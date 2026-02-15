@@ -1,0 +1,31 @@
+# Default: auto-detect text files and normalize line endings
+* text=auto
+
+# Go files: normalize to LF
+*.go     text eol=lf
+go.mod   text eol=lf
+go.sum   text eol=lf
+
+# Auto-generated files: normalize to LF
+frontend/wailsjs/**  text eol=lf
+
+# Web / config files: normalize to LF
+*.ts     text eol=lf
+*.tsx    text eol=lf
+*.js     text eol=lf
+*.jsx    text eol=lf
+*.html   text eol=lf
+*.css    text eol=lf
+*.json   text eol=lf
+*.yaml   text eol=lf
+*.yml    text eol=lf
+*.toml   text eol=lf
+*.md     text eol=lf
+Makefile text eol=lf
+
+# Binary files
+*.exe    binary
+*.dll    binary
+*.ico    binary
+*.png    binary
+*.syso   binary
