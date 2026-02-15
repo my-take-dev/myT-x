@@ -1,0 +1,154 @@
+.agent-teams-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-teams-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(23, 35, 56, 0.75);
+}
+
+.agent-teams-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.agent-teams-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-mode-toggle {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(12, 21, 35, 0.8);
+}
+
+.view-mode-toggle button {
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.view-mode-toggle button.active {
+  color: var(--fg-main);
+  background: var(--accent-22);
+}
+
+.agent-teams-content {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.agent-teams-content.with-activity {
+  grid-template-rows: 1fr 220px;
+}
+
+.agent-teams-content.no-activity {
+  grid-template-rows: 1fr;
+}
+
+.agent-pane-grid {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+}
+
+.agent-pane-grid.list {
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.agent-pane {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.agent-pane .terminal-pane {
+  border: 0;
+  border-radius: 0;
+}
+
+.agent-pane-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.status-indicator.active {
+  color: #40db7f;
+}
+
+.status-indicator.idle {
+  color: var(--fg-dim);
+}
+
+.role-badge {
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--fg-dim);
+  font-size: 0.74rem;
+}
+
+.team-activity-feed {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: rgba(10, 17, 28, 0.75);
+}
+
+.feed-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.feed-entries {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  display: grid;
+  gap: 5px;
+}
+
+.activity-item {
+  font-size: 0.8rem;
+  color: var(--fg-dim);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.activity-item .sender,
+.activity-item .receiver {
+  color: var(--fg-main);
+}
+

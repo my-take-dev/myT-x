@@ -1,0 +1,10 @@
+@media (max-width: 900px) {
+  .sidebar {
+    width: 220px;
+    min-width: 220px;
+  }
+
+  .agent-teams-content {
+    grid-template-rows: 1fr 170px;
+  }
+}
