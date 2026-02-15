@@ -1,0 +1,27 @@
+shell: powershell.exe
+prefix: Ctrl+b
+quake_mode: true
+global_hotkey: Ctrl+Shift+F12
+keys:
+  split-vertical: "%"
+  split-horizontal: "\""
+  toggle-zoom: z
+  kill-pane: x
+  detach-session: d
+worktree:
+  enabled: true
+  force_cleanup: false
+  setup_scripts: []
+  copy_files: []
+agent_model:
+  from: "claude-opus-4-6"
+  to: "claude-sonnet-4-5-20250929"
+  overrides:
+    - name: "security"
+      model: "claude-opus-4-6"
+    - name: "reviewer"
+      model: "claude-sonnet-4-5-20250929"
+    - name: "coder"
+      model: "claude-sonnet-4-5-20250929"
+pane_env:
+  CLAUDE_CODE_EFFORT_LEVEL: "high"

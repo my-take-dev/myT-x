@@ -1,0 +1,270 @@
+/* Menu bar */
+.menu-bar {
+  height: 32px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background: rgba(10, 15, 24, 0.98);
+  border-bottom: 1px solid var(--line);
+  z-index: 100;
+}
+
+.menu-bar-item {
+  position: relative;
+}
+
+.menu-bar-trigger {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  color: var(--fg-main);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s;
+}
+
+.menu-bar-trigger:hover {
+  background: var(--accent-10);
+}
+
+/* ── Settings Modal (wider for sidebar layout) ── */
+.settings-panel {
+  width: 740px;
+  max-width: 92vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Sidebar + Content Layout ── */
+.settings-layout {
+  display: flex;
+  flex: 1;
+  /* Keep this at 0 so the scrollable children can shrink inside flex layouts. */
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Sidebar Navigation ── */
+.settings-sidebar {
+  width: 160px;
+  min-width: 160px;
+  border-right: 1px solid var(--line);
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.settings-sidebar-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 8px 16px;
+  border: none;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+
+.settings-sidebar-item:hover {
+  color: var(--fg-main);
+  background: var(--accent-06);
+}
+
+.settings-sidebar-item.active {
+  color: var(--accent);
+  background: var(--accent-10);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── Content Area ── */
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Section Headers ── */
+.settings-section {
+  margin-top: 4px;
+}
+
+.settings-section-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.05em;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+
+/* ── Description text ── */
+.settings-desc {
+  font-size: 0.72rem;
+  color: var(--fg-dim);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* ── Shortcut Input visual distinction ── */
+.shortcut-input {
+  background: var(--accent-04);
+  border-color: var(--accent-25);
+  font-family: "Consolas", "Courier New", monospace;
+  letter-spacing: 0.05em;
+}
+
+.settings-body .shortcut-input.capturing {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-22);
+  animation: pulse-capture 1.5s ease infinite;
+}
+
+@keyframes pulse-capture {
+  0%, 100% { box-shadow: 0 0 0 2px var(--accent-22); }
+  50% { box-shadow: 0 0 0 4px var(--accent-22); }
+}
+
+.shortcut-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--fg-dim);
+  letter-spacing: 0.03em;
+}
+
+.shortcut-label::before {
+  content: "\2328";
+  font-size: 0.85rem;
+  opacity: 0.6;
+}
+
+/* ── Dynamic List ── */
+.dynamic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dynamic-list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dynamic-list-row .form-input {
+  flex: 1;
+}
+
+.dynamic-list-remove {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--danger-40);
+  background: var(--danger-08);
+  color: var(--danger);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dynamic-list-remove:hover {
+  background: var(--danger-20);
+  border-color: var(--danger);
+}
+
+.dynamic-list-add {
+  align-self: flex-start;
+  font-size: 0.78rem;
+  padding: 4px 12px;
+  margin-top: 2px;
+}
+
+/* ── Override Row ── */
+.override-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(27, 42, 67, 0.4);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.override-priority {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 24px;
+  text-align: center;
+  padding-top: 4px;
+}
+
+.override-fields {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+}
+
+.override-fields .form-group {
+  flex: 1;
+}
+
+/* ── Priority / info note ── */
+.settings-note {
+  font-size: 0.74rem;
+  color: var(--fg-dim);
+  margin: 0 0 6px 0;
+  padding: 4px 8px;
+  background: var(--accent-06);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+}
+
+/* ── Input error state ── */
+.input-error {
+  border-color: var(--danger) !important;
+}
+
+/* ── Footer with restart note ── */
+.settings-footer {
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-restart-note {
+  font-size: 0.7rem;
+  color: var(--fg-dim);
+  margin-right: auto;
+}
+
+.settings-error {
+  font-size: 0.78rem;
+  color: var(--danger);
+  margin-right: auto;
+}

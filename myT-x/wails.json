@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "myT-x",
+  "outputfilename": "myT-x",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "my-take-dev",
+    "email": ""
+  },
+  "info": {
+    "companyName": "my-take-dev",
+    "productName": "myT-x",
+    "productVersion": "0.0.2",
+    "copyright": "Copyright 2026 my-take-dev",
+    "comments": "Windows向けアプリケーション"
+  }
+}
