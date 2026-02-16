@@ -14,6 +14,9 @@ type PaneContextSnapshot struct {
 	Layout      *LayoutNode
 	Env         map[string]string
 	Title       string
+	// SessionWorkDir is the effective working directory for the session.
+	// Worktree sessions use Worktree.Path; regular sessions use RootPath.
+	SessionWorkDir string
 }
 
 // parseSessionName extracts the session name from a target string.
@@ -84,10 +87,16 @@ func (m *SessionManager) SetWorktreeInfo(name string, info *SessionWorktreeInfo)
 	}
 	normalized := normalizeSessionWorktreeInfo(info)
 	if normalized == nil {
+		if session.Worktree != nil {
+			m.markStateMutationLocked()
+		}
 		session.Worktree = nil
 		return nil
 	}
 
+	if !worktreeInfoEqual(session.Worktree, normalized) {
+		m.markStateMutationLocked()
+	}
 	session.Worktree = normalized
 	return nil
 }
@@ -117,6 +126,9 @@ func (m *SessionManager) SetRootPath(name, rootPath string) error {
 	if err != nil {
 		return err
 	}
+	if session.RootPath != rootPath {
+		m.markStateMutationLocked()
+	}
 	session.RootPath = rootPath
 	return nil
 }
@@ -129,6 +141,9 @@ func (m *SessionManager) SetAgentTeam(name string, isAgent bool) error {
 	session, err := m.getSessionByNameLocked(name)
 	if err != nil {
 		return err
+	}
+	if session.IsAgentTeam != isAgent {
+		m.markStateMutationLocked()
 	}
 	session.IsAgentTeam = isAgent
 	return nil
@@ -169,6 +184,7 @@ func (m *SessionManager) SetPaneRuntime(paneID int, term *terminal.Terminal, env
 	pane.Env = copyEnvMap(env)
 	if strings.TrimSpace(pane.Title) == "" && strings.TrimSpace(inheritTitle) != "" {
 		pane.Title = inheritTitle
+		m.markStateMutationLocked()
 	}
 	return nil
 }
@@ -182,12 +198,21 @@ func (m *SessionManager) GetPaneContextSnapshot(paneID int) (PaneContextSnapshot
 	if !ok || pane == nil || pane.Window == nil || pane.Window.Session == nil {
 		return PaneContextSnapshot{}, fmt.Errorf("pane not found: %%%d", paneID)
 	}
+
+	// Resolve effective working directory.
+	sess := pane.Window.Session
+	workDir := strings.TrimSpace(sess.RootPath)
+	if wt := sess.Worktree; wt != nil && strings.TrimSpace(wt.Path) != "" {
+		workDir = strings.TrimSpace(wt.Path)
+	}
+
 	return PaneContextSnapshot{
-		SessionID:   pane.Window.Session.ID,
-		SessionName: pane.Window.Session.Name,
-		Layout:      cloneLayout(pane.Window.Layout),
-		Env:         copyEnvMap(pane.Env),
-		Title:       pane.Title,
+		SessionID:      sess.ID,
+		SessionName:    sess.Name,
+		Layout:         cloneLayout(pane.Window.Layout),
+		Env:            copyEnvMap(pane.Env),
+		Title:          pane.Title,
+		SessionWorkDir: workDir,
 	}, nil
 }
 
@@ -213,4 +238,15 @@ func (m *SessionManager) HasPane(paneID string) bool {
 	_, ok := m.panes[id]
 	m.mu.RUnlock()
 	return ok
+}
+
+func worktreeInfoEqual(left, right *SessionWorktreeInfo) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Path == right.Path &&
+		left.RepoPath == right.RepoPath &&
+		left.BranchName == right.BranchName &&
+		left.BaseBranch == right.BaseBranch &&
+		left.IsDetached == right.IsDetached
 }

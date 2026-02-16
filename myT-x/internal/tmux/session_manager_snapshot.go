@@ -1,22 +1,29 @@
 package tmux
 
 import (
-	"fmt"
 	"sort"
 )
 
-// Snapshot returns deep-copied frontend-safe session state.
+// Snapshot returns frontend-safe session state snapshots.
+// Cache miss paths build deep-copied snapshot values.
+// Cache hit paths return the shared cached slice reference; callers must treat
+// the returned value as read-only and must not retain/mutate it.
 func (m *SessionManager) Snapshot() []SessionSnapshot {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	names := make([]string, 0, len(m.sessions))
-	for name := range m.sessions {
-		names = append(names, name)
+	if m.snapshotGeneration == m.generation && m.snapshotCache != nil {
+		cached := m.snapshotCache
+		m.mu.RUnlock()
+		return cached
 	}
-	sort.Slice(names, func(i, j int) bool {
-		return m.sessions[names[i]].ID < m.sessions[names[j]].ID
-	})
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.snapshotGeneration == m.generation && m.snapshotCache != nil {
+		return m.snapshotCache
+	}
+
+	names := m.sortedSessionNamesLocked()
 
 	out := make([]SessionSnapshot, 0, len(names))
 	for _, name := range names {
@@ -60,7 +67,25 @@ func (m *SessionManager) Snapshot() []SessionSnapshot {
 		out = append(out, ss)
 	}
 
-	return out
+	m.snapshotCache = out
+	m.snapshotGeneration = m.generation
+	return m.snapshotCache
+}
+
+func (m *SessionManager) sortedSessionNamesLocked() []string {
+	if !m.sortedNamesDirty && len(m.sortedSessionNames) == len(m.sessions) {
+		return m.sortedSessionNames
+	}
+	names := make([]string, 0, len(m.sessions))
+	for name := range m.sessions {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return m.sessions[names[i]].ID < m.sessions[names[j]].ID
+	})
+	m.sortedSessionNames = names
+	m.sortedNamesDirty = false
+	return m.sortedSessionNames
 }
 
 // ActivePaneIDs returns the set of all pane ID strings currently managed.
@@ -70,8 +95,11 @@ func (m *SessionManager) ActivePaneIDs() map[string]struct{} {
 	defer m.mu.RUnlock()
 
 	ids := make(map[string]struct{}, len(m.panes))
-	for id := range m.panes {
-		ids[fmt.Sprintf("%%%d", id)] = struct{}{}
+	for _, pane := range m.panes {
+		if pane == nil {
+			continue
+		}
+		ids[pane.IDString()] = struct{}{}
 	}
 	return ids
 }

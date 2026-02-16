@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -18,12 +17,14 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func runGitInDir(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Env = append(append([]string{}, os.Environ()...), "LC_ALL=C", "LC_MESSAGES=C", "LANG=C")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
@@ -87,7 +88,7 @@ func TestRunSetupScripts(t *testing.T) {
 			}
 		}
 
-		app.runSetupScripts(t.TempDir(), "session-a", "powershell.exe", []string{"echo one", "echo two"})
+		app.runSetupScriptsWithParentContext(nil, t.TempDir(), "session-a", "powershell.exe", []string{"echo one", "echo two"})
 		if len(ran) != 2 {
 			t.Fatalf("executed scripts = %d, want 2", len(ran))
 		}
@@ -123,7 +124,7 @@ func TestRunSetupScripts(t *testing.T) {
 			}
 		}
 
-		app.runSetupScripts(t.TempDir(), "session-b", "powershell.exe", []string{"bad-script", "never-run"})
+		app.runSetupScriptsWithParentContext(nil, t.TempDir(), "session-b", "powershell.exe", []string{"bad-script", "never-run"})
 		if len(ran) != 1 {
 			t.Fatalf("executed scripts = %d, want 1", len(ran))
 		}
@@ -158,7 +159,7 @@ func TestRunSetupScripts(t *testing.T) {
 			}
 		}
 
-		app.runSetupScripts(t.TempDir(), "session-c", "powershell.exe", []string{"slow-script"})
+		app.runSetupScriptsWithParentContext(nil, t.TempDir(), "session-c", "powershell.exe", []string{"slow-script"})
 		if eventPayload == nil {
 			t.Fatal("expected failure payload")
 		}
@@ -192,7 +193,7 @@ func TestRunSetupScripts(t *testing.T) {
 			}
 		}
 
-		app.runSetupScripts(t.TempDir(), "session-d", "powershell.exe", []string{"echo one", "  ", "", "echo two"})
+		app.runSetupScriptsWithParentContext(nil, t.TempDir(), "session-d", "powershell.exe", []string{"echo one", "  ", "", "echo two"})
 		if len(ran) != 2 {
 			t.Fatalf("executed scripts = %d, want 2 (whitespace-only should be skipped)", len(ran))
 		}
@@ -206,6 +207,114 @@ func TestRunSetupScripts(t *testing.T) {
 			t.Fatalf("success payload = %v, want true", eventPayload["success"])
 		}
 	})
+}
+
+func TestRunSetupScriptsWithParentContextFallback(t *testing.T) {
+	origExecuteSetup := executeSetupCommandFn
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		executeSetupCommandFn = origExecuteSetup
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	ran := 0
+	executeSetupCommandFn = func(ctx context.Context, _ string, _ string, script string, _ string) ([]byte, error) {
+		if ctx == nil {
+			t.Fatal("executeSetupCommandFn received nil context")
+		}
+		if strings.TrimSpace(script) == "" {
+			t.Fatal("executeSetupCommandFn received empty script")
+		}
+		ran++
+		return []byte("ok"), nil
+	}
+
+	var emittedCtx context.Context
+	var eventPayload map[string]any
+	runtimeEventsEmitFn = func(ctx context.Context, name string, data ...interface{}) {
+		if name != "worktree:setup-complete" || len(data) == 0 {
+			return
+		}
+		emittedCtx = ctx
+		payload, ok := data[0].(map[string]any)
+		if ok {
+			eventPayload = payload
+		}
+	}
+
+	app.runSetupScriptsWithParentContext(nil, t.TempDir(), "session-fallback", "powershell.exe", []string{"echo one"})
+
+	if ran != 1 {
+		t.Fatalf("executed scripts = %d, want 1", ran)
+	}
+	if emittedCtx == nil {
+		t.Fatal("expected non-nil emit context when parent/app context are nil")
+	}
+	if eventPayload == nil {
+		t.Fatal("expected worktree:setup-complete payload")
+	}
+	if success, _ := eventPayload["success"].(bool); !success {
+		t.Fatalf("success payload = %v, want true", eventPayload["success"])
+	}
+}
+
+func TestWaitForSetupScriptsCancellation(t *testing.T) {
+	if !waitForSetupScriptsCancellation(nil, 10*time.Millisecond) {
+		t.Fatal("waitForSetupScriptsCancellation(nil) = false, want true")
+	}
+
+	done := make(chan struct{})
+	close(done)
+	if !waitForSetupScriptsCancellation(done, 10*time.Millisecond) {
+		t.Fatal("waitForSetupScriptsCancellation(closed channel) = false, want true")
+	}
+
+	blocked := make(chan struct{})
+	if waitForSetupScriptsCancellation(blocked, 10*time.Millisecond) {
+		t.Fatal("waitForSetupScriptsCancellation(timeout channel) = true, want false")
+	}
+}
+
+func TestChooseWorktreeIdentifier(t *testing.T) {
+	tests := []struct {
+		name       string
+		branchName string
+		session    string
+		want       string
+		wantPrefix string
+	}{
+		{
+			name:       "uses sanitized branch name",
+			branchName: "feature/team-123",
+			session:    "session-a",
+			want:       "featureteam-123",
+		},
+		{
+			name:       "falls back to session when branch sanitizes to work",
+			branchName: "work",
+			session:    "session-a",
+			want:       "session-a",
+		},
+		{
+			name:       "falls back to timestamp when both sanitize to work",
+			branchName: "!!!",
+			session:    "???",
+			wantPrefix: "wt-",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := chooseWorktreeIdentifier(tt.branchName, tt.session)
+			if tt.want != "" && got != tt.want {
+				t.Fatalf("chooseWorktreeIdentifier(%q, %q) = %q, want %q", tt.branchName, tt.session, got, tt.want)
+			}
+			if tt.wantPrefix != "" && !strings.HasPrefix(got, tt.wantPrefix) {
+				t.Fatalf("chooseWorktreeIdentifier(%q, %q) = %q, want prefix %q", tt.branchName, tt.session, got, tt.wantPrefix)
+			}
+		})
+	}
 }
 
 func TestCopyConfigFilesToWorktree(t *testing.T) {
@@ -230,6 +339,35 @@ func TestCopyConfigFilesToWorktree(t *testing.T) {
 		}
 		if string(data) != "KEY=val" {
 			t.Errorf("destination file content = %q, want %q", string(data), "KEY=val")
+		}
+	})
+
+	t.Run("logs warning before overwriting existing destination file", func(t *testing.T) {
+		repoDir := t.TempDir()
+		wtDir := t.TempDir()
+
+		if err := os.WriteFile(filepath.Join(repoDir, ".env"), []byte("KEY=new"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wtDir, ".env"), []byte("KEY=old"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
+
+		failures := copyConfigFilesToWorktree(repoDir, wtDir, []string{".env"})
+		if len(failures) != 0 {
+			t.Fatalf("unexpected failures: %v", failures)
+		}
+		if !strings.Contains(logBuf.String(), "overwriting existing destination file from copy_files") {
+			t.Fatalf("expected overwrite warning log, got logs: %q", logBuf.String())
+		}
+		got, err := os.ReadFile(filepath.Join(wtDir, ".env"))
+		if err != nil {
+			t.Fatalf("failed to read destination file: %v", err)
+		}
+		if string(got) != "KEY=new" {
+			t.Fatalf("destination file content = %q, want %q", string(got), "KEY=new")
 		}
 	})
 
@@ -272,6 +410,54 @@ func TestCopyConfigFilesToWorktree(t *testing.T) {
 		failures := copyConfigFilesToWorktree(repoDir, wtDir, []string{"../sensitive.txt"})
 		if len(failures) != 0 {
 			t.Fatalf("traversal paths should be skipped, not added to failures: %v", failures)
+		}
+	})
+
+	t.Run("rejects source symlink escaping repository", func(t *testing.T) {
+		repoDir := t.TempDir()
+		wtDir := t.TempDir()
+		outsideFile := filepath.Join(t.TempDir(), "secret.env")
+		if err := os.WriteFile(outsideFile, []byte("SECRET=1"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		linkPath := filepath.Join(repoDir, ".env")
+		if err := os.Symlink(outsideFile, linkPath); err != nil {
+			t.Skipf("symlink not supported in this environment: %v", err)
+		}
+
+		failures := copyConfigFilesToWorktree(repoDir, wtDir, []string{".env"})
+		if len(failures) != 0 {
+			t.Fatalf("symlink escape should be skipped, not added to failures: %v", failures)
+		}
+		if _, err := os.Stat(filepath.Join(wtDir, ".env")); err == nil {
+			t.Fatal("destination file should not be created for escaping source symlink")
+		}
+	})
+
+	t.Run("rejects destination symlink escaping worktree", func(t *testing.T) {
+		repoDir := t.TempDir()
+		wtDir := t.TempDir()
+		outsideDir := t.TempDir()
+
+		srcDir := filepath.Join(repoDir, "config")
+		if err := os.MkdirAll(srcDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(srcDir, "app.yaml"), []byte("key: val"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		linkDir := filepath.Join(wtDir, "config")
+		if err := os.Symlink(outsideDir, linkDir); err != nil {
+			t.Skipf("symlink not supported in this environment: %v", err)
+		}
+
+		failures := copyConfigFilesToWorktree(repoDir, wtDir, []string{filepath.Join("config", "app.yaml")})
+		if len(failures) != 0 {
+			t.Fatalf("symlink escape should be skipped, not added to failures: %v", failures)
+		}
+		if _, err := os.Stat(filepath.Join(outsideDir, "app.yaml")); err == nil {
+			t.Fatal("file should not be written outside worktree via destination symlink")
 		}
 	})
 
@@ -319,6 +505,26 @@ func TestCopyConfigFilesToWorktree(t *testing.T) {
 		failures := copyConfigFilesToWorktree(repoDir, wtDir, nil)
 		if len(failures) != 0 {
 			t.Fatalf("nil file list should produce no failures: %v", failures)
+		}
+	})
+
+	t.Run("reports configured files when repository path resolution fails", func(t *testing.T) {
+		wtDir := t.TempDir()
+		want := []string{".env", "config/app.yaml"}
+
+		failures := copyConfigFilesToWorktree("\x00", wtDir, want)
+		if !reflect.DeepEqual(failures, want) {
+			t.Fatalf("copy failures = %v, want %v", failures, want)
+		}
+	})
+
+	t.Run("reports configured files when worktree path resolution fails", func(t *testing.T) {
+		repoDir := t.TempDir()
+		want := []string{".env", "config/app.yaml"}
+
+		failures := copyConfigFilesToWorktree(repoDir, "\x00", want)
+		if !reflect.DeepEqual(failures, want) {
+			t.Fatalf("copy failures = %v, want %v", failures, want)
 		}
 	})
 }
@@ -557,6 +763,55 @@ func TestPromoteWorktreeToBranchSuccess(t *testing.T) {
 	}
 }
 
+func TestRollbackPromotedWorktreeBranch(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+	runGitInDir(t, repoPath, "checkout", "--detach")
+	runGitInDir(t, repoPath, "checkout", "-b", "feature/rollback-target")
+
+	repo, err := gitpkg.Open(repoPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := rollbackPromotedWorktreeBranch(repo, "feature/rollback-target"); err != nil {
+		t.Fatalf("rollbackPromotedWorktreeBranch() error = %v", err)
+	}
+
+	if current := runGitInDir(t, repoPath, "branch", "--show-current"); current != "" {
+		t.Fatalf("current git branch = %q, want detached HEAD", current)
+	}
+	branches, err := repo.ListBranches()
+	if err != nil {
+		t.Fatalf("ListBranches() error = %v", err)
+	}
+	for _, branch := range branches {
+		if branch == "feature/rollback-target" {
+			t.Fatalf("rollback target branch %q should be deleted", branch)
+		}
+	}
+}
+
+func TestRollbackPromotedWorktreeBranchReturnsCombinedError(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+	repo, err := gitpkg.Open(repoPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(repoPath, ".git")); err != nil {
+		t.Fatalf("RemoveAll(.git) error = %v", err)
+	}
+
+	err = rollbackPromotedWorktreeBranch(repo, "invalid branch name")
+	if err == nil {
+		t.Fatal("rollbackPromotedWorktreeBranch() expected combined rollback error")
+	}
+	if !strings.Contains(err.Error(), "failed to restore detached HEAD during promotion rollback") {
+		t.Fatalf("error = %v, want detached-HEAD rollback failure", err)
+	}
+	if !strings.Contains(err.Error(), "failed to delete promoted branch") {
+		t.Fatalf("error = %v, want branch-delete rollback failure", err)
+	}
+}
+
 func TestCommitAndPushWorktreeSuccess(t *testing.T) {
 	repoPath := testutil.CreateTempGitRepo(t)
 	remoteRoot := t.TempDir()
@@ -601,6 +856,54 @@ func TestCommitAndPushWorktreeSuccess(t *testing.T) {
 	}
 }
 
+func TestCommitAndPushWorktreePushOnlyWhenCommitMessageEmpty(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+	remoteRoot := t.TempDir()
+	remotePath := filepath.Join(remoteRoot, "origin.git")
+	runGitInDir(t, remoteRoot, "init", "--bare", remotePath)
+
+	branchName := runGitInDir(t, repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	runGitInDir(t, repoPath, "remote", "add", "origin", remotePath)
+	runGitInDir(t, repoPath, "push", "-u", "origin", branchName)
+
+	// Create one local commit that is not yet pushed.
+	if err := os.WriteFile(filepath.Join(repoPath, "push-only.txt"), []byte("push-only"), 0o644); err != nil {
+		t.Fatalf("write push-only.txt: %v", err)
+	}
+	runGitInDir(t, repoPath, "add", "push-only.txt")
+	runGitInDir(t, repoPath, "commit", "-m", "local commit for push-only test")
+
+	localHeadBefore := runGitInDir(t, repoPath, "rev-parse", "HEAD")
+	remoteHeadBefore := runGitInDir(t, repoPath, "--git-dir", remotePath, "rev-parse", "refs/heads/"+branchName)
+	if localHeadBefore == remoteHeadBefore {
+		t.Fatal("expected local branch to be ahead before push-only test")
+	}
+
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := app.sessions.SetWorktreeInfo("session-a", &tmux.SessionWorktreeInfo{
+		Path:       repoPath,
+		RepoPath:   repoPath,
+		BranchName: branchName,
+		BaseBranch: "",
+		IsDetached: false,
+	}); err != nil {
+		t.Fatalf("SetWorktreeInfo() error = %v", err)
+	}
+
+	if err := app.CommitAndPushWorktree("session-a", "   ", true); err != nil {
+		t.Fatalf("CommitAndPushWorktree() push-only error = %v", err)
+	}
+
+	remoteHeadAfter := runGitInDir(t, repoPath, "--git-dir", remotePath, "rev-parse", "refs/heads/"+branchName)
+	if remoteHeadAfter != localHeadBefore {
+		t.Fatalf("remote head after push-only = %q, want %q", remoteHeadAfter, localHeadBefore)
+	}
+}
+
 func TestCreateSessionWithWorktreeValidation(t *testing.T) {
 	t.Run("returns error when session manager is unavailable", func(t *testing.T) {
 		app := NewApp()
@@ -642,6 +945,24 @@ func TestCreateSessionWithWorktreeValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("returns error when session name is empty", func(t *testing.T) {
+		repoPath := testutil.CreateTempGitRepo(t)
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		app.setConfigSnapshot(config.DefaultConfig())
+
+		_, err := app.CreateSessionWithWorktree(repoPath, "   ", WorktreeSessionOptions{
+			BranchName: "feature/test",
+		})
+		if err == nil {
+			t.Fatal("CreateSessionWithWorktree() expected session-name validation error")
+		}
+		if !strings.Contains(err.Error(), "session name is required") {
+			t.Fatalf("error = %v, want session-name validation message", err)
+		}
+	})
+
 	t.Run("returns error when branch name is empty", func(t *testing.T) {
 		repoPath := testutil.CreateTempGitRepo(t)
 		app := NewApp()
@@ -653,19 +974,223 @@ func TestCreateSessionWithWorktreeValidation(t *testing.T) {
 			t.Fatal("CreateSessionWithWorktree() expected branch validation error")
 		}
 	})
+
+	t.Run("returns error when pull-before-create fails", func(t *testing.T) {
+		repoPath := testutil.CreateTempGitRepo(t)
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		app.setConfigSnapshot(config.DefaultConfig())
+
+		originalExecute := executeRouterRequestFn
+		t.Cleanup(func() {
+			executeRouterRequestFn = originalExecute
+		})
+
+		routerCalls := 0
+		executeRouterRequestFn = func(_ *tmux.CommandRouter, _ ipc.TmuxRequest) ipc.TmuxResponse {
+			routerCalls++
+			return ipc.TmuxResponse{ExitCode: 0}
+		}
+
+		_, err := app.CreateSessionWithWorktree(repoPath, "session-a", WorktreeSessionOptions{
+			BranchName:       "feature/pull-before-create",
+			PullBeforeCreate: true,
+		})
+		if err == nil {
+			t.Fatal("CreateSessionWithWorktree() expected pull failure")
+		}
+		if !strings.Contains(err.Error(), "failed to pull latest changes") {
+			t.Fatalf("CreateSessionWithWorktree() error = %v, want pull failure message", err)
+		}
+		if routerCalls != 0 {
+			t.Fatalf("router call count = %d, want 0 when pull fails before session creation", routerCalls)
+		}
+		if got := len(app.sessions.Snapshot()); got != 0 {
+			t.Fatalf("session count = %d, want 0 after pull failure", got)
+		}
+	})
+}
+
+func TestCreateSessionWithExistingWorktreeValidation(t *testing.T) {
+	t.Run("returns error when session manager is unavailable", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = nil
+		app.router = tmux.NewCommandRouter(nil, nil, tmux.RouterOptions{})
+		app.setConfigSnapshot(config.DefaultConfig())
+
+		if _, err := app.CreateSessionWithExistingWorktree(t.TempDir(), "session-a", t.TempDir(), false); err == nil {
+			t.Fatal("CreateSessionWithExistingWorktree() expected session manager availability error")
+		}
+	})
+
+	t.Run("returns error when router is unavailable", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = nil
+		app.setConfigSnapshot(config.DefaultConfig())
+
+		if _, err := app.CreateSessionWithExistingWorktree(t.TempDir(), "session-a", t.TempDir(), false); err == nil {
+			t.Fatal("CreateSessionWithExistingWorktree() expected router availability error")
+		}
+	})
+
+	t.Run("returns error when worktree feature is disabled", func(t *testing.T) {
+		repoPath := testutil.CreateTempGitRepo(t)
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		cfg := config.DefaultConfig()
+		cfg.Worktree.Enabled = false
+		app.setConfigSnapshot(cfg)
+
+		if _, err := app.CreateSessionWithExistingWorktree(repoPath, "session-a", repoPath, false); err == nil {
+			t.Fatal("CreateSessionWithExistingWorktree() expected disabled feature error")
+		}
+	})
+
+	t.Run("returns error when repository path is empty", func(t *testing.T) {
+		repoPath := testutil.CreateTempGitRepo(t)
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		app.setConfigSnapshot(config.DefaultConfig())
+
+		_, err := app.CreateSessionWithExistingWorktree("   ", "session-a", repoPath, false)
+		if err == nil {
+			t.Fatal("CreateSessionWithExistingWorktree() expected repository-path validation error")
+		}
+		if !strings.Contains(err.Error(), "repository path is required") {
+			t.Fatalf("error = %v, want repository path validation message", err)
+		}
+	})
+
+	t.Run("returns error when worktree path is empty", func(t *testing.T) {
+		repoPath := testutil.CreateTempGitRepo(t)
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		app.setConfigSnapshot(config.DefaultConfig())
+
+		_, err := app.CreateSessionWithExistingWorktree(repoPath, "session-a", "   ", false)
+		if err == nil {
+			t.Fatal("CreateSessionWithExistingWorktree() expected worktree-path validation error")
+		}
+		if !strings.Contains(err.Error(), "worktree path is required") {
+			t.Fatalf("error = %v, want worktree path validation message", err)
+		}
+	})
+
+	t.Run("returns error when session name is empty", func(t *testing.T) {
+		repoPath := testutil.CreateTempGitRepo(t)
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		app.setConfigSnapshot(config.DefaultConfig())
+
+		_, err := app.CreateSessionWithExistingWorktree(repoPath, "   ", repoPath, false)
+		if err == nil {
+			t.Fatal("CreateSessionWithExistingWorktree() expected session-name validation error")
+		}
+		if !strings.Contains(err.Error(), "session name is required") {
+			t.Fatalf("error = %v, want session-name validation message", err)
+		}
+	})
+
+	t.Run("returns error when worktree path is already in use", func(t *testing.T) {
+		repoPath := testutil.CreateTempGitRepo(t)
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		app.setConfigSnapshot(config.DefaultConfig())
+		if _, _, err := app.sessions.CreateSession("using-worktree", "0", 120, 40); err != nil {
+			t.Fatalf("CreateSession() error = %v", err)
+		}
+		if err := app.sessions.SetWorktreeInfo("using-worktree", &tmux.SessionWorktreeInfo{
+			Path:       repoPath,
+			RepoPath:   repoPath,
+			BranchName: "main",
+		}); err != nil {
+			t.Fatalf("SetWorktreeInfo() error = %v", err)
+		}
+
+		_, err := app.CreateSessionWithExistingWorktree(repoPath, "session-a", repoPath, false)
+		if err == nil {
+			t.Fatal("CreateSessionWithExistingWorktree() expected conflict error")
+		}
+		if !strings.Contains(err.Error(), "already in use by session") {
+			t.Fatalf("error = %v, want conflict message", err)
+		}
+	})
+}
+
+func TestCreateSessionForDirectoryReturnsErrorWhenTmuxReturnsEmptyName(t *testing.T) {
+	origExecute := executeRouterRequestFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = origExecute
+	})
+
+	app := NewApp()
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, _ ipc.TmuxRequest) ipc.TmuxResponse {
+		return ipc.TmuxResponse{ExitCode: 0, Stdout: "   "}
+	}
+
+	if _, err := app.createSessionForDirectory(nil, t.TempDir(), "session-a", false); err == nil {
+		t.Fatal("createSessionForDirectory() expected empty-name error")
+	}
+}
+
+func TestCreateSessionForDirectoryRollsBackWhenTmuxReturnsEmptyName(t *testing.T) {
+	origExecute := executeRouterRequestFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = origExecute
+	})
+
+	app := NewApp()
+	var killSessionCalled bool
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		switch req.Command {
+		case "new-session":
+			return ipc.TmuxResponse{ExitCode: 0, Stdout: "   "}
+		case "kill-session":
+			target, _ := req.Flags["-t"].(string)
+			if strings.TrimSpace(target) != "session-a" {
+				t.Fatalf("rollback kill target = %q, want %q", target, "session-a")
+			}
+			killSessionCalled = true
+			return ipc.TmuxResponse{ExitCode: 0}
+		default:
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
+		}
+	}
+
+	if _, err := app.createSessionForDirectory(nil, t.TempDir(), "session-a", false); err == nil {
+		t.Fatal("createSessionForDirectory() expected empty-name error")
+	}
+	if !killSessionCalled {
+		t.Fatal("expected rollback kill-session call when tmux returns empty created name")
+	}
 }
 
 func TestCreateSessionWithWorktreeSuccess(t *testing.T) {
 	repoPath := testutil.CreateTempGitRepo(t)
 	app := NewApp()
+	app.setRuntimeContext(context.Background())
 	app.sessions = tmux.NewSessionManager()
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 	app.setConfigSnapshot(config.DefaultConfig())
 
 	originalExecuteRouterRequestFn := executeRouterRequestFn
+	originalEmit := runtimeEventsEmitFn
 	t.Cleanup(func() {
 		executeRouterRequestFn = originalExecuteRouterRequestFn
+		runtimeEventsEmitFn = originalEmit
 	})
+
+	events := make([]string, 0, 4)
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+		events = append(events, name)
+	}
 
 	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		switch req.Command {
@@ -695,6 +1220,16 @@ func TestCreateSessionWithWorktreeSuccess(t *testing.T) {
 	if snapshot.Name != "session-a" {
 		t.Fatalf("snapshot.Name = %q, want %q", snapshot.Name, "session-a")
 	}
+	foundSnapshotEvent := false
+	for _, name := range events {
+		if name == "tmux:snapshot" || name == "tmux:snapshot-delta" {
+			foundSnapshotEvent = true
+			break
+		}
+	}
+	if !foundSnapshotEvent {
+		t.Fatalf("CreateSessionWithWorktree() events = %v, want snapshot event", events)
+	}
 
 	info, err := app.sessions.GetWorktreeInfo(snapshot.Name)
 	if err != nil {
@@ -721,6 +1256,173 @@ func TestCreateSessionWithWorktreeSuccess(t *testing.T) {
 
 	if currentBranch := runGitInDir(t, info.Path, "branch", "--show-current"); currentBranch != "feature/session-a" {
 		t.Fatalf("worktree current branch = %q, want %q", currentBranch, "feature/session-a")
+	}
+}
+
+func TestCreateSessionWithWorktreeRollsBackWorktreeWhenSessionCreationFails(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+	app.setConfigSnapshot(config.DefaultConfig())
+
+	originalExecute := executeRouterRequestFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = originalExecute
+	})
+
+	capturedWorktreePath := ""
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		if req.Command != "new-session" {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command\n"}
+		}
+		if worktreePath, ok := req.Flags["-c"].(string); ok {
+			capturedWorktreePath = strings.TrimSpace(worktreePath)
+		}
+		return ipc.TmuxResponse{ExitCode: 1, Stderr: "simulated session creation failure\n"}
+	}
+
+	_, err := app.CreateSessionWithWorktree(repoPath, "session-a", WorktreeSessionOptions{
+		BranchName: "feature/rollback-worktree",
+	})
+	if err == nil {
+		t.Fatal("CreateSessionWithWorktree() expected session creation error")
+	}
+	if !strings.Contains(err.Error(), "failed to create session") {
+		t.Fatalf("CreateSessionWithWorktree() error = %v, want session creation failure", err)
+	}
+	if strings.TrimSpace(capturedWorktreePath) == "" {
+		t.Fatal("expected captured worktree path from new-session request")
+	}
+	if _, statErr := os.Stat(capturedWorktreePath); !os.IsNotExist(statErr) {
+		t.Fatalf("rollback should remove worktree path %q, stat error = %v", capturedWorktreePath, statErr)
+	}
+	if got := len(app.sessions.Snapshot()); got != 0 {
+		t.Fatalf("session count after rollback = %d, want 0", got)
+	}
+
+	repo, openErr := gitpkg.Open(repoPath)
+	if openErr != nil {
+		t.Fatalf("Open() error = %v", openErr)
+	}
+	branches, listErr := repo.ListBranches()
+	if listErr != nil {
+		t.Fatalf("ListBranches() error = %v", listErr)
+	}
+	for _, branch := range branches {
+		if branch == "feature/rollback-worktree" {
+			t.Fatalf("rollback branch %q should be cleaned up", branch)
+		}
+	}
+}
+
+func TestCreateSessionWithWorktreeEmitsCleanupFailureEventWhenRollbackFails(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+	app.setConfigSnapshot(config.DefaultConfig())
+
+	originalExecute := executeRouterRequestFn
+	originalEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = originalExecute
+		runtimeEventsEmitFn = originalEmit
+	})
+
+	capturedWorktreePath := ""
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		if req.Command != "new-session" {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command\n"}
+		}
+		if worktreePath, ok := req.Flags["-c"].(string); ok {
+			capturedWorktreePath = strings.TrimSpace(worktreePath)
+		}
+		_ = os.RemoveAll(filepath.Join(repoPath, ".git"))
+		return ipc.TmuxResponse{ExitCode: 1, Stderr: "simulated session creation failure\n"}
+	}
+
+	var cleanupPayload map[string]any
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+		if name != "worktree:cleanup-failed" || len(data) == 0 {
+			return
+		}
+		payload, ok := data[0].(map[string]any)
+		if ok {
+			cleanupPayload = payload
+		}
+	}
+
+	_, err := app.CreateSessionWithWorktree(repoPath, "session-a", WorktreeSessionOptions{
+		BranchName: "feature/rollback-failed",
+	})
+	if err == nil {
+		t.Fatal("CreateSessionWithWorktree() expected rollback failure error")
+	}
+	if !strings.Contains(err.Error(), "worktree rollback also failed") {
+		t.Fatalf("CreateSessionWithWorktree() error = %v, want rollback failure details", err)
+	}
+	if cleanupPayload == nil {
+		t.Fatal("expected worktree:cleanup-failed event payload")
+	}
+	if got := cleanupPayload["sessionName"]; got != "session-a" {
+		t.Fatalf("cleanup payload sessionName = %v, want session-a", got)
+	}
+	if strings.TrimSpace(capturedWorktreePath) == "" {
+		t.Fatal("expected captured worktree path from new-session request")
+	}
+	if got := cleanupPayload["path"]; got != capturedWorktreePath {
+		t.Fatalf("cleanup payload path = %v, want %q", got, capturedWorktreePath)
+	}
+}
+
+func TestCreateSessionWithWorktreeEnableAgentTeamSetsEnvVars(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+	app.setConfigSnapshot(config.DefaultConfig())
+
+	originalExecute := executeRouterRequestFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = originalExecute
+	})
+
+	var capturedReq ipc.TmuxRequest
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		capturedReq = req
+		sessionName, _ := req.Flags["-s"].(string)
+		sessionName = strings.TrimSpace(sessionName)
+		if sessionName == "" {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "missing session name\n"}
+		}
+		if _, _, err := app.sessions.CreateSession(sessionName, "0", 120, 40); err != nil {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: err.Error() + "\n"}
+		}
+		return ipc.TmuxResponse{ExitCode: 0, Stdout: sessionName + "\n"}
+	}
+
+	snapshot, err := app.CreateSessionWithWorktree(
+		repoPath,
+		"team-worktree",
+		WorktreeSessionOptions{
+			BranchName:      "feature/team-worktree",
+			EnableAgentTeam: true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CreateSessionWithWorktree() error = %v", err)
+	}
+
+	wantEnv := agentTeamEnvVars(snapshot.Name)
+	if len(capturedReq.Env) != len(wantEnv) {
+		t.Fatalf("captured env count = %d, want %d", len(capturedReq.Env), len(wantEnv))
+	}
+	for key, wantValue := range wantEnv {
+		if got := capturedReq.Env[key]; got != wantValue {
+			t.Fatalf("captured env[%q] = %q, want %q", key, got, wantValue)
+		}
 	}
 }
 
@@ -885,12 +1587,7 @@ func TestCreateSessionWithExistingWorktreeLogsRollbackKillSessionFailure(t *test
 		}
 	}
 
-	originalLogger := slog.Default()
-	var logBuf bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() {
-		slog.SetDefault(originalLogger)
-	})
+	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
 
 	_, err := app.CreateSessionWithExistingWorktree(repoPath, "existing-wt", repoPath, false)
 	if err == nil {
@@ -1060,6 +1757,23 @@ func TestCreateSessionWithExistingWorktreeReturnsErrorWhenBranchDetectionFailsWi
 	}
 }
 
+func TestCreateSessionWithExistingWorktreeReturnsStatErrorForInvalidPath(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+	app.setConfigSnapshot(config.DefaultConfig())
+
+	_, err := app.CreateSessionWithExistingWorktree(repoPath, "existing-wt", "\x00", false)
+	if err == nil {
+		t.Fatal("CreateSessionWithExistingWorktree() expected stat error for invalid worktree path")
+	}
+	if !strings.Contains(err.Error(), "failed to stat worktree path") {
+		t.Fatalf("error = %v, want stat error message", err)
+	}
+}
+
 func TestWorktreeStructFieldCounts(t *testing.T) {
 	if got := reflect.TypeOf(WorktreeSessionOptions{}).NumField(); got != 4 {
 		t.Fatalf("WorktreeSessionOptions field count = %d, want 4; update tests for new fields", got)
@@ -1134,6 +1848,114 @@ func TestWorktreePublicAPIsValidation(t *testing.T) {
 			t.Fatal("IsGitRepository() expected false for non-git directory")
 		}
 	})
+}
+
+func TestWorktreePublicAPIsRejectEmptySessionName(t *testing.T) {
+	app := NewApp()
+
+	if err := app.PromoteWorktreeToBranch("   ", "feature/new"); err == nil {
+		t.Fatal("PromoteWorktreeToBranch() expected session-name validation error")
+	}
+	if err := app.CommitAndPushWorktree("   ", "message", true); err == nil {
+		t.Fatal("CommitAndPushWorktree() expected session-name validation error")
+	}
+	if _, err := app.CheckWorktreeStatus("   "); err == nil {
+		t.Fatal("CheckWorktreeStatus() expected session-name validation error")
+	}
+	if err := app.CleanupWorktree("   "); err == nil {
+		t.Fatal("CleanupWorktree() expected session-name validation error")
+	}
+}
+
+func TestPromoteWorktreeToBranchRejectsInvalidBranchName(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+	runGitInDir(t, repoPath, "checkout", "--detach")
+
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := app.sessions.SetWorktreeInfo("session-a", &tmux.SessionWorktreeInfo{
+		Path:       repoPath,
+		RepoPath:   repoPath,
+		BranchName: "",
+		BaseBranch: "HEAD",
+		IsDetached: true,
+	}); err != nil {
+		t.Fatalf("SetWorktreeInfo() error = %v", err)
+	}
+
+	if err := app.PromoteWorktreeToBranch("session-a", "invalid branch name"); err == nil {
+		t.Fatal("PromoteWorktreeToBranch() expected invalid-branch error")
+	}
+}
+
+func TestCreateSessionWithExistingWorktreeEnableAgentTeamSetsEnvVars(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+	app.setConfigSnapshot(config.DefaultConfig())
+
+	originalExecute := executeRouterRequestFn
+	originalEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = originalExecute
+		runtimeEventsEmitFn = originalEmit
+	})
+
+	events := make([]string, 0, 4)
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+		events = append(events, name)
+	}
+
+	var capturedReq ipc.TmuxRequest
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		capturedReq = req
+		switch req.Command {
+		case "new-session":
+			sessionName, _ := req.Flags["-s"].(string)
+			sessionName = strings.TrimSpace(sessionName)
+			if sessionName == "" {
+				return ipc.TmuxResponse{ExitCode: 1, Stderr: "missing session name\n"}
+			}
+			if _, _, err := app.sessions.CreateSession(sessionName, "0", 120, 40); err != nil {
+				return ipc.TmuxResponse{ExitCode: 1, Stderr: err.Error() + "\n"}
+			}
+			return ipc.TmuxResponse{ExitCode: 0, Stdout: sessionName + "\n"}
+		default:
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command\n"}
+		}
+	}
+
+	snapshot, err := app.CreateSessionWithExistingWorktree(repoPath, "existing-wt-team", repoPath, true)
+	if err != nil {
+		t.Fatalf("CreateSessionWithExistingWorktree() error = %v", err)
+	}
+
+	wantEnv := agentTeamEnvVars(snapshot.Name)
+	if len(capturedReq.Env) != len(wantEnv) {
+		t.Fatalf("captured env count = %d, want %d", len(capturedReq.Env), len(wantEnv))
+	}
+	for key, wantValue := range wantEnv {
+		if got := capturedReq.Env[key]; got != wantValue {
+			t.Fatalf("captured env[%q] = %q, want %q", key, got, wantValue)
+		}
+	}
+
+	foundSnapshotEvent := false
+	for _, name := range events {
+		if name == "tmux:snapshot" || name == "tmux:snapshot-delta" {
+			foundSnapshotEvent = true
+			break
+		}
+	}
+	if !foundSnapshotEvent {
+		t.Fatalf("CreateSessionWithExistingWorktree() events = %v, want snapshot event", events)
+	}
 }
 
 func TestListBranchesHidesWorktreeOnlyLocalBranches(t *testing.T) {

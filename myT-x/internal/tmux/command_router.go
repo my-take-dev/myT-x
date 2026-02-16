@@ -87,6 +87,17 @@ func (r *CommandRouter) PaneEnvSnapshot() map[string]string {
 	return r.getPaneEnv()
 }
 
+// paneEnvView returns a read-only map reference of current PaneEnv.
+// Callers must not mutate the returned map.
+// NOTE: safety relies on UpdatePaneEnv using copy-on-write replacement
+// (allocate a new map, then swap under paneEnvMu) rather than in-place writes.
+// See UpdatePaneEnv for the writer side of this contract.
+func (r *CommandRouter) paneEnvView() map[string]string {
+	r.paneEnvMu.RLock()
+	defer r.paneEnvMu.RUnlock()
+	return r.opts.PaneEnv
+}
+
 // getPaneEnv returns a snapshot (deep copy) of current PaneEnv.
 func (r *CommandRouter) getPaneEnv() map[string]string {
 	r.paneEnvMu.RLock()
@@ -131,6 +142,7 @@ func NewCommandRouter(sessions *SessionManager, emitter EventEmitter, opts Route
 		"kill-session":    router.handleKillSession,
 		"list-panes":      router.handleListPanes,
 		"display-message": router.handleDisplayMessage,
+		"activate-window": router.handleActivateWindow,
 	}
 	return router
 }

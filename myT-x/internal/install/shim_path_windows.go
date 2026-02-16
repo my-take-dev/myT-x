@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf16"
 	"unsafe"
 
@@ -30,22 +30,35 @@ const (
 	smtoAbortIfHung = 0x0002
 	// Timeout for WM_SETTINGCHANGE broadcast to avoid indefinite blocking.
 	wmSettingChangeTimeoutMS = 5000
+	// Maximum allowed raw registry Path value size (64KB).
+	// This bound guards against unexpectedly large reads and allocation spikes.
+	maxRegistryPathRawSize = 64 * 1024
 )
 
 var (
 	user32DLL                 = windows.NewLazySystemDLL("user32.dll")
 	procSendMessageTimeoutW   = user32DLL.NewProc("SendMessageTimeoutW")
 	environmentSettingPayload = mustUTF16Ptr("Environment")
+	ensurePathMu              sync.Mutex
 )
 
 func ensurePathContains(installDir string) (bool, error) {
-	currentPath := os.Getenv("PATH")
-	if containsPathEntry(currentPath, installDir) {
-		return false, nil
-	}
+	ensurePathMu.Lock()
+	defer ensurePathMu.Unlock()
 
-	// Query registry value for user PATH because process PATH may differ.
-	regValue, regValueType, err := readUserPathFromRegistryWithType()
+	// Read and write user PATH through a single registry handle to avoid
+	// read-then-write races when concurrent processes update PATH.
+	key, _, err := registry.CreateKey(
+		registry.CURRENT_USER,
+		registryEnvKeyPath,
+		registry.QUERY_VALUE|registry.SET_VALUE,
+	)
+	if err != nil {
+		return false, fmt.Errorf("open registry key for read/write: %w", err)
+	}
+	defer key.Close()
+
+	regValue, regValueType, err := readUserPathFromRegistryKeyWithType(key)
 	if err != nil {
 		return false, err
 	}
@@ -53,7 +66,7 @@ func ensurePathContains(installDir string) (bool, error) {
 		return false, nil
 	}
 
-	newPath := strings.TrimSuffix(regValue, ";")
+	newPath := strings.TrimRight(regValue, ";")
 	if newPath != "" {
 		newPath += ";"
 	}
@@ -63,19 +76,13 @@ func ensurePathContains(installDir string) (bool, error) {
 	slog.Debug("[DEBUG-SHIM] writing updated PATH to registry",
 		"entryCount", countPathEntries(newPath),
 		"valueType", pathRegistryTypeName(targetValueType))
-	key, _, err := registry.CreateKey(registry.CURRENT_USER, registryEnvKeyPath, registry.SET_VALUE)
-	if err != nil {
-		return false, fmt.Errorf("open registry key for writing: %w", err)
-	}
-	defer key.Close()
-
-	if err := setPathRegistryValue(key, newPath, regValueType); err != nil {
+	if err := setPathRegistryValue(key, newPath, targetValueType); err != nil {
 		return false, fmt.Errorf("update user PATH in registry: %w", err)
 	}
 	if err := broadcastEnvironmentSettingChange(); err != nil {
 		// Non-fatal: PATH update succeeded. Existing behavior ("open a new terminal")
 		// still works when broadcast delivery fails.
-		slog.Debug("[DEBUG-SHIM] failed to broadcast WM_SETTINGCHANGE",
+		slog.Warn("[WARN-SHIM] failed to broadcast WM_SETTINGCHANGE",
 			"error", err)
 	}
 	return true, nil
@@ -100,6 +107,10 @@ func readUserPathFromRegistryWithType() (string, uint32, error) {
 	}
 	defer key.Close()
 
+	return readUserPathFromRegistryKeyWithType(key)
+}
+
+func readUserPathFromRegistryKeyWithType(key registry.Key) (string, uint32, error) {
 	rawSize, valueType, err := key.GetValue(pathValueName, nil)
 	if err != nil {
 		// Path value not yet created — treat as empty (first install).
@@ -112,21 +123,22 @@ func readUserPathFromRegistryWithType() (string, uint32, error) {
 		return "", registry.NONE, fmt.Errorf("read user PATH from registry: %w", err)
 	}
 
-	if valueType != registry.SZ && valueType != registry.EXPAND_SZ {
-		return "", registry.NONE, fmt.Errorf("read user PATH from registry: unsupported value type %d", valueType)
+	if err := validateRegistryPathValueType(valueType); err != nil {
+		return "", registry.NONE, err
 	}
 
-	rawValue := make([]byte, rawSize)
-	if rawSize > 0 {
-		n, valueTypeRead, readErr := key.GetValue(pathValueName, rawValue)
-		if readErr != nil {
-			slog.Debug("[DEBUG-SHIM] failed to read raw Path value from registry", "error", readErr)
-			return "", registry.NONE, fmt.Errorf("read user PATH from registry: %w", readErr)
-		}
-		if valueTypeRead != valueType {
-			return "", registry.NONE, fmt.Errorf("read user PATH from registry: inconsistent value type %d (expected %d)", valueTypeRead, valueType)
-		}
-		rawValue = rawValue[:n]
+	rawValue, valueType, err := readRegistryPathRawValueWithRetry(
+		rawSize,
+		valueType,
+		func(buffer []byte) (int, uint32, error) {
+			return key.GetValue(pathValueName, buffer)
+		},
+		func() (int, uint32, error) {
+			return key.GetValue(pathValueName, nil)
+		},
+	)
+	if err != nil {
+		return "", registry.NONE, err
 	}
 
 	value := decodeRegistryUTF16String(rawValue)
@@ -136,17 +148,118 @@ func readUserPathFromRegistryWithType() (string, uint32, error) {
 	return value, valueType, nil
 }
 
-func setPathRegistryValue(key registry.Key, pathValue string, currentType uint32) error {
-	switch selectPathRegistryValueType(currentType, pathValue) {
+func readRegistryPathRawValueWithRetry(
+	rawSize int,
+	valueType uint32,
+	readValue func([]byte) (int, uint32, error),
+	readSizeAndType func() (int, uint32, error),
+) ([]byte, uint32, error) {
+	if err := validateRegistryPathRawSize(rawSize); err != nil {
+		return nil, registry.NONE, err
+	}
+	// Read with bounded retries to tolerate size changes between length query and read.
+	// This can happen when another process updates user PATH concurrently.
+	const maxReadAttempts = 3
+	for attempt := 1; attempt <= maxReadAttempts; attempt++ {
+		buffer := make([]byte, rawSize)
+		n, valueTypeRead, readErr := readValue(buffer)
+		if readErr == nil {
+			if n < 0 {
+				return nil, registry.NONE, fmt.Errorf("read user PATH from registry: invalid read size %d", n)
+			}
+			if valueTypeRead != valueType {
+				slog.Debug("[DEBUG-SHIM] registry Path value type changed while reading, retrying",
+					"attempt", attempt, "maxAttempts", maxReadAttempts, "expectedType", valueType, "actualType", valueTypeRead)
+				if attempt == maxReadAttempts {
+					return nil, registry.NONE, fmt.Errorf("read user PATH from registry: inconsistent value type %d (expected %d)", valueTypeRead, valueType)
+				}
+				var sizeErr error
+				rawSize, valueType, sizeErr = readSizeAndType()
+				if sizeErr != nil {
+					slog.Debug("[DEBUG-SHIM] failed to refresh Path value metadata after value type mismatch", "error", sizeErr)
+					return nil, registry.NONE, fmt.Errorf("read user PATH from registry: %w", sizeErr)
+				}
+				if err := validateRegistryPathRawSize(rawSize); err != nil {
+					return nil, registry.NONE, err
+				}
+				if err := validateRegistryPathValueType(valueType); err != nil {
+					return nil, registry.NONE, err
+				}
+				continue
+			}
+			if n > len(buffer) {
+				// Defensive path for mock/custom readers or zero-length initial buffers:
+				// when n exceeds the current buffer, retry with the reported size.
+				if err := validateRegistryPathValueType(valueTypeRead); err != nil {
+					return nil, registry.NONE, fmt.Errorf("%w on size-growth retry", err)
+				}
+				slog.Debug("[DEBUG-SHIM] registry Path value exceeded current buffer size, retrying",
+					"attempt", attempt, "maxAttempts", maxReadAttempts, "requestedSize", len(buffer), "actualSize", n)
+				rawSize = n
+				valueType = valueTypeRead
+				continue
+			}
+			return buffer[:n], valueType, nil
+		}
+		if errors.Is(readErr, windows.ERROR_MORE_DATA) {
+			slog.Debug("[DEBUG-SHIM] registry Path value size changed while reading, retrying",
+				"attempt", attempt, "maxAttempts", maxReadAttempts)
+			var sizeErr error
+			// Refresh both size and valueType because registry values can change between retries.
+			rawSize, valueType, sizeErr = readSizeAndType()
+			if sizeErr != nil {
+				slog.Debug("[DEBUG-SHIM] failed to refresh Path value size after ERROR_MORE_DATA", "error", sizeErr)
+				return nil, registry.NONE, fmt.Errorf("read user PATH from registry: %w", sizeErr)
+			}
+			if err := validateRegistryPathRawSize(rawSize); err != nil {
+				return nil, registry.NONE, err
+			}
+			if err := validateRegistryPathValueType(valueType); err != nil {
+				return nil, registry.NONE, err
+			}
+			continue
+		}
+
+		slog.Debug("[DEBUG-SHIM] failed to read raw Path value from registry", "error", readErr)
+		return nil, registry.NONE, fmt.Errorf("read user PATH from registry: %w", readErr)
+	}
+
+	return nil, registry.NONE, fmt.Errorf("read user PATH from registry: retry limit exceeded (%d attempts)", maxReadAttempts)
+}
+
+func validateRegistryPathRawSize(rawSize int) error {
+	if rawSize < 0 {
+		return fmt.Errorf("read user PATH from registry: invalid raw size %d", rawSize)
+	}
+	if rawSize > maxRegistryPathRawSize {
+		return fmt.Errorf("read user PATH from registry: raw size %d exceeds limit %d", rawSize, maxRegistryPathRawSize)
+	}
+	return nil
+}
+
+func validateRegistryPathValueType(valueType uint32) error {
+	if valueType != registry.SZ && valueType != registry.EXPAND_SZ {
+		return fmt.Errorf("read user PATH from registry: unsupported value type %d", valueType)
+	}
+	return nil
+}
+
+func setPathRegistryValue(key registry.Key, pathValue string, targetType uint32) error {
+	switch targetType {
 	case registry.SZ:
 		return key.SetStringValue(pathValueName, pathValue)
 	case registry.EXPAND_SZ:
 		return key.SetExpandStringValue(pathValueName, pathValue)
 	default:
-		return fmt.Errorf("unsupported value type %d", currentType)
+		return fmt.Errorf("unsupported value type %d", targetType)
 	}
 }
 
+// selectPathRegistryValueType determines the registry value type (SZ or EXPAND_SZ)
+// for writing the PATH value. For known types (SZ, EXPAND_SZ), the current type is
+// preserved. For NONE (new entry), auto-detects based on "%" markers.
+// For unknown types, the value is returned as-is; the caller is responsible
+// for rejecting unsupported types (e.g. setPathRegistryValue returns an error).
 func selectPathRegistryValueType(currentType uint32, pathValue string) uint32 {
 	switch currentType {
 	case registry.SZ, registry.EXPAND_SZ:
@@ -157,6 +270,7 @@ func selectPathRegistryValueType(currentType uint32, pathValue string) uint32 {
 		}
 		return registry.SZ
 	default:
+		// Unknown types are returned as-is so the caller can reject explicitly.
 		return currentType
 	}
 }
@@ -166,7 +280,7 @@ func decodeRegistryUTF16String(rawValue []byte) string {
 		return ""
 	}
 	if len(rawValue)%2 != 0 {
-		slog.Debug("[DEBUG-SHIM] registry Path value has odd byte length, truncating last byte",
+		slog.Warn("[WARN-SHIM] registry Path value has odd byte length, truncating last byte",
 			"byteLength", len(rawValue))
 		rawValue = rawValue[:len(rawValue)-1]
 	}
@@ -178,6 +292,9 @@ func decodeRegistryUTF16String(rawValue []byte) string {
 			break
 		}
 		utf16Data = append(utf16Data, ch)
+	}
+	if len(utf16Data) > 0 && utf16Data[0] == 0xFEFF {
+		utf16Data = utf16Data[1:]
 	}
 	return string(utf16.Decode(utf16Data))
 }
@@ -206,6 +323,7 @@ func pathRegistryTypeName(valueType uint32) string {
 }
 
 func broadcastEnvironmentSettingChange() error {
+	var result uintptr // Populated by SendMessageTimeoutW; not inspected by this caller.
 	ret, _, callErr := procSendMessageTimeoutW.Call(
 		uintptr(hwndBroadcast),
 		uintptr(wmSettingChange),
@@ -213,10 +331,10 @@ func broadcastEnvironmentSettingChange() error {
 		uintptr(unsafe.Pointer(environmentSettingPayload)),
 		uintptr(smtoAbortIfHung),
 		uintptr(wmSettingChangeTimeoutMS),
-		0,
+		uintptr(unsafe.Pointer(&result)),
 	)
 	if ret == 0 {
-		if callErr == windows.ERROR_SUCCESS {
+		if callErr == nil || errors.Is(callErr, windows.ERROR_SUCCESS) {
 			return errors.New("SendMessageTimeoutW returned 0 without extended error")
 		}
 		return fmt.Errorf("SendMessageTimeoutW failed: %w", callErr)
@@ -233,7 +351,11 @@ func mustUTF16Ptr(value string) *uint16 {
 }
 
 func containsPathEntry(pathValue string, entry string) bool {
-	normalizedEntry := strings.ToLower(strings.TrimSpace(filepath.Clean(entry)))
+	normalizedEntry := strings.TrimSpace(entry)
+	if normalizedEntry == "" {
+		return false
+	}
+	normalizedEntry = strings.ToLower(filepath.Clean(normalizedEntry))
 	for _, item := range strings.Split(pathValue, ";") {
 		item = strings.TrimSpace(item)
 		if item == "" {

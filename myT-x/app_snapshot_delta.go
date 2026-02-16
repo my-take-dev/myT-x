@@ -133,9 +133,10 @@ func layoutSnapshotEqual(left, right *tmux.LayoutNode) bool {
 }
 
 func (a *App) snapshotDelta(snapshots []tmux.SessionSnapshot) (tmux.SessionSnapshotDelta, bool, bool) {
-	a.snapshotMu.Lock()
-	defer a.snapshotMu.Unlock()
+	a.snapshotDeltaMu.Lock()
+	defer a.snapshotDeltaMu.Unlock()
 
+	a.snapshotMu.Lock()
 	if !a.snapshotPrimed {
 		if a.snapshotCache == nil {
 			a.snapshotCache = make(map[string]tmux.SessionSnapshot, len(snapshots))
@@ -144,8 +145,15 @@ func (a *App) snapshotDelta(snapshots []tmux.SessionSnapshot) (tmux.SessionSnaps
 			a.snapshotCache[snapshot.Name] = snapshot
 		}
 		a.snapshotPrimed = true
+		a.snapshotMu.Unlock()
 		return tmux.SessionSnapshotDelta{}, false, true
 	}
+	// NOTE: snapshotDelta intentionally computes outside snapshotMu to avoid
+	// holding the cache lock across full snapshot comparison on the hot path.
+	// snapshotDeltaMu serializes emit paths so cache updates cannot overwrite each
+	// other when requestSnapshot(true) is triggered concurrently.
+	previous := copySnapshotCache(a.snapshotCache)
+	a.snapshotMu.Unlock()
 
 	delta := tmux.SessionSnapshotDelta{
 		Upserts: make([]tmux.SessionSnapshot, 0, len(snapshots)),
@@ -156,14 +164,14 @@ func (a *App) snapshotDelta(snapshots []tmux.SessionSnapshot) (tmux.SessionSnaps
 	currentNames := make(map[string]struct{}, len(snapshots))
 	for _, snapshot := range snapshots {
 		currentNames[snapshot.Name] = struct{}{}
-		prev, ok := a.snapshotCache[snapshot.Name]
+		prev, ok := previous[snapshot.Name]
 		if ok && sessionSnapshotEqual(prev, snapshot) {
 			continue
 		}
 		delta.Upserts = append(delta.Upserts, snapshot)
 	}
 
-	for name := range a.snapshotCache {
+	for name := range previous {
 		if _, ok := currentNames[name]; ok {
 			continue
 		}
@@ -173,13 +181,34 @@ func (a *App) snapshotDelta(snapshots []tmux.SessionSnapshot) (tmux.SessionSnaps
 		sort.Strings(delta.Removed)
 	}
 
-	// Update cache in-place: remove stale, upsert new/changed.
+	// Update cache in-place on the copied map: remove stale, then upsert changes.
 	for _, name := range delta.Removed {
-		delete(a.snapshotCache, name)
+		delete(previous, name)
 	}
 	for _, snapshot := range delta.Upserts {
-		a.snapshotCache[snapshot.Name] = snapshot
+		previous[snapshot.Name] = snapshot
 	}
 
+	a.snapshotMu.Lock()
+	if !a.snapshotPrimed || a.snapshotCache == nil {
+		a.snapshotCache = make(map[string]tmux.SessionSnapshot, len(snapshots))
+		for _, snapshot := range snapshots {
+			a.snapshotCache[snapshot.Name] = snapshot
+		}
+		a.snapshotPrimed = true
+		a.snapshotMu.Unlock()
+		return tmux.SessionSnapshotDelta{}, false, true
+	}
+	a.snapshotCache = previous
+	a.snapshotMu.Unlock()
+
 	return delta, len(delta.Upserts) > 0 || len(delta.Removed) > 0, false
+}
+
+func copySnapshotCache(cache map[string]tmux.SessionSnapshot) map[string]tmux.SessionSnapshot {
+	out := make(map[string]tmux.SessionSnapshot, len(cache))
+	for name, snapshot := range cache {
+		out[name] = snapshot
+	}
+	return out
 }

@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"strings"
+	"time"
 )
 
 // UpdateActivityByPaneID updates a session's activity timestamp by pane id (%N).
@@ -26,6 +27,7 @@ func (m *SessionManager) UpdateActivityByPaneID(paneID string) bool {
 		return false
 	}
 	session.IsIdle = false
+	m.markStateMutationLocked()
 	return true
 }
 
@@ -54,5 +56,32 @@ func (m *SessionManager) CheckIdleState() bool {
 		changed = true
 	}
 
+	if changed {
+		m.markStateMutationLocked()
+	}
 	return changed
+}
+
+// RecommendedIdleCheckInterval returns an adaptive polling interval for idle checks.
+func (m *SessionManager) RecommendedIdleCheckInterval() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if len(m.sessions) == 0 {
+		return 5 * time.Second
+	}
+	allIdle := true
+	for _, session := range m.sessions {
+		if session == nil {
+			continue
+		}
+		if !session.IsIdle {
+			allIdle = false
+			break
+		}
+	}
+	if allIdle {
+		return 5 * time.Second
+	}
+	return time.Second
 }

@@ -60,7 +60,9 @@ export function LayoutPresetSelector({ sessionName, paneCount }: LayoutPresetSel
             title={p.label}
             aria-label={`Layout: ${p.label}`}
             onClick={() => {
-              void api.ApplyLayoutPreset(sessionName, p.id);
+              void api.ApplyLayoutPreset(sessionName, p.id).catch((err) => {
+                console.warn("[layout-preset] ApplyLayoutPreset failed", err);
+              });
             }}
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">

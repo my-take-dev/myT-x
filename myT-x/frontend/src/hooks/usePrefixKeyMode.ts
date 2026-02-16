@@ -14,7 +14,28 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
   const setPrefixMode = useTmuxStore((s) => s.setPrefixMode);
   const zoomPaneId = useTmuxStore((s) => s.zoomPaneId);
   const setZoomPaneId = useTmuxStore((s) => s.setZoomPaneId);
+  const toggleSyncInputMode = useTmuxStore((s) => s.toggleSyncInputMode);
   const timerRef = useRef<number | null>(null);
+  const sessionsRef = useRef(sessions);
+  const activeSessionRef = useRef(activeSession);
+  const prefixModeRef = useRef(prefixMode);
+  const zoomPaneIdRef = useRef(zoomPaneId);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
+    activeSessionRef.current = activeSession;
+  }, [activeSession]);
+
+  useEffect(() => {
+    prefixModeRef.current = prefixMode;
+  }, [prefixMode]);
+
+  useEffect(() => {
+    zoomPaneIdRef.current = zoomPaneId;
+  }, [zoomPaneId]);
 
   useEffect(() => {
     const clearPrefixTimer = () => {
@@ -26,7 +47,10 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
 
     const armPrefixTimer = () => {
       clearPrefixTimer();
-      timerRef.current = window.setTimeout(() => setPrefixMode(false), 1200);
+      timerRef.current = window.setTimeout(() => {
+        prefixModeRef.current = false;
+        setPrefixMode(false);
+      }, 1200);
     };
 
     const handle = (event: KeyboardEvent) => {
@@ -35,17 +59,19 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
       }
       if (event.ctrlKey && (event.key === "b" || event.key === "B")) {
         event.preventDefault();
+        prefixModeRef.current = true;
         setPrefixMode(true);
         armPrefixTimer();
         return;
       }
 
-      if (!prefixMode) {
+      if (!prefixModeRef.current) {
         return;
       }
 
       event.preventDefault();
       clearPrefixTimer();
+      prefixModeRef.current = false;
       setPrefixMode(false);
 
       const paneId = options.activePaneId;
@@ -53,34 +79,46 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
         return;
       }
 
-      const currentSession = sessions.find((session) => session.name === activeSession);
+      const currentSession = sessionsRef.current.find(
+        (session) => session.name === activeSessionRef.current,
+      );
       const panes = currentSession?.windows[0]?.panes ?? [];
       const currentIndex = panes.findIndex((pane) => pane.id === paneId);
 
       const key = event.key;
       if (key === "%") {
-        void api.SplitPane(paneId, true);
+        void api.SplitPane(paneId, true).catch((err) => {
+          console.warn("[prefix] split vertical failed", err);
+        });
         return;
       }
       if (key === '"') {
-        void api.SplitPane(paneId, false);
+        void api.SplitPane(paneId, false).catch((err) => {
+          console.warn("[prefix] split horizontal failed", err);
+        });
         return;
       }
       if (key === "z" || key === "Z") {
-        setZoomPaneId(zoomPaneId === paneId ? null : paneId);
+        const currentZoomPaneId = zoomPaneIdRef.current;
+        setZoomPaneId(currentZoomPaneId === paneId ? null : paneId);
         return;
       }
       if (key === "s" || key === "S") {
-        useTmuxStore.getState().toggleSyncInputMode();
+        toggleSyncInputMode();
         return;
       }
       if (key === "x" || key === "X") {
-        void api.KillPane(paneId);
+        void api.KillPane(paneId).catch((err) => {
+          console.warn("[prefix] kill pane failed", err);
+        });
         return;
       }
       if (key === "d" || key === "D") {
-        if (activeSession) {
-          void api.DetachSession(activeSession);
+        const currentActiveSession = activeSessionRef.current;
+        if (currentActiveSession) {
+          void api.DetachSession(currentActiveSession).catch((err) => {
+            console.warn("[prefix] detach session failed", err);
+          });
         }
         return;
       }
@@ -88,7 +126,9 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
         const nextIndex = Math.max(0, currentIndex - 1);
         const target = panes[nextIndex];
         if (target) {
-          void api.FocusPane(target.id);
+          void api.FocusPane(target.id).catch((err) => {
+            console.warn("[prefix] focus pane failed", err);
+          });
         }
         return;
       }
@@ -96,7 +136,9 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
         const nextIndex = Math.min(panes.length - 1, currentIndex + 1);
         const target = panes[nextIndex];
         if (target) {
-          void api.FocusPane(target.id);
+          void api.FocusPane(target.id).catch((err) => {
+            console.warn("[prefix] focus pane failed", err);
+          });
         }
         return;
       }
@@ -107,5 +149,5 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
       window.removeEventListener("keydown", handle);
       clearPrefixTimer();
     };
-  }, [activeSession, options.activePaneId, prefixMode, sessions, setPrefixMode, setZoomPaneId, zoomPaneId]);
+  }, [options.activePaneId, setPrefixMode, setZoomPaneId, toggleSyncInputMode]);
 }

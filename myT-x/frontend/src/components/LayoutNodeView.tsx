@@ -13,11 +13,12 @@ export interface LayoutNodeActions {
   onDetachSession: () => void;
 }
 
-interface LayoutNodeViewProps extends LayoutNodeActions {
+interface LayoutNodeViewProps {
   node: LayoutNode;
   paneMap: Map<string, PaneSnapshot>;
   activePaneId: string | null;
   nodePath?: string;
+  actions: LayoutNodeActions;
 }
 
 function renderPaneTerminal(
@@ -44,6 +45,7 @@ function renderPaneTerminal(
 
 export function LayoutNodeView(props: LayoutNodeViewProps) {
   const node = props.node;
+  const actions = props.actions;
   if (node.type === "leaf") {
     if (typeof node.pane_id !== "number" || !Number.isFinite(node.pane_id)) {
       return <div className="session-empty">Pane id is missing.</div>;
@@ -56,11 +58,11 @@ export function LayoutNodeView(props: LayoutNodeViewProps) {
     return renderPaneTerminal(
       pane,
       props.activePaneId === pane.id || pane.active,
-      props,
+      actions,
     );
   }
 
-  return <SplitLayoutNodeView {...props} />;
+  return <SplitLayoutNodeView {...props} actions={actions} />;
 }
 
 function childNodeKey(node: LayoutNode | undefined, fallbackPath: string): string {
@@ -75,6 +77,7 @@ function childNodeKey(node: LayoutNode | undefined, fallbackPath: string): strin
 
 function SplitLayoutNodeView(props: LayoutNodeViewProps) {
   const node = props.node;
+  const actions = props.actions;
 
   // [C-1 fix] Hooks must be called before any conditional return (React Rules of Hooks).
   const [ratio, setRatio] = useState(node.ratio && node.ratio > 0 ? node.ratio : 0.5);
@@ -152,14 +155,7 @@ function SplitLayoutNodeView(props: LayoutNodeViewProps) {
             node={node.children[0]}
             paneMap={props.paneMap}
             activePaneId={props.activePaneId}
-            onFocusPane={props.onFocusPane}
-            onSplitVertical={props.onSplitVertical}
-            onSplitHorizontal={props.onSplitHorizontal}
-            onToggleZoom={props.onToggleZoom}
-            onKillPane={props.onKillPane}
-            onRenamePane={props.onRenamePane}
-            onSwapPane={props.onSwapPane}
-            onDetachSession={props.onDetachSession}
+            actions={actions}
             nodePath={`${nodePath}.0`}
           />
         ) : null}
@@ -183,14 +179,7 @@ function SplitLayoutNodeView(props: LayoutNodeViewProps) {
             node={node.children[1]}
             paneMap={props.paneMap}
             activePaneId={props.activePaneId}
-            onFocusPane={props.onFocusPane}
-            onSplitVertical={props.onSplitVertical}
-            onSplitHorizontal={props.onSplitHorizontal}
-            onToggleZoom={props.onToggleZoom}
-            onKillPane={props.onKillPane}
-            onRenamePane={props.onRenamePane}
-            onSwapPane={props.onSwapPane}
-            onDetachSession={props.onDetachSession}
+            actions={actions}
             nodePath={`${nodePath}.1`}
           />
         ) : null}

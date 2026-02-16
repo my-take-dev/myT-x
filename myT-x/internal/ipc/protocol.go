@@ -7,9 +7,10 @@ import (
 	"os/user"
 	"regexp"
 	"strings"
+
+	"myT-x/internal/userutil"
 )
 
-var invalidPipeRune = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 var pipeNamePattern = regexp.MustCompile(`(?i)^\\\\\.\\pipe\\myT-x-[a-z0-9._-]{1,128}$`)
 
 const defaultPipePrefix = `\\.\pipe\myT-x-`
@@ -36,11 +37,7 @@ type CommandExecutor interface {
 }
 
 func sanitizeUsername(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "unknown"
-	}
-	return invalidPipeRune.ReplaceAllString(value, "_")
+	return userutil.SanitizeUsername(value)
 }
 
 // DefaultPipeName returns the pipe path to use. If the GO_TMUX_PIPE

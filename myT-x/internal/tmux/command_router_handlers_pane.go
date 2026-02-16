@@ -43,6 +43,27 @@ func (r *CommandRouter) splitWindowResolved(target *TmuxPane, direction SplitDir
 		return nil, err
 	}
 
+	requestedWorkDir := workDir
+	workDir = strings.TrimSpace(workDir)
+
+	// Fallback: when workDir is not explicitly provided (GUI split path),
+	// use the session's effective working directory.
+	if workDir == "" {
+		workDir = strings.TrimSpace(targetCtx.SessionWorkDir)
+		if workDir != "" {
+			slog.Debug("[DEBUG-SPLIT] splitWindowResolved: using session workdir fallback",
+				"requestedWorkDir", requestedWorkDir,
+				"sessionWorkDir", targetCtx.SessionWorkDir,
+				"resolvedWorkDir", workDir,
+			)
+		} else {
+			slog.Debug("[DEBUG-SPLIT] splitWindowResolved: workdir unresolved after fallback",
+				"requestedWorkDir", requestedWorkDir,
+				"sessionWorkDir", targetCtx.SessionWorkDir,
+			)
+		}
+	}
+
 	newPane, err := r.sessions.SplitPane(targetPaneID, direction)
 	if err != nil {
 		return nil, err
@@ -50,17 +71,18 @@ func (r *CommandRouter) splitWindowResolved(target *TmuxPane, direction SplitDir
 
 	slog.Debug("[DEBUG-SPLIT] splitWindowResolved: request args",
 		"originalArgs", fmt.Sprintf("%v", args),
-		"originalWorkDir", workDir,
+		"requestedWorkDir", requestedWorkDir,
+		"resolvedWorkDir", workDir,
 	)
 
 	env := copyEnvMap(targetCtx.Env)
-	mergePaneEnvDefaults(env, r.getPaneEnv())
+	mergePaneEnvDefaults(env, r.paneEnvView())
 	for k, v := range extraEnv {
 		env[k] = v
 	}
 	addTmuxEnvironment(env, r.opts.PipeName, r.opts.HostPID, targetCtx.SessionID, newPane.ID, r.ShimAvailable())
 
-	if attachErr := r.attachTerminal(newPane, strings.TrimSpace(workDir), env, nil); attachErr != nil {
+	if attachErr := r.attachTerminal(newPane, workDir, env, nil); attachErr != nil {
 		if _, _, rollbackErr := r.sessions.KillPane(newPane.IDString()); rollbackErr != nil {
 			slog.Warn("[DEBUG-SPLIT] failed to rollback pane after attachTerminal error",
 				"paneId", newPane.IDString(), "attachErr", attachErr, "rollbackErr", rollbackErr)

@@ -52,10 +52,19 @@ func TestGetEmbeddedShim_WithData(t *testing.T) {
 	}
 }
 
-// setupEmbedTestEnv sets up LOCALAPPDATA and PATH for shim install tests.
+// setupEmbedTestEnv sets up LOCALAPPDATA and PATH for shim install tests and
+// redirects PATH mutation to process-local updates (no registry writes).
 // Returns the installDir path.
+// NOTE: This helper mutates package-level test seams; callers must not use
+// t.Parallel() in tests that invoke this helper.
 func setupEmbedTestEnv(t *testing.T) string {
 	t.Helper()
+
+	origEnsurePathContains := ensurePathContainsFn
+	t.Cleanup(func() { ensurePathContainsFn = origEnsurePathContains })
+	ensurePathContainsFn = func(dir string) (bool, error) {
+		return EnsureProcessPathContains(dir), nil
+	}
 
 	origLocal := os.Getenv("LOCALAPPDATA")
 	t.Cleanup(func() { _ = os.Setenv("LOCALAPPDATA", origLocal) })

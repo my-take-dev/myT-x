@@ -14,6 +14,8 @@ import (
 	"strings"
 )
 
+var ensurePathContainsFn = ensurePathContains
+
 // ShimInstallResult contains shim install details.
 type ShimInstallResult struct {
 	InstalledPath  string `json:"installed_path"`
@@ -39,7 +41,7 @@ func EnsureShimInstalled(workspaceRoot string) (ShimInstallResult, error) {
 		sourceHash := sha256Hex(shimBytes)
 		if err := installShimIfChanged(hashFile, sourceHash, target, func() error {
 			slog.Debug("[DEBUG-SHIM] writing embedded shim binary", "target", target, "size", len(shimBytes))
-			return os.WriteFile(target, shimBytes, 0o755)
+			return writeFileAtomically(target, shimBytes, 0o755)
 		}); err != nil {
 			return ShimInstallResult{}, fmt.Errorf("write embedded shim: %w", err)
 		}
@@ -50,7 +52,7 @@ func EnsureShimInstalled(workspaceRoot string) (ShimInstallResult, error) {
 		}
 		sourceHash, hashErr := sha256HexFile(source)
 		if hashErr != nil {
-			slog.Debug("[DEBUG-SHIM] hash computation failed, proceeding with copy", "error", hashErr)
+			slog.Warn("[WARN-SHIM] hash computation failed, proceeding with copy", "error", hashErr)
 			sourceHash = "" // force copy
 		}
 		if err := installShimIfChanged(hashFile, sourceHash, target, func() error {
@@ -60,7 +62,7 @@ func EnsureShimInstalled(workspaceRoot string) (ShimInstallResult, error) {
 		}
 	}
 
-	updated, err := ensurePathContains(installDir)
+	updated, err := ensurePathContainsFn(installDir)
 	if err != nil {
 		return ShimInstallResult{}, err
 	}
@@ -91,10 +93,6 @@ func NeedsShimInstall() (bool, error) {
 		return false, err
 	}
 
-	currentPath := os.Getenv("PATH")
-	if containsPathEntry(currentPath, installDir) {
-		return false, nil
-	}
 	regValue, err := readUserPathFromRegistry()
 	if err != nil {
 		return false, err
@@ -106,11 +104,23 @@ func NeedsShimInstall() (bool, error) {
 // Child processes (terminal panes) inherit the updated PATH so the tmux shim
 // becomes discoverable without requiring a system restart.
 func EnsureProcessPathContains(dir string) bool {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return false
+	}
+	// Keep process-level PATH updates serialized to avoid duplicate append races
+	// between concurrent startup/background callers.
+	ensurePathMu.Lock()
+	defer ensurePathMu.Unlock()
+
 	currentPath := os.Getenv("PATH")
 	if containsPathEntry(currentPath, dir) {
 		return false
 	}
-	os.Setenv("PATH", currentPath+";"+dir)
+	if err := os.Setenv("PATH", currentPath+";"+dir); err != nil {
+		slog.Warn("[WARN-SHIM] failed to update process PATH", "error", err)
+		return false
+	}
 	return true
 }
 
@@ -158,10 +168,43 @@ func installShimIfChanged(hashFile, sourceHash, target string, writeFn func() er
 	}
 	if sourceHash != "" {
 		if err := os.WriteFile(hashFile, []byte(sourceHash), 0o644); err != nil {
-			slog.Debug("[DEBUG-SHIM] failed to write hash file", "path", hashFile, "error", err)
+			slog.Warn("[WARN-SHIM] failed to write hash file", "path", hashFile, "error", err)
 		}
 	}
 	return nil
+}
+
+func writeFileAtomically(target string, content []byte, perm os.FileMode) (retErr error) {
+	tmpFile, err := os.CreateTemp(filepath.Dir(target), ".shim-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		if retErr != nil {
+			if closeErr := tmpFile.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+				slog.Debug("[DEBUG-SHIM] failed to close temp file during rollback",
+					"path", tmpPath, "error", closeErr)
+			}
+			if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				slog.Debug("[DEBUG-SHIM] failed to remove temp file during rollback",
+					"path", tmpPath, "error", removeErr)
+			}
+		}
+	}()
+	if _, err := tmpFile.Write(content); err != nil {
+		return err
+	}
+	if err := tmpFile.Chmod(perm); err != nil {
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil {
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, target)
 }
 
 // matchesHashFile reads a hash file and compares with the expected hash.
@@ -175,5 +218,5 @@ func matchesHashFile(hashFilePath, expectedHash string) bool {
 		}
 		return false
 	}
-	return strings.TrimSpace(string(stored)) == expectedHash
+	return strings.TrimSpace(string(stored)) == strings.TrimSpace(expectedHash)
 }

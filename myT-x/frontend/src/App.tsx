@@ -42,7 +42,9 @@ function App() {
 
   useEffect(() => {
     if (current?.name) {
-      void api.SetActiveSession(current.name);
+      void api.SetActiveSession(current.name).catch((err) => {
+        console.warn("[app] SetActiveSession failed", err);
+      });
     }
   }, [current?.name]);
 

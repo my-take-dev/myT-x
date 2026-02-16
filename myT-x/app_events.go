@@ -11,6 +11,8 @@ import (
 	"myT-x/internal/tmux"
 )
 
+const snapshotCoalesceWindow = 50 * time.Millisecond
+
 // emitRuntimeEvent emits via the app context and delegates to emitRuntimeEventWithContext.
 func (a *App) emitRuntimeEvent(name string, payload any) {
 	a.emitRuntimeEventWithContext(a.runtimeContext(), name, payload)
@@ -29,9 +31,16 @@ func (a *App) emitRuntimeEventWithContext(ctx context.Context, name string, payl
 // emitBackendEvent handles backend-originated runtime events.
 // For tmux pane output, it also buffers chunks and emits pane snapshots.
 func (a *App) emitBackendEvent(name string, payload any) {
-	if a.runtimeContext() == nil {
+	ctx := a.runtimeContext()
+	if ctx == nil {
+		slog.Warn("[DEBUG-EVENT] backend event dropped because runtime context is nil", "event", name)
 		return
 	}
+	if name == "app:activate-window" {
+		a.bringWindowToFront()
+		return
+	}
+
 	if name == "tmux:pane-output" {
 		if evt, handled := paneOutputEventFromPayload(payload); handled {
 			if evt == nil {
@@ -67,9 +76,9 @@ func (a *App) emitBackendEvent(name string, payload any) {
 		return
 	}
 
-	a.emitRuntimeEvent(name, payload)
+	a.emitRuntimeEventWithContext(ctx, name, payload)
 	if shouldEmitSnapshotForEvent(name) {
-		a.emitSnapshot()
+		a.requestSnapshot(shouldBypassSnapshotDebounceForEvent(name))
 	}
 }
 
@@ -81,6 +90,15 @@ func shouldEmitSnapshotForEvent(name string) bool {
 		"tmux:layout-changed",
 		"tmux:pane-focused",
 		"tmux:pane-renamed":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldBypassSnapshotDebounceForEvent(name string) bool {
+	switch name {
+	case "tmux:session-created", "tmux:session-destroyed", "tmux:pane-focused", "tmux:pane-renamed":
 		return true
 	default:
 		return false
@@ -107,95 +125,80 @@ func (a *App) enqueuePaneOutput(paneID string, chunk []byte) {
 	// Stale pane cleanup is handled by stopOutputBuffer + snapshot reconciliation.
 	slog.Debug("[output] enqueuePaneOutput", "paneId", paneID, "chunkLen", len(chunk))
 	a.enqueuePaneStateFeed(paneID, chunk)
-	buffer := a.ensureOutputBuffer(paneID)
-	buffer.Write(chunk)
+	flusher := a.ensureOutputFlusher()
+	flusher.Write(paneID, chunk)
 }
 
-func (a *App) ensureOutputBuffer(paneID string) *terminal.OutputBuffer {
+func (a *App) ensureOutputFlusher() *terminal.OutputFlushManager {
 	a.outputMu.Lock()
 	defer a.outputMu.Unlock()
 
-	if buffer, ok := a.outputBuffers[paneID]; ok {
-		return buffer
+	if a.outputFlusher != nil {
+		return a.outputFlusher
 	}
-	sessions := a.sessions
-	buffer := terminal.NewOutputBuffer(16*time.Millisecond, 8*1024, func(flushed []byte) {
+	flusher := terminal.NewOutputFlushManager(16*time.Millisecond, 8*1024, func(paneID string, flushed []byte) {
 		if len(flushed) == 0 {
 			return
 		}
 		ctx := a.runtimeContext()
 		if ctx == nil {
+			slog.Debug("[output] skip pane flush because runtime context is nil", "paneId", paneID)
 			return
 		}
-		if sessions != nil && sessions.UpdateActivityByPaneID(paneID) {
-			a.emitSnapshot()
+		if sessions := a.sessions; sessions != nil && sessions.UpdateActivityByPaneID(paneID) {
+			a.requestSnapshot(false)
 		}
 		slog.Debug("[output] flushing to frontend", "paneId", paneID, "flushedLen", len(flushed))
 		a.emitRuntimeEventWithContext(ctx, "pane:data:"+paneID, string(flushed))
 	})
-	buffer.Start()
-	a.outputBuffers[paneID] = buffer
-	return buffer
+	flusher.Start()
+	a.outputFlusher = flusher
+	return flusher
 }
 
-// detachAllOutputBuffers removes all tracked pane output buffers from the app map
-// and returns them for lock-free stopping.
-func (a *App) detachAllOutputBuffers() map[string]*terminal.OutputBuffer {
+// detachAllOutputBuffers detaches all tracked pane output buffers and returns pane IDs
+// for pane-state cleanup.
+func (a *App) detachAllOutputBuffers() []string {
 	a.outputMu.Lock()
-	if len(a.outputBuffers) == 0 {
-		a.outputMu.Unlock()
+	flusher := a.outputFlusher
+	a.outputFlusher = nil
+	a.outputMu.Unlock()
+	if flusher == nil {
 		return nil
 	}
-	detached := make(map[string]*terminal.OutputBuffer, len(a.outputBuffers))
-	for paneID, buffer := range a.outputBuffers {
-		detached[paneID] = buffer
-	}
-	a.outputBuffers = map[string]*terminal.OutputBuffer{}
-	a.outputMu.Unlock()
-	return detached
+	removed := flusher.RetainPanes(nil)
+	flusher.Stop()
+	return removed
 }
 
 // detachStaleOutputBuffers removes buffers for panes that no longer exist and
-// returns them for lock-free stopping.
-func (a *App) detachStaleOutputBuffers(existingPanes map[string]struct{}) map[string]*terminal.OutputBuffer {
+// returns removed pane IDs for pane-state cleanup.
+func (a *App) detachStaleOutputBuffers(existingPanes map[string]struct{}) []string {
 	a.outputMu.Lock()
-	if len(a.outputBuffers) == 0 {
-		a.outputMu.Unlock()
+	flusher := a.outputFlusher
+	a.outputMu.Unlock()
+	if flusher == nil {
 		return nil
 	}
-	detached := make(map[string]*terminal.OutputBuffer)
-	for paneID, buffer := range a.outputBuffers {
-		if _, ok := existingPanes[paneID]; ok {
-			continue
-		}
-		detached[paneID] = buffer
-		delete(a.outputBuffers, paneID)
-	}
-	a.outputMu.Unlock()
-	return detached
+	return flusher.RetainPanes(existingPanes)
 }
 
-// stopDetachedOutputBuffers stops detached buffers outside outputMu and removes
-// corresponding pane state entries.
-func (a *App) stopDetachedOutputBuffers(buffers map[string]*terminal.OutputBuffer) {
-	for paneID, buffer := range buffers {
-		if buffer != nil {
-			buffer.Stop()
-		}
-		if a.paneStates != nil {
-			a.paneStates.RemovePane(paneID)
-		}
+// cleanupDetachedPaneStates removes corresponding pane state entries.
+func (a *App) cleanupDetachedPaneStates(paneIDs []string) {
+	if a.paneStates == nil {
+		return
+	}
+	for _, paneID := range paneIDs {
+		a.paneStates.RemovePane(paneID)
 	}
 }
 
 func (a *App) stopOutputBuffer(paneID string) {
 	a.outputMu.Lock()
-	buffer := a.outputBuffers[paneID]
-	delete(a.outputBuffers, paneID)
+	flusher := a.outputFlusher
 	a.outputMu.Unlock()
-
-	if buffer != nil {
-		buffer.Stop()
+	if flusher != nil {
+		flusher.RemovePane(paneID)
 	}
 	if a.paneStates != nil {
 		a.paneStates.RemovePane(paneID)
@@ -203,25 +206,46 @@ func (a *App) stopOutputBuffer(paneID string) {
 }
 
 func (a *App) emitSnapshot() {
+	ctx := a.runtimeContext()
+	if ctx == nil {
+		slog.Debug("[snapshot] skip emitSnapshot: runtime context is nil")
+		return
+	}
 	// SessionManager pointer is initialized once at startup and kept stable.
 	// During shutdown it is closed but not replaced, so a local snapshot is safe.
 	sessions := a.sessions
-	if a.runtimeContext() == nil || sessions == nil {
+	if sessions == nil {
+		slog.Debug("[snapshot] skip emitSnapshot: sessions manager is nil")
 		return
 	}
 	snapshots := sessions.Snapshot()
-	a.syncPaneStates(snapshots)
+	if a.shouldSyncPaneStates(sessions.TopologyGeneration()) {
+		a.syncPaneStates(snapshots)
+	}
 	delta, changed, initial := a.snapshotDelta(snapshots)
 	if initial {
-		a.emitRuntimeEvent("tmux:snapshot", snapshots)
-		a.recordSnapshotEmission("full", payloadSizeBytes(snapshots))
+		a.emitRuntimeEventWithContext(ctx, "tmux:snapshot", snapshots)
+		a.recordSnapshotEmission("full", a.estimateSnapshotPayloadBytes(snapshots))
 		return
 	}
 	if !changed {
 		return
 	}
-	a.emitRuntimeEvent("tmux:snapshot-delta", delta)
-	a.recordSnapshotEmission("delta", payloadSizeBytes(delta))
+	a.emitRuntimeEventWithContext(ctx, "tmux:snapshot-delta", delta)
+	a.recordSnapshotEmission("delta", a.estimateSnapshotPayloadBytes(delta))
+}
+
+// shouldSyncPaneStates tracks the last synced topology generation and returns
+// whether pane state synchronization should run for this snapshot.
+// NOTE: This predicate has side effects by updating snapshotLastTopology.
+func (a *App) shouldSyncPaneStates(topologyGeneration uint64) bool {
+	a.snapshotMu.Lock()
+	defer a.snapshotMu.Unlock()
+	if a.snapshotLastTopology == topologyGeneration {
+		return false
+	}
+	a.snapshotLastTopology = topologyGeneration
+	return true
 }
 
 func (a *App) syncPaneStates(snapshots []tmux.SessionSnapshot) {
@@ -244,4 +268,80 @@ func (a *App) syncPaneStates(snapshots []tmux.SessionSnapshot) {
 	}
 	a.paneStates.SetActivePanes(active)
 	a.paneStates.RetainPanes(alive)
+}
+
+func (a *App) requestSnapshot(immediate bool) {
+	if a.runtimeContext() == nil {
+		slog.Debug("[snapshot] skip requestSnapshot: runtime context is nil")
+		return
+	}
+	// App.sessions is assigned once during startup and not set back to nil during
+	// normal runtime, so this lock-free nil guard is safe on the hot path.
+	if a.sessions == nil {
+		slog.Debug("[snapshot] skip requestSnapshot: sessions manager is nil")
+		return
+	}
+
+	emitNow := false
+	a.snapshotRequestMu.Lock()
+	a.snapshotRequestGeneration++
+	currentGeneration := a.snapshotRequestGeneration
+
+	if immediate {
+		if a.snapshotRequestTimer != nil {
+			a.snapshotRequestTimer.Stop()
+			a.snapshotRequestTimer = nil
+		}
+		if a.snapshotRequestDispatched < currentGeneration {
+			a.snapshotRequestDispatched = currentGeneration
+			emitNow = true
+		}
+		a.snapshotRequestMu.Unlock()
+		if emitNow {
+			a.emitSnapshot()
+		}
+		return
+	}
+
+	if a.snapshotRequestTimer == nil {
+		a.snapshotRequestTimer = time.AfterFunc(snapshotCoalesceWindow, a.flushSnapshotRequest)
+	}
+	a.snapshotRequestMu.Unlock()
+}
+
+func (a *App) flushSnapshotRequest() {
+	ctx := a.runtimeContext()
+	sessions := a.sessions
+	emitNow := false
+
+	a.snapshotRequestMu.Lock()
+	a.snapshotRequestTimer = nil
+	if ctx == nil {
+		a.snapshotRequestMu.Unlock()
+		slog.Debug("[snapshot] skip flushSnapshotRequest: runtime context is nil")
+		return
+	}
+	if sessions == nil {
+		a.snapshotRequestMu.Unlock()
+		slog.Debug("[snapshot] skip flushSnapshotRequest: sessions manager is nil")
+		return
+	}
+	if a.snapshotRequestDispatched < a.snapshotRequestGeneration {
+		a.snapshotRequestDispatched = a.snapshotRequestGeneration
+		emitNow = true
+	}
+	a.snapshotRequestMu.Unlock()
+
+	if emitNow {
+		a.emitSnapshot()
+	}
+}
+
+func (a *App) clearSnapshotRequestTimer() {
+	a.snapshotRequestMu.Lock()
+	if a.snapshotRequestTimer != nil {
+		a.snapshotRequestTimer.Stop()
+		a.snapshotRequestTimer = nil
+	}
+	a.snapshotRequestMu.Unlock()
 }
