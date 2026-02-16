@@ -18,7 +18,15 @@ var branchNameRegex = regexp.MustCompile(`^[a-zA-Z0-9._/-]+$`)
 // Allowed characters: alphanumeric, hyphens, and underscores.
 var customNameRegex = regexp.MustCompile(`[^a-zA-Z0-9\-_]`)
 
-const wtDirSuffix = ".wt"
+// commitishRegex validates commit-ish references accepted by worktree creation.
+// Allowed characters are restricted to common ref/hash syntax to block control
+// characters and whitespace while still allowing refs such as "HEAD~1".
+var commitishRegex = regexp.MustCompile(`^[a-zA-Z0-9._/@^~:-]+$`)
+
+const (
+	wtDirSuffix           = ".wt"
+	maxWorktreePathSuffix = 100
+)
 
 // IsValidBranchName checks if the given branch name is valid.
 func IsValidBranchName(name string) bool {
@@ -31,8 +39,8 @@ func IsValidBranchName(name string) bool {
 	if strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") {
 		return false
 	}
-	// filepath.Clean normalizes the path and also catches raw ".." sequences.
-	if strings.Contains(filepath.Clean(name), "..") {
+	// Reject raw ".." sequences directly so names like "a/../b" are blocked.
+	if strings.Contains(name, "..") {
 		return false
 	}
 	if strings.Contains(name, "//") {
@@ -55,6 +63,20 @@ func ValidateBranchName(name string) error {
 	return nil
 }
 
+// ValidateCommitish validates a git commit-ish used as a worktree base.
+func ValidateCommitish(commitish string) error {
+	if strings.TrimSpace(commitish) == "" {
+		return fmt.Errorf("commit-ish cannot be empty")
+	}
+	if strings.ContainsRune(commitish, '\x00') {
+		return fmt.Errorf("invalid commit-ish: contains null byte")
+	}
+	if !commitishRegex.MatchString(commitish) {
+		return fmt.Errorf("invalid commit-ish %q (allowed pattern: %s)", commitish, commitishRegex.String())
+	}
+	return nil
+}
+
 // SanitizeCustomName removes invalid characters from custom name.
 // Allowed characters: [a-zA-Z0-9-_]. Converts to lowercase, returns "work" as default if empty.
 func SanitizeCustomName(name string) string {
@@ -63,13 +85,6 @@ func SanitizeCustomName(name string) string {
 		return "work"
 	}
 	return sanitized
-}
-
-// GenerateBranchName creates a unique branch name in the format: {baseBranch}-{customName}-{UnixNano}.
-func GenerateBranchName(baseBranch, customName string) string {
-	sanitizedName := SanitizeCustomName(customName)
-	uniqueID := fmt.Sprintf("%d", time.Now().UnixNano())
-	return fmt.Sprintf("%s-%s-%s", baseBranch, sanitizedName, uniqueID)
 }
 
 // GenerateWorktreeDirPath returns the .wt directory path for a repository.
@@ -96,7 +111,7 @@ func FindAvailableWorktreePath(basePath string) string {
 		slog.Debug("[DEBUG-GIT] FindAvailableWorktreePath: stat returned non-NotExist error",
 			"path", basePath, "error", err)
 	}
-	for i := 2; i <= 100; i++ {
+	for i := 2; i <= maxWorktreePathSuffix; i++ {
 		candidate := fmt.Sprintf("%s-%d", basePath, i)
 		if _, err := os.Stat(candidate); err != nil {
 			if os.IsNotExist(err) {
@@ -115,13 +130,21 @@ func ValidateWorktreePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("worktree path cannot be empty")
 	}
-	if !filepath.IsAbs(path) {
+	cleanedPath := filepath.Clean(path)
+	if !filepath.IsAbs(cleanedPath) {
 		return fmt.Errorf("worktree path must be absolute: %s", path)
 	}
-	if strings.Contains(path, "..") {
-		return fmt.Errorf("worktree path must not contain '..': %s", path)
+
+	segments := strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	for _, segment := range segments {
+		if segment == ".." {
+			return fmt.Errorf("worktree path must not contain '..' path segment: %s", path)
+		}
 	}
-	base := filepath.Base(path)
+
+	base := filepath.Base(cleanedPath)
 	if base == ".git" || base == ".hg" || base == ".svn" {
 		return fmt.Errorf("worktree path must not target VCS directory: %s", path)
 	}

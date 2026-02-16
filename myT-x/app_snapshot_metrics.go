@@ -10,14 +10,18 @@ import (
 )
 
 type snapshotMetrics struct {
-	windowStart time.Time
-	fullCount   int
-	deltaCount  int
-	fullBytes   int64
-	deltaBytes  int64
+	windowStart  time.Time
+	fullCount    int
+	deltaCount   int
+	fullBytes    int64
+	deltaBytes   int64
+	fullSamples  int
+	deltaSamples int
 }
 
 const snapshotMetricsWindow = 10 * time.Second
+const snapshotPayloadSampleEvery = 8
+const snapshotPayloadNotSampled = -1
 
 // payloadSizeBytes estimates the JSON-serialized byte size of the given snapshot
 // or delta payload without performing actual marshaling. The result is an
@@ -176,12 +180,10 @@ func estimateBoolSize(value bool) int {
 }
 
 func (a *App) recordSnapshotEmission(kind string, payloadBytes int) {
-	if payloadBytes < 0 {
-		payloadBytes = 0
-	}
+	hasPayloadSample := payloadBytes >= 0
 
-	a.snapshotMu.Lock()
-	defer a.snapshotMu.Unlock()
+	a.snapshotMetricsMu.Lock()
+	defer a.snapshotMetricsMu.Unlock()
 
 	now := time.Now()
 	if a.snapshotStats.windowStart.IsZero() {
@@ -190,10 +192,16 @@ func (a *App) recordSnapshotEmission(kind string, payloadBytes int) {
 	switch kind {
 	case "full":
 		a.snapshotStats.fullCount++
-		a.snapshotStats.fullBytes += int64(payloadBytes)
+		if hasPayloadSample {
+			a.snapshotStats.fullBytes += int64(payloadBytes)
+			a.snapshotStats.fullSamples++
+		}
 	default:
 		a.snapshotStats.deltaCount++
-		a.snapshotStats.deltaBytes += int64(payloadBytes)
+		if hasPayloadSample {
+			a.snapshotStats.deltaBytes += int64(payloadBytes)
+			a.snapshotStats.deltaSamples++
+		}
 	}
 
 	elapsed := now.Sub(a.snapshotStats.windowStart)
@@ -209,8 +217,10 @@ func (a *App) recordSnapshotEmission(kind string, payloadBytes int) {
 			"windowMs", elapsed.Milliseconds(),
 			"fullCount", a.snapshotStats.fullCount,
 			"deltaCount", a.snapshotStats.deltaCount,
-			"avgFullBytes", avgBytes(a.snapshotStats.fullBytes, a.snapshotStats.fullCount),
-			"avgDeltaBytes", avgBytes(a.snapshotStats.deltaBytes, a.snapshotStats.deltaCount),
+			"avgFullBytes", avgBytes(a.snapshotStats.fullBytes, a.snapshotStats.fullSamples),
+			"avgDeltaBytes", avgBytes(a.snapshotStats.deltaBytes, a.snapshotStats.deltaSamples),
+			"fullSamples", a.snapshotStats.fullSamples,
+			"deltaSamples", a.snapshotStats.deltaSamples,
 			"eventsPerSec", float64(totalCount)/elapsed.Seconds(),
 			"bytesPerSec", float64(totalBytes)/elapsed.Seconds(),
 		)
@@ -219,6 +229,17 @@ func (a *App) recordSnapshotEmission(kind string, payloadBytes int) {
 	a.snapshotStats = snapshotMetrics{
 		windowStart: now,
 	}
+}
+
+func (a *App) estimateSnapshotPayloadBytes(payload any) int {
+	a.snapshotMetricsMu.Lock()
+	eventCount := a.snapshotStats.fullCount + a.snapshotStats.deltaCount
+	shouldSample := eventCount%snapshotPayloadSampleEvery == 0
+	a.snapshotMetricsMu.Unlock()
+	if !shouldSample {
+		return snapshotPayloadNotSampled
+	}
+	return payloadSizeBytes(payload)
 }
 
 func avgBytes(bytes int64, count int) int64 {

@@ -63,6 +63,7 @@ func (m *SessionManager) SwapPanes(sourcePaneID string, targetPaneID string) (st
 		}
 	}
 	window.Layout = swapPaneIDsInLayout(window.Layout, sourceID, targetID)
+	m.markTopologyMutationLocked()
 	return window.Session.Name, nil
 }
 
@@ -169,6 +170,9 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 				"session", result.sessionName,
 			)
 		}
+		m.markSessionMapMutationLocked()
+	} else {
+		m.markTopologyMutationLocked()
 	}
 
 	return result, nil

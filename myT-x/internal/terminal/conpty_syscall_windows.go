@@ -36,7 +36,7 @@ type _COORD struct {
 
 // Pack converts the coordinate to a packed uintptr for Windows API calls
 func (c *_COORD) Pack() uintptr {
-	return uintptr((int32(c.Y) << 16) | int32(c.X))
+	return uintptr((uint32(uint16(c.Y)) << 16) | uint32(uint16(c.X)))
 }
 
 // _HPCON is a pseudo console handle
@@ -125,6 +125,8 @@ func deleteProcThreadAttrList(attrList []byte) {
 // createEnvBlock creates a Windows environment block from a string slice.
 // Empty strings are filtered out to prevent a stray null terminator from
 // being misinterpreted as the double-null block terminator.
+// IMPORTANT: The caller MUST use runtime.KeepAlive on the returned pointer
+// until the Windows API call that consumes it has returned.
 func createEnvBlock(env []string) *uint16 {
 	if len(env) == 0 {
 		return nil

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -32,7 +32,7 @@ interface TerminalPaneProps {
 }
 
 /** クリップボードへテキストをペースト（ブラケットペースト対応） */
-export function TerminalPane(props: TerminalPaneProps) {
+function TerminalPaneComponent(props: TerminalPaneProps) {
   const setPrefixMode = useTmuxStore((s) => s.setPrefixMode);
   const syncInputModeRef = useRef(false);
   const fontSize = useTmuxStore((s) => s.fontSize);
@@ -116,6 +116,11 @@ export function TerminalPane(props: TerminalPaneProps) {
     let rendererAddon: { dispose: () => void } | null = null;
     let rendererMode: "webgl" | "dom" = "dom";
     let resizeTimer: ReturnType<typeof window.setTimeout> | null = null;
+    let scrollWriteTimer: ReturnType<typeof window.setTimeout> | null = null;
+    let fontSizeTimer: ReturnType<typeof window.setTimeout> | null = null;
+    let pendingFontSize: number | null = null;
+    let rafWriteID: number | null = null;
+    const pendingWrites: string[] = [];
     let lastResizeCols = -1;
     let lastResizeRows = -1;
 
@@ -150,7 +155,9 @@ export function TerminalPane(props: TerminalPaneProps) {
       }
       lastResizeCols = term.cols;
       lastResizeRows = term.rows;
-      void api.ResizePane(props.paneId, term.cols, term.rows);
+      void api.ResizePane(props.paneId, term.cols, term.rows).catch((err) => {
+        console.warn(`[terminal] resize failed for pane=${props.paneId}`, err);
+      });
     };
 
     const scheduleResize = () => {
@@ -250,7 +257,9 @@ export function TerminalPane(props: TerminalPaneProps) {
         copyOnSelectTimer = null;
         const selection = term.getSelection();
         if (selection) {
-          void ClipboardSetText(selection);
+          void ClipboardSetText(selection).catch((err) => {
+            console.warn("[copy] clipboard write failed", err);
+          });
         }
       }, 100);
     });
@@ -262,7 +271,9 @@ export function TerminalPane(props: TerminalPaneProps) {
       e.stopPropagation();
       const selection = term.getSelection();
       if (selection) {
-        void ClipboardSetText(selection);
+        void ClipboardSetText(selection).catch((err) => {
+          console.warn("[copy] clipboard write failed", err);
+        });
         term.clearSelection();
       } else {
         void ClipboardGetText().then((text) => {
@@ -305,7 +316,9 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (event.ctrlKey && (event.key === "c" || event.key === "C")) {
         const selection = term.getSelection();
         if (selection) {
-          void ClipboardSetText(selection);
+          void ClipboardSetText(selection).catch((err) => {
+            console.warn("[copy] clipboard write failed", err);
+          });
           term.clearSelection();
           return false;
         }
@@ -322,19 +335,41 @@ export function TerminalPane(props: TerminalPaneProps) {
 
     const disposable = term.onData((input) => {
       if (syncInputModeRef.current) {
-        void api.SendSyncInput(props.paneId, input);
+        void api.SendSyncInput(props.paneId, input).catch((err) => {
+          console.warn(`[terminal] sync input failed for pane=${props.paneId}`, err);
+        });
       } else {
-        void api.SendInput(props.paneId, input);
+        void api.SendInput(props.paneId, input).catch((err) => {
+          console.warn(`[terminal] input failed for pane=${props.paneId}`, err);
+        });
       }
     });
 
+    const flushPendingWrites = () => {
+      rafWriteID = null;
+      if (pendingWrites.length === 0) {
+        return;
+      }
+      const payload = pendingWrites.join("");
+      pendingWrites.length = 0;
+      if (isComposing) {
+        composingOutput.push(payload);
+        return;
+      }
+      term.write(payload);
+    };
+
+    const enqueuePendingWrite = (data: string) => {
+      pendingWrites.push(data);
+      if (rafWriteID !== null) {
+        return;
+      }
+      rafWriteID = window.requestAnimationFrame(flushPendingWrites);
+    };
+
     EventsOn(paneEvent, (data: string) => {
       if (typeof data === "string") {
-        if (isComposing) {
-          composingOutput.push(data);
-          return;
-        }
-        term.write(data);
+        enqueuePendingWrite(data);
       }
     });
 
@@ -345,8 +380,17 @@ export function TerminalPane(props: TerminalPaneProps) {
       const atBottom = buf.viewportY >= buf.baseY;
       setScrollAtBottom(atBottom);
     };
+    const scheduleScrollWriteUpdate = () => {
+      if (disposed || scrollWriteTimer !== null) {
+        return;
+      }
+      scrollWriteTimer = window.setTimeout(() => {
+        scrollWriteTimer = null;
+        updateScrollState();
+      }, 100);
+    };
     const scrollDisposable = term.onScroll(updateScrollState);
-    const writeDisposable = term.onWriteParsed(updateScrollState);
+    const writeDisposable = term.onWriteParsed(scheduleScrollWriteUpdate);
 
     // --- Ctrl+ホイール: フォントサイズ変更 ---
     const mountEl = containerRef.current;
@@ -354,7 +398,19 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (!e.ctrlKey) return;
       e.preventDefault();
       const delta = e.deltaY < 0 ? 1 : -1;
-      setFontSize(Math.max(8, Math.min(32, (term.options.fontSize ?? 13) + delta)));
+      const current = pendingFontSize ?? (term.options.fontSize ?? 13);
+      pendingFontSize = Math.max(8, Math.min(32, current + delta));
+      if (fontSizeTimer !== null) {
+        window.clearTimeout(fontSizeTimer);
+      }
+      fontSizeTimer = window.setTimeout(() => {
+        fontSizeTimer = null;
+        if (pendingFontSize === null) {
+          return;
+        }
+        setFontSize(pendingFontSize);
+        pendingFontSize = null;
+      }, 50);
     };
     if (mountEl) {
       mountEl.addEventListener("wheel", handleWheel, { passive: false });
@@ -372,6 +428,15 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (resizeTimer !== null) {
         window.clearTimeout(resizeTimer);
       }
+      if (scrollWriteTimer !== null) {
+        window.clearTimeout(scrollWriteTimer);
+      }
+      if (fontSizeTimer !== null) {
+        window.clearTimeout(fontSizeTimer);
+      }
+      if (rafWriteID !== null) {
+        window.cancelAnimationFrame(rafWriteID);
+      }
       // IME composition クリーンアップ
       if (compositionTextarea) {
         compositionTextarea.removeEventListener("compositionstart", onCompositionStart);
@@ -380,7 +445,9 @@ export function TerminalPane(props: TerminalPaneProps) {
       }
       isComposing = false;
       composingOutput.length = 0;
+      pendingWrites.length = 0;
       pendingResize = false;
+      pendingFontSize = null;
       if (copyOnSelectTimer !== null) window.clearTimeout(copyOnSelectTimer);
 
       // イベントリスナー クリーンアップ
@@ -425,7 +492,9 @@ export function TerminalPane(props: TerminalPaneProps) {
         if (event.dataTransfer.files.length > 0) return;
         const sourcePaneId = event.dataTransfer.getData("text/plain");
         if (sourcePaneId && sourcePaneId !== props.paneId) {
-          props.onSwapPane(sourcePaneId, props.paneId);
+          void Promise.resolve(props.onSwapPane(sourcePaneId, props.paneId)).catch((err) => {
+            console.warn("[pane] swap failed", err);
+          });
         }
       }}
       onClick={() => props.onFocus(props.paneId)}
@@ -553,4 +622,14 @@ export function TerminalPane(props: TerminalPaneProps) {
     </div>
   );
 }
+
+function areTerminalPanePropsEqual(prev: TerminalPaneProps, next: TerminalPaneProps): boolean {
+  return (
+    prev.paneId === next.paneId
+    && prev.active === next.active
+    && prev.paneTitle === next.paneTitle
+  );
+}
+
+export const TerminalPane = memo(TerminalPaneComponent, areTerminalPanePropsEqual);
 

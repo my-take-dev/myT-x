@@ -92,10 +92,14 @@ func (a *App) startPaneFeedWorker(parent context.Context) {
 			a.emitRuntimeEventWithContext(a.runtimeContext(), "tmux:worker-panic", map[string]any{
 				"worker": "pane-feed-worker",
 			})
+			restartTimer := time.NewTimer(restartDelay)
 			select {
 			case <-ctx.Done():
+				if !restartTimer.Stop() {
+					<-restartTimer.C
+				}
 				return
-			case <-time.After(restartDelay):
+			case <-restartTimer.C:
 			}
 			restartDelay = nextPanicRestartBackoff(restartDelay)
 		}

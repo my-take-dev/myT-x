@@ -27,6 +27,26 @@ func TestGetConfigSnapshotReturnsIndependentCopy(t *testing.T) {
 	}
 }
 
+func TestGetConfigReadOnlySharesReferenceFields(t *testing.T) {
+	app := &App{}
+	cfg := config.DefaultConfig()
+	cfg.Keys = map[string]string{"base": "value"}
+	cfg.Worktree.SetupScripts = []string{"setup-a"}
+	app.setConfigSnapshot(cfg)
+
+	readOnly := app.getConfigReadOnly()
+	readOnly.Keys["shared-map"] = "mutated"
+	readOnly.Worktree.SetupScripts[0] = "setup-mutated"
+
+	latest := app.getConfigSnapshot()
+	if latest.Keys["shared-map"] != "mutated" {
+		t.Fatal("getConfigReadOnly should expose shared map references")
+	}
+	if len(latest.Worktree.SetupScripts) == 0 || latest.Worktree.SetupScripts[0] != "setup-mutated" {
+		t.Fatal("getConfigReadOnly should expose shared slice references")
+	}
+}
+
 func TestConfigSnapshotConcurrency(t *testing.T) {
 	app := &App{}
 	app.setConfigSnapshot(config.DefaultConfig())

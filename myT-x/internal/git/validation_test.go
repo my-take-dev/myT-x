@@ -27,8 +27,10 @@ func TestIsValidBranchName(t *testing.T) {
 		{"ends with slash", "bad/", false},
 		{"ends with dot", "bad.", false},
 		{"contains double dot", "a..b", false},
+		{"path traversal via slash", "a/../b", false},
 		{"contains double slash", "a//b", false},
 		{"ends with .lock", "branch.lock", false},
+		{"contains null", "a\x00b", false},
 		{"special chars", "a@b", false},
 		{"space", "a b", false},
 		{"backslash", `a\b`, false},
@@ -53,7 +55,9 @@ func TestValidateBranchName(t *testing.T) {
 		{"valid", "main", false},
 		{"empty", "", true},
 		{"invalid chars", "a@b", true},
+		{"contains null", "a\x00b", true},
 		{"path traversal", "../hack", true},
+		{"path traversal via slash", "a/../b", true},
 	}
 
 	for _, tt := range tests {
@@ -64,6 +68,49 @@ func TestValidateBranchName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateCommitish(t *testing.T) {
+	tests := []struct {
+		name      string
+		commitish string
+		wantErr   bool
+	}{
+		{name: "HEAD", commitish: "HEAD", wantErr: false},
+		{name: "commit hash", commitish: "a1b2c3d4", wantErr: false},
+		{name: "ref with slash", commitish: "origin/main", wantErr: false},
+		{name: "HEAD with tilde", commitish: "HEAD~1", wantErr: false},
+		{name: "HEAD with caret", commitish: "HEAD^", wantErr: false},
+		{name: "empty", commitish: "", wantErr: true},
+		{name: "contains space", commitish: "main branch", wantErr: true},
+		{name: "contains null", commitish: "a\x00b", wantErr: true},
+		{name: "semicolon injection", commitish: "HEAD;echo", wantErr: true},
+		{name: "pipe injection", commitish: "HEAD|cat", wantErr: true},
+		{name: "command substitution", commitish: "$(cmd)", wantErr: true},
+		{name: "backtick substitution", commitish: "`whoami`", wantErr: true},
+		{name: "newline injection", commitish: "HEAD\nmalicious", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateCommitish(tt.commitish)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateCommitish(%q) error = %v, wantErr %v", tt.commitish, err, tt.wantErr)
+			}
+		})
+	}
+
+	t.Run("reports escaped invalid value and allowed pattern", func(t *testing.T) {
+		err := ValidateCommitish("bad value")
+		if err == nil {
+			t.Fatal("ValidateCommitish() expected error for invalid commit-ish")
+		}
+		if !strings.Contains(err.Error(), `"bad value"`) {
+			t.Fatalf("error = %v, want quoted invalid value", err)
+		}
+		if !strings.Contains(err.Error(), "allowed pattern:") {
+			t.Fatalf("error = %v, want allowed pattern hint", err)
+		}
+	})
 }
 
 func TestSanitizeCustomName(t *testing.T) {
@@ -89,17 +136,6 @@ func TestSanitizeCustomName(t *testing.T) {
 				t.Errorf("SanitizeCustomName(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestGenerateBranchName(t *testing.T) {
-	result := GenerateBranchName("main", "feature")
-	if !strings.HasPrefix(result, "main-feature-") {
-		t.Errorf("GenerateBranchName() = %q, want prefix 'main-feature-'", result)
-	}
-	parts := strings.Split(result, "-")
-	if len(parts) < 3 {
-		t.Errorf("GenerateBranchName() = %q, expected at least 3 parts", result)
 	}
 }
 
@@ -172,6 +208,7 @@ func TestValidateWorktreePath(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid absolute", absPath, false},
+		{"valid absolute with double-dot segment text", filepath.Join(filepath.Dir(absPath), "my..project"), false},
 		{"empty", "", true},
 		{"relative", "relative/path", true},
 		{"path traversal", absPath + string(filepath.Separator) + ".." + string(filepath.Separator) + "hack", true},

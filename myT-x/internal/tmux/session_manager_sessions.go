@@ -21,6 +21,8 @@ func (m *SessionManager) closeLocked() []*TmuxPane {
 	}
 	m.sessions = map[string]*TmuxSession{}
 	m.panes = map[int]*TmuxPane{}
+	m.sortedSessionNames = nil
+	m.markSessionMapMutationLocked()
 	return panes
 }
 
@@ -82,13 +84,14 @@ func (m *SessionManager) CreateSession(name string, windowName string, width, he
 		Session:  session,
 	}
 	pane := &TmuxPane{
-		ID:     m.nextPaneID,
-		Index:  0,
-		Active: true,
-		Width:  width,
-		Height: height,
-		Env:    map[string]string{},
-		Window: window,
+		ID:       m.nextPaneID,
+		idString: fmt.Sprintf("%%%d", m.nextPaneID),
+		Index:    0,
+		Active:   true,
+		Width:    width,
+		Height:   height,
+		Env:      map[string]string{},
+		Window:   window,
 	}
 	m.nextPaneID++
 
@@ -98,6 +101,7 @@ func (m *SessionManager) CreateSession(name string, windowName string, width, he
 
 	m.sessions[session.Name] = session
 	m.panes[pane.ID] = pane
+	m.markSessionMapMutationLocked()
 	return session, pane, nil
 }
 
@@ -135,6 +139,7 @@ func (m *SessionManager) RenameSession(oldName, newName string) error {
 	delete(m.sessions, oldName)
 	session.Name = newName
 	m.sessions[newName] = session
+	m.markSessionMapMutationLocked()
 	return nil
 }
 
@@ -159,6 +164,7 @@ func (m *SessionManager) removeSessionLocked(name string) (*TmuxSession, []*Tmux
 		}
 	}
 	delete(m.sessions, sessionName)
+	m.markSessionMapMutationLocked()
 	return sessionCopy, panes, nil
 }
 

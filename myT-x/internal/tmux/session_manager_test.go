@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -654,5 +655,94 @@ func TestKillPaneKeepsOtherPanesInSession(t *testing.T) {
 	}
 	if paneCount != 1 {
 		t.Fatalf("pane count = %d, want 1", paneCount)
+	}
+}
+
+func TestTopologyGenerationTracksStructuralChanges(t *testing.T) {
+	manager := NewSessionManager()
+	initialTopology := manager.TopologyGeneration()
+
+	_, pane, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	afterCreate := manager.TopologyGeneration()
+	if afterCreate <= initialTopology {
+		t.Fatalf("topology generation after create = %d, want > %d", afterCreate, initialTopology)
+	}
+
+	if err := manager.SetActivePane(pane.ID); err != nil {
+		t.Fatalf("SetActivePane() error = %v", err)
+	}
+	afterFocus := manager.TopologyGeneration()
+	if afterFocus <= afterCreate {
+		t.Fatalf("topology generation after focus = %d, want > %d", afterFocus, afterCreate)
+	}
+
+	splitPane, err := manager.SplitPane(pane.ID, SplitHorizontal)
+	if err != nil {
+		t.Fatalf("SplitPane() error = %v", err)
+	}
+	afterSplit := manager.TopologyGeneration()
+	if afterSplit <= afterFocus {
+		t.Fatalf("topology generation after split = %d, want > %d", afterSplit, afterFocus)
+	}
+
+	if _, err := manager.RenamePane(splitPane.IDString(), "renamed"); err != nil {
+		t.Fatalf("RenamePane() error = %v", err)
+	}
+	if got := manager.TopologyGeneration(); got != afterSplit {
+		t.Fatalf("RenamePane should not change topology generation: got %d want %d", got, afterSplit)
+	}
+
+	if _, _, err := manager.KillPane(splitPane.IDString()); err != nil {
+		t.Fatalf("KillPane() error = %v", err)
+	}
+	afterKill := manager.TopologyGeneration()
+	if afterKill <= afterSplit {
+		t.Fatalf("topology generation after kill = %d, want > %d", afterKill, afterSplit)
+	}
+}
+
+func TestSnapshotCacheInvalidationByGeneration(t *testing.T) {
+	manager := NewSessionManager()
+	_, pane, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	first := manager.Snapshot()
+	second := manager.Snapshot()
+	if len(first) == 0 || len(second) == 0 {
+		t.Fatalf("unexpected snapshot lengths: first=%d second=%d", len(first), len(second))
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("snapshot should remain unchanged without mutations: first=%+v second=%+v", first, second)
+	}
+	manager.mu.RLock()
+	beforeMutationSnapshotGen := manager.snapshotGeneration
+	manager.mu.RUnlock()
+
+	if _, err := manager.RenamePane(pane.IDString(), "changed"); err != nil {
+		t.Fatalf("RenamePane() error = %v", err)
+	}
+	third := manager.Snapshot()
+	if len(third) == 0 {
+		t.Fatal("third snapshot should not be empty")
+	}
+	if got := third[0].Windows[0].Panes[0].Title; got != "changed" {
+		t.Fatalf("snapshot title = %q, want %q after mutation", got, "changed")
+	}
+	manager.mu.RLock()
+	afterMutationSnapshotGen := manager.snapshotGeneration
+	currentGeneration := manager.generation
+	manager.mu.RUnlock()
+	if afterMutationSnapshotGen <= beforeMutationSnapshotGen {
+		t.Fatalf("snapshotGeneration did not advance after mutation: before=%d after=%d",
+			beforeMutationSnapshotGen, afterMutationSnapshotGen)
+	}
+	if afterMutationSnapshotGen != currentGeneration {
+		t.Fatalf("snapshotGeneration should match current generation after rebuild: snapshot=%d generation=%d",
+			afterMutationSnapshotGen, currentGeneration)
 	}
 }

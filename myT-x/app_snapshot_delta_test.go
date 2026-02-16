@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,7 +133,7 @@ func TestSnapshotFieldCounts(t *testing.T) {
 		{"TmuxSession", tmux.TmuxSession{}, 10},
 		{"SessionSnapshot", tmux.SessionSnapshot{}, 8},
 		{"SessionWorktreeInfo", tmux.SessionWorktreeInfo{}, 5},
-		{"PaneContextSnapshot", tmux.PaneContextSnapshot{}, 5},
+		{"PaneContextSnapshot", tmux.PaneContextSnapshot{}, 6},
 		{"WindowSnapshot", tmux.WindowSnapshot{}, 5},
 		{"PaneSnapshot", tmux.PaneSnapshot{}, 6},
 		{"LayoutNode", tmux.LayoutNode{}, 5},
@@ -475,6 +476,54 @@ func TestSnapshotDeltaSequentialOperations(t *testing.T) {
 	delta, changed, _ = app.snapshotDelta(withBAgain)
 	if changed {
 		t.Fatalf("same snapshot should not produce delta: %#v", delta)
+	}
+}
+
+func TestSnapshotDeltaConcurrentCallsRemainStable(t *testing.T) {
+	app := NewApp()
+	_, _, _ = app.snapshotDelta([]tmux.SessionSnapshot{
+		testSnapshot("alpha", 1, false),
+	})
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	runWorker := func(build func(i int) []tmux.SessionSnapshot) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 100; i++ {
+				app.snapshotDelta(build(i))
+			}
+		}()
+	}
+
+	runWorker(func(i int) []tmux.SessionSnapshot {
+		return []tmux.SessionSnapshot{
+			testSnapshot("alpha", 1, i%2 == 0),
+		}
+	})
+	runWorker(func(i int) []tmux.SessionSnapshot {
+		return []tmux.SessionSnapshot{
+			testSnapshot("alpha", 1, false),
+			testSnapshot("beta", 2, i%3 == 0),
+		}
+	})
+
+	close(start)
+	wg.Wait()
+
+	final := []tmux.SessionSnapshot{
+		testSnapshot("alpha", 1, false),
+		testSnapshot("beta", 2, false),
+	}
+	_, _, initial := app.snapshotDelta(final)
+	if initial {
+		t.Fatal("final snapshot should not be marked as initial")
+	}
+	_, changed, _ := app.snapshotDelta(final)
+	if changed {
+		t.Fatal("repeating final snapshot should not produce delta")
 	}
 }
 

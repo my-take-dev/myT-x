@@ -46,12 +46,14 @@ func TestPayloadSizeBytesDelta(t *testing.T) {
 
 func TestRecordSnapshotEmissionRollsWindow(t *testing.T) {
 	app := NewApp()
+	app.snapshotMetricsMu.Lock()
 	app.snapshotStats.windowStart = time.Unix(0, 0)
+	app.snapshotMetricsMu.Unlock()
 
 	app.recordSnapshotEmission("delta", 128)
 
-	app.snapshotMu.Lock()
-	defer app.snapshotMu.Unlock()
+	app.snapshotMetricsMu.Lock()
+	defer app.snapshotMetricsMu.Unlock()
 	if app.snapshotStats.deltaCount != 0 || app.snapshotStats.fullCount != 0 {
 		t.Fatalf("snapshot stats should be reset after report: %#v", app.snapshotStats)
 	}
@@ -62,12 +64,14 @@ func TestRecordSnapshotEmissionRollsWindow(t *testing.T) {
 
 func TestRecordSnapshotEmissionCountsFullPayloads(t *testing.T) {
 	app := NewApp()
+	app.snapshotMetricsMu.Lock()
 	app.snapshotStats.windowStart = time.Now()
+	app.snapshotMetricsMu.Unlock()
 
 	app.recordSnapshotEmission("full", 256)
 
-	app.snapshotMu.Lock()
-	defer app.snapshotMu.Unlock()
+	app.snapshotMetricsMu.Lock()
+	defer app.snapshotMetricsMu.Unlock()
 	if app.snapshotStats.fullCount != 1 {
 		t.Fatalf("fullCount = %d, want 1", app.snapshotStats.fullCount)
 	}
@@ -192,5 +196,32 @@ func TestAvgBytes(t *testing.T) {
 	}
 	if got := avgBytes(21, 2); got != 10 {
 		t.Fatalf("avgBytes(21,2) = %d, want 10", got)
+	}
+}
+
+func TestEstimateSnapshotPayloadBytesSampling(t *testing.T) {
+	app := NewApp()
+	payload := []tmux.SessionSnapshot{
+		{
+			ID:        1,
+			Name:      "alpha",
+			CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	app.snapshotMetricsMu.Lock()
+	app.snapshotStats.fullCount = 1
+	app.snapshotStats.deltaCount = 0
+	app.snapshotMetricsMu.Unlock()
+	if got := app.estimateSnapshotPayloadBytes(payload); got != snapshotPayloadNotSampled {
+		t.Fatalf("estimateSnapshotPayloadBytes() = %d, want %d", got, snapshotPayloadNotSampled)
+	}
+
+	app.snapshotMetricsMu.Lock()
+	app.snapshotStats.fullCount = snapshotPayloadSampleEvery
+	app.snapshotStats.deltaCount = 0
+	app.snapshotMetricsMu.Unlock()
+	if got := app.estimateSnapshotPayloadBytes(payload); got <= 0 {
+		t.Fatalf("estimateSnapshotPayloadBytes() = %d, want > 0 when sampled", got)
 	}
 }

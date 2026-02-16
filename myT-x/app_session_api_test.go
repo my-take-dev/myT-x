@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,24 @@ import (
 )
 
 func TestCreateRenameKillSessionValidation(t *testing.T) {
+	t.Run("CreateSession returns error when root path is empty", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		if _, err := app.CreateSession("   ", "session-a", false); err == nil {
+			t.Fatal("CreateSession() expected root path validation error")
+		}
+	})
+
+	t.Run("CreateSession returns error when session name is empty", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		if _, err := app.CreateSession(t.TempDir(), "   ", false); err == nil {
+			t.Fatal("CreateSession() expected session name validation error")
+		}
+	})
+
 	t.Run("CreateSession returns error when session manager is unavailable", func(t *testing.T) {
 		app := NewApp()
 		if _, err := app.CreateSession(t.TempDir(), "session-a", false); err == nil {
@@ -41,6 +61,27 @@ func TestCreateRenameKillSessionValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("RenameSession returns error when old name is empty", func(t *testing.T) {
+		app := NewApp()
+		if err := app.RenameSession("   ", "new"); err == nil {
+			t.Fatal("RenameSession() expected old-name validation error")
+		}
+	})
+
+	t.Run("RenameSession returns error when new name is empty", func(t *testing.T) {
+		app := NewApp()
+		if err := app.RenameSession("old", "   "); err == nil {
+			t.Fatal("RenameSession() expected new-name validation error")
+		}
+	})
+
+	t.Run("KillSession returns error when session name is empty", func(t *testing.T) {
+		app := NewApp()
+		if err := app.KillSession("   ", false); err == nil {
+			t.Fatal("KillSession() expected session name validation error")
+		}
+	})
+
 	t.Run("KillSession returns error when session manager is unavailable", func(t *testing.T) {
 		app := NewApp()
 		if err := app.KillSession("session-a", false); err == nil {
@@ -60,11 +101,74 @@ func TestCreateRenameKillSessionValidation(t *testing.T) {
 	})
 }
 
+func TestCreateSessionReturnsErrorWhenTmuxReturnsEmptyCreatedName(t *testing.T) {
+	origExecute := executeRouterRequestFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = origExecute
+	})
+
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		if req.Command != "new-session" {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
+		}
+		return ipc.TmuxResponse{ExitCode: 0, Stdout: "   "}
+	}
+
+	if _, err := app.CreateSession(t.TempDir(), "session-a", false); err == nil {
+		t.Fatal("CreateSession() expected error when tmux returns empty created name")
+	}
+}
+
+func TestCreateSessionRollsBackWhenStoreRootPathFails(t *testing.T) {
+	origExecute := executeRouterRequestFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = origExecute
+	})
+
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+
+	var rollbackTargets []string
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		switch req.Command {
+		case "new-session":
+			return ipc.TmuxResponse{ExitCode: 0, Stdout: "missing-session\n"}
+		case "kill-session":
+			target, _ := req.Flags["-t"].(string)
+			rollbackTargets = append(rollbackTargets, strings.TrimSpace(target))
+			return ipc.TmuxResponse{ExitCode: 0}
+		default:
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
+		}
+	}
+
+	_, err := app.CreateSession(t.TempDir(), "session-a", false)
+	if err == nil {
+		t.Fatal("CreateSession() expected storeRootPath error")
+	}
+	if !strings.Contains(err.Error(), "failed to set root path for conflict detection") {
+		t.Fatalf("CreateSession() error = %v, want storeRootPath failure", err)
+	}
+	if len(rollbackTargets) != 1 {
+		t.Fatalf("rollback kill-session count = %d, want 1", len(rollbackTargets))
+	}
+	if rollbackTargets[0] != "missing-session" {
+		t.Fatalf("rollback target = %q, want %q", rollbackTargets[0], "missing-session")
+	}
+}
+
 func TestCreateSessionLogsGitMetadataFailures(t *testing.T) {
 	repoPath := testutil.CreateTempGitRepo(t)
 	app := NewApp()
 	app.sessions = tmux.NewSessionManager()
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+
+	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
 
 	originalExecute := executeRouterRequestFn
 	t.Cleanup(func() {
@@ -82,13 +186,15 @@ func TestCreateSessionLogsGitMetadataFailures(t *testing.T) {
 		return ipc.TmuxResponse{ExitCode: 0, Stdout: sessionName}
 	}
 
-	// Force open failure by passing a nested non-repo path.
-	badRepoPath := filepath.Join(repoPath, "not-a-repo")
-	if err := os.MkdirAll(badRepoPath, 0o755); err != nil {
-		t.Fatal(err)
+	// Keep git-dir detection passing but force CurrentBranch() to fail.
+	// This validates that metadata-enrichment failures are logged without
+	// breaking session creation.
+	headPath := filepath.Join(repoPath, ".git", "HEAD")
+	if err := os.WriteFile(headPath, []byte("ref: refs/heads/does-not-exist\n"), 0o644); err != nil {
+		t.Fatalf("failed to corrupt HEAD for metadata-failure test: %v", err)
 	}
 
-	if _, err := app.CreateSession(badRepoPath, "session-a", false); err != nil {
+	if _, err := app.CreateSession(repoPath, "session-a", false); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
 
@@ -98,6 +204,9 @@ func TestCreateSessionLogsGitMetadataFailures(t *testing.T) {
 	}
 	if snapshots[0].Name != "session-a" && !strings.HasPrefix(snapshots[0].Name, "session-a") {
 		t.Fatalf("created session name = %q, want session-a prefix", snapshots[0].Name)
+	}
+	if !strings.Contains(logBuf.String(), "failed to read git branch for session metadata") {
+		t.Fatalf("expected git metadata failure log, got logs: %q", logBuf.String())
 	}
 }
 
@@ -696,6 +805,38 @@ func TestStoreRootPath(t *testing.T) {
 	})
 }
 
+func TestCreateSessionEmitsSnapshot(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+
+	events := make([]string, 0, 4)
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+		events = append(events, name)
+	}
+
+	if _, err := app.CreateSession(os.TempDir(), "session-a", false); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	foundSnapshotEvent := false
+	for _, name := range events {
+		if name == "tmux:snapshot" || name == "tmux:snapshot-delta" {
+			foundSnapshotEvent = true
+			break
+		}
+	}
+	if !foundSnapshotEvent {
+		t.Fatalf("CreateSession() events = %v, want snapshot event", events)
+	}
+}
+
 func TestKillSessionEmitsSnapshot(t *testing.T) {
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() {
@@ -732,6 +873,62 @@ func TestKillSessionEmitsSnapshot(t *testing.T) {
 	}
 }
 
+func TestKillSessionClearsActiveSessionWhenTargetIsActive(t *testing.T) {
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+
+	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	app.setActiveSessionName("session-a")
+
+	if err := app.KillSession("session-a", false); err != nil {
+		t.Fatalf("KillSession() error = %v", err)
+	}
+	if got := app.getActiveSessionName(); got != "" {
+		t.Fatalf("active session = %q, want empty after kill", got)
+	}
+}
+
+func waitForAsyncError(t *testing.T, done <-chan error, fallbackTimeout time.Duration, timeoutMessage string) error {
+	t.Helper()
+	timeout := fallbackTimeout
+	if deadline, ok := t.Deadline(); ok {
+		remaining := time.Until(deadline) / 4
+		if remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		t.Fatalf("%s", timeoutMessage)
+		return nil
+	}
+}
+
+func waitForSignal(t *testing.T, done <-chan struct{}, fallbackTimeout time.Duration, timeoutMessage string) {
+	t.Helper()
+	timeout := fallbackTimeout
+	if deadline, ok := t.Deadline(); ok {
+		remaining := time.Until(deadline) / 4
+		if remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		t.Fatalf("%s", timeoutMessage)
+	}
+}
+
 func TestKillSessionStopsOutputBuffersOutsideOutputLock(t *testing.T) {
 	app := NewApp()
 	app.sessions = tmux.NewSessionManager()
@@ -744,7 +941,7 @@ func TestKillSessionStopsOutputBuffersOutsideOutputLock(t *testing.T) {
 	paneID := fmt.Sprintf("%%%d", pane.ID)
 
 	callbackRan := make(chan struct{}, 1)
-	buffer := terminal.NewOutputBuffer(16*time.Millisecond, 1024, func([]byte) {
+	flusher := terminal.NewOutputFlushManager(16*time.Millisecond, 1024, func(_ string, _ []byte) {
 		app.outputMu.Lock()
 		app.outputMu.Unlock()
 		select {
@@ -752,29 +949,31 @@ func TestKillSessionStopsOutputBuffersOutsideOutputLock(t *testing.T) {
 		default:
 		}
 	})
-	buffer.Start()
-	buffer.Write([]byte("pending"))
-	app.outputBuffers[paneID] = buffer
+	flusher.Start()
+	flusher.Write(paneID, []byte("pending"))
+	app.outputFlusher = flusher
 
 	done := make(chan error, 1)
 	go func() {
 		done <- app.KillSession("session-a", false)
 	}()
 
-	select {
-	case killErr := <-done:
-		if killErr != nil {
-			t.Fatalf("KillSession() error = %v", killErr)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("KillSession() timed out; possible outputMu -> Stop callback deadlock")
+	killErr := waitForAsyncError(
+		t,
+		done,
+		2*time.Second,
+		"KillSession() timed out; possible outputMu -> Stop callback deadlock",
+	)
+	if killErr != nil {
+		t.Fatalf("KillSession() error = %v", killErr)
 	}
 
-	select {
-	case <-callbackRan:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("output buffer callback did not run during KillSession()")
-	}
+	waitForSignal(
+		t,
+		callbackRan,
+		500*time.Millisecond,
+		"output buffer callback did not run during KillSession()",
+	)
 }
 
 func TestKillSessionWorktreeLookupFailureEmitsCleanupFailureEvent(t *testing.T) {
@@ -809,7 +1008,7 @@ func TestKillSessionWorktreeLookupFailureEmitsCleanupFailureEvent(t *testing.T) 
 	}
 
 	if err := app.KillSession("missing-session", true); err != nil {
-		t.Fatalf("KillSession() error = %v", err)
+		t.Fatalf("KillSession() error = %v, want nil because session kill already succeeded", err)
 	}
 	if cleanupPayload == nil {
 		t.Fatal("expected worktree:cleanup-failed event payload")
@@ -819,22 +1018,164 @@ func TestKillSessionWorktreeLookupFailureEmitsCleanupFailureEvent(t *testing.T) 
 	}
 }
 
-func TestEmitWorktreeCleanupFailureSkipsEventWhenContextIsNil(t *testing.T) {
+func TestKillSessionWithoutDeleteWorktreeLogsMetadataLookupFailure(t *testing.T) {
+	origExecute := executeRouterRequestFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = origExecute
+	})
+
+	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
+
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		if req.Command != "kill-session" {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
+		}
+		return ipc.TmuxResponse{ExitCode: 0}
+	}
+
+	if err := app.KillSession("missing-session", false); err != nil {
+		t.Fatalf("KillSession() error = %v, want nil when tmux kill succeeds", err)
+	}
+	if !strings.Contains(logBuf.String(), "failed to resolve worktree metadata for killed session") {
+		t.Fatalf("expected metadata lookup warning log, got logs: %q", logBuf.String())
+	}
+}
+
+func TestKillSessionDeleteWorktreeWithoutMetadataLogsDebug(t *testing.T) {
+	origExecute := executeRouterRequestFn
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		executeRouterRequestFn = origExecute
+		runtimeEventsEmitFn = origEmit
+	})
+
+	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		if req.Command != "kill-session" {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
+		}
+		return ipc.TmuxResponse{ExitCode: 0}
+	}
+
+	cleanupFailedEvents := 0
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+		if name == "worktree:cleanup-failed" {
+			cleanupFailedEvents++
+		}
+	}
+
+	if err := app.KillSession("session-a", true); err != nil {
+		t.Fatalf("KillSession() error = %v", err)
+	}
+	if cleanupFailedEvents != 0 {
+		t.Fatalf("cleanup failure events = %d, want 0", cleanupFailedEvents)
+	}
+	if !strings.Contains(logBuf.String(), "deleteWorktree requested but session has no worktree metadata") {
+		t.Fatalf("expected debug log for missing worktree metadata, got logs: %q", logBuf.String())
+	}
+}
+
+func TestKillSessionDeleteWorktreeDirtyWorktreeEmitsFailureAndKeepsWorktree(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	repoPath := testutil.CreateTempGitRepo(t)
+	repo, err := gitpkg.Open(repoPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	wtPath := filepath.Join(t.TempDir(), "kill-dirty-worktree")
+	if err := repo.CreateWorktree(wtPath, "feature/kill-dirty", "HEAD"); err != nil {
+		t.Fatalf("CreateWorktree() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(wtPath, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.setConfigSnapshot(config.DefaultConfig())
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := app.sessions.SetWorktreeInfo("session-a", &tmux.SessionWorktreeInfo{
+		Path:       wtPath,
+		RepoPath:   repoPath,
+		BranchName: "feature/kill-dirty",
+		BaseBranch: "HEAD",
+		IsDetached: false,
+	}); err != nil {
+		t.Fatalf("SetWorktreeInfo() error = %v", err)
+	}
+
+	var cleanupPayload map[string]any
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+		if name != "worktree:cleanup-failed" || len(data) == 0 {
+			return
+		}
+		payload, ok := data[0].(map[string]any)
+		if ok {
+			cleanupPayload = payload
+		}
+	}
+
+	if err := app.KillSession("session-a", true); err != nil {
+		t.Fatalf("KillSession() error = %v", err)
+	}
+	if cleanupPayload == nil {
+		t.Fatal("expected worktree:cleanup-failed event payload")
+	}
+	if got := cleanupPayload["sessionName"]; got != "session-a" {
+		t.Fatalf("cleanup payload sessionName = %v, want session-a", got)
+	}
+	if errText, _ := cleanupPayload["error"].(string); !strings.Contains(errText, "uncommitted changes") {
+		t.Fatalf("cleanup payload error = %q, want uncommitted changes", errText)
+	}
+	if _, statErr := os.Stat(wtPath); statErr != nil {
+		t.Fatalf("dirty worktree should remain after cleanup rejection, stat error = %v", statErr)
+	}
+}
+
+func TestEmitWorktreeCleanupFailureFallsBackToBackgroundContext(t *testing.T) {
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() {
 		runtimeEventsEmitFn = origEmit
 	})
 
 	eventCount := 0
-	runtimeEventsEmitFn = func(context.Context, string, ...interface{}) {
+	var emitCtx context.Context
+	runtimeEventsEmitFn = func(ctx context.Context, _ string, _ ...interface{}) {
 		eventCount++
+		emitCtx = ctx
 	}
 
 	app := NewApp()
 	app.emitWorktreeCleanupFailure("session-a", `C:\wt\session-a`, errors.New("cleanup failed"))
 
-	if eventCount != 0 {
-		t.Fatalf("event count = %d, want 0 when app context is nil", eventCount)
+	if eventCount != 1 {
+		t.Fatalf("event count = %d, want 1 when app context is nil", eventCount)
+	}
+	if emitCtx == nil {
+		t.Fatal("emit context is nil, want background fallback context")
 	}
 }
 
@@ -924,7 +1265,12 @@ func TestCleanupSessionWorktreeSuccessPaths(t *testing.T) {
 
 		app := NewApp()
 		app.setConfigSnapshot(config.DefaultConfig())
-		app.cleanupSessionWorktree("session-a", wtPath, repoPath, "feature/cleanup-clean", nil)
+		app.cleanupSessionWorktree(worktreeCleanupParams{
+			SessionName: "session-a",
+			WtPath:      wtPath,
+			RepoPath:    repoPath,
+			BranchName:  "feature/cleanup-clean",
+		})
 
 		if _, statErr := os.Stat(wtPath); !os.IsNotExist(statErr) {
 			t.Fatalf("worktree should be removed, stat error = %v", statErr)
@@ -958,7 +1304,12 @@ func TestCleanupSessionWorktreeSuccessPaths(t *testing.T) {
 		cfg := config.DefaultConfig()
 		cfg.Worktree.ForceCleanup = true
 		app.setConfigSnapshot(cfg)
-		app.cleanupSessionWorktree("session-a", wtPath, repoPath, "feature/cleanup-dirty", nil)
+		app.cleanupSessionWorktree(worktreeCleanupParams{
+			SessionName: "session-a",
+			WtPath:      wtPath,
+			RepoPath:    repoPath,
+			BranchName:  "feature/cleanup-dirty",
+		})
 
 		if _, statErr := os.Stat(wtPath); !os.IsNotExist(statErr) {
 			t.Fatalf("dirty worktree should be force-removed, stat error = %v", statErr)
@@ -973,14 +1324,206 @@ func TestCleanupSessionWorktreeSuccessPaths(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("empty branch name keeps cleanup non-fatal", func(t *testing.T) {
+		repoPath := testutil.CreateTempGitRepo(t)
+		repo, err := gitpkg.Open(repoPath)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		wtPath := filepath.Join(t.TempDir(), "worktree-detached")
+		if err := repo.CreateWorktreeDetached(wtPath, "HEAD"); err != nil {
+			t.Fatalf("CreateWorktreeDetached() error = %v", err)
+		}
+
+		app := NewApp()
+		app.setConfigSnapshot(config.DefaultConfig())
+		app.cleanupSessionWorktree(worktreeCleanupParams{
+			SessionName: "session-a",
+			WtPath:      wtPath,
+			RepoPath:    repoPath,
+			BranchName:  "",
+		})
+
+		if _, statErr := os.Stat(wtPath); !os.IsNotExist(statErr) {
+			t.Fatalf("detached worktree should be removed, stat error = %v", statErr)
+		}
+	})
+}
+
+func TestWorktreeCleanupParamsFieldCountGuard(t *testing.T) {
+	const expectedFieldCount = 4
+	if got := reflect.TypeOf(worktreeCleanupParams{}).NumField(); got != expectedFieldCount {
+		t.Fatalf("worktreeCleanupParams field count = %d, want %d", got, expectedFieldCount)
+	}
+}
+
+func TestCleanupSessionWorktreeSkipsWhenWorktreePathEmpty(t *testing.T) {
+	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
+
+	app := NewApp()
+	app.cleanupSessionWorktree(worktreeCleanupParams{
+		SessionName: "session-a",
+		WtPath:      "   ",
+		RepoPath:    "ignored",
+		BranchName:  "ignored",
+	})
+
+	if !strings.Contains(logBuf.String(), "skip worktree cleanup: worktree path is empty") {
+		t.Fatalf("expected skip log for empty worktree path, got logs: %q", logBuf.String())
+	}
+}
+
+func TestCleanupSessionWorktreeEmitsFailureWhenRepoPathEmpty(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+
+	var eventPayload map[string]any
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+		if name != "worktree:cleanup-failed" || len(data) == 0 {
+			return
+		}
+		payload, ok := data[0].(map[string]any)
+		if ok {
+			eventPayload = payload
+		}
+	}
+
+	app.cleanupSessionWorktree(worktreeCleanupParams{
+		SessionName: "session-a",
+		WtPath:      `C:\worktree\session-a`,
+		RepoPath:    "   ",
+		BranchName:  "feature/test",
+	})
+
+	if eventPayload == nil {
+		t.Fatal("expected worktree:cleanup-failed event payload")
+	}
+	if got := eventPayload["sessionName"]; got != "session-a" {
+		t.Fatalf("payload sessionName = %v, want session-a", got)
+	}
+	if got := eventPayload["path"]; got != `C:\worktree\session-a` {
+		t.Fatalf("payload path = %v, want %q", got, `C:\worktree\session-a`)
+	}
+	errMsg, _ := eventPayload["error"].(string)
+	if !strings.Contains(errMsg, "repository path is empty") {
+		t.Fatalf("payload error = %q, want repository path message", errMsg)
+	}
+}
+
+func TestCleanupOrphanedLocalWorktreeBranchHandlesNilRepository(t *testing.T) {
+	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
+
+	app := NewApp()
+	app.cleanupOrphanedLocalWorktreeBranch(nil, "feature/orphan")
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "skip orphaned branch cleanup: repository is nil") {
+		t.Fatalf("expected nil repository debug log, got logs: %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "feature/orphan") {
+		t.Fatalf("expected log to include branch name, got logs: %q", logOutput)
+	}
+}
+
+func TestCleanupOrphanedLocalWorktreeBranchSkipsWhenBranchNameEmpty(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	repoPath := testutil.CreateTempGitRepo(t)
+	repo, err := gitpkg.Open(repoPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
+
+	app := NewApp()
+	app.cleanupOrphanedLocalWorktreeBranch(repo, "   ")
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "skip orphaned branch cleanup: branch name is empty") {
+		t.Fatalf("expected empty-branch debug log, got logs: %q", logOutput)
+	}
 }
 
 func TestGetSessionEnvValidation(t *testing.T) {
 	app := NewApp()
 	app.sessions = nil
 
+	if _, err := app.GetSessionEnv("   "); err == nil {
+		t.Fatal("GetSessionEnv() expected empty name validation error")
+	}
+
 	if _, err := app.GetSessionEnv("session-a"); err == nil {
 		t.Fatal("GetSessionEnv() expected session manager availability error")
+	}
+}
+
+func TestCleanupOrphanedLocalWorktreeBranchLogsWarnOnCleanupError(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	repoPath := testutil.CreateTempGitRepo(t)
+	repo, err := gitpkg.Open(repoPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
+
+	// Break the repository to force CleanupLocalBranchIfOrphaned to fail.
+	if err := os.RemoveAll(filepath.Join(repoPath, ".git")); err != nil {
+		t.Fatalf("failed to remove .git: %v", err)
+	}
+
+	app := NewApp()
+	app.cleanupOrphanedLocalWorktreeBranch(repo, "feature/broken")
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "failed to clean up orphaned local branch") {
+		t.Fatalf("expected warn log for cleanup error, got logs: %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "feature/broken") {
+		t.Fatalf("expected branch name in log, got logs: %q", logOutput)
+	}
+}
+func TestCleanupSessionWorktreeEmitsFailureWhenRepoOpenFails(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.setConfigSnapshot(config.DefaultConfig())
+
+	var eventPayload map[string]any
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+		if name != "worktree:cleanup-failed" || len(data) == 0 {
+			return
+		}
+		payload, ok := data[0].(map[string]any)
+		if ok {
+			eventPayload = payload
+		}
+	}
+
+	app.cleanupSessionWorktree(worktreeCleanupParams{
+		SessionName: "session-a",
+		WtPath:      filepath.Join(t.TempDir(), "worktree-open-fail"),
+		RepoPath:    filepath.Join(t.TempDir(), "nonexistent-repo"),
+		BranchName:  "feature/test",
+	})
+
+	if eventPayload == nil {
+		t.Fatal("expected worktree:cleanup-failed event payload")
+	}
+	if got := eventPayload["sessionName"]; got != "session-a" {
+		t.Fatalf("payload sessionName = %v, want session-a", got)
 	}
 }
 

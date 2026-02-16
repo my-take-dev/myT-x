@@ -47,7 +47,7 @@ func (r *CommandRouter) handleNewSession(req ipc.TmuxRequest) ipc.TmuxResponse {
 	}
 
 	env := copyEnvMap(req.Env)
-	mergePaneEnvDefaults(env, r.getPaneEnv())
+	mergePaneEnvDefaults(env, r.paneEnvView())
 	addTmuxEnvironment(env, r.opts.PipeName, r.opts.HostPID, paneCtx.SessionID, pane.ID, r.ShimAvailable())
 
 	if err := r.attachTerminal(pane, workDir, env, nil); err != nil {

@@ -172,10 +172,20 @@ func (m *Manager) stopLocked() error {
 		}
 	}
 
+	timer := time.NewTimer(2 * time.Second)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+
 	select {
 	case <-ah.doneCh:
 		// Loop exited cleanly.
-	case <-time.After(2 * time.Second):
+	case <-timer.C:
 		timeoutErr := fmt.Errorf("hotkey message loop stop timed out (hotkeyID=%d)", ah.hotkeyID)
 		slog.Warn("[hotkey] DEBUG message loop stop timed out, goroutine/thread may leak",
 			"hotkeyID", ah.hotkeyID)

@@ -162,11 +162,15 @@ func (m *SessionManager) ResizePane(paneID string, cols, rows int) error {
 	if pane == nil || pane.Terminal == nil {
 		return fmt.Errorf("pane not found: %s", paneID)
 	}
+	if pane.Width == cols && pane.Height == rows {
+		return nil
+	}
 	if err := pane.Terminal.Resize(cols, rows); err != nil {
 		return err
 	}
 	pane.Width = cols
 	pane.Height = rows
+	m.markStateMutationLocked()
 	return nil
 }
 
@@ -184,6 +188,10 @@ func (m *SessionManager) RenamePane(paneID string, title string) (string, error)
 	if pane == nil || pane.Window == nil || pane.Window.Session == nil {
 		return "", fmt.Errorf("pane not found: %s", paneID)
 	}
-	pane.Title = strings.TrimSpace(title)
+	nextTitle := strings.TrimSpace(title)
+	if pane.Title != nextTitle {
+		pane.Title = nextTitle
+		m.markStateMutationLocked()
+	}
 	return pane.Window.Session.Name, nil
 }

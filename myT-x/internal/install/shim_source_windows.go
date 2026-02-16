@@ -63,13 +63,16 @@ func copyFile(src, dst string) (retErr error) {
 				slog.Debug("[DEBUG-SHIM] failed to close temp file during rollback",
 					"path", tmpPath, "error", closeErr)
 			}
-			if rErr := os.Remove(tmpPath); rErr != nil {
+			if rErr := os.Remove(tmpPath); rErr != nil && !os.IsNotExist(rErr) {
 				slog.Debug("[DEBUG-SHIM] failed to remove temp file", "path", tmpPath, "error", rErr)
 			}
 		}
 	}()
 
 	if _, err := io.Copy(tmpFile, in); err != nil {
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil {
 		return err
 	}
 	if err := tmpFile.Close(); err != nil {

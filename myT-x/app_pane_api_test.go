@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"myT-x/internal/tmux"
 )
@@ -197,9 +199,17 @@ func TestPaneMutationAPIsSuccessPaths(t *testing.T) {
 
 	t.Run("SwapPanes updates pane order and emits layout-changed event", func(t *testing.T) {
 		app, firstPane, secondPane := newAppWithPanes(t)
+		var eventsMu sync.Mutex
 		events := make([]string, 0, 4)
 		runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+			eventsMu.Lock()
 			events = append(events, name)
+			eventsMu.Unlock()
+		}
+		eventSnapshot := func() []string {
+			eventsMu.Lock()
+			defer eventsMu.Unlock()
+			return append([]string(nil), events...)
 		}
 
 		before := app.sessions.Snapshot()[0].Windows[0].Panes
@@ -213,12 +223,15 @@ func TestPaneMutationAPIsSuccessPaths(t *testing.T) {
 		if after[0].ID != secondPane || after[1].ID != firstPane {
 			t.Fatalf("pane order after swap = [%q, %q], want [%q, %q]", after[0].ID, after[1].ID, secondPane, firstPane)
 		}
-		if !containsEvent(events, "tmux:layout-changed") {
-			t.Fatalf("events = %v, want tmux:layout-changed", events)
+		if !containsEvent(eventSnapshot(), "tmux:layout-changed") {
+			t.Fatalf("events = %v, want tmux:layout-changed", eventSnapshot())
 		}
-		if !containsAnyEvent(events, "tmux:snapshot", "tmux:snapshot-delta") {
-			t.Fatalf("events = %v, want snapshot update event", events)
-		}
+		waitForCondition(
+			t,
+			snapshotCoalesceWindow+300*time.Millisecond,
+			func() bool { return containsAnyEvent(eventSnapshot(), "tmux:snapshot", "tmux:snapshot-delta") },
+			"snapshot update event after swap",
+		)
 	})
 
 	t.Run("KillPane emits session-destroyed when last pane is removed", func(t *testing.T) {
@@ -288,6 +301,28 @@ func TestSplitPaneValidation(t *testing.T) {
 	})
 }
 
+func TestSplitPaneSuccess(t *testing.T) {
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+
+	_, pane, err := app.sessions.CreateSession("session-a", "0", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	newPaneID, err := app.SplitPane(pane.IDString(), true)
+	if err != nil {
+		t.Fatalf("SplitPane() error = %v", err)
+	}
+	if newPaneID == "" {
+		t.Fatal("SplitPane() returned empty pane id")
+	}
+	if !app.sessions.HasPane(newPaneID) {
+		t.Fatalf("SplitPane() returned pane id %q that does not exist", newPaneID)
+	}
+}
+
 func TestGetPaneReplay(t *testing.T) {
 	t.Run("returns empty when pane state manager is unavailable", func(t *testing.T) {
 		app := NewApp()
@@ -313,5 +348,30 @@ func TestGetPaneEnvValidation(t *testing.T) {
 
 	if _, err := app.GetPaneEnv("%1"); err == nil {
 		t.Fatal("GetPaneEnv() expected session manager availability error")
+	}
+}
+
+func TestGetPaneEnvSuccess(t *testing.T) {
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+
+	_, pane, err := app.sessions.CreateSession("session-a", "0", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	pane.Env["FOO"] = "bar"
+	pane.Env["BAZ"] = "qux"
+
+	env, err := app.GetPaneEnv(pane.IDString())
+	if err != nil {
+		t.Fatalf("GetPaneEnv() error = %v", err)
+	}
+	if env["FOO"] != "bar" || env["BAZ"] != "qux" {
+		t.Fatalf("GetPaneEnv() = %v, want map with FOO=bar and BAZ=qux", env)
+	}
+
+	env["FOO"] = "modified"
+	if pane.Env["FOO"] != "bar" {
+		t.Fatalf("pane env mutated via returned map: got %q, want %q", pane.Env["FOO"], "bar")
 	}
 }
