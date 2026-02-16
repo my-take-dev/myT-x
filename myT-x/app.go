@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"myT-x/internal/config"
 	"myT-x/internal/hotkeys"
@@ -27,7 +28,8 @@ type App struct {
 	//   paneEnvUpdateMu -> tmux.CommandRouter.paneEnvMu (via UpdatePaneEnv)
 	//
 	// Independent locks: do not assume ordering across these.
-	//   windowMu, outputMu, snapshotMu, startupWarnMu, activeSessMu, ctxMu
+	//   windowMu, outputMu, snapshotMu, snapshotDeltaMu, snapshotRequestMu, snapshotMetricsMu,
+	//   startupWarnMu, activeSessMu, ctxMu
 	//   tmux.SessionManager.mu, tmux.CommandRouter.mu
 	//
 	// Keep cfgSaveMu/cfgMu isolated from the independent lock set above.
@@ -57,14 +59,23 @@ type App struct {
 	windowToggling atomic.Bool // CAS guard to prevent concurrent toggleQuakeWindow
 
 	// Output buffering and snapshot state.
-	outputMu       sync.Mutex
-	outputBuffers  map[string]*terminal.OutputBuffer
-	paneFeedCh     chan paneFeedItem
-	paneFeedStop   context.CancelFunc
-	snapshotMu     sync.Mutex
-	snapshotCache  map[string]tmux.SessionSnapshot
-	snapshotPrimed bool
-	snapshotStats  snapshotMetrics
+	outputMu      sync.Mutex
+	outputFlusher *terminal.OutputFlushManager
+	paneFeedCh    chan paneFeedItem
+	paneFeedStop  context.CancelFunc
+
+	snapshotMu           sync.Mutex
+	snapshotDeltaMu      sync.Mutex
+	snapshotCache        map[string]tmux.SessionSnapshot
+	snapshotPrimed       bool
+	snapshotLastTopology uint64
+
+	snapshotRequestMu         sync.Mutex
+	snapshotRequestTimer      *time.Timer
+	snapshotRequestGeneration uint64
+	snapshotRequestDispatched uint64
+	snapshotMetricsMu         sync.Mutex
+	snapshotStats             snapshotMetrics
 
 	// Background worker cancellation/waits.
 	idleCancel context.CancelFunc
@@ -81,7 +92,6 @@ type paneFeedItem struct {
 // NewApp creates the app service.
 func NewApp() *App {
 	return &App{
-		outputBuffers: map[string]*terminal.OutputBuffer{},
 		paneFeedCh:    make(chan paneFeedItem, 4096),
 		snapshotCache: map[string]tmux.SessionSnapshot{},
 		hotkeys:       hotkeys.NewManager(),

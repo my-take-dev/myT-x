@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { api } from "../api";
 import { useTmuxStore } from "../stores/tmuxStore";
 import type { PaneSnapshot, SessionSnapshot } from "../types/tmux";
@@ -30,6 +30,57 @@ export function SessionView(props: SessionViewProps) {
     const active = paneList.find((pane) => pane.active);
     return active?.id ?? paneList[0]?.id ?? null;
   }, [paneList]);
+  const sessionName = props.session?.name ?? "";
+
+  const onFocusPane = useCallback((paneId: string) => {
+    void api.FocusPane(paneId).catch((err) => {
+      console.warn("[session-view] FocusPane failed", err);
+    });
+  }, []);
+
+  const onSplitVertical = useCallback((paneId: string) => {
+    void api.SplitPane(paneId, true).catch((err) => {
+      console.warn("[session-view] SplitPane(vertical) failed", err);
+    });
+  }, []);
+
+  const onSplitHorizontal = useCallback((paneId: string) => {
+    void api.SplitPane(paneId, false).catch((err) => {
+      console.warn("[session-view] SplitPane(horizontal) failed", err);
+    });
+  }, []);
+
+  const onToggleZoom = useCallback((paneId: string) => {
+    const current = useTmuxStore.getState().zoomPaneId;
+    setZoomPaneId(current === paneId ? null : paneId);
+  }, [setZoomPaneId]);
+
+  const onKillPane = useCallback((paneId: string) => {
+    void api.KillPane(paneId).catch((err) => {
+      console.warn("[session-view] KillPane failed", err);
+    });
+  }, []);
+
+  const onRenamePane = useCallback((paneId: string, title: string) => {
+    void api.RenamePane(paneId, title).catch((err) => {
+      console.warn("[session-view] RenamePane failed", err);
+    });
+  }, []);
+
+  const onSwapPane = useCallback((sourcePaneId: string, targetPaneId: string) => {
+    void api.SwapPanes(sourcePaneId, targetPaneId).catch((err) => {
+      console.warn("[session-view] SwapPanes failed", err);
+    });
+  }, []);
+
+  const onDetachSession = useCallback(() => {
+    if (sessionName === "") {
+      return;
+    }
+    void api.DetachSession(sessionName).catch((err) => {
+      console.warn("[session-view] DetachSession failed", err);
+    });
+  }, [sessionName]);
 
   if (!props.session) {
     return <div className="session-empty">セッションを作成してください。</div>;
@@ -69,30 +120,14 @@ export function SessionView(props: SessionViewProps) {
           panes={window.panes}
           activePaneId={activePaneId}
           zoomPaneId={zoomPaneId}
-          onFocusPane={(paneId) => {
-            void api.FocusPane(paneId);
-          }}
-          onSplitVertical={(paneId) => {
-            void api.SplitPane(paneId, true);
-          }}
-          onSplitHorizontal={(paneId) => {
-            void api.SplitPane(paneId, false);
-          }}
-          onToggleZoom={(paneId) => {
-            setZoomPaneId(zoomPaneId === paneId ? null : paneId);
-          }}
-          onKillPane={(paneId) => {
-            void api.KillPane(paneId);
-          }}
-          onRenamePane={(paneId, title) => {
-            void api.RenamePane(paneId, title);
-          }}
-          onSwapPane={(sourcePaneId, targetPaneId) => {
-            void api.SwapPanes(sourcePaneId, targetPaneId);
-          }}
-          onDetachSession={() => {
-            void api.DetachSession(props.session?.name ?? "");
-          }}
+          onFocusPane={onFocusPane}
+          onSplitVertical={onSplitVertical}
+          onSplitHorizontal={onSplitHorizontal}
+          onToggleZoom={onToggleZoom}
+          onKillPane={onKillPane}
+          onRenamePane={onRenamePane}
+          onSwapPane={onSwapPane}
+          onDetachSession={onDetachSession}
         />
       </div>
     </div>

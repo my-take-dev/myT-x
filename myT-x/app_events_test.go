@@ -5,7 +5,9 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"myT-x/internal/tmux"
 )
@@ -63,6 +65,26 @@ func TestEmitRuntimeEventWithContextEmitsWhenContextIsReady(t *testing.T) {
 	}
 	if eventName != "config:updated" {
 		t.Fatalf("event name = %q, want %q", eventName, "config:updated")
+	}
+}
+
+func TestEmitBackendEventSkipsNilRuntimeContextWithWarning(t *testing.T) {
+	var logBuf bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() {
+		slog.SetDefault(originalLogger)
+	})
+
+	app := NewApp()
+	app.emitBackendEvent("app:activate-window", nil)
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "backend event dropped because runtime context is nil") {
+		t.Fatalf("log output = %q, want backend nil-context warning", logOutput)
+	}
+	if !strings.Contains(logOutput, "event=app:activate-window") {
+		t.Fatalf("log output = %q, want dropped event name", logOutput)
 	}
 }
 
@@ -320,5 +342,271 @@ func TestShouldEmitSnapshotForEvent(t *testing.T) {
 				t.Fatalf("shouldEmitSnapshotForEvent(%q) = %v, want %v", tt.eventName, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestShouldBypassSnapshotDebounceForEvent(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventName string
+		want      bool
+	}{
+		{name: "session created", eventName: "tmux:session-created", want: true},
+		{name: "session destroyed", eventName: "tmux:session-destroyed", want: true},
+		{name: "pane focused", eventName: "tmux:pane-focused", want: true},
+		{name: "pane renamed", eventName: "tmux:pane-renamed", want: true},
+		{name: "layout changed", eventName: "tmux:layout-changed", want: false},
+		{name: "pane created", eventName: "tmux:pane-created", want: false},
+		{name: "unknown event", eventName: "tmux:unknown", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldBypassSnapshotDebounceForEvent(tt.eventName); got != tt.want {
+				t.Fatalf("shouldBypassSnapshotDebounceForEvent(%q) = %v, want %v", tt.eventName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRequestSnapshotNilGuards(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+		t.Fatalf("unexpected runtime event emission for nil-guard path: %s", name)
+	}
+
+	t.Run("runtime context is nil", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+
+		app.requestSnapshot(false)
+
+		app.snapshotRequestMu.Lock()
+		defer app.snapshotRequestMu.Unlock()
+		if app.snapshotRequestTimer != nil {
+			t.Fatal("snapshotRequestTimer should remain nil when runtime context is nil")
+		}
+		if app.snapshotRequestGeneration != 0 || app.snapshotRequestDispatched != 0 {
+			t.Fatalf("snapshot request state mutated unexpectedly: generation=%d dispatched=%d",
+				app.snapshotRequestGeneration, app.snapshotRequestDispatched)
+		}
+	})
+
+	t.Run("sessions manager is nil", func(t *testing.T) {
+		app := NewApp()
+		app.setRuntimeContext(context.Background())
+		app.sessions = nil
+
+		app.requestSnapshot(false)
+
+		app.snapshotRequestMu.Lock()
+		defer app.snapshotRequestMu.Unlock()
+		if app.snapshotRequestTimer != nil {
+			t.Fatal("snapshotRequestTimer should remain nil when sessions manager is nil")
+		}
+		if app.snapshotRequestGeneration != 0 || app.snapshotRequestDispatched != 0 {
+			t.Fatalf("snapshot request state mutated unexpectedly: generation=%d dispatched=%d",
+				app.snapshotRequestGeneration, app.snapshotRequestDispatched)
+		}
+	})
+}
+
+func TestClearSnapshotRequestTimerStopsScheduledCallback(t *testing.T) {
+	app := NewApp()
+
+	triggered := make(chan struct{}, 1)
+	app.snapshotRequestMu.Lock()
+	app.snapshotRequestTimer = time.AfterFunc(20*time.Millisecond, func() {
+		select {
+		case triggered <- struct{}{}:
+		default:
+		}
+	})
+	app.snapshotRequestMu.Unlock()
+
+	app.clearSnapshotRequestTimer()
+	app.clearSnapshotRequestTimer()
+
+	select {
+	case <-triggered:
+		t.Fatal("snapshot request timer callback should not fire after clearSnapshotRequestTimer")
+	case <-time.After(120 * time.Millisecond):
+	}
+}
+
+func TestRequestSnapshotCoalescesBurst(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.sessions = tmux.NewSessionManager()
+	if _, _, err := app.sessions.CreateSession("alpha", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	var mu sync.Mutex
+	snapshotEvents := 0
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+		if name != "tmux:snapshot" && name != "tmux:snapshot-delta" {
+			return
+		}
+		mu.Lock()
+		snapshotEvents++
+		mu.Unlock()
+	}
+
+	for i := 0; i < 6; i++ {
+		app.requestSnapshot(false)
+	}
+	waitForCondition(
+		t,
+		snapshotCoalesceWindow+300*time.Millisecond,
+		func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return snapshotEvents >= 1
+		},
+		"coalesced snapshot emission",
+	)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if snapshotEvents != 1 {
+		t.Fatalf("snapshot event count = %d, want 1 for coalesced burst", snapshotEvents)
+	}
+}
+
+func TestRequestSnapshotImmediateCancelsPendingDebounce(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.sessions = tmux.NewSessionManager()
+	if _, _, err := app.sessions.CreateSession("alpha", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	var mu sync.Mutex
+	snapshotEvents := 0
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+		if name != "tmux:snapshot" && name != "tmux:snapshot-delta" {
+			return
+		}
+		mu.Lock()
+		snapshotEvents++
+		mu.Unlock()
+	}
+
+	app.requestSnapshot(false)
+	app.requestSnapshot(true)
+	waitForCondition(
+		t,
+		snapshotCoalesceWindow+300*time.Millisecond,
+		func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return snapshotEvents >= 1
+		},
+		"immediate snapshot emission",
+	)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if snapshotEvents != 1 {
+		t.Fatalf("snapshot event count = %d, want 1 with immediate bypass", snapshotEvents)
+	}
+}
+
+func TestEmitBackendEventDebouncesLayoutChangedSnapshots(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.sessions = tmux.NewSessionManager()
+	if _, _, err := app.sessions.CreateSession("alpha", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	var mu sync.Mutex
+	snapshotEvents := 0
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+		if name != "tmux:snapshot" && name != "tmux:snapshot-delta" {
+			return
+		}
+		mu.Lock()
+		snapshotEvents++
+		mu.Unlock()
+	}
+
+	for i := 0; i < 4; i++ {
+		app.emitBackendEvent("tmux:layout-changed", map[string]any{"sessionName": "alpha"})
+	}
+	waitForCondition(
+		t,
+		snapshotCoalesceWindow+300*time.Millisecond,
+		func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return snapshotEvents >= 1
+		},
+		"debounced layout snapshot emission",
+	)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if snapshotEvents != 1 {
+		t.Fatalf("snapshot event count = %d, want 1 for debounced layout updates", snapshotEvents)
+	}
+}
+
+func TestShouldSyncPaneStates(t *testing.T) {
+	app := NewApp()
+
+	if !app.shouldSyncPaneStates(1) {
+		t.Fatal("first topology generation should require sync")
+	}
+	if app.shouldSyncPaneStates(1) {
+		t.Fatal("same topology generation should not require sync")
+	}
+	if !app.shouldSyncPaneStates(2) {
+		t.Fatal("new topology generation should require sync")
+	}
+}
+
+func TestDetachOutputBuffers(t *testing.T) {
+	app := NewApp()
+	t.Cleanup(func() {
+		app.detachAllOutputBuffers()
+	})
+	flusher := app.ensureOutputFlusher()
+	flusher.Write("%1", []byte("keep"))
+	flusher.Write("%2", []byte("drop"))
+
+	removed := app.detachStaleOutputBuffers(map[string]struct{}{"%1": {}})
+	if len(removed) != 1 || removed[0] != "%2" {
+		t.Fatalf("detachStaleOutputBuffers() = %#v, want [%q]", removed, "%2")
+	}
+
+	all := app.detachAllOutputBuffers()
+	if len(all) != 1 || all[0] != "%1" {
+		t.Fatalf("detachAllOutputBuffers() = %#v, want [%q]", all, "%1")
+	}
+
+	app.outputMu.Lock()
+	defer app.outputMu.Unlock()
+	if app.outputFlusher != nil {
+		t.Fatal("outputFlusher should be nil after detachAllOutputBuffers")
 	}
 }

@@ -106,6 +106,158 @@ func TestCreateWorktreeWithBranch(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeWithCommitishBase(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	repoDir := testutil.CreateTempGitRepo(t)
+	repo, err := Open(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wtDir := GenerateWorktreeDirPath(repoDir)
+	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	wtPath := filepath.Join(wtDir, "feature-from-commitish")
+	if err := repo.CreateWorktree(wtPath, "feature/from-commitish", "HEAD~0"); err != nil {
+		t.Fatalf("CreateWorktree() with commit-ish base error = %v", err)
+	}
+
+	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
+		t.Fatal("worktree directory was not created")
+	}
+
+	if err := repo.RemoveWorktree(wtPath); err != nil {
+		t.Fatalf("RemoveWorktree() error = %v", err)
+	}
+}
+
+func TestCreateWorktreeWithBranchConflict(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	repoDir := testutil.CreateTempGitRepo(t)
+	repo, err := Open(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wtDir := GenerateWorktreeDirPath(repoDir)
+	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	firstPath := filepath.Join(wtDir, "feature-conflict-1")
+	if err := repo.CreateWorktree(firstPath, "feature/conflict", "HEAD"); err != nil {
+		t.Fatalf("initial CreateWorktree() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = repo.RemoveWorktreeForced(firstPath)
+	})
+
+	secondPath := filepath.Join(wtDir, "feature-conflict-2")
+	if err := repo.CreateWorktree(secondPath, "feature/conflict", "HEAD"); err == nil {
+		t.Fatal("CreateWorktree() expected branch-conflict error")
+	}
+}
+
+func TestCreateWorktreeRejectsInvalidBaseBranch(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	repoDir := testutil.CreateTempGitRepo(t)
+	repo, err := Open(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wtDir := GenerateWorktreeDirPath(repoDir)
+	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wtPath := filepath.Join(wtDir, "invalid-base")
+
+	if err := repo.CreateWorktree(wtPath, "feature/invalid-base", "invalid base"); err == nil {
+		t.Fatal("CreateWorktree() expected base branch validation error")
+	}
+}
+
+func TestCreateWorktreeFromBranch(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	repoDir := testutil.CreateTempGitRepo(t)
+	repo, err := Open(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defaultBranch, err := repo.CurrentBranch()
+	if err != nil {
+		t.Fatalf("CurrentBranch() error = %v", err)
+	}
+	if err := repo.CheckoutNewBranch("feature/from-existing"); err != nil {
+		t.Fatalf("CheckoutNewBranch() error = %v", err)
+	}
+	if _, err := repo.runGitCommand("checkout", defaultBranch); err != nil {
+		t.Fatalf("checkout default branch error = %v", err)
+	}
+
+	wtDir := GenerateWorktreeDirPath(repoDir)
+	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wtPath := filepath.Join(wtDir, "existing-branch")
+
+	if err := repo.CreateWorktreeFromBranch(wtPath, "feature/from-existing"); err != nil {
+		t.Fatalf("CreateWorktreeFromBranch() error = %v", err)
+	}
+
+	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
+		t.Fatal("worktree directory was not created")
+	}
+
+	infos, err := repo.ListWorktreesWithInfo()
+	if err != nil {
+		t.Fatalf("ListWorktreesWithInfo() error = %v", err)
+	}
+	found := false
+	for _, info := range infos {
+		if info.Path != wtPath {
+			continue
+		}
+		found = true
+		if info.Branch != "feature/from-existing" {
+			t.Fatalf("worktree branch = %q, want %q", info.Branch, "feature/from-existing")
+		}
+		if info.IsDetached {
+			t.Fatal("worktree should not be detached")
+		}
+	}
+	if !found {
+		t.Fatalf("worktree %q not found in info list", wtPath)
+	}
+}
+
+func TestCreateWorktreeFromBranchValidation(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	repoDir := testutil.CreateTempGitRepo(t)
+	repo, err := Open(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wtDir := GenerateWorktreeDirPath(repoDir)
+	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wtPath := filepath.Join(wtDir, "invalid-branch")
+
+	if err := repo.CreateWorktreeFromBranch(wtPath, "invalid branch name"); err == nil {
+		t.Fatal("CreateWorktreeFromBranch() expected branch validation error")
+	}
+}
+
 func TestListWorktreesWithInfo(t *testing.T) {
 	testutil.SkipIfNoGit(t)
 

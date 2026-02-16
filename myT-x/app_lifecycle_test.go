@@ -336,9 +336,10 @@ func TestShutdownReleasesInMemoryResources(t *testing.T) {
 	app.snapshotCache["session-a"] = tmux.SessionSnapshot{Name: "session-a"}
 	app.snapshotPrimed = true
 
-	buffer := terminal.NewOutputBuffer(16*time.Millisecond, 1024, func([]byte) {})
-	buffer.Start()
-	app.outputBuffers["%1"] = buffer
+	flusher := terminal.NewOutputFlushManager(16*time.Millisecond, 1024, func(string, []byte) {})
+	flusher.Start()
+	flusher.Write("%1", []byte("pending"))
+	app.outputFlusher = flusher
 
 	app.startPaneFeedWorker(context.Background())
 	app.startIdleMonitor(context.Background())
@@ -357,8 +358,8 @@ func TestShutdownReleasesInMemoryResources(t *testing.T) {
 	if app.idleCancel != nil {
 		t.Fatal("idleCancel should be nil after shutdown")
 	}
-	if len(app.outputBuffers) != 0 {
-		t.Fatalf("outputBuffers length = %d, want 0", len(app.outputBuffers))
+	if app.outputFlusher != nil {
+		t.Fatal("outputFlusher should be nil after shutdown")
 	}
 	if app.paneStates.Snapshot("%1") != "" {
 		t.Fatal("paneStates should be reset after shutdown")
@@ -405,7 +406,7 @@ func TestShutdownStopsOutputBuffersOutsideOutputLock(t *testing.T) {
 	app.setRuntimeContext(context.Background())
 
 	callbackRan := make(chan struct{}, 1)
-	buffer := terminal.NewOutputBuffer(16*time.Millisecond, 1024, func([]byte) {
+	flusher := terminal.NewOutputFlushManager(16*time.Millisecond, 1024, func(_ string, _ []byte) {
 		app.outputMu.Lock()
 		app.outputMu.Unlock()
 		select {
@@ -413,9 +414,9 @@ func TestShutdownStopsOutputBuffersOutsideOutputLock(t *testing.T) {
 		default:
 		}
 	})
-	buffer.Start()
-	buffer.Write([]byte("pending"))
-	app.outputBuffers["%1"] = buffer
+	flusher.Start()
+	flusher.Write("%1", []byte("pending"))
+	app.outputFlusher = flusher
 
 	done := make(chan struct{})
 	go func() {
@@ -563,6 +564,23 @@ func TestToggleQuakeWindowSkipsWhenContextNil(t *testing.T) {
 	// Verify the CAS guard was properly released.
 	if app.windowToggling.Load() {
 		t.Fatal("windowToggling should be false after toggle with nil context")
+	}
+}
+
+func TestBringWindowToFrontSkipsWhenContextNil(t *testing.T) {
+	var logBuf bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() {
+		slog.SetDefault(originalLogger)
+	})
+
+	app := NewApp()
+	app.bringWindowToFront()
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "bringWindowToFront dropped because runtime context is nil") {
+		t.Fatalf("log output = %q, want bringWindowToFront nil-context warning", logOutput)
 	}
 }
 

@@ -155,7 +155,7 @@ func (a *App) startup(ctx context.Context) {
 	a.configureGlobalHotkey()
 	a.startPaneFeedWorker(ctx)
 	a.startIdleMonitor(ctx)
-	a.emitSnapshot()
+	a.requestSnapshot(true)
 	a.flushPendingConfigLoadWarnings()
 }
 
@@ -206,6 +206,11 @@ func (a *App) ensureShimReady(workspace string) {
 func (a *App) shutdown(_ context.Context) {
 	logCtx := a.runtimeContext()
 	a.stopPaneFeedWorker()
+	a.clearSnapshotRequestTimer()
+	a.snapshotRequestMu.Lock()
+	a.snapshotRequestGeneration = 0
+	a.snapshotRequestDispatched = 0
+	a.snapshotRequestMu.Unlock()
 
 	if a.idleCancel != nil {
 		a.idleCancel()
@@ -218,7 +223,7 @@ func (a *App) shutdown(_ context.Context) {
 		runtimeLogger.Warningf(logCtx, "timed out waiting for setup workers during shutdown")
 	}
 
-	a.stopDetachedOutputBuffers(a.detachAllOutputBuffers())
+	a.cleanupDetachedPaneStates(a.detachAllOutputBuffers())
 
 	if a.paneStates != nil {
 		a.paneStates.Reset()
@@ -226,8 +231,11 @@ func (a *App) shutdown(_ context.Context) {
 	a.snapshotMu.Lock()
 	a.snapshotCache = map[string]tmux.SessionSnapshot{}
 	a.snapshotPrimed = false
-	a.snapshotStats = snapshotMetrics{}
+	a.snapshotLastTopology = 0
 	a.snapshotMu.Unlock()
+	a.snapshotMetricsMu.Lock()
+	a.snapshotStats = snapshotMetrics{}
+	a.snapshotMetricsMu.Unlock()
 	if a.hotkeys != nil {
 		if err := a.hotkeys.Stop(); err != nil {
 			runtimeLogger.Warningf(logCtx, "hotkeys stop failed: %v", err)
@@ -266,17 +274,26 @@ func (a *App) startIdleMonitor(parent context.Context) {
 					}
 				}()
 
-				ticker := time.NewTicker(time.Second)
-				defer ticker.Stop()
+				nextInterval := sessions.RecommendedIdleCheckInterval()
+				if nextInterval <= 0 {
+					nextInterval = time.Second
+				}
+				timer := time.NewTimer(nextInterval)
+				defer timer.Stop()
 
 				for {
 					select {
 					case <-ctx.Done():
 						return
-					case <-ticker.C:
+					case <-timer.C:
 						if sessions.CheckIdleState() {
-							a.emitSnapshot()
+							a.requestSnapshot(false)
 						}
+						nextInterval = sessions.RecommendedIdleCheckInterval()
+						if nextInterval <= 0 {
+							nextInterval = time.Second
+						}
+						timer.Reset(nextInterval)
 					}
 				}
 			}()
@@ -296,10 +313,14 @@ func (a *App) startIdleMonitor(parent context.Context) {
 			a.emitRuntimeEventWithContext(a.runtimeContext(), "tmux:worker-panic", map[string]any{
 				"worker": "idle-monitor",
 			})
+			restartTimer := time.NewTimer(restartDelay)
 			select {
 			case <-ctx.Done():
+				if !restartTimer.Stop() {
+					<-restartTimer.C
+				}
 				return
-			case <-time.After(restartDelay):
+			case <-restartTimer.C:
 			}
 			restartDelay = nextPanicRestartBackoff(restartDelay)
 		}
@@ -318,10 +339,20 @@ func waitWithTimeout(waitFn func(), timeout time.Duration) bool {
 		close(done)
 	}()
 
+	timer := time.NewTimer(timeout)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+
 	select {
 	case <-done:
 		return true
-	case <-time.After(timeout):
+	case <-timer.C:
 		return false
 	}
 }
@@ -347,6 +378,25 @@ func (a *App) configureGlobalHotkey() {
 		return
 	}
 	runtimeLogger.Infof(logCtx, "global hotkey registered: %s", a.hotkeys.ActiveBinding())
+}
+
+// bringWindowToFront shows and raises the application window.
+// Used when a second instance signals the first to activate.
+func (a *App) bringWindowToFront() {
+	ctx := a.runtimeContext()
+	if ctx == nil {
+		slog.Warn("[DEBUG-IPC] bringWindowToFront dropped because runtime context is nil")
+		return
+	}
+	a.raiseWindow(ctx)
+	a.setWindowVisible(true)
+}
+
+func (a *App) raiseWindow(ctx context.Context) {
+	runtimeWindowShowFn(ctx)
+	runtimeWindowUnminimiseFn(ctx)
+	runtimeWindowSetAlwaysOnTopFn(ctx, true)
+	runtimeWindowSetAlwaysOnTopFn(ctx, false)
 }
 
 func (a *App) setWindowVisible(visible bool) {
@@ -381,10 +431,7 @@ func (a *App) toggleQuakeWindow() {
 	if currentlyVisible {
 		runtimeWindowHideFn(ctx)
 	} else {
-		runtimeWindowShowFn(ctx)
-		runtimeWindowUnminimiseFn(ctx)
-		runtimeWindowSetAlwaysOnTopFn(ctx, true)
-		runtimeWindowSetAlwaysOnTopFn(ctx, false)
+		a.raiseWindow(ctx)
 	}
 
 	a.setWindowVisible(!currentlyVisible)

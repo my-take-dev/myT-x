@@ -387,6 +387,130 @@ func TestGetPaneContextSnapshot(t *testing.T) {
 	}
 }
 
+func TestGetPaneContextSnapshotSessionWorkDir(t *testing.T) {
+	type arrangeFunc func(*testing.T, *SessionManager, string)
+
+	tests := []struct {
+		name    string
+		arrange arrangeFunc
+		wantDir string
+	}{
+		{
+			name:    "empty when root and worktree are unset",
+			wantDir: "",
+		},
+		{
+			name: "uses root path for regular sessions",
+			arrange: func(t *testing.T, manager *SessionManager, sessionName string) {
+				t.Helper()
+				if err := manager.SetRootPath(sessionName, `C:\Projects\myapp`); err != nil {
+					t.Fatalf("SetRootPath() error = %v", err)
+				}
+			},
+			wantDir: `C:\Projects\myapp`,
+		},
+		{
+			name: "trimmed root path is returned",
+			arrange: func(t *testing.T, manager *SessionManager, sessionName string) {
+				t.Helper()
+				if err := manager.SetRootPath(sessionName, "  C:\\Projects\\myapp  "); err != nil {
+					t.Fatalf("SetRootPath() error = %v", err)
+				}
+			},
+			wantDir: `C:\Projects\myapp`,
+		},
+		{
+			name: "worktree path takes precedence over root path",
+			arrange: func(t *testing.T, manager *SessionManager, sessionName string) {
+				t.Helper()
+				if err := manager.SetRootPath(sessionName, `C:\Projects\myapp`); err != nil {
+					t.Fatalf("SetRootPath() error = %v", err)
+				}
+				if err := manager.SetWorktreeInfo(sessionName, &SessionWorktreeInfo{
+					Path:     `C:\Projects\myapp.wt\feature`,
+					RepoPath: `C:\Projects\myapp`,
+				}); err != nil {
+					t.Fatalf("SetWorktreeInfo() error = %v", err)
+				}
+			},
+			wantDir: `C:\Projects\myapp.wt\feature`,
+		},
+		{
+			name: "whitespace worktree path falls back to root path",
+			arrange: func(t *testing.T, manager *SessionManager, sessionName string) {
+				t.Helper()
+				if err := manager.SetRootPath(sessionName, `C:\Projects\myapp`); err != nil {
+					t.Fatalf("SetRootPath() error = %v", err)
+				}
+				if err := manager.SetWorktreeInfo(sessionName, &SessionWorktreeInfo{
+					Path:     "   ",
+					RepoPath: `C:\Projects\myapp`,
+				}); err != nil {
+					t.Fatalf("SetWorktreeInfo() error = %v", err)
+				}
+			},
+			wantDir: `C:\Projects\myapp`,
+		},
+		{
+			name: "whitespace root path is treated as empty",
+			arrange: func(t *testing.T, manager *SessionManager, sessionName string) {
+				t.Helper()
+				if err := manager.SetRootPath(sessionName, "   "); err != nil {
+					t.Fatalf("SetRootPath() error = %v", err)
+				}
+			},
+			wantDir: "",
+		},
+		{
+			name: "worktree path is used when root path is unset",
+			arrange: func(t *testing.T, manager *SessionManager, sessionName string) {
+				t.Helper()
+				if err := manager.SetWorktreeInfo(sessionName, &SessionWorktreeInfo{
+					Path:     `C:\Projects\myapp.wt\feature`,
+					RepoPath: `C:\Projects\myapp`,
+				}); err != nil {
+					t.Fatalf("SetWorktreeInfo() error = %v", err)
+				}
+			},
+			wantDir: `C:\Projects\myapp.wt\feature`,
+		},
+		{
+			name: "trimmed worktree path is returned",
+			arrange: func(t *testing.T, manager *SessionManager, sessionName string) {
+				t.Helper()
+				if err := manager.SetWorktreeInfo(sessionName, &SessionWorktreeInfo{
+					Path:     "  C:\\Projects\\myapp.wt\\feature  ",
+					RepoPath: `C:\Projects\myapp`,
+				}); err != nil {
+					t.Fatalf("SetWorktreeInfo() error = %v", err)
+				}
+			},
+			wantDir: `C:\Projects\myapp.wt\feature`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewSessionManager()
+			session, pane, err := manager.CreateSession("demo", "0", 120, 40)
+			if err != nil {
+				t.Fatalf("CreateSession() error = %v", err)
+			}
+			if tt.arrange != nil {
+				tt.arrange(t, manager, session.Name)
+			}
+
+			snapshot, err := manager.GetPaneContextSnapshot(pane.ID)
+			if err != nil {
+				t.Fatalf("GetPaneContextSnapshot() error = %v", err)
+			}
+			if snapshot.SessionWorkDir != tt.wantDir {
+				t.Fatalf("SessionWorkDir = %q, want %q", snapshot.SessionWorkDir, tt.wantDir)
+			}
+		})
+	}
+}
+
 func TestHasPane(t *testing.T) {
 	manager := NewSessionManager()
 	_, pane, err := manager.CreateSession("demo", "0", 120, 40)
@@ -498,5 +622,121 @@ func TestSetWorktreeInfoTrimsWhitespace(t *testing.T) {
 	}
 	if info.BaseBranch != "" {
 		t.Fatalf("BaseBranch = %q, want empty", info.BaseBranch)
+	}
+}
+
+func TestWorktreeInfoEqual(t *testing.T) {
+	base := &SessionWorktreeInfo{
+		Path:       `C:\Projects\repo.wt\feature`,
+		RepoPath:   `C:\Projects\repo`,
+		BranchName: "feature",
+		BaseBranch: "main",
+		IsDetached: false,
+	}
+
+	tests := []struct {
+		name  string
+		left  *SessionWorktreeInfo
+		right *SessionWorktreeInfo
+		want  bool
+	}{
+		{
+			name:  "both nil",
+			left:  nil,
+			right: nil,
+			want:  true,
+		},
+		{
+			name:  "nil and non-nil",
+			left:  nil,
+			right: base,
+			want:  false,
+		},
+		{
+			name: "equal values",
+			left: &SessionWorktreeInfo{
+				Path:       base.Path,
+				RepoPath:   base.RepoPath,
+				BranchName: base.BranchName,
+				BaseBranch: base.BaseBranch,
+				IsDetached: base.IsDetached,
+			},
+			right: &SessionWorktreeInfo{
+				Path:       base.Path,
+				RepoPath:   base.RepoPath,
+				BranchName: base.BranchName,
+				BaseBranch: base.BaseBranch,
+				IsDetached: base.IsDetached,
+			},
+			want: true,
+		},
+		{
+			name: "path differs",
+			left: base,
+			right: &SessionWorktreeInfo{
+				Path:       `C:\Projects\repo.wt\feature-b`,
+				RepoPath:   base.RepoPath,
+				BranchName: base.BranchName,
+				BaseBranch: base.BaseBranch,
+				IsDetached: base.IsDetached,
+			},
+			want: false,
+		},
+		{
+			name: "repo path differs",
+			left: base,
+			right: &SessionWorktreeInfo{
+				Path:       base.Path,
+				RepoPath:   `D:\repo`,
+				BranchName: base.BranchName,
+				BaseBranch: base.BaseBranch,
+				IsDetached: base.IsDetached,
+			},
+			want: false,
+		},
+		{
+			name: "branch differs",
+			left: base,
+			right: &SessionWorktreeInfo{
+				Path:       base.Path,
+				RepoPath:   base.RepoPath,
+				BranchName: "feature-b",
+				BaseBranch: base.BaseBranch,
+				IsDetached: base.IsDetached,
+			},
+			want: false,
+		},
+		{
+			name: "base branch differs",
+			left: base,
+			right: &SessionWorktreeInfo{
+				Path:       base.Path,
+				RepoPath:   base.RepoPath,
+				BranchName: base.BranchName,
+				BaseBranch: "release",
+				IsDetached: base.IsDetached,
+			},
+			want: false,
+		},
+		{
+			name: "detached differs",
+			left: base,
+			right: &SessionWorktreeInfo{
+				Path:       base.Path,
+				RepoPath:   base.RepoPath,
+				BranchName: base.BranchName,
+				BaseBranch: base.BaseBranch,
+				IsDetached: true,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := worktreeInfoEqual(tt.left, tt.right); got != tt.want {
+				t.Fatalf("worktreeInfoEqual() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

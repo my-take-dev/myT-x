@@ -18,6 +18,28 @@ export function LayoutRenderer(props: LayoutRendererProps) {
     }
     return map;
   }, [props.panes]);
+  const actions = useMemo<LayoutNodeActions>(
+    () => ({
+      onFocusPane: props.onFocusPane,
+      onSplitVertical: props.onSplitVertical,
+      onSplitHorizontal: props.onSplitHorizontal,
+      onToggleZoom: props.onToggleZoom,
+      onKillPane: props.onKillPane,
+      onRenamePane: props.onRenamePane,
+      onSwapPane: props.onSwapPane,
+      onDetachSession: props.onDetachSession,
+    }),
+    [
+      props.onDetachSession,
+      props.onFocusPane,
+      props.onKillPane,
+      props.onRenamePane,
+      props.onSplitHorizontal,
+      props.onSplitVertical,
+      props.onSwapPane,
+      props.onToggleZoom,
+    ],
+  );
 
   if (props.zoomPaneId) {
     const pane = paneMap.get(props.zoomPaneId);
@@ -30,14 +52,14 @@ export function LayoutRenderer(props: LayoutRendererProps) {
           paneId={pane.id}
           paneTitle={pane.title}
           active={true}
-          onFocus={props.onFocusPane}
-          onSplitVertical={props.onSplitVertical}
-          onSplitHorizontal={props.onSplitHorizontal}
-          onToggleZoom={props.onToggleZoom}
-          onKillPane={props.onKillPane}
-          onRenamePane={props.onRenamePane}
-          onSwapPane={props.onSwapPane}
-          onDetach={props.onDetachSession}
+          onFocus={actions.onFocusPane}
+          onSplitVertical={actions.onSplitVertical}
+          onSplitHorizontal={actions.onSplitHorizontal}
+          onToggleZoom={actions.onToggleZoom}
+          onKillPane={actions.onKillPane}
+          onRenamePane={actions.onRenamePane}
+          onSwapPane={actions.onSwapPane}
+          onDetach={actions.onDetachSession}
         />
       </div>
     );
@@ -52,14 +74,7 @@ export function LayoutRenderer(props: LayoutRendererProps) {
       node={props.layout}
       paneMap={paneMap}
       activePaneId={props.activePaneId}
-      onFocusPane={props.onFocusPane}
-      onSplitVertical={props.onSplitVertical}
-      onSplitHorizontal={props.onSplitHorizontal}
-      onToggleZoom={props.onToggleZoom}
-      onKillPane={props.onKillPane}
-      onRenamePane={props.onRenamePane}
-      onSwapPane={props.onSwapPane}
-      onDetachSession={props.onDetachSession}
+      actions={actions}
     />
   );
 }

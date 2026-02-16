@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,43 +30,63 @@ func agentTeamEnvVars(teamName string) map[string]string {
 // is appended automatically (same deduplication as CreateSessionWithWorktree).
 // When enableAgentTeam is true, Agent Teams environment variables are set on the
 // session's initial pane so that Claude Code creates team member panes automatically.
-func (a *App) CreateSession(rootPath string, sessionName string, enableAgentTeam bool) (tmux.SessionSnapshot, error) {
+func (a *App) CreateSession(rootPath string, sessionName string, enableAgentTeam bool) (snapshot tmux.SessionSnapshot, retErr error) {
 	sessions, router, err := a.requireSessionsAndRouter()
 	if err != nil {
 		return tmux.SessionSnapshot{}, err
 	}
 
 	rootPath = strings.TrimSpace(rootPath)
+	if rootPath == "" {
+		return tmux.SessionSnapshot{}, errors.New("root path is required")
+	}
 	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return tmux.SessionSnapshot{}, errors.New("session name is required")
+	}
 	sessionName = a.findAvailableSessionName(sessionName)
+	createdName := ""
+	sessionMayExist := false
+	defer func() {
+		if !sessionMayExist {
+			return
+		}
+		if retErr == nil {
+			// Emit a snapshot for successful create flows so sidebar/session-list
+			// subscribers receive the latest state.
+			a.requestSnapshot(true)
+			return
+		}
+		if createdName != "" {
+			slog.Debug("[DEBUG-SESSION] rolling back session after create failure",
+				"session", createdName, "error", retErr)
+			if rollbackErr := a.rollbackCreatedSession(createdName); rollbackErr != nil {
+				retErr = fmt.Errorf("%w (session rollback also failed: %v)", retErr, rollbackErr)
+			}
+		}
+		// Emit snapshot on rollback/error paths so UI state is reconciled with
+		// the latest backend state.
+		a.requestSnapshot(true)
+	}()
 
-	req := ipc.TmuxRequest{
-		Command: "new-session",
-		Flags: map[string]any{
-			"-c": rootPath,
-			"-s": sessionName,
-		},
+	createdName, err = a.createSessionForDirectory(router, rootPath, sessionName, enableAgentTeam)
+	if err != nil {
+		return tmux.SessionSnapshot{}, err
 	}
-	if enableAgentTeam {
-		req.Env = agentTeamEnvVars(sessionName)
-	}
-	resp := executeRouterRequestFn(router, req)
-	if resp.ExitCode != 0 {
-		return tmux.SessionSnapshot{}, errors.New(strings.TrimSpace(resp.Stderr))
-	}
-
-	createdName := strings.TrimSpace(resp.Stdout)
+	sessionMayExist = true
 
 	// Store git branch metadata for display in the sidebar.
+	// NOTE: This enrichment is best-effort. Session creation must continue even if
+	// git probing fails because tmux session creation already succeeded.
 	if gitpkg.IsGitRepository(rootPath) {
 		repo, err := gitpkg.Open(rootPath)
 		if err != nil {
-			slog.Warn("[DEBUG-SESSION] failed to open git repo for session metadata",
+			slog.Warn("[WARN-SESSION] failed to open git repo for session metadata",
 				"path", rootPath, "error", err)
 		} else {
 			branch, brErr := repo.CurrentBranch()
 			if brErr != nil {
-				slog.Warn("[DEBUG-SESSION] failed to read git branch for session metadata",
+				slog.Warn("[WARN-SESSION] failed to read git branch for session metadata",
 					"path", rootPath, "error", brErr)
 			} else {
 				// wtPath="" signals "no worktree, just tracking git info".
@@ -73,26 +94,17 @@ func (a *App) CreateSession(rootPath string, sessionName string, enableAgentTeam
 					RepoPath:   rootPath,
 					BranchName: branch,
 				}); setErr != nil {
-					slog.Warn("[DEBUG-SESSION] failed to store git info for session", "session", createdName, "error", setErr)
+					slog.Warn("[WARN-SESSION] failed to store git info for session", "session", createdName, "error", setErr)
 				}
 			}
 		}
 	}
 
 	if err := a.storeRootPath(createdName, rootPath); err != nil {
-		if rollbackErr := a.rollbackCreatedSession(createdName); rollbackErr != nil {
-			a.emitSnapshot()
-			return tmux.SessionSnapshot{}, fmt.Errorf("%w (session rollback also failed: %v)", err, rollbackErr)
-		}
-		a.emitSnapshot()
 		return tmux.SessionSnapshot{}, err
 	}
-	snapshot, activateErr := a.activateCreatedSession(createdName)
-	if activateErr != nil {
-		return tmux.SessionSnapshot{}, activateErr
-	}
-	a.emitSnapshot()
-	return snapshot, nil
+	snapshot, retErr = a.activateCreatedSession(createdName)
+	return snapshot, retErr
 }
 
 // RenameSession renames an existing session.
@@ -115,7 +127,7 @@ func (a *App) RenameSession(oldName, newName string) error {
 	if a.getActiveSessionName() == oldName {
 		a.setActiveSessionName(newName)
 	}
-	a.emitSnapshot()
+	a.requestSnapshot(true)
 	return nil
 }
 
@@ -133,8 +145,14 @@ func (a *App) KillSession(sessionName string, deleteWorktree bool) error {
 		return err
 	}
 
-	// Capture worktree info before destroying the session.
+	var worktreeInfo *tmux.SessionWorktreeInfo
+	// Capture worktree metadata before destroying the session so it remains
+	// available for cleanup and diagnostics even after kill-session succeeds.
 	worktreeInfo, wtErr := sessions.GetWorktreeInfo(sessionName)
+	if !deleteWorktree && wtErr != nil {
+		slog.Debug("[DEBUG-GIT] failed to resolve worktree metadata for killed session (deleteWorktree=false)",
+			"session", sessionName, "error", wtErr)
+	}
 
 	resp := executeRouterRequestFn(router, ipc.TmuxRequest{
 		Command: "kill-session",
@@ -148,56 +166,69 @@ func (a *App) KillSession(sessionName string, deleteWorktree bool) error {
 
 	// Stop pane buffers that no longer exist (lightweight pane ID lookup).
 	existingPanes := sessions.ActivePaneIDs()
-	a.stopDetachedOutputBuffers(a.detachStaleOutputBuffers(existingPanes))
+	a.cleanupDetachedPaneStates(a.detachStaleOutputBuffers(existingPanes))
 
-	if !deleteWorktree && wtErr != nil {
-		// NOTE: Metadata lookup failures are non-fatal when deleteWorktree is false.
-		// Session termination must still succeed because cleanup was not requested.
-		slog.Warn("[DEBUG-kill] GetWorktreeInfo error", "session", sessionName, "error", wtErr)
+	if a.getActiveSessionName() == sessionName {
+		a.setActiveSessionName("")
 	}
-
-	a.emitSnapshot()
+	a.requestSnapshot(true)
 
 	// Worktree cleanup only when the user explicitly chose to delete.
 	if deleteWorktree {
-		var wtPath string
-		var repoPath string
-		var branchName string
-		if worktreeInfo != nil {
-			wtPath = worktreeInfo.Path
-			repoPath = worktreeInfo.RepoPath
-			branchName = worktreeInfo.BranchName
+		if wtErr != nil {
+			slog.Warn("[WARN-GIT] failed to resolve worktree metadata before cleanup",
+				"session", sessionName, "error", wtErr)
+			a.emitWorktreeCleanupFailure(sessionName, "", wtErr)
+			// NOTE: Session termination already succeeded. Treat metadata lookup
+			// failure as a non-fatal cleanup warning to avoid retry loops that
+			// can surface "session not found" after successful kill-session.
+			return nil
+		} else if worktreeInfo != nil {
+			a.cleanupSessionWorktree(worktreeCleanupParams{
+				SessionName: sessionName,
+				WtPath:      worktreeInfo.Path,
+				RepoPath:    worktreeInfo.RepoPath,
+				BranchName:  worktreeInfo.BranchName,
+			})
+		} else {
+			slog.Debug("[DEBUG-SESSION] deleteWorktree requested but session has no worktree metadata",
+				"session", sessionName)
 		}
-		a.cleanupSessionWorktree(sessionName, wtPath, repoPath, branchName, wtErr)
 	}
 
 	return nil
 }
 
+// worktreeCleanupParams holds parameters for cleanupSessionWorktree.
+type worktreeCleanupParams struct {
+	SessionName string
+	WtPath      string
+	RepoPath    string
+	BranchName  string
+}
+
 // cleanupSessionWorktree removes a worktree after session destruction.
 // Called only when the user explicitly chose to delete the worktree.
-func (a *App) cleanupSessionWorktree(sessionName, wtPath, repoPath, branchName string, lookupErr error) {
-	if lookupErr != nil {
-		slog.Warn("[DEBUG-GIT] failed to resolve worktree metadata before cleanup",
-			"session", sessionName, "error", lookupErr)
-		a.emitWorktreeCleanupFailure(sessionName, wtPath, lookupErr)
-		return
-	}
+func (a *App) cleanupSessionWorktree(params worktreeCleanupParams) {
+	wtPath := strings.TrimSpace(params.WtPath)
 	if wtPath == "" {
+		slog.Debug("[DEBUG-GIT] skip worktree cleanup: worktree path is empty",
+			"session", params.SessionName)
 		return
 	}
 	cfg := a.getConfigSnapshot()
-	if strings.TrimSpace(repoPath) == "" {
-		err := fmt.Errorf("worktree cleanup skipped: repository path is empty for session %s", sessionName)
-		slog.Warn("[DEBUG-GIT] failed to clean up worktree", "session", sessionName, "error", err)
-		a.emitWorktreeCleanupFailure(sessionName, wtPath, err)
+	repoPath := strings.TrimSpace(params.RepoPath)
+	if repoPath == "" {
+		err := fmt.Errorf("worktree cleanup skipped: repository path is empty for session %s", params.SessionName)
+		slog.Warn("[WARN-GIT] failed to clean up worktree", "session", params.SessionName, "error", err)
+		a.emitWorktreeCleanupFailure(params.SessionName, wtPath, err)
 		return
 	}
 
 	repo, err := gitpkg.Open(repoPath)
 	if err != nil {
-		slog.Warn("[DEBUG-GIT] failed to open repo for worktree cleanup", "error", err)
-		a.emitWorktreeCleanupFailure(sessionName, wtPath, err)
+		slog.Warn("[WARN-GIT] failed to open repo for worktree cleanup", "error", err)
+		a.emitWorktreeCleanupFailure(params.SessionName, wtPath, err)
 		return
 	}
 
@@ -205,39 +236,44 @@ func (a *App) cleanupSessionWorktree(sessionName, wtPath, repoPath, branchName s
 	// On any error, skip cleanup to avoid data loss (unless ForceCleanup is set).
 	if !cfg.Worktree.ForceCleanup && !a.isWorktreeCleanForRemoval(wtPath) {
 		err := fmt.Errorf("worktree cleanup skipped due to uncommitted changes or status check failure")
-		slog.Warn("[DEBUG-GIT] failed to clean up worktree", "session", sessionName, "path", wtPath, "error", err)
-		a.emitWorktreeCleanupFailure(sessionName, wtPath, err)
+		slog.Warn("[WARN-GIT] failed to clean up worktree", "session", params.SessionName, "path", wtPath, "error", err)
+		a.emitWorktreeCleanupFailure(params.SessionName, wtPath, err)
 		return
 	}
 
 	if err := repo.RemoveWorktree(wtPath); err != nil {
 		if !cfg.Worktree.ForceCleanup {
-			slog.Warn("[DEBUG-GIT] failed to remove worktree", "error", err)
-			a.emitWorktreeCleanupFailure(sessionName, wtPath, err)
+			slog.Warn("[WARN-GIT] failed to remove worktree", "error", err)
+			a.emitWorktreeCleanupFailure(params.SessionName, wtPath, err)
 			return
 		}
 		if fErr := repo.RemoveWorktreeForced(wtPath); fErr != nil {
-			slog.Warn("[DEBUG-GIT] failed to force-remove worktree", "error", fErr)
-			a.emitWorktreeCleanupFailure(sessionName, wtPath, fErr)
+			slog.Warn("[WARN-GIT] failed to force-remove worktree", "error", fErr)
+			a.emitWorktreeCleanupFailure(params.SessionName, wtPath, fErr)
 			return
 		}
 	}
 
 	if err := repo.PruneWorktrees(); err != nil {
-		slog.Warn("[DEBUG-GIT] failed to prune worktrees", "error", err)
+		slog.Warn("[WARN-GIT] failed to prune worktrees", "error", err)
 	}
 
-	a.cleanupOrphanedLocalWorktreeBranch(repo, branchName)
+	a.cleanupOrphanedLocalWorktreeBranch(repo, params.BranchName)
 }
 
 func (a *App) cleanupOrphanedLocalWorktreeBranch(repo *gitpkg.Repository, branchName string) {
 	branchName = strings.TrimSpace(branchName)
-	if repo == nil || branchName == "" {
+	if repo == nil {
+		slog.Debug("[DEBUG-GIT] skip orphaned branch cleanup: repository is nil", "branch", branchName)
+		return
+	}
+	if branchName == "" {
+		slog.Debug("[DEBUG-GIT] skip orphaned branch cleanup: branch name is empty")
 		return
 	}
 	deleted, err := repo.CleanupLocalBranchIfOrphaned(branchName)
 	if err != nil {
-		slog.Warn("[DEBUG-GIT] failed to clean up orphaned local branch",
+		slog.Warn("[WARN-GIT] failed to clean up orphaned local branch",
 			"branch", branchName, "error", err)
 		return
 	}
@@ -252,18 +288,18 @@ func (a *App) cleanupOrphanedLocalWorktreeBranch(repo *gitpkg.Repository, branch
 func (a *App) isWorktreeCleanForRemoval(wtPath string) bool {
 	wtRepo, err := gitpkg.Open(wtPath)
 	if err != nil {
-		slog.Warn("[DEBUG-GIT] failed to open worktree for change check, skipping cleanup",
+		slog.Warn("[WARN-GIT] failed to open worktree for change check, skipping cleanup",
 			"path", wtPath, "error", err)
 		return false
 	}
 	hasChanges, chkErr := wtRepo.HasUncommittedChanges()
 	if chkErr != nil {
-		slog.Warn("[DEBUG-GIT] failed to check uncommitted changes, skipping cleanup",
+		slog.Warn("[WARN-GIT] failed to check uncommitted changes, skipping cleanup",
 			"path", wtPath, "error", chkErr)
 		return false
 	}
 	if hasChanges {
-		slog.Warn("[DEBUG-GIT] worktree has uncommitted changes, skipping cleanup",
+		slog.Warn("[WARN-GIT] worktree has uncommitted changes, skipping cleanup",
 			"path", wtPath)
 		return false
 	}
@@ -277,9 +313,9 @@ func (a *App) emitWorktreeCleanupFailure(sessionName, wtPath string, err error) 
 	}
 	ctx := a.runtimeContext()
 	if ctx == nil {
-		slog.Warn("[DEBUG-kill] worktree cleanup failed but app context is nil",
+		slog.Warn("[WARN-SESSION] worktree cleanup failed with nil app context; using background context",
 			"session", sessionName, "path", wtPath, "error", err)
-		return
+		ctx = context.Background()
 	}
 	a.emitRuntimeEventWithContext(ctx, "worktree:cleanup-failed", map[string]any{
 		"sessionName": sessionName,
@@ -306,6 +342,10 @@ func (a *App) rollbackCreatedSession(sessionName string) error {
 	if err != nil {
 		return err
 	}
+	return rollbackSessionByRouter(router, sessionName)
+}
+
+func rollbackSessionByRouter(router *tmux.CommandRouter, sessionName string) error {
 	resp := executeRouterRequestFn(router, ipc.TmuxRequest{
 		Command: "kill-session",
 		Flags: map[string]any{
@@ -358,6 +398,10 @@ func pathsEqualFold(a, b string) bool {
 func (a *App) findSessionByRootPath(dir string) string {
 	sessions, err := a.requireSessions()
 	if err != nil {
+		// During startup/shutdown, session manager access can fail transiently.
+		// Treat this as "no conflict" to avoid blocking session-creation flows.
+		slog.Debug("[DEBUG-SESSION] findSessionByRootPath fallback to no-conflict",
+			"path", dir, "error", err)
 		return ""
 	}
 	normalizedPath := filepath.Clean(dir)

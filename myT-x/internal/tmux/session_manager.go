@@ -80,6 +80,7 @@ type TmuxWindow struct {
 // TmuxPane models a tmux-like pane.
 type TmuxPane struct {
 	ID       int                `json:"id"`
+	idString string             `json:"-"`
 	Index    int                `json:"index"`
 	Terminal *terminal.Terminal `json:"-"`
 	Title    string             `json:"title,omitempty"`
@@ -91,6 +92,12 @@ type TmuxPane struct {
 }
 
 func (p *TmuxPane) IDString() string {
+	if p == nil {
+		return ""
+	}
+	if p.idString != "" {
+		return p.idString
+	}
 	return fmt.Sprintf("%%%d", p.ID)
 }
 
@@ -143,15 +150,48 @@ type SessionManager struct {
 	now           func() time.Time
 	idleThreshold time.Duration
 
-	mu sync.RWMutex
+	// generation increments on any state mutation.
+	generation uint64
+	// topologyGeneration increments when session/window/pane topology changes.
+	topologyGeneration uint64
+	sortedSessionNames []string
+	sortedNamesDirty   bool
+	// snapshotGeneration is the generation number of snapshotCache.
+	snapshotGeneration uint64
+	snapshotCache      []SessionSnapshot
+	mu                 sync.RWMutex
 }
 
 // NewSessionManager creates a SessionManager.
 func NewSessionManager() *SessionManager {
 	return &SessionManager{
-		sessions:      map[string]*TmuxSession{},
-		panes:         map[int]*TmuxPane{},
-		now:           time.Now,
-		idleThreshold: 5 * time.Second,
+		sessions:         map[string]*TmuxSession{},
+		panes:            map[int]*TmuxPane{},
+		now:              time.Now,
+		idleThreshold:    5 * time.Second,
+		sortedNamesDirty: true,
 	}
+}
+
+func (m *SessionManager) markStateMutationLocked() {
+	m.generation++
+}
+
+func (m *SessionManager) markTopologyMutationLocked() {
+	m.generation++
+	m.topologyGeneration++
+}
+
+func (m *SessionManager) markSessionMapMutationLocked() {
+	m.sortedNamesDirty = true
+	m.generation++
+	m.topologyGeneration++
+}
+
+// TopologyGeneration returns a monotonically increasing counter that changes
+// when session/window/pane topology changes.
+func (m *SessionManager) TopologyGeneration() uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.topologyGeneration
 }

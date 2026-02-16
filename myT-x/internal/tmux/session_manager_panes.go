@@ -21,13 +21,14 @@ func (m *SessionManager) SplitPane(targetPaneID int, direction SplitDirection) (
 	}
 
 	newPane := &TmuxPane{
-		ID:     m.nextPaneID,
-		Index:  len(window.Panes),
-		Active: true,
-		Width:  target.Width,
-		Height: target.Height,
-		Env:    copyEnvMap(target.Env),
-		Window: window,
+		ID:       m.nextPaneID,
+		idString: fmt.Sprintf("%%%d", m.nextPaneID),
+		Index:    len(window.Panes),
+		Active:   true,
+		Width:    target.Width,
+		Height:   target.Height,
+		Env:      copyEnvMap(target.Env),
+		Window:   window,
 	}
 	m.nextPaneID++
 
@@ -41,6 +42,7 @@ func (m *SessionManager) SplitPane(targetPaneID int, direction SplitDirection) (
 	}
 	window.Layout = nextLayout
 	m.panes[newPane.ID] = newPane
+	m.markTopologyMutationLocked()
 
 	return newPane, nil
 }
@@ -64,6 +66,10 @@ func (m *SessionManager) SetActivePane(paneID int) error {
 	}
 	pane.Active = true
 	window.ActivePN = pane.Index
+	// Active pane changes alter frontend-visible pane ordering/selection semantics.
+	// We classify this as a topology mutation so Snapshot() consumers can coalesce
+	// pane-state synchronization on TopologyGeneration.
+	m.markTopologyMutationLocked()
 	return nil
 }
 
@@ -88,5 +94,6 @@ func (m *SessionManager) ApplyLayoutPreset(sessionName string, windowIdx int, pr
 		paneIDs[i] = pane.ID
 	}
 	window.Layout = BuildPresetLayout(preset, paneIDs)
+	m.markTopologyMutationLocked()
 	return nil
 }

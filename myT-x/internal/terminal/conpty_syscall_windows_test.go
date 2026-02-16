@@ -72,6 +72,75 @@ func TestCreateEnvBlockContent(t *testing.T) {
 	runtime.KeepAlive(ptr)
 }
 
+func TestCreateEnvBlockContentUnicode(t *testing.T) {
+	env := []string{"LANG=日本語", "FOO=bar"}
+	ptr := createEnvBlock(env)
+	if ptr == nil {
+		t.Fatal("createEnvBlock() returned nil")
+	}
+
+	block := readUTF16Block(ptr)
+
+	var entries []string
+	current := ""
+	for _, ch := range block {
+		if ch == 0 {
+			if current == "" {
+				break
+			}
+			entries = append(entries, current)
+			current = ""
+			continue
+		}
+		current += string(rune(ch))
+	}
+
+	if len(entries) != len(env) {
+		t.Fatalf("expected %d entries, got %d: %v", len(env), len(entries), entries)
+	}
+	if entries[0] != env[0] {
+		t.Fatalf("entry[0] = %q, want %q", entries[0], env[0])
+	}
+	if entries[1] != env[1] {
+		t.Fatalf("entry[1] = %q, want %q", entries[1], env[1])
+	}
+
+	runtime.KeepAlive(ptr)
+}
+
+func TestCoordPackUsesUnsigned16BitLayout(t *testing.T) {
+	tests := []struct {
+		name  string
+		coord _COORD
+		want  uint32
+	}{
+		{
+			name:  "zero values",
+			coord: _COORD{X: 0, Y: 0},
+			want:  0x00000000,
+		},
+		{
+			name:  "positive dimensions",
+			coord: _COORD{X: 80, Y: 40},
+			want:  0x00280050,
+		},
+		{
+			name:  "negative values use unsigned 16-bit layout",
+			coord: _COORD{X: -1, Y: -1},
+			want:  0xffffffff,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := uint32(tt.coord.Pack())
+			if got != tt.want {
+				t.Fatalf("Pack() = 0x%08X, want 0x%08X", got, tt.want)
+			}
+		})
+	}
+}
+
 // readUTF16Block reads a null-terminated UTF-16 environment block from a pointer.
 // Reads until finding a double null terminator (empty string entry).
 func readUTF16Block(ptr *uint16) []uint16 {
@@ -82,8 +151,9 @@ func readUTF16Block(ptr *uint16) []uint16 {
 	p := unsafe.Pointer(ptr)
 	nullCount := 0
 	const maxUTF16Units = 1 << 20
+	const utf16UnitSize = uintptr(unsafe.Sizeof(uint16(0)))
 	for i := 0; i < maxUTF16Units; i++ {
-		ch := *(*uint16)(unsafe.Pointer(uintptr(p) + uintptr(i)*2))
+		ch := *(*uint16)(unsafe.Pointer(uintptr(p) + uintptr(i)*utf16UnitSize))
 		result = append(result, ch)
 		if ch == 0 {
 			nullCount++
