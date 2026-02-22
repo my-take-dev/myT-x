@@ -3,15 +3,17 @@ package main
 import (
 	"log/slog"
 	"runtime/debug"
-	"time"
 )
 
-const (
-	initialPanicRestartBackoff = 100 * time.Millisecond
-	maxPanicRestartBackoff     = 5 * time.Second
-	maxPanicRestartRetries     = 10
-)
-
+// recoverBackgroundPanic logs a recovered panic from a background goroutine
+// and returns whether a panic actually occurred. The boolean return value
+// indicates panic occurrence: true means a panic was recovered (and logged),
+// false means recovered was nil (no panic). Callers use this to decide
+// whether to restart the worker or exit normally.
+//
+// Used by simple one-shot goroutines (e.g. worktree setup scripts) that need
+// panic logging without full retry-loop semantics. For background workers
+// requiring exponential backoff retry, use workerutil.RunWithPanicRecovery.
 func recoverBackgroundPanic(worker string, recovered any) bool {
 	if recovered != nil {
 		slog.Error("[DEBUG-PANIC] background goroutine recovered from panic",
@@ -22,18 +24,4 @@ func recoverBackgroundPanic(worker string, recovered any) bool {
 		return true
 	}
 	return false
-}
-
-func nextPanicRestartBackoff(current time.Duration) time.Duration {
-	if current <= 0 {
-		return initialPanicRestartBackoff
-	}
-	if current >= maxPanicRestartBackoff {
-		return maxPanicRestartBackoff
-	}
-	next := current * 2
-	if next > maxPanicRestartBackoff || next < current {
-		return maxPanicRestartBackoff
-	}
-	return next
 }

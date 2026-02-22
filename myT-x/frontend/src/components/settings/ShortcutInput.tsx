@@ -1,4 +1,4 @@
-import { useState } from "react";
+import {useState} from "react";
 
 interface ShortcutInputProps {
   value: string;
@@ -8,7 +8,7 @@ interface ShortcutInputProps {
   ariaLabel?: string;
 }
 
-export function ShortcutInput({ value, onChange, placeholder, disabled, ariaLabel }: ShortcutInputProps) {
+export function ShortcutInput({value, onChange, placeholder, disabled, ariaLabel}: ShortcutInputProps) {
   const [capturing, setCapturing] = useState(false);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -20,6 +20,7 @@ export function ShortcutInput({ value, onChange, placeholder, disabled, ariaLabe
       return;
     }
     if (e.key === "Tab") {
+      e.stopPropagation();
       setCapturing(false);
       return;
     }

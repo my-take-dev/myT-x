@@ -44,6 +44,9 @@ func (m *SessionManager) SwapPanes(sourcePaneID string, targetPaneID string) (st
 	sourceIdx := -1
 	targetIdx := -1
 	for i, pane := range window.Panes {
+		if pane == nil {
+			continue
+		}
 		switch pane.ID {
 		case sourceID:
 			sourceIdx = i
@@ -57,12 +60,19 @@ func (m *SessionManager) SwapPanes(sourcePaneID string, targetPaneID string) (st
 
 	window.Panes[sourceIdx], window.Panes[targetIdx] = window.Panes[targetIdx], window.Panes[sourceIdx]
 	for idx, pane := range window.Panes {
+		if pane == nil {
+			continue
+		}
 		pane.Index = idx
 		if pane.Active {
 			window.ActivePN = idx
 		}
 	}
-	window.Layout = swapPaneIDsInLayout(window.Layout, sourceID, targetID)
+	nextLayout := swapPaneIDsInLayout(window.Layout, sourceID, targetID)
+	if nextLayout == nil {
+		nextLayout = rebuildLayoutFromPaneOrder(window.Panes)
+	}
+	window.Layout = nextLayout
 	m.markTopologyMutationLocked()
 	return window.Session.Name, nil
 }
@@ -86,7 +96,7 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 	var result killPaneResult
 
 	pane, ok := m.panes[id]
-	if !ok {
+	if !ok || pane == nil {
 		return result, fmt.Errorf("pane not found: %s", paneIDStr)
 	}
 	window := pane.Window
@@ -103,7 +113,14 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 	delete(m.panes, id)
 
 	nextWindows := make([]*TmuxWindow, 0, len(session.Windows))
-	for _, sessionWindow := range session.Windows {
+	// removedWindowIdx is a spatial hint — the original session.Windows slice
+	// index of the window that contained the killed pane.  It is NOT a stable
+	// window ID; it is used only as a proximity hint when choosing a fallback
+	// active window after pane removal causes the active window to become
+	// empty or its ID to be removed.  fallbackWindowIDNearIndex picks the
+	// closest surviving window by index, preserving spatial locality.
+	removedWindowIdx := -1
+	for windowIdx, sessionWindow := range session.Windows {
 		if sessionWindow == nil {
 			continue
 		}
@@ -124,9 +141,13 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 			continue
 		}
 		result.removedFromWindow = true
+		removedWindowIdx = windowIdx
 
 		sessionWindow.Panes = nextPanes
 		for idx, candidate := range sessionWindow.Panes {
+			if candidate == nil {
+				continue
+			}
 			candidate.Index = idx
 		}
 		if len(sessionWindow.Panes) == 0 {
@@ -136,6 +157,9 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 			sessionWindow.ActivePN = 0
 		}
 		for i, candidate := range sessionWindow.Panes {
+			if candidate == nil {
+				continue
+			}
 			candidate.Active = i == sessionWindow.ActivePN
 		}
 		if nextLayout, removed := removePaneFromLayout(sessionWindow.Layout, pane.ID); removed && nextLayout != nil {
@@ -172,6 +196,13 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 		}
 		m.markSessionMapMutationLocked()
 	} else {
+		activeWindow, _ := findWindowByID(session.Windows, session.ActiveWindowID)
+		if activeWindow == nil {
+			preferredIdx := max(removedWindowIdx, 0)
+			if fallbackWindowID, ok := fallbackWindowIDNearIndex(session.Windows, preferredIdx); ok {
+				session.ActiveWindowID = fallbackWindowID
+			}
+		}
 		m.markTopologyMutationLocked()
 	}
 
@@ -210,19 +241,24 @@ func (m *SessionManager) KillPane(paneID string) (sessionName string, removedSes
 }
 
 func rebuildLayoutFromPaneOrder(panes []*TmuxPane) *LayoutNode {
-	if len(panes) == 0 {
-		return nil
-	}
-	root := newLeafLayout(panes[0].ID)
-	for i := 1; i < len(panes); i++ {
-		root = &LayoutNode{
-			Type:      LayoutSplit,
-			Direction: SplitHorizontal,
-			Ratio:     0.5,
-			Children: [2]*LayoutNode{
-				root,
-				newLeafLayout(panes[i].ID),
-			},
+	var root *LayoutNode
+	for _, p := range panes {
+		if p == nil {
+			continue
+		}
+		leaf := newLeafLayout(p.ID)
+		if root == nil {
+			root = leaf
+		} else {
+			root = &LayoutNode{
+				Type:      LayoutSplit,
+				Direction: SplitHorizontal,
+				Ratio:     0.5,
+				Children: [2]*LayoutNode{
+					root,
+					leaf,
+				},
+			}
 		}
 	}
 	return root

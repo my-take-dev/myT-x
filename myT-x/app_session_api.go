@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,6 +11,15 @@ import (
 	"myT-x/internal/ipc"
 	"myT-x/internal/tmux"
 )
+
+// CreateSessionOptions holds the boolean options for session creation APIs.
+// This struct replaces consecutive bool parameters (enableAgentTeam, useClaudeEnv,
+// usePaneEnv) to eliminate argument-ordering mistakes at call sites.
+type CreateSessionOptions struct {
+	EnableAgentTeam bool `json:"enable_agent_team"` // set Agent Teams env vars on initial pane
+	UseClaudeEnv    bool `json:"use_claude_env"`    // apply claude_env config to panes
+	UsePaneEnv      bool `json:"use_pane_env"`      // apply pane_env config to additional panes
+}
 
 // agentTeamEnvVars returns the environment variables that signal Claude Code
 // to enable Agent Teams mode. The caller is responsible for passing these
@@ -28,9 +36,9 @@ func agentTeamEnvVars(teamName string) map[string]string {
 // CreateSession creates a new session rooted at path.
 // If a session with the same name already exists, a numeric suffix (-2, -3, ...)
 // is appended automatically (same deduplication as CreateSessionWithWorktree).
-// When enableAgentTeam is true, Agent Teams environment variables are set on the
+// When opts.EnableAgentTeam is true, Agent Teams environment variables are set on the
 // session's initial pane so that Claude Code creates team member panes automatically.
-func (a *App) CreateSession(rootPath string, sessionName string, enableAgentTeam bool) (snapshot tmux.SessionSnapshot, retErr error) {
+func (a *App) CreateSession(rootPath string, sessionName string, opts CreateSessionOptions) (snapshot tmux.SessionSnapshot, retErr error) {
 	sessions, router, err := a.requireSessionsAndRouter()
 	if err != nil {
 		return tmux.SessionSnapshot{}, err
@@ -69,36 +77,19 @@ func (a *App) CreateSession(rootPath string, sessionName string, enableAgentTeam
 		a.requestSnapshot(true)
 	}()
 
-	createdName, err = a.createSessionForDirectory(router, rootPath, sessionName, enableAgentTeam)
+	createdName, err = a.createSessionForDirectory(router, rootPath, sessionName, opts)
 	if err != nil {
 		return tmux.SessionSnapshot{}, err
 	}
 	sessionMayExist = true
 
+	// Set session-level env flags before any additional pane can be created.
+	applySessionEnvFlags(sessions, createdName, opts.UseClaudeEnv, opts.UsePaneEnv)
+
 	// Store git branch metadata for display in the sidebar.
 	// NOTE: This enrichment is best-effort. Session creation must continue even if
 	// git probing fails because tmux session creation already succeeded.
-	if gitpkg.IsGitRepository(rootPath) {
-		repo, err := gitpkg.Open(rootPath)
-		if err != nil {
-			slog.Warn("[WARN-SESSION] failed to open git repo for session metadata",
-				"path", rootPath, "error", err)
-		} else {
-			branch, brErr := repo.CurrentBranch()
-			if brErr != nil {
-				slog.Warn("[WARN-SESSION] failed to read git branch for session metadata",
-					"path", rootPath, "error", brErr)
-			} else {
-				// wtPath="" signals "no worktree, just tracking git info".
-				if setErr := sessions.SetWorktreeInfo(createdName, &tmux.SessionWorktreeInfo{
-					RepoPath:   rootPath,
-					BranchName: branch,
-				}); setErr != nil {
-					slog.Warn("[WARN-SESSION] failed to store git info for session", "session", createdName, "error", setErr)
-				}
-			}
-		}
-	}
+	enrichSessionGitMetadata(sessions, createdName, rootPath)
 
 	if err := a.storeRootPath(createdName, rootPath); err != nil {
 		return tmux.SessionSnapshot{}, err
@@ -127,7 +118,15 @@ func (a *App) RenameSession(oldName, newName string) error {
 	if a.getActiveSessionName() == oldName {
 		a.setActiveSessionName(newName)
 	}
-	a.requestSnapshot(true)
+	// NOTE: RenameSession does not call requestSnapshot(true) directly.
+	// Instead, the snapshot is triggered automatically by emitBackendEvent
+	// via snapshotEventPolicies["tmux:session-renamed"] = {trigger: true, bypassDebounce: true}.
+	// The "tmux:session-renamed" event provides immediate UI feedback (e.g. sidebar rename animation)
+	// while the triggered snapshot reconciles the full state.
+	a.emitBackendEvent("tmux:session-renamed", map[string]any{
+		"oldName": oldName,
+		"newName": newName,
+	})
 	return nil
 }
 
@@ -145,7 +144,6 @@ func (a *App) KillSession(sessionName string, deleteWorktree bool) error {
 		return err
 	}
 
-	var worktreeInfo *tmux.SessionWorktreeInfo
 	// Capture worktree metadata before destroying the session so it remains
 	// available for cleanup and diagnostics even after kill-session succeeds.
 	worktreeInfo, wtErr := sessions.GetWorktreeInfo(sessionName)
@@ -308,14 +306,20 @@ func (a *App) isWorktreeCleanForRemoval(wtPath string) bool {
 
 // emitWorktreeCleanupFailure notifies the frontend that worktree cleanup failed.
 func (a *App) emitWorktreeCleanupFailure(sessionName, wtPath string, err error) {
+	// NOTE: err==nil is defensively handled here to ensure the event payload always
+	// contains a non-empty error string. All current callers pass a non-nil err, but
+	// this guard prevents silent data loss if a future call site omits the error.
 	if err == nil {
 		err = fmt.Errorf("unknown worktree cleanup failure")
 	}
 	ctx := a.runtimeContext()
 	if ctx == nil {
-		slog.Warn("[WARN-SESSION] worktree cleanup failed with nil app context; using background context",
-			"session", sessionName, "path", wtPath, "error", err)
-		ctx = context.Background()
+		// NOTE: During shutdown, runtimeContext() may return nil. Event is intentionally
+		// dropped as no frontend receiver exists. The error is still logged in the
+		// slog.Warn below for post-mortem diagnostics.
+		slog.Warn("[DEBUG-WORKTREE] emitWorktreeCleanupFailure: runtime context is nil, event dropped",
+			"sessionName", sessionName, "path", wtPath, "error", err)
+		return
 	}
 	a.emitRuntimeEventWithContext(ctx, "worktree:cleanup-failed", map[string]any{
 		"sessionName": sessionName,
@@ -335,6 +339,63 @@ func (a *App) GetSessionEnv(sessionName string) (map[string]string, error) {
 		return nil, err
 	}
 	return sessions.GetSessionEnv(sessionName)
+}
+
+// applySessionEnvFlags sets session-level UseClaudeEnv and UsePaneEnv flags
+// on the SessionManager. These flags control whether additional panes inherit
+// claude_env / pane_env variables via buildPaneEnvForSession.
+//
+// IMPORTANT: Every session creation path (CreateSession, CreateSessionWithWorktree,
+// CreateSessionWithExistingWorktree) must call this function after
+// createSessionForDirectory succeeds. When adding a new session creation path,
+// ensure applySessionEnvFlags is called to avoid silent flag-loss.
+//
+// NOTE: Failure is non-fatal (Warn only). The only realistic failure case is
+// session-name mismatch in SessionManager, which cannot happen here because
+// the session was just created successfully by createSessionForDirectory.
+// Aborting the entire session creation for a flag-storage failure would be
+// disproportionate; the session remains fully functional without these flags
+// (additional panes simply won't inherit the configured env).
+func applySessionEnvFlags(sm *tmux.SessionManager, sessionName string, useClaudeEnv, usePaneEnv bool) {
+	if useClaudeEnv {
+		if setErr := sm.SetUseClaudeEnv(sessionName, useClaudeEnv); setErr != nil {
+			slog.Warn("[WARN-ENV] failed to set UseClaudeEnv flag", "session", sessionName, "error", setErr)
+		}
+	}
+	if usePaneEnv {
+		if setErr := sm.SetUsePaneEnv(sessionName, usePaneEnv); setErr != nil {
+			slog.Warn("[WARN-ENV] failed to set UsePaneEnv flag", "session", sessionName, "error", setErr)
+		}
+	}
+}
+
+// enrichSessionGitMetadata probes the rootPath for git information and stores
+// branch metadata on the session for sidebar display. This is best-effort:
+// any failure is logged but does not abort session creation.
+func enrichSessionGitMetadata(sessions *tmux.SessionManager, sessionName, rootPath string) {
+	if !gitpkg.IsGitRepository(rootPath) {
+		return
+	}
+	repo, err := gitpkg.Open(rootPath)
+	if err != nil {
+		slog.Warn("[WARN-SESSION] failed to open git repo for session metadata",
+			"path", rootPath, "error", err)
+		return
+	}
+	branch, err := repo.CurrentBranch()
+	if err != nil {
+		slog.Warn("[WARN-SESSION] failed to read git branch for session metadata",
+			"path", rootPath, "error", err)
+		return
+	}
+	// wtPath="" signals "no worktree, just tracking git info".
+	if setErr := sessions.SetWorktreeInfo(sessionName, &tmux.SessionWorktreeInfo{
+		RepoPath:   rootPath,
+		BranchName: branch,
+	}); setErr != nil {
+		slog.Warn("[WARN-SESSION] failed to store git info for session",
+			"session", sessionName, "error", setErr)
+	}
 }
 
 func (a *App) rollbackCreatedSession(sessionName string) error {

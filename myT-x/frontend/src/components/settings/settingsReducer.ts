@@ -1,4 +1,4 @@
-import type { FormAction, FormState, PaneEnvEntry } from "./types";
+import type { ClaudeEnvEntry, FormAction, FormState, PaneEnvEntry } from "./types";
 import { generateId } from "./types";
 import { EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK } from "./constants";
 
@@ -12,11 +12,15 @@ export const INITIAL_FORM: FormState = {
   wtForceCleanup: false,
   wtSetupScripts: [],
   wtCopyFiles: [],
+  wtCopyDirs: [],
   agentFrom: "",
   agentTo: "",
   overrides: [],
   effortLevel: "",
   paneEnvEntries: [],
+  paneEnvDefaultEnabled: false,
+  claudeEnvDefaultEnabled: false,
+  claudeEnvEntries: [],
   minOverrideNameLen: MIN_OVERRIDE_NAME_LEN_FALLBACK,
   allowedShells: [],
   loading: false,
@@ -44,6 +48,10 @@ export function formReducer(state: FormState, action: FormAction): FormState {
         .filter(([k]) => k.toUpperCase() !== EFFORT_LEVEL_KEY)
         .map(([key, value]) => ({ id: generateId(), key, value }));
       const effortKey = Object.keys(pe).find(k => k.toUpperCase() === EFFORT_LEVEL_KEY);
+      const ce = cfg.claude_env;
+      const claudeEnvEntries: ClaudeEnvEntry[] = ce?.vars
+        ? Object.entries(ce.vars).map(([key, value]) => ({ id: generateId(), key, value }))
+        : [];
       return {
         ...state,
         shell: cfg.shell || "powershell.exe",
@@ -55,6 +63,7 @@ export function formReducer(state: FormState, action: FormAction): FormState {
         wtForceCleanup: wt?.force_cleanup ?? false,
         wtSetupScripts: wt?.setup_scripts || [],
         wtCopyFiles: wt?.copy_files || [],
+        wtCopyDirs: wt?.copy_dirs || [],
         agentFrom: am?.from || "",
         agentTo: am?.to || "",
         overrides: (am?.overrides || []).map((o) => ({
@@ -64,6 +73,9 @@ export function formReducer(state: FormState, action: FormAction): FormState {
         })),
         effortLevel: effortKey ? pe[effortKey] || "" : "",
         paneEnvEntries,
+        paneEnvDefaultEnabled: cfg.pane_env_default_enabled ?? false,
+        claudeEnvDefaultEnabled: ce?.default_enabled ?? false,
+        claudeEnvEntries,
         allowedShells: shells || [],
         loading: false,
         loadFailed: false,
@@ -89,6 +101,15 @@ export function formReducer(state: FormState, action: FormAction): FormState {
         nextEntries[action.index] = { ...nextEntries[action.index], [action.field]: action.value };
       }
       return { ...state, paneEnvEntries: nextEntries };
+    }
+    case "SET_CLAUDE_ENV_ENTRIES":
+      return { ...state, claudeEnvEntries: action.entries };
+    case "UPDATE_CLAUDE_ENV_ENTRY": {
+      const nextClaude = [...state.claudeEnvEntries];
+      if (action.index >= 0 && action.index < nextClaude.length) {
+        nextClaude[action.index] = { ...nextClaude[action.index], [action.field]: action.value };
+      }
+      return { ...state, claudeEnvEntries: nextClaude };
     }
     default: {
       const _exhaustive: never = action;

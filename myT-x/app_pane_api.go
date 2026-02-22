@@ -2,12 +2,16 @@ package main
 
 import (
 	"errors"
+	"log/slog"
 	"strings"
 
 	"myT-x/internal/tmux"
 )
 
 // SplitPane splits one pane. horizontal=true means left/right split.
+// NOTE: Unlike other pane API methods, SplitPane delegates to CommandRouter
+// (not SessionManager directly), so requireSessionsWithPaneID is not used.
+// Validation follows the same TrimSpace + empty check pattern manually.
 func (a *App) SplitPane(paneID string, horizontal bool) (string, error) {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
@@ -27,29 +31,29 @@ func (a *App) SplitPane(paneID string, horizontal bool) (string, error) {
 
 // SendInput writes raw input bytes to a pane.
 func (a *App) SendInput(paneID string, input string) error {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return errors.New("pane id is required")
-	}
-	sessions, err := a.requireSessions()
+	sessions, err := a.requireSessionsWithPaneID(&paneID)
 	if err != nil {
 		return err
 	}
 	// Keep input untrimmed to preserve intentional whitespace/newline payloads.
-	return sessions.WriteToPane(paneID, input)
+	if err := sessions.WriteToPane(paneID, input); err != nil {
+		slog.Debug("[PANE] SendInput failed", "paneID", paneID, "err", err)
+		return err
+	}
+	return nil
 }
 
 // SendSyncInput writes input to all panes in the same window as the given pane.
 func (a *App) SendSyncInput(paneID string, input string) error {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return errors.New("pane id is required")
-	}
-	sessions, err := a.requireSessions()
+	sessions, err := a.requireSessionsWithPaneID(&paneID)
 	if err != nil {
 		return err
 	}
-	return sessions.WriteToPanesInWindow(paneID, input)
+	if err := sessions.WriteToPanesInWindow(paneID, input); err != nil {
+		slog.Debug("[PANE] SendSyncInput failed", "paneID", paneID, "err", err)
+		return err
+	}
+	return nil
 }
 
 // GetPaneReplay returns buffered output for a pane to restore terminal view.
@@ -66,11 +70,7 @@ func (a *App) GetPaneReplay(paneID string) string {
 
 // ResizePane updates pane PTY size.
 func (a *App) ResizePane(paneID string, cols int, rows int) error {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return errors.New("pane id is required")
-	}
-	sessions, err := a.requireSessions()
+	sessions, err := a.requireSessionsWithPaneID(&paneID)
 	if err != nil {
 		return err
 	}
@@ -85,11 +85,7 @@ func (a *App) ResizePane(paneID string, cols int, rows int) error {
 
 // FocusPane selects pane as active.
 func (a *App) FocusPane(paneID string) error {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return errors.New("pane id is required")
-	}
-	sessions, err := a.requireSessions()
+	sessions, err := a.requireSessionsWithPaneID(&paneID)
 	if err != nil {
 		return err
 	}
@@ -115,11 +111,7 @@ func (a *App) FocusPane(paneID string) error {
 
 // RenamePane updates pane title.
 func (a *App) RenamePane(paneID string, title string) error {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return errors.New("pane id is required")
-	}
-	sessions, err := a.requireSessions()
+	sessions, err := a.requireSessionsWithPaneID(&paneID)
 	if err != nil {
 		return err
 	}
@@ -158,11 +150,7 @@ func (a *App) SwapPanes(sourcePaneID string, targetPaneID string) error {
 
 // KillPane closes one pane and updates session state.
 func (a *App) KillPane(paneID string) error {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return errors.New("pane id is required")
-	}
-	sessions, err := a.requireSessions()
+	sessions, err := a.requireSessionsWithPaneID(&paneID)
 	if err != nil {
 		return err
 	}
@@ -181,7 +169,11 @@ func (a *App) KillPane(paneID string) error {
 	return nil
 }
 
-// ApplyLayoutPreset applies a layout preset to the current window.
+// ApplyLayoutPreset applies a layout preset to the active window of a session.
+// Active-window resolution and preset application are performed atomically inside
+// SessionManager to eliminate the TOCTOU gap between reading ActiveWindowID and
+// applying the layout. If ActiveWindowID points to a deleted window, the session
+// manager falls back to the first available window.
 func (a *App) ApplyLayoutPreset(sessionName string, preset string) error {
 	sessionName = strings.TrimSpace(sessionName)
 	if sessionName == "" {
@@ -195,7 +187,8 @@ func (a *App) ApplyLayoutPreset(sessionName string, preset string) error {
 	if err != nil {
 		return err
 	}
-	if err := sessions.ApplyLayoutPreset(sessionName, 0, tmux.LayoutPreset(preset)); err != nil {
+
+	if err := sessions.ApplyLayoutPresetToActiveWindow(sessionName, tmux.LayoutPreset(preset)); err != nil {
 		return err
 	}
 	a.emitBackendEvent("tmux:layout-changed", map[string]any{
@@ -206,11 +199,7 @@ func (a *App) ApplyLayoutPreset(sessionName string, preset string) error {
 
 // GetPaneEnv returns environment variables for one pane on demand.
 func (a *App) GetPaneEnv(paneID string) (map[string]string, error) {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return nil, errors.New("pane id is required")
-	}
-	sessions, err := a.requireSessions()
+	sessions, err := a.requireSessionsWithPaneID(&paneID)
 	if err != nil {
 		return nil, err
 	}

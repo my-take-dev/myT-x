@@ -10,7 +10,15 @@ import (
 )
 
 func parseCommand(args []string) (ipc.TmuxRequest, error) {
+	if len(args) == 0 {
+		return ipc.TmuxRequest{}, fmt.Errorf("command is required")
+	}
+
 	name := strings.TrimSpace(args[0])
+	if name == "" {
+		return ipc.TmuxRequest{}, fmt.Errorf("command is required")
+	}
+
 	spec, ok := commandSpecs[name]
 	if !ok {
 		return ipc.TmuxRequest{}, fmt.Errorf("unknown command: %s", name)
@@ -36,7 +44,7 @@ func parseCommand(args []string) (ipc.TmuxRequest, error) {
 
 		kind, known := spec.flags[arg]
 		if !known {
-			// Try expanding combined bool flags: -dPh → -d, -P, -h
+			// Try expanding combined bool flags: -dPh -> -d, -P, -h
 			if expanded, ok := expandCombinedFlags(spec, arg); ok {
 				for _, flag := range expanded {
 					req.Flags[flag] = true
@@ -72,7 +80,8 @@ func parseCommand(args []string) (ipc.TmuxRequest, error) {
 				return ipc.TmuxRequest{}, fmt.Errorf("flag %s requires KEY=VALUE", arg)
 			}
 			key, value, ok := strings.Cut(args[i+1], "=")
-			if !ok || strings.TrimSpace(key) == "" {
+			key = strings.TrimSpace(key)
+			if !ok || key == "" {
 				return ipc.TmuxRequest{}, fmt.Errorf("invalid env: %s", args[i+1])
 			}
 			req.Env[key] = value
@@ -85,15 +94,68 @@ func parseCommand(args []string) (ipc.TmuxRequest, error) {
 	return req, validateRequired(name, req)
 }
 
+// validateTargetFlag checks that -t flag is present and non-empty for the given command.
+func validateTargetFlag(command string, flags map[string]any) error {
+	if strings.TrimSpace(asString(flags["-t"])) == "" {
+		return fmt.Errorf("%s requires -t", command)
+	}
+	return nil
+}
+
 func validateRequired(command string, req ipc.TmuxRequest) error {
 	switch command {
-	case "has-session", "kill-session":
-		if strings.TrimSpace(asString(req.Flags["-t"])) == "" {
-			return fmt.Errorf("%s requires -t", command)
+	case "has-session", "kill-session", "attach-session", "select-window", "kill-window", "new-window":
+		if err := validateTargetFlag(command, req.Flags); err != nil {
+			return err
+		}
+		if command == "new-window" {
+			if strings.TrimSpace(asString(req.Flags["-n"])) == "" {
+				return fmt.Errorf("%s requires -n flag", command)
+			}
 		}
 	case "display-message":
 		if !asBool(req.Flags["-p"]) {
 			return fmt.Errorf("display-message requires -p")
+		}
+	case "rename-session", "rename-window":
+		if err := validateTargetFlag(command, req.Flags); err != nil {
+			return err
+		}
+		if len(req.Args) == 0 || strings.TrimSpace(req.Args[0]) == "" {
+			return fmt.Errorf("%s requires new-name argument", command)
+		}
+	case "set-environment":
+		if len(req.Args) == 0 || strings.TrimSpace(req.Args[0]) == "" {
+			return fmt.Errorf("set-environment requires KEY argument")
+		}
+		// VALUE is required unless -u (unset) is specified.
+		// Empty string "" is a valid VALUE (e.g. set-environment KEY "").
+		if !asBool(req.Flags["-u"]) && len(req.Args) < 2 {
+			return fmt.Errorf("set-environment requires VALUE argument")
+		}
+	}
+
+	if err := validateNonNegativeSizeFlags(command, req); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateNonNegativeSizeFlags(command string, req ipc.TmuxRequest) error {
+	switch command {
+	case "new-session", "resize-pane":
+		for _, flag := range []string{"-x", "-y"} {
+			rawValue, ok := req.Flags[flag]
+			if !ok {
+				continue
+			}
+			value, ok := rawValue.(int)
+			if !ok {
+				return fmt.Errorf("flag %s expects integer", flag)
+			}
+			if value < 0 {
+				return fmt.Errorf("flag %s must be non-negative", flag)
+			}
 		}
 	}
 	return nil

@@ -36,15 +36,13 @@ func NewOutputBuffer(interval time.Duration, maxBytes int, emit func([]byte)) *O
 		interval = 16 * time.Millisecond
 	}
 	if maxBytes <= 0 {
-		maxBytes = 8 * 1024
+		// Default 32 KiB: see outputFlushThreshold rationale in app_events.go.
+		maxBytes = 32 * 1024
 	}
 	if emit == nil {
 		emit = func([]byte) {}
 	}
-	maxBufferedAge := interval * 4
-	if maxBufferedAge < 64*time.Millisecond {
-		maxBufferedAge = 64 * time.Millisecond
-	}
+	maxBufferedAge := max(interval*4, 64*time.Millisecond)
 	buf := outputBufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	return &OutputBuffer{

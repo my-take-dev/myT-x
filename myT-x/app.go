@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"myT-x/internal/panestate"
 	"myT-x/internal/terminal"
 	"myT-x/internal/tmux"
+	"myT-x/internal/wsserver"
 )
 
 // App is the Wails-bound application service.
@@ -26,25 +29,31 @@ type App struct {
 	//
 	// Nested lock ordering (one-way only):
 	//   paneEnvUpdateMu -> tmux.CommandRouter.paneEnvMu (via UpdatePaneEnv)
+	//   claudeEnvUpdateMu -> tmux.CommandRouter.claudeEnvMu (via UpdateClaudeEnv)
+	//
+	// Lock ordering (outer -> inner):
+	//   snapshotDeltaMu -> snapshotMu  (snapshotDelta acquires snapshotMu while holding snapshotDeltaMu)
 	//
 	// Independent locks: do not assume ordering across these.
-	//   windowMu, outputMu, snapshotMu, snapshotDeltaMu, snapshotRequestMu, snapshotMetricsMu,
-	//   startupWarnMu, activeSessMu, ctxMu
+	//   windowMu, outputMu, snapshotRequestMu, snapshotMetricsMu,
+	//   startupWarnMu, activeSessMu, ctxMu, sessionLogMu
 	//   tmux.SessionManager.mu, tmux.CommandRouter.mu
 	//
 	// Keep cfgSaveMu/cfgMu isolated from the independent lock set above.
-	cfgMu                 sync.RWMutex
-	cfgSaveMu             sync.Mutex
-	configEventVersion    atomic.Uint64
-	paneEnvUpdateMu       sync.Mutex
-	paneEnvAppliedVersion uint64
-	cfg                   config.Config
-	configPath            string
-	workspace             string
-	startupWarnMu         sync.Mutex
-	configLoadWarnings    []string
-	activeSessMu          sync.RWMutex
-	activeSess            string
+	cfgMu                   sync.RWMutex
+	cfgSaveMu               sync.Mutex
+	configEventVersion      atomic.Uint64
+	paneEnvUpdateMu         sync.Mutex
+	paneEnvAppliedVersion   uint64
+	claudeEnvUpdateMu       sync.Mutex
+	claudeEnvAppliedVersion uint64
+	cfg                     config.Config
+	configPath              string
+	workspace               string
+	startupWarnMu           sync.Mutex
+	configLoadWarnings      []string
+	activeSessMu            sync.RWMutex
+	activeSess              string
 
 	// Backend services.
 	sessions   *tmux.SessionManager
@@ -57,12 +66,19 @@ type App struct {
 	windowMu       sync.Mutex
 	windowVisible  bool
 	windowToggling atomic.Bool // CAS guard to prevent concurrent toggleQuakeWindow
+	shuttingDown   atomic.Bool // set true at the start of shutdown(); checked by worker recovery loops
 
 	// Output buffering and snapshot state.
 	outputMu      sync.Mutex
 	outputFlusher *terminal.OutputFlushManager
 	paneFeedCh    chan paneFeedItem
 	paneFeedStop  context.CancelFunc
+
+	// wsHub provides a WebSocket binary stream for high-throughput pane data.
+	// Set once during startup (single-goroutine); nil if WebSocket server fails to start.
+	// Read by ensureOutputFlusher flush callback (concurrent) and GetWebSocketURL (Wails-bound).
+	// Safe without mutex: written once before any reader goroutine starts, never reassigned.
+	wsHub *wsserver.Hub
 
 	snapshotMu           sync.Mutex
 	snapshotDeltaMu      sync.Mutex
@@ -76,6 +92,19 @@ type App struct {
 	snapshotRequestDispatched uint64
 	snapshotMetricsMu         sync.Mutex
 	snapshotStats             snapshotMetrics
+
+	// Session log state (captures Warn/Error level records).
+	// Protected by sessionLogMu (RWMutex: write-lock for append/close, read-lock for get).
+	//
+	// sessionLogLastEmit: time of last app:session-log-updated emission; throttles
+	//   high-frequency ping events to prevent Wails IPC saturation.
+	// sessionLogSeq: monotonically increasing counter for stable frontend deduplication.
+	sessionLogMu       sync.RWMutex
+	sessionLogFile     *os.File
+	sessionLogPath     string
+	sessionLogEntries  sessionLogRingBuffer
+	sessionLogLastEmit time.Time
+	sessionLogSeq      uint64
 
 	// Background worker cancellation/waits.
 	idleCancel context.CancelFunc
@@ -92,9 +121,25 @@ type paneFeedItem struct {
 // NewApp creates the app service.
 func NewApp() *App {
 	return &App{
-		paneFeedCh:    make(chan paneFeedItem, 4096),
-		snapshotCache: map[string]tmux.SessionSnapshot{},
-		hotkeys:       hotkeys.NewManager(),
-		paneStates:    panestate.NewManager(512 * 1024),
+		// paneFeedCh buffer: 4096 items provides ~4 seconds of headroom at
+		// 10 panes x 100 chunks/sec. When full, enqueuePaneStateFeed falls
+		// back to direct Feed() call (see app_pane_feed.go).
+		paneFeedCh:        make(chan paneFeedItem, 4096),
+		snapshotCache:     map[string]tmux.SessionSnapshot{},
+		hotkeys:           hotkeys.NewManager(),
+		paneStates:        panestate.NewManager(512 * 1024),
+		sessionLogEntries: newSessionLogRingBuffer(sessionLogMaxEntries),
 	}
+}
+
+// GetWebSocketURL returns the WebSocket endpoint URL for the frontend pane
+// data stream. The frontend calls this on mount to establish a binary channel
+// that bypasses Wails IPC overhead for high-frequency terminal output.
+// Returns empty string if the WebSocket server is not available.
+func (a *App) GetWebSocketURL() string {
+	if a.wsHub == nil {
+		slog.Debug("[WS] wsHub is nil, WebSocket URL unavailable")
+		return ""
+	}
+	return a.wsHub.URL()
 }

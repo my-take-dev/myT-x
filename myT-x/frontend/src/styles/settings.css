@@ -164,6 +164,12 @@
   gap: 6px;
 }
 
+.dynamic-list-row-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .dynamic-list-row {
   display: flex;
   align-items: center;

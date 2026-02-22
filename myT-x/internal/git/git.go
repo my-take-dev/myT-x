@@ -257,7 +257,7 @@ func (r *Repository) listRemoteBranchNames() (map[string]struct{}, error) {
 		return names, nil
 	}
 
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		refName := strings.TrimSpace(line)
 		if refName == "" {
 			continue
@@ -284,7 +284,7 @@ func (r *Repository) listRemoteNames() ([]string, error) {
 	}
 
 	names := make([]string, 0, 4)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		name := strings.TrimSpace(line)
 		if name == "" {
 			continue

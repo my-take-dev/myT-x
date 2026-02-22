@@ -22,8 +22,8 @@ func applyShellTransform(req *ipc.TmuxRequest) bool {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(req.Command)) {
-	case "new-session", "split-window":
-		return applySessionOrSplitTransform(req)
+	case "new-session", "new-window", "split-window":
+		return applyNewProcessTransform(req)
 	case "send-keys":
 		return applySendKeysTransform(req)
 	default:
@@ -31,7 +31,17 @@ func applyShellTransform(req *ipc.TmuxRequest) bool {
 	}
 }
 
-func applySessionOrSplitTransform(req *ipc.TmuxRequest) bool {
+func applyNewProcessTransform(req *ipc.TmuxRequest) bool {
+	// Defense-in-depth: nil-initialize here even though applyShellTransform
+	// (the current sole caller) already does so. This guards against future
+	// callers that invoke applyNewProcessTransform directly.
+	if req.Flags == nil {
+		req.Flags = map[string]any{}
+	}
+	if req.Env == nil {
+		req.Env = map[string]string{}
+	}
+
 	workDir := flagValue(req.Flags["-c"])
 	parsed := shellparser.ParseUnixCommand(req.Args, workDir)
 

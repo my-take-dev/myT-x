@@ -6,7 +6,31 @@ interface WorktreeSettingsProps {
   dispatch: FormDispatch;
 }
 
+function pickIndexedValidationErrors(
+  validationErrors: Record<string, string>,
+  keyPrefix: string,
+): Record<number, string> | undefined {
+  const entries = Object.entries(validationErrors).filter(([key]) => key.startsWith(keyPrefix));
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  const itemErrors: Record<number, string> = {};
+  for (const [key, message] of entries) {
+    const rawIndex = key.slice(keyPrefix.length);
+    const index = Number.parseInt(rawIndex, 10);
+    if (!Number.isInteger(index) || index < 0) {
+      continue;
+    }
+    itemErrors[index] = message;
+  }
+  return Object.keys(itemErrors).length > 0 ? itemErrors : undefined;
+}
+
 export function WorktreeSettings({ s, dispatch }: WorktreeSettingsProps) {
+  const copyFileItemErrors = pickIndexedValidationErrors(s.validationErrors, "wt_copy_files_");
+  const copyDirItemErrors = pickIndexedValidationErrors(s.validationErrors, "wt_copy_dirs_");
+
   return (
     <div className="settings-section">
       <div className="settings-section-title">Worktree</div>
@@ -60,7 +84,28 @@ export function WorktreeSettings({ s, dispatch }: WorktreeSettingsProps) {
           onChange={(items) => dispatch({ type: "SET_FIELD", field: "wtCopyFiles", value: items })}
           placeholder="例: .env"
           addLabel="ファイル追加"
+          itemErrors={copyFileItemErrors}
         />
+        {s.validationErrors["wt_copy_files"] && (
+          <span className="form-error">{s.validationErrors["wt_copy_files"]}</span>
+        )}
+      </div>
+
+      <div className="form-group" style={{ marginTop: 6 }}>
+        <label className="form-label">コピーディレクトリ</label>
+        <span className="settings-desc">
+          リポジトリルートからworktreeにコピーするディレクトリ（相対パスのみ。ディレクトリ全体を再帰的にコピー）
+        </span>
+        <DynamicStringList
+          items={s.wtCopyDirs}
+          onChange={(items) => dispatch({ type: "SET_FIELD", field: "wtCopyDirs", value: items })}
+          placeholder="例: .vscode"
+          addLabel="ディレクトリ追加"
+          itemErrors={copyDirItemErrors}
+        />
+        {s.validationErrors["wt_copy_dirs"] && (
+          <span className="form-error">{s.validationErrors["wt_copy_dirs"]}</span>
+        )}
       </div>
     </div>
   );

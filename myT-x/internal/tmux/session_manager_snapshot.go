@@ -5,13 +5,12 @@ import (
 )
 
 // Snapshot returns frontend-safe session state snapshots.
-// Cache miss paths build deep-copied snapshot values.
-// Cache hit paths return the shared cached slice reference; callers must treat
-// the returned value as read-only and must not retain/mutate it.
+// Cache miss paths rebuild the cache from internal state.
+// All return paths clone the cached slice so callers cannot mutate shared data.
 func (m *SessionManager) Snapshot() []SessionSnapshot {
 	m.mu.RLock()
 	if m.snapshotGeneration == m.generation && m.snapshotCache != nil {
-		cached := m.snapshotCache
+		cached := cloneSessionSnapshots(m.snapshotCache)
 		m.mu.RUnlock()
 		return cached
 	}
@@ -20,7 +19,7 @@ func (m *SessionManager) Snapshot() []SessionSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.snapshotGeneration == m.generation && m.snapshotCache != nil {
-		return m.snapshotCache
+		return cloneSessionSnapshots(m.snapshotCache)
 	}
 
 	names := m.sortedSessionNamesLocked()
@@ -34,16 +33,20 @@ func (m *SessionManager) Snapshot() []SessionSnapshot {
 			worktree = &copied
 		}
 		ss := SessionSnapshot{
-			ID:          session.ID,
-			Name:        session.Name,
-			CreatedAt:   session.CreatedAt,
-			IsIdle:      session.IsIdle,
-			IsAgentTeam: session.IsAgentTeam,
-			Windows:     make([]WindowSnapshot, 0, len(session.Windows)),
-			Worktree:    worktree,
-			RootPath:    session.RootPath,
+			ID:             session.ID,
+			Name:           session.Name,
+			CreatedAt:      session.CreatedAt,
+			IsIdle:         session.IsIdle,
+			ActiveWindowID: session.ActiveWindowID,
+			IsAgentTeam:    session.IsAgentTeam,
+			Windows:        make([]WindowSnapshot, 0, len(session.Windows)),
+			Worktree:       worktree,
+			RootPath:       session.RootPath,
 		}
 		for _, window := range session.Windows {
+			if window == nil {
+				continue
+			}
 			ws := WindowSnapshot{
 				ID:       window.ID,
 				Name:     window.Name,
@@ -52,6 +55,9 @@ func (m *SessionManager) Snapshot() []SessionSnapshot {
 				Panes:    make([]PaneSnapshot, 0, len(window.Panes)),
 			}
 			for _, pane := range window.Panes {
+				if pane == nil {
+					continue
+				}
 				ps := PaneSnapshot{
 					ID:     pane.IDString(),
 					Index:  pane.Index,
@@ -69,7 +75,52 @@ func (m *SessionManager) Snapshot() []SessionSnapshot {
 
 	m.snapshotCache = out
 	m.snapshotGeneration = m.generation
-	return m.snapshotCache
+	return cloneSessionSnapshots(m.snapshotCache)
+}
+
+// Clone returns a deep copy of the SessionSnapshot.
+// S-1: Extracted from the former cloneSessionSnapshots package-level function
+// into a method on SessionSnapshot for better discoverability and testability.
+func (ss SessionSnapshot) Clone() SessionSnapshot {
+	out := ss
+
+	if ss.Worktree != nil {
+		worktreeCopy := *ss.Worktree
+		out.Worktree = &worktreeCopy
+	}
+
+	if len(ss.Windows) == 0 {
+		out.Windows = []WindowSnapshot{}
+		return out
+	}
+
+	out.Windows = make([]WindowSnapshot, len(ss.Windows))
+	for j := range ss.Windows {
+		window := ss.Windows[j]
+		out.Windows[j] = window
+		out.Windows[j].Layout = cloneLayout(window.Layout)
+
+		if len(window.Panes) == 0 {
+			out.Windows[j].Panes = []PaneSnapshot{}
+			continue
+		}
+		out.Windows[j].Panes = make([]PaneSnapshot, len(window.Panes))
+		copy(out.Windows[j].Panes, window.Panes)
+	}
+	return out
+}
+
+// cloneSessionSnapshots creates independent deep copies of a snapshot slice.
+// Delegates to SessionSnapshot.Clone() for each element.
+func cloneSessionSnapshots(src []SessionSnapshot) []SessionSnapshot {
+	if len(src) == 0 {
+		return []SessionSnapshot{}
+	}
+	out := make([]SessionSnapshot, len(src))
+	for i := range src {
+		out[i] = src[i].Clone()
+	}
+	return out
 }
 
 func (m *SessionManager) sortedSessionNamesLocked() []string {

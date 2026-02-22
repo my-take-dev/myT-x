@@ -19,32 +19,35 @@ import (
 
 // NOTE: This file overrides package-level function variables
 // (runtimeEventsEmitFn, ensureShimInstalledFn, etc.). Do not use t.Parallel() here.
+// Package-level variable replacement makes tests inherently serial; t.Parallel()
+// would cause data races between tests that swap the same function variables.
 
 type lifecycleTestLogger struct {
-	warnf  func(context.Context, string, ...interface{})
-	infof  func(context.Context, string, ...interface{})
-	errorf func(context.Context, string, ...interface{})
+	warnf  func(context.Context, string, ...any)
+	infof  func(context.Context, string, ...any)
+	errorf func(context.Context, string, ...any)
 }
 
-func (l lifecycleTestLogger) Warningf(ctx context.Context, message string, args ...interface{}) {
+func (l lifecycleTestLogger) Warningf(ctx context.Context, message string, args ...any) {
 	if l.warnf != nil {
 		l.warnf(ctx, message, args...)
 	}
 }
 
-func (l lifecycleTestLogger) Infof(ctx context.Context, message string, args ...interface{}) {
+func (l lifecycleTestLogger) Infof(ctx context.Context, message string, args ...any) {
 	if l.infof != nil {
 		l.infof(ctx, message, args...)
 	}
 }
 
-func (l lifecycleTestLogger) Errorf(ctx context.Context, message string, args ...interface{}) {
+func (l lifecycleTestLogger) Errorf(ctx context.Context, message string, args ...any) {
 	if l.errorf != nil {
 		l.errorf(ctx, message, args...)
 	}
 }
 
 func restoreShimLifecycleHooks() {
+	cleanupLegacyShimInstallsFn = install.CleanupLegacyShimInstalls
 	needsShimInstallFn = install.NeedsShimInstall
 	ensureShimInstalledFn = install.EnsureShimInstalled
 	resolveShimInstallDirFn = install.ResolveInstallDir
@@ -66,6 +69,38 @@ func newLifecycleTestApp() *App {
 	return app
 }
 
+func TestEnsureShimReadyCallsLegacyCleanup(t *testing.T) {
+	t.Cleanup(restoreShimLifecycleHooks)
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
+
+	cleanupCalled := false
+	cleanupLegacyShimInstallsFn = func() error {
+		cleanupCalled = true
+		return nil
+	}
+	needsShimInstallFn = func() (bool, error) {
+		return false, nil
+	}
+	ensureShimInstalledFn = func(_ string) (install.ShimInstallResult, error) {
+		return install.ShimInstallResult{}, nil
+	}
+	resolveShimInstallDirFn = func() (string, error) {
+		return `C:\Users\test\AppData\Local\myT-x\bin`, nil
+	}
+	ensureProcessPathContainsFn = func(string) bool {
+		return false
+	}
+	runtimeEventsEmitFn = func(context.Context, string, ...any) {}
+
+	app := newLifecycleTestApp()
+	app.ensureShimReady(`C:\workspace\myT-x`)
+
+	if !cleanupCalled {
+		t.Fatal("cleanupLegacyShimInstallsFn should have been called")
+	}
+}
+
 func TestEnsureShimReadyAlwaysRunsStartupSync(t *testing.T) {
 	t.Cleanup(restoreShimLifecycleHooks)
 	origEmit := runtimeEventsEmitFn
@@ -75,6 +110,7 @@ func TestEnsureShimReadyAlwaysRunsStartupSync(t *testing.T) {
 	needsCalls := 0
 	events := 0
 
+	cleanupLegacyShimInstallsFn = func() error { return nil }
 	needsShimInstallFn = func() (bool, error) {
 		needsCalls++
 		return false, nil
@@ -89,7 +125,7 @@ func TestEnsureShimReadyAlwaysRunsStartupSync(t *testing.T) {
 	ensureProcessPathContainsFn = func(string) bool {
 		return false
 	}
-	runtimeEventsEmitFn = func(context.Context, string, ...interface{}) {
+	runtimeEventsEmitFn = func(context.Context, string, ...any) {
 		events++
 	}
 
@@ -118,6 +154,7 @@ func TestEnsureShimReadyEmitsInstallEventWhenPreviouslyMissing(t *testing.T) {
 	needsCalls := 0
 	events := 0
 
+	cleanupLegacyShimInstallsFn = func() error { return nil }
 	needsShimInstallFn = func() (bool, error) {
 		needsCalls++
 		if needsCalls == 1 {
@@ -134,7 +171,7 @@ func TestEnsureShimReadyEmitsInstallEventWhenPreviouslyMissing(t *testing.T) {
 	ensureProcessPathContainsFn = func(string) bool {
 		return false
 	}
-	runtimeEventsEmitFn = func(context.Context, string, ...interface{}) {
+	runtimeEventsEmitFn = func(context.Context, string, ...any) {
 		events++
 	}
 
@@ -157,6 +194,7 @@ func TestEnsureShimReadySkipsPathMutationWhenInstallDirResolutionFails(t *testin
 
 	ensurePathCalls := 0
 	needsCalls := 0
+	cleanupLegacyShimInstallsFn = func() error { return nil }
 	needsShimInstallFn = func() (bool, error) {
 		needsCalls++
 		return false, nil
@@ -171,7 +209,7 @@ func TestEnsureShimReadySkipsPathMutationWhenInstallDirResolutionFails(t *testin
 		ensurePathCalls++
 		return true
 	}
-	runtimeEventsEmitFn = func(context.Context, string, ...interface{}) {}
+	runtimeEventsEmitFn = func(context.Context, string, ...any) {}
 
 	app := newLifecycleTestApp()
 	app.ensureShimReady(`C:\workspace\myT-x`)
@@ -192,6 +230,7 @@ func TestEnsureShimReadyMarksShimUnavailableWhenPostCheckFails(t *testing.T) {
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
+	cleanupLegacyShimInstallsFn = func() error { return nil }
 	needsShimInstallFn = func() (bool, error) {
 		return true, nil
 	}
@@ -204,7 +243,7 @@ func TestEnsureShimReadyMarksShimUnavailableWhenPostCheckFails(t *testing.T) {
 	ensureProcessPathContainsFn = func(string) bool {
 		return false
 	}
-	runtimeEventsEmitFn = func(context.Context, string, ...interface{}) {}
+	runtimeEventsEmitFn = func(context.Context, string, ...any) {}
 
 	app := newLifecycleTestApp()
 	app.ensureShimReady(`C:\workspace\myT-x`)
@@ -220,6 +259,7 @@ func TestEnsureShimReadyMarksShimUnavailableWhenPostCheckErrors(t *testing.T) {
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
 	needsCalls := 0
+	cleanupLegacyShimInstallsFn = func() error { return nil }
 	needsShimInstallFn = func() (bool, error) {
 		needsCalls++
 		if needsCalls == 1 {
@@ -236,7 +276,7 @@ func TestEnsureShimReadyMarksShimUnavailableWhenPostCheckErrors(t *testing.T) {
 	ensureProcessPathContainsFn = func(string) bool {
 		return false
 	}
-	runtimeEventsEmitFn = func(context.Context, string, ...interface{}) {}
+	runtimeEventsEmitFn = func(context.Context, string, ...any) {}
 
 	app := newLifecycleTestApp()
 	app.ensureShimReady(`C:\workspace\myT-x`)
@@ -254,6 +294,7 @@ func TestEnsureShimReadyAddsStartupWarningWhenInstallFails(t *testing.T) {
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
+	cleanupLegacyShimInstallsFn = func() error { return nil }
 	needsShimInstallFn = func() (bool, error) {
 		return true, nil
 	}
@@ -266,7 +307,7 @@ func TestEnsureShimReadyAddsStartupWarningWhenInstallFails(t *testing.T) {
 	ensureProcessPathContainsFn = func(string) bool {
 		return false
 	}
-	runtimeEventsEmitFn = func(context.Context, string, ...interface{}) {}
+	runtimeEventsEmitFn = func(context.Context, string, ...any) {}
 
 	app := newLifecycleTestApp()
 	app.ensureShimReady(`C:\workspace\myT-x`)
@@ -282,6 +323,7 @@ func TestStartupAddsWarningWhenPipeServerStartFails(t *testing.T) {
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
+	cleanupLegacyShimInstallsFn = func() error { return nil }
 	needsShimInstallFn = func() (bool, error) {
 		return false, nil
 	}
@@ -295,7 +337,7 @@ func TestStartupAddsWarningWhenPipeServerStartFails(t *testing.T) {
 		return false
 	}
 	var emittedWarning string
-	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
 		if name != "config:load-failed" || len(data) == 0 {
 			return
 		}
@@ -310,15 +352,27 @@ func TestStartupAddsWarningWhenPipeServerStartFails(t *testing.T) {
 		return ipc.NewPipeServer(pipeName, nil)
 	}
 
+	originalSlogHandler := slog.Default()
+
 	app := NewApp()
 	app.hotkeys = nil
 	app.startup(context.Background())
 	t.Cleanup(func() {
 		app.shutdown(context.Background())
+		slog.SetDefault(originalSlogHandler)
 	})
 
+	// startup() no longer calls flushPendingConfigLoadWarnings() directly because
+	// the frontend has not yet registered its EventsOn() handlers at that point.
+	// Warnings are deferred until GetConfigAndFlushWarnings() is called.
+	if emittedWarning != "" {
+		t.Fatalf("startup should not emit config:load-failed directly; got %q", emittedWarning)
+	}
+
+	// Simulate the frontend calling GetConfigAndFlushWarnings after Wails init.
+	_ = app.GetConfigAndFlushWarnings()
 	if !strings.Contains(emittedWarning, "Failed to start tmux IPC pipe server at startup.") {
-		t.Fatalf("startup warning = %q, want pipe server startup failure warning", emittedWarning)
+		t.Fatalf("GetConfigAndFlushWarnings warning = %q, want pipe server startup failure warning", emittedWarning)
 	}
 }
 
@@ -450,9 +504,134 @@ func TestConfigureGlobalHotkeyLogsWhenManagerUnavailable(t *testing.T) {
 
 	app.configureGlobalHotkey()
 
-	if !strings.Contains(buf.String(), "[DEBUG-hotkey] no hotkeys configured, skipping") {
-		t.Fatalf("expected no-hotkeys debug log, output=%q", buf.String())
+	if !strings.Contains(buf.String(), "[HOTKEY] hotkey backend unavailable, skipping registration") {
+		t.Fatalf("expected hotkey-backend-unavailable debug log, output=%q", buf.String())
 	}
+}
+
+func TestDefaultRecoveryOptions(t *testing.T) {
+	t.Run("OnPanic emits tmux:worker-panic event", func(t *testing.T) {
+		origEmit := runtimeEventsEmitFn
+		t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
+
+		var emittedName string
+		var emittedPayload map[string]any
+		runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
+			emittedName = name
+			if len(data) > 0 {
+				if m, ok := data[0].(map[string]any); ok {
+					emittedPayload = m
+				}
+			}
+		}
+
+		app := NewApp()
+		app.setRuntimeContext(context.Background())
+		opts := app.defaultRecoveryOptions()
+
+		opts.OnPanic("test-worker", 3)
+
+		if emittedName != "tmux:worker-panic" {
+			t.Fatalf("OnPanic event name = %q, want %q", emittedName, "tmux:worker-panic")
+		}
+		if emittedPayload["worker"] != "test-worker" {
+			t.Fatalf("OnPanic payload worker = %v, want %q", emittedPayload["worker"], "test-worker")
+		}
+		if emittedPayload["attempt"] != 3 {
+			t.Fatalf("OnPanic payload attempt = %v, want 3", emittedPayload["attempt"])
+		}
+	})
+
+	t.Run("OnPanic skips emit when runtimeContext is nil", func(t *testing.T) {
+		origEmit := runtimeEventsEmitFn
+		t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
+
+		emitted := false
+		runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
+			emitted = true
+		}
+
+		app := NewApp()
+		// runtimeContext is nil by default.
+		opts := app.defaultRecoveryOptions()
+
+		// Must not panic and must not emit.
+		opts.OnPanic("test-worker", 1)
+
+		if emitted {
+			t.Fatal("OnPanic should not emit when runtimeContext is nil")
+		}
+	})
+
+	t.Run("OnFatal emits tmux:worker-fatal event", func(t *testing.T) {
+		origEmit := runtimeEventsEmitFn
+		t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
+
+		var emittedName string
+		var emittedPayload map[string]any
+		runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
+			emittedName = name
+			if len(data) > 0 {
+				if m, ok := data[0].(map[string]any); ok {
+					emittedPayload = m
+				}
+			}
+		}
+
+		app := NewApp()
+		app.setRuntimeContext(context.Background())
+		opts := app.defaultRecoveryOptions()
+
+		opts.OnFatal("test-worker", 10)
+
+		if emittedName != "tmux:worker-fatal" {
+			t.Fatalf("OnFatal event name = %q, want %q", emittedName, "tmux:worker-fatal")
+		}
+		if emittedPayload["worker"] != "test-worker" {
+			t.Fatalf("OnFatal payload worker = %v, want %q", emittedPayload["worker"], "test-worker")
+		}
+		if emittedPayload["maxRetries"] != 10 {
+			t.Fatalf("OnFatal payload maxRetries = %v, want 10", emittedPayload["maxRetries"])
+		}
+	})
+
+	t.Run("OnFatal skips emit when runtimeContext is nil", func(t *testing.T) {
+		origEmit := runtimeEventsEmitFn
+		t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
+
+		emitted := false
+		runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
+			emitted = true
+		}
+
+		app := NewApp()
+		opts := app.defaultRecoveryOptions()
+
+		opts.OnFatal("test-worker", 10)
+
+		if emitted {
+			t.Fatal("OnFatal should not emit when runtimeContext is nil")
+		}
+	})
+
+	t.Run("IsShutdown returns true when shuttingDown is set", func(t *testing.T) {
+		app := NewApp()
+		app.shuttingDown.Store(true)
+		opts := app.defaultRecoveryOptions()
+
+		if !opts.IsShutdown() {
+			t.Fatal("IsShutdown should return true when shuttingDown is set")
+		}
+	})
+
+	t.Run("IsShutdown returns false when shuttingDown is not set", func(t *testing.T) {
+		app := NewApp()
+		opts := app.defaultRecoveryOptions()
+
+		if opts.IsShutdown() {
+			t.Fatal("IsShutdown should return false when shuttingDown is not set")
+		}
+	})
 }
 
 func TestWaitWithTimeout(t *testing.T) {

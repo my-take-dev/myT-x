@@ -57,10 +57,10 @@ func (m *SessionManager) CreateSession(name string, windowName string, width, he
 		return nil, nil, fmt.Errorf("session already exists: %s", name)
 	}
 	if width <= 0 {
-		width = 120
+		width = DefaultTerminalCols
 	}
 	if height <= 0 {
-		height = 40
+		height = DefaultTerminalRows
 	}
 	if strings.TrimSpace(windowName) == "" {
 		windowName = "0"
@@ -77,12 +77,14 @@ func (m *SessionManager) CreateSession(name string, windowName string, width, he
 	m.nextSessionID++
 
 	window := &TmuxWindow{
-		ID:       0,
+		ID:       m.nextWindowID,
 		Name:     windowName,
 		Layout:   nil,
 		ActivePN: 0,
 		Session:  session,
 	}
+	session.ActiveWindowID = window.ID
+	m.nextWindowID++
 	pane := &TmuxPane{
 		ID:       m.nextPaneID,
 		idString: fmt.Sprintf("%%%d", m.nextPaneID),
@@ -158,7 +160,13 @@ func (m *SessionManager) removeSessionLocked(name string) (*TmuxSession, []*Tmux
 	sessionCopy := cloneSessionForRead(session)
 	panes := make([]*TmuxPane, 0)
 	for _, window := range session.Windows {
+		if window == nil {
+			continue
+		}
 		for _, pane := range window.Panes {
+			if pane == nil {
+				continue
+			}
 			panes = append(panes, pane)
 			delete(m.panes, pane.ID)
 		}
@@ -225,28 +233,44 @@ func (m *SessionManager) GetSession(name string) (*TmuxSession, bool) {
 	return cloneSessionForRead(session), true
 }
 
+// cloneSessionForRead creates a deep copy of a session for safe read access
+// outside of lock scope.
+//
+// S-45: Cloned panes intentionally have Terminal=nil. The Terminal field is
+// an internal resource that must only be accessed under SessionManager.mu.
+// Callers of cloneSessionForRead (GetSession, ListSessions, ResolveSessionTarget,
+// RemoveSession) receive a snapshot that is safe to read and mutate without
+// affecting internal state, but cannot perform I/O through the clone.
+// Code paths that need Terminal access (e.g. emitLayoutChangedForSession)
+// must look up panes by ID through SessionManager methods.
 func cloneSessionForRead(session *TmuxSession) *TmuxSession {
 	if session == nil {
 		return nil
 	}
 
 	cloned := &TmuxSession{
-		ID:           session.ID,
-		Name:         session.Name,
-		CreatedAt:    session.CreatedAt,
-		LastActivity: session.LastActivity,
-		IsIdle:       session.IsIdle,
-		Env:          copyEnvMap(session.Env),
-		IsAgentTeam:  session.IsAgentTeam,
-		RootPath:     session.RootPath,
+		ID:             session.ID,
+		Name:           session.Name,
+		CreatedAt:      session.CreatedAt,
+		LastActivity:   session.LastActivity,
+		IsIdle:         session.IsIdle,
+		Env:            copyEnvMap(session.Env),
+		IsAgentTeam:    session.IsAgentTeam,
+		RootPath:       session.RootPath,
+		ActiveWindowID: session.ActiveWindowID,
+		UseClaudeEnv:   copyBoolPtr(session.UseClaudeEnv),
+		UsePaneEnv:     copyBoolPtr(session.UsePaneEnv),
 	}
 	if session.Worktree != nil {
 		worktreeCopy := *session.Worktree
 		cloned.Worktree = &worktreeCopy
 	}
 
-	cloned.Windows = make([]*TmuxWindow, len(session.Windows))
-	for i, window := range session.Windows {
+	// S-47: Use append-based construction to skip nil windows/panes cleanly,
+	// producing a compact slice without nil holes that could cause index-based
+	// access panics in callers.
+	cloned.Windows = make([]*TmuxWindow, 0, len(session.Windows))
+	for _, window := range session.Windows {
 		if window == nil {
 			continue
 		}
@@ -254,27 +278,32 @@ func cloneSessionForRead(session *TmuxSession) *TmuxSession {
 			ID:       window.ID,
 			Name:     window.Name,
 			Layout:   cloneLayout(window.Layout),
-			ActivePN: window.ActivePN,
+			ActivePN: 0, // Recalculated below after nil pane filtering.
 			Session:  cloned,
 		}
-		windowCopy.Panes = make([]*TmuxPane, len(window.Panes))
-		for j, pane := range window.Panes {
+		windowCopy.Panes = make([]*TmuxPane, 0, len(window.Panes))
+		for srcIdx, pane := range window.Panes {
 			if pane == nil {
 				continue
 			}
-			paneCopy := &TmuxPane{
-				ID:     pane.ID,
-				Index:  pane.Index,
-				Title:  pane.Title,
-				Active: pane.Active,
-				Width:  pane.Width,
-				Height: pane.Height,
-				Env:    copyEnvMap(pane.Env),
-				Window: windowCopy,
+			if srcIdx == window.ActivePN {
+				windowCopy.ActivePN = len(windowCopy.Panes)
 			}
-			windowCopy.Panes[j] = paneCopy
+			paneCopy := &TmuxPane{
+				ID:       pane.ID,
+				idString: pane.idString,
+				Index:    pane.Index,
+				Title:    pane.Title,
+				Active:   pane.Active,
+				Width:    pane.Width,
+				Height:   pane.Height,
+				Env:      copyEnvMap(pane.Env),
+				Window:   windowCopy,
+				// S-45: Terminal intentionally nil — see function doc.
+			}
+			windowCopy.Panes = append(windowCopy.Panes, paneCopy)
 		}
-		cloned.Windows[i] = windowCopy
+		cloned.Windows = append(cloned.Windows, windowCopy)
 	}
 	return cloned
 }

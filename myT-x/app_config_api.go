@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -55,6 +56,7 @@ func (a *App) SaveConfig(cfg config.Config) error {
 		return err
 	}
 	a.applyRuntimePaneEnvUpdate(event)
+	a.applyRuntimeClaudeEnvUpdate(event)
 	// Event emission intentionally happens outside cfgSaveMu.
 	// Concurrent saves are ordered by Version, and frontend consumers must
 	// treat the highest version as authoritative.
@@ -83,6 +85,31 @@ func (a *App) applyRuntimePaneEnvUpdate(event configUpdatedEvent) {
 
 	router.UpdatePaneEnv(event.Config.PaneEnv)
 	a.paneEnvAppliedVersion = event.Version
+}
+
+// applyRuntimeClaudeEnvUpdate updates router claude_env while preventing
+// out-of-order writes from concurrent SaveConfig calls.
+func (a *App) applyRuntimeClaudeEnvUpdate(event configUpdatedEvent) {
+	router, guardErr := a.requireRouter()
+	if guardErr != nil {
+		slog.Warn("[DEBUG-CONFIG] skipped ClaudeEnv update: router unavailable", "error", guardErr)
+		return
+	}
+
+	a.claudeEnvUpdateMu.Lock()
+	defer a.claudeEnvUpdateMu.Unlock()
+
+	if event.Version <= a.claudeEnvAppliedVersion {
+		slog.Debug("[DEBUG-CONFIG] skipped stale ClaudeEnv update", "received", event.Version, "applied", a.claudeEnvAppliedVersion)
+		return
+	}
+
+	var vars map[string]string
+	if event.Config.ClaudeEnv != nil {
+		vars = event.Config.ClaudeEnv.Vars
+	}
+	router.UpdateClaudeEnv(vars)
+	a.claudeEnvAppliedVersion = event.Version
 }
 
 // saveConfigWithLock persists cfg, updates the in-memory snapshot, and bumps event version under cfgSaveMu.
@@ -114,6 +141,15 @@ func (a *App) GetValidationRules() ValidationRules {
 	return ValidationRules{
 		MinOverrideNameLen: config.MinOverrideNameLen(),
 	}
+}
+
+// GetClaudeEnvVarDescriptions returns known Claude Code environment variable
+// names with Japanese descriptions for the frontend settings UI autocomplete.
+// Returns a shallow copy to prevent callers from mutating the global map.
+func (a *App) GetClaudeEnvVarDescriptions() map[string]string {
+	cp := make(map[string]string, len(claudeEnvVarDescriptions))
+	maps.Copy(cp, claudeEnvVarDescriptions)
+	return cp
 }
 
 // ListSessions returns current session snapshots.

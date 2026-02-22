@@ -8,10 +8,16 @@ import { KeybindSettings } from "./settings/KeybindSettings";
 import { WorktreeSettings } from "./settings/WorktreeSettings";
 import { AgentModelSettings } from "./settings/AgentModelSettings";
 import { PaneEnvSettings } from "./settings/PaneEnvSettings";
+import { ClaudeEnvSettings } from "./settings/ClaudeEnvSettings";
 import { EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK } from "./settings/constants";
 import type { SettingsCategory } from "./settings/types";
 import { INITIAL_FORM, formReducer } from "./settings/settingsReducer";
-import { validateAgentModelSettings, validatePaneEnvSettings } from "./settings/settingsValidation";
+import {
+  validateAgentModelSettings,
+  validateClaudeEnvSettings,
+  validatePaneEnvSettings,
+  validateWorktreeCopyPathSettings,
+} from "./settings/settingsValidation";
 import type { WailsConfigInput } from "../types/tmux";
 
 interface SettingsModalProps {
@@ -25,7 +31,8 @@ const SETTINGS_CATEGORIES: { id: SettingsCategory; label: string }[] = [
   { id: "keybinds", label: "キーバインド" },
   { id: "worktree", label: "Worktree" },
   { id: "agent-model", label: "Agent Model" },
-  { id: "pane-env", label: "環境変数" },
+  { id: "claude-env", label: "CLAUDE CODE環境変数" },
+  { id: "pane-env", label: "追加ペイン環境変数" },
 ];
 
 function getFocusableElements(root: HTMLElement | null): HTMLElement[] {
@@ -185,6 +192,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     keybinds: () => <KeybindSettings s={s} dispatch={dispatch} />,
     worktree: () => <WorktreeSettings s={s} dispatch={dispatch} />,
     "agent-model": () => <AgentModelSettings s={s} dispatch={dispatch} />,
+    "claude-env": () => <ClaudeEnvSettings s={s} dispatch={dispatch} />,
     "pane-env": () => <PaneEnvSettings s={s} dispatch={dispatch} />,
   };
 
@@ -199,14 +207,20 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
     const errors = {
       ...validateAgentModelSettings(s.agentFrom, s.agentTo, s.overrides, s.minOverrideNameLen),
+      ...validateClaudeEnvSettings(s.claudeEnvEntries),
       ...validatePaneEnvSettings(s.paneEnvEntries, s.effortLevel),
+      ...validateWorktreeCopyPathSettings(s.wtCopyFiles, s.wtCopyDirs),
     };
     if (Object.keys(errors).length > 0) {
       dispatch({ type: "SET_FIELD", field: "validationErrors", value: errors });
       if (Object.keys(errors).some((k) => k.startsWith("agent") || k.startsWith("override"))) {
         dispatch({ type: "SET_FIELD", field: "activeCategory", value: "agent-model" });
+      } else if (Object.keys(errors).some((k) => k.startsWith("claude_env"))) {
+        dispatch({ type: "SET_FIELD", field: "activeCategory", value: "claude-env" });
       } else if (Object.keys(errors).some((k) => k.startsWith("pane_env"))) {
         dispatch({ type: "SET_FIELD", field: "activeCategory", value: "pane-env" });
+      } else if (Object.keys(errors).some((k) => k.startsWith("wt_copy_"))) {
+        dispatch({ type: "SET_FIELD", field: "activeCategory", value: "worktree" });
       }
       return;
     }
@@ -229,6 +243,18 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       if (k && v && k !== EFFORT_LEVEL_KEY) paneEnv[k] = v;
     }
 
+    const claudeEnvVars: Record<string, string> = {};
+    for (const entry of s.claudeEnvEntries) {
+      const k = entry.key.trim();
+      const v = entry.value.trim();
+      if (k && v) claudeEnvVars[k] = v;
+    }
+    const hasClaudeEnv = Object.keys(claudeEnvVars).length > 0 || s.claudeEnvDefaultEnabled;
+
+    // NOTE: SaveConfig performs full overwrite (not merge), so omitting
+    // claude_env / pane_env when empty correctly clears any previously saved
+    // configuration. Go-side config.Save marshals the entire Config struct
+    // and writes it atomically to disk.
     const payload: WailsConfigInput = {
       shell: s.shell,
       prefix: s.prefix,
@@ -240,6 +266,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         force_cleanup: s.wtForceCleanup,
         setup_scripts: s.wtSetupScripts.filter((v) => v.trim()),
         copy_files: s.wtCopyFiles.filter((v) => v.trim()),
+        copy_dirs: s.wtCopyDirs.filter((v) => v.trim()),
       },
       agent_model: hasAgent
         ? {
@@ -252,6 +279,13 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           }
         : undefined,
       pane_env: Object.keys(paneEnv).length > 0 ? paneEnv : undefined,
+      pane_env_default_enabled: s.paneEnvDefaultEnabled,
+      claude_env: hasClaudeEnv
+        ? {
+            default_enabled: s.claudeEnvDefaultEnabled,
+            vars: Object.keys(claudeEnvVars).length > 0 ? claudeEnvVars : undefined,
+          }
+        : undefined,
     };
 
     try {

@@ -103,7 +103,7 @@ func (r *replayRing) snapshotInto(buf []byte) []byte {
 }
 
 // Manager stores per-pane terminal state for lightweight resume.
-// Lock ordering: Manager.mu (coarse) → paneState.mu (fine). Never reverse.
+// Lock ordering: Manager.mu (coarse) -> paneState.mu (fine). Never reverse.
 // RLock is used for read-only map lookups (Snapshot, Feed fast path for existing panes).
 // Lock is used for map mutations (Feed slow path for new panes, RemovePane, RetainPanes).
 type Manager struct {
@@ -117,16 +117,19 @@ type Manager struct {
 // NewManager creates a new pane state manager.
 func NewManager(maxReplayBytes int) *Manager {
 	if maxReplayBytes <= 0 {
+		// Default 512 KiB per pane: at 10 panes = 5 MiB total replay memory.
+		// Sufficient to hold ~500K characters of terminal output for session resume.
+		// Configurable via NewManager parameter for memory-constrained deployments.
 		maxReplayBytes = 512 * 1024
 	}
-	cap := maxReplayBytes
+	replayCap := maxReplayBytes
 	return &Manager{
 		maxReplayBytes: maxReplayBytes,
 		states:         map[string]*paneState{},
 		activePanes:    map[string]struct{}{},
 		replayPool: sync.Pool{
 			New: func() any {
-				buf := make([]byte, 0, cap)
+				buf := make([]byte, 0, replayCap)
 				return &buf
 			},
 		},
@@ -176,8 +179,19 @@ func (m *Manager) ResizePane(paneID string, cols int, rows int) {
 }
 
 // Feed applies terminal output chunk to pane state.
+// It trims paneID for defensive correctness, then delegates to feedCore.
+// Hot-path callers that have already validated/trimmed the paneID should
+// call FeedTrimmed directly to skip the redundant TrimSpace.
 func (m *Manager) Feed(paneID string, chunk []byte) {
 	paneID = strings.TrimSpace(paneID)
+	m.FeedTrimmed(paneID, chunk)
+}
+
+// FeedTrimmed applies terminal output chunk to pane state.
+// The caller must ensure paneID is already trimmed (no leading/trailing whitespace).
+// This is the fast path used by hot-path callers (e.g. enqueuePaneStateFeed)
+// that pre-validate paneID before enqueuing.
+func (m *Manager) FeedTrimmed(paneID string, chunk []byte) {
 	if paneID == "" || len(chunk) == 0 {
 		if paneID == "" && len(chunk) > 0 {
 			slog.Warn("[DEBUG-PANESTATE] Feed called with empty paneID, ignoring")

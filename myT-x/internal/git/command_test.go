@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -82,13 +83,7 @@ func TestUpsertEnvVar(t *testing.T) {
 	t.Run("appends missing key", func(t *testing.T) {
 		env := []string{"Path=C:\\tools"}
 		got := upsertEnvVar(env, "LC_ALL", "C")
-		found := false
-		for _, entry := range got {
-			if entry == "LC_ALL=C" {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(got, "LC_ALL=C")
 		if !found {
 			t.Fatalf("LC_ALL=C not found in env: %v", got)
 		}
@@ -105,13 +100,7 @@ func TestLocaleNeutralGitEnv(t *testing.T) {
 
 	expectContains := []string{"LC_ALL=C", "LC_MESSAGES=C", "LANG=C"}
 	for _, expected := range expectContains {
-		found := false
-		for _, entry := range got {
-			if entry == expected {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(got, expected)
 		if !found {
 			t.Fatalf("expected %q in env, got %v", expected, got)
 		}

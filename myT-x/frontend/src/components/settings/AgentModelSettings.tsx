@@ -13,6 +13,7 @@ export function AgentModelSettings({ s, dispatch }: AgentModelSettingsProps) {
       <span className="settings-desc" style={{ marginBottom: 8, display: "block" }}>
         Claude Codeが子エージェントを起動する際のモデル自動置換設定。
         子プロセスの --model フラグを置換元から置換先に変更します。
+        置換元に「ALL」を指定すると、全モデルを置換先に一括変更します。
       </span>
 
       <div className="form-group">
@@ -37,7 +38,7 @@ export function AgentModelSettings({ s, dispatch }: AgentModelSettingsProps) {
           <span className="form-error">{s.validationErrors["agent_model"]}</span>
         )}
         <span className="settings-desc">
-          fromとtoは両方同時に指定が必要です
+          fromとtoは両方同時に指定が必要です。fromに「ALL」を指定すると全モデル置換。
         </span>
       </div>
 

@@ -18,7 +18,7 @@ const defaultPipePrefix = `\\.\pipe\myT-x-`
 // TmuxRequest is a single tmux-compatible command request.
 type TmuxRequest struct {
 	Command    string            `json:"command"`
-	Flags      map[string]any    `json:"flags,omitempty"` // Values are string or bool; map[string]any for tmux CLI compat
+	Flags      map[string]any    `json:"flags,omitempty"` // Values are string, bool, or float64 (JSON number); map[string]any for tmux CLI compat
 	Args       []string          `json:"args,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
 	CallerPane string            `json:"caller_pane,omitempty"`
@@ -52,6 +52,16 @@ func DefaultPipeName() string {
 	if username == "" {
 		if current, err := user.Current(); err == nil {
 			username = current.Username
+		} else {
+			// Both USERNAME env and user.Current() unavailable.
+			// sanitizeUsername("") returns "unknown" as a safe fallback
+			// to avoid generating a bare pipe name like "\\.\pipe\myT-x-".
+			// NOTE: "unknown" fallback is extremely unlikely (requires both
+			// $USERNAME empty and user.Current() failure). Collision risk
+			// between multiple users falling back to the same pipe name
+			// is accepted for robustness over failing to start.
+			slog.Warn("[ipc] could not determine username, falling back to default",
+				"error", err)
 		}
 	}
 	return defaultPipePrefix + sanitizeUsername(username)
@@ -79,8 +89,15 @@ func decodeRequest(raw []byte) (TmuxRequest, error) {
 	if err != nil {
 		return TmuxRequest{}, err
 	}
+
+	// Normalize nil collection fields to empty values so callers never
+	// need nil checks. Every collection field in TmuxRequest is initialized:
+	//   Flags -> empty map, Args -> empty slice, Env -> empty map.
 	if req.Flags == nil {
 		req.Flags = map[string]any{}
+	}
+	if req.Args == nil {
+		req.Args = []string{}
 	}
 	if req.Env == nil {
 		req.Env = map[string]string{}

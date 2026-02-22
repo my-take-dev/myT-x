@@ -471,7 +471,7 @@ func BenchmarkNewLineScroll(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		term := newTerminalState(120, 40)
 		// Fill terminal then trigger 1000 scrolls.
-		for j := 0; j < 40+1000; j++ {
+		for range 40 + 1000 {
 			term.newLine()
 		}
 	}
@@ -520,7 +520,7 @@ func BenchmarkPutRuneFullLine(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		term := newTerminalState(120, 2)
-		for j := 0; j < 120; j++ {
+		for range 120 {
 			term.putRune('X')
 		}
 	}

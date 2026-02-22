@@ -7,21 +7,44 @@ import (
 	"myT-x/internal/terminal"
 )
 
+// INVARIANT (copy-on-read contract for env maps): Every public method in this
+// file that returns a map[string]string (GetSessionEnv, GetPaneEnv, etc.)
+// returns a deep copy via copyEnvMap. Callers may freely mutate the returned
+// map without affecting internal state. This is the complementary read-side
+// contract to the copy-on-write contract documented on paneEnvView in
+// command_router.go. Both contracts together ensure that env maps are never
+// shared across goroutine boundaries without protection.
+//
+// The write-side methods (SetSessionEnv, SetPaneRuntime, etc.) always mutate
+// the canonical session/pane Env map under m.mu.Lock, so no copy-on-write
+// indirection is needed here — the mutex serialises all writes.
+//
+// NOTE: SetPaneRuntime also applies copy-on-write for the incoming env map:
+// it calls copyEnvMap(env) before storing, ensuring the caller's map is not
+// aliased into internal state. This completes the bidirectional isolation
+// contract for pane environment maps.
+
 // PaneContextSnapshot is a lock-safe snapshot of pane-owned session/window state.
 type PaneContextSnapshot struct {
 	SessionID   int
 	SessionName string
+	WindowID    int
 	Layout      *LayoutNode
 	Env         map[string]string
 	Title       string
 	// SessionWorkDir is the effective working directory for the session.
 	// Worktree sessions use Worktree.Path; regular sessions use RootPath.
 	SessionWorkDir string
+	// PaneWidth and PaneHeight are the pane's column/row dimensions at snapshot
+	// time. Added for I-02 so that handleResizePane can read fallback dimensions
+	// under RLock instead of dereferencing the live pointer after lock release.
+	PaneWidth  int
+	PaneHeight int
 }
 
 // parseSessionName extracts the session name from a target string.
 // If name contains a colon, only the portion before it is used
-// (e.g., "mysession:0" → "mysession").
+// (e.g., "mysession:0" -> "mysession").
 func parseSessionName(name string) string {
 	sessionName, _, _ := strings.Cut(strings.TrimSpace(name), ":")
 	return sessionName
@@ -73,6 +96,55 @@ func (m *SessionManager) GetSessionEnv(name string) (map[string]string, error) {
 	return copyEnvMap(session.Env), nil
 }
 
+// SetSessionEnv sets a single environment variable on the named session.
+func (m *SessionManager) SetSessionEnv(name, key, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("environment variable name is required")
+	}
+
+	session, err := m.getSessionByNameLocked(name)
+	if err != nil {
+		return err
+	}
+	if session.Env == nil {
+		session.Env = map[string]string{}
+	}
+	if prev, exists := session.Env[key]; exists && prev == value {
+		return nil
+	}
+	session.Env[key] = value
+	m.markStateMutationLocked()
+	return nil
+}
+
+// UnsetSessionEnv removes a single environment variable from the named session.
+func (m *SessionManager) UnsetSessionEnv(name, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("environment variable name is required")
+	}
+
+	session, err := m.getSessionByNameLocked(name)
+	if err != nil {
+		return err
+	}
+	if session.Env != nil {
+		if _, exists := session.Env[key]; !exists {
+			return nil
+		}
+		delete(session.Env, key)
+		m.markStateMutationLocked()
+	}
+	return nil
+}
+
 // SetWorktreeInfo sets worktree metadata on the named session.
 // Passing nil clears worktree metadata.
 // String fields are normalized with strings.TrimSpace before being stored, so
@@ -122,6 +194,7 @@ func (m *SessionManager) GetWorktreeInfo(name string) (*SessionWorktreeInfo, err
 func (m *SessionManager) SetRootPath(name, rootPath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	rootPath = strings.TrimSpace(rootPath)
 	session, err := m.getSessionByNameLocked(name)
 	if err != nil {
 		return err
@@ -146,6 +219,36 @@ func (m *SessionManager) SetAgentTeam(name string, isAgent bool) error {
 		m.markStateMutationLocked()
 	}
 	session.IsAgentTeam = isAgent
+	return nil
+}
+
+// SetUseClaudeEnv sets whether claude_env is applied to panes in the named session.
+func (m *SessionManager) SetUseClaudeEnv(name string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionByNameLocked(name)
+	if err != nil {
+		return err
+	}
+	if session.UseClaudeEnv == nil || *session.UseClaudeEnv != enabled {
+		m.markStateMutationLocked()
+	}
+	session.UseClaudeEnv = &enabled
+	return nil
+}
+
+// SetUsePaneEnv sets whether pane_env is applied to additional panes in the named session.
+func (m *SessionManager) SetUsePaneEnv(name string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionByNameLocked(name)
+	if err != nil {
+		return err
+	}
+	if session.UsePaneEnv == nil || *session.UsePaneEnv != enabled {
+		m.markStateMutationLocked()
+	}
+	session.UsePaneEnv = &enabled
 	return nil
 }
 
@@ -209,10 +312,13 @@ func (m *SessionManager) GetPaneContextSnapshot(paneID int) (PaneContextSnapshot
 	return PaneContextSnapshot{
 		SessionID:      sess.ID,
 		SessionName:    sess.Name,
+		WindowID:       pane.Window.ID,
 		Layout:         cloneLayout(pane.Window.Layout),
 		Env:            copyEnvMap(pane.Env),
 		Title:          pane.Title,
 		SessionWorkDir: workDir,
+		PaneWidth:      pane.Width,
+		PaneHeight:     pane.Height,
 	}, nil
 }
 

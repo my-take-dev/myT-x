@@ -48,6 +48,9 @@ func ensurePathContains(installDir string) (bool, error) {
 
 	// Read and write user PATH through a single registry handle to avoid
 	// read-then-write races when concurrent processes update PATH.
+	// Intentionally uses CreateKey (not OpenKey) to obtain a read/write handle.
+	// CreateKey opens the key if it already exists or creates it if missing,
+	// which is the desired behavior for ensuring the PATH entry is present.
 	key, _, err := registry.CreateKey(
 		registry.CURRENT_USER,
 		registryEnvKeyPath,
@@ -301,7 +304,7 @@ func decodeRegistryUTF16String(rawValue []byte) string {
 
 func countPathEntries(pathValue string) int {
 	count := 0
-	for _, item := range strings.Split(pathValue, ";") {
+	for item := range strings.SplitSeq(pathValue, ";") {
 		if strings.TrimSpace(item) != "" {
 			count++
 		}
@@ -356,7 +359,7 @@ func containsPathEntry(pathValue string, entry string) bool {
 		return false
 	}
 	normalizedEntry = strings.ToLower(filepath.Clean(normalizedEntry))
-	for _, item := range strings.Split(pathValue, ";") {
+	for item := range strings.SplitSeq(pathValue, ";") {
 		item = strings.TrimSpace(item)
 		if item == "" {
 			continue

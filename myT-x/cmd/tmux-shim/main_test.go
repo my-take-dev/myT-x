@@ -112,6 +112,115 @@ func TestParseCommandRequiresTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing -t")
 	}
+
+	_, err = parseCommand([]string{"has-session", "-t", "   "})
+	if err == nil {
+		t.Fatal("expected error for whitespace-only -t")
+	}
+}
+
+// new-window requires -n (child session name) in addition to -t.
+// myT-x semantics: new-window creates a child session, not a tmux window.
+func TestParseCommandNewWindowRequiresNameFlag(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "missing -n flag",
+			args:    []string{"new-window", "-t", "parent"},
+			wantErr: "new-window requires -n flag",
+		},
+		{
+			name:    "whitespace-only -n flag",
+			args:    []string{"new-window", "-t", "parent", "-n", "   "},
+			wantErr: "new-window requires -n flag",
+		},
+		{
+			name:    "empty -n flag",
+			args:    []string{"new-window", "-t", "parent", "-n", ""},
+			wantErr: "new-window requires -n flag",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseCommand(tt.args)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+
+	// Positive case: valid -t and -n should succeed.
+	req, err := parseCommand([]string{"new-window", "-t", "parent", "-n", "child"})
+	if err != nil {
+		t.Fatalf("parseCommand(new-window -t parent -n child) error = %v", err)
+	}
+	if asString(req.Flags["-n"]) != "child" {
+		t.Fatalf("-n = %q, want child", asString(req.Flags["-n"]))
+	}
+}
+
+func TestParseCommandRejectsEmptyArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "nil args",
+			args: nil,
+		},
+		{
+			name: "empty args",
+			args: []string{},
+		},
+		{
+			name: "whitespace command",
+			args: []string{"   "},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseCommand(tt.args)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), "command is required") {
+				t.Fatalf("error = %q, want command required", err.Error())
+			}
+		})
+	}
+}
+
+func TestParseCommandSendKeysLiteralFlag(t *testing.T) {
+	req, err := parseCommand([]string{"send-keys", "-l", "-t", "%0", "echo", "hello"})
+	if err != nil {
+		t.Fatalf("parseCommand() error = %v", err)
+	}
+	if req.Command != "send-keys" {
+		t.Fatalf("command = %q, want %q", req.Command, "send-keys")
+	}
+	if !asBool(req.Flags["-l"]) {
+		t.Fatalf("-l flag = %v, want true", req.Flags["-l"])
+	}
+	if got := asString(req.Flags["-t"]); got != "%0" {
+		t.Fatalf("-t = %q, want %q", got, "%0")
+	}
+	if !reflect.DeepEqual(req.Args, []string{"echo", "hello"}) {
+		t.Fatalf("args = %v, want %v", req.Args, []string{"echo", "hello"})
+	}
+}
+
+func TestValidateCommandSpecConsistency(t *testing.T) {
+	if err := validateCommandSpecConsistency(); err != nil {
+		t.Fatalf("validateCommandSpecConsistency() error = %v", err)
+	}
 }
 
 func TestParseCommandCombinedBoolFlags(t *testing.T) {
@@ -281,6 +390,9 @@ func TestParseCommandKillSessionRequiresTarget(t *testing.T) {
 	if _, err := parseCommand([]string{"kill-session"}); err == nil {
 		t.Fatal("parseCommand(kill-session) expected missing -t error")
 	}
+	if _, err := parseCommand([]string{"kill-session", "-t", "   "}); err == nil {
+		t.Fatal("parseCommand(kill-session -t whitespace) expected missing -t error")
+	}
 
 	req, err := parseCommand([]string{"kill-session", "-t", "demo"})
 	if err != nil {
@@ -344,6 +456,63 @@ func TestParseCommandFlagIntRejectsNonInteger(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "expects integer") {
 		t.Fatalf("error = %v, want integer validation message", err)
+	}
+}
+
+func TestParseCommandRejectsNegativeSizeFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "new-session rejects negative -x",
+			args:    []string{"new-session", "-s", "demo", "-x", "-1"},
+			wantErr: "flag -x must be non-negative",
+		},
+		{
+			name:    "new-session rejects negative -y",
+			args:    []string{"new-session", "-s", "demo", "-y", "-1"},
+			wantErr: "flag -y must be non-negative",
+		},
+		{
+			name:    "resize-pane rejects negative -x",
+			args:    []string{"resize-pane", "-t", "%0", "-x", "-1"},
+			wantErr: "flag -x must be non-negative",
+		},
+		{
+			name:    "resize-pane rejects negative -y",
+			args:    []string{"resize-pane", "-t", "%0", "-y", "-1"},
+			wantErr: "flag -y must be non-negative",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseCommand(tt.args)
+			if err == nil {
+				t.Fatalf("parseCommand(%v) expected error", tt.args)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseCommandTrimsEnvKeyForEFlag(t *testing.T) {
+	req, err := parseCommand([]string{
+		"split-window",
+		"-t", "%0",
+		"-e", " MY_VAR =value",
+	})
+	if err != nil {
+		t.Fatalf("parseCommand() error = %v", err)
+	}
+	if got := req.Env["MY_VAR"]; got != "value" {
+		t.Fatalf("env[MY_VAR] = %q, want %q", got, "value")
+	}
+	if _, exists := req.Env[" MY_VAR "]; exists {
+		t.Fatal("untrimmed env key should not exist")
 	}
 }
 
@@ -434,7 +603,7 @@ func TestRotateShimDebugLogIfNeededScenarios(t *testing.T) {
 				if baseErr != nil {
 					t.Fatalf("base log should remain, stat err = %v", baseErr)
 				}
-			} else if !os.IsNotExist(baseErr) {
+			} else if !errors.Is(baseErr, os.ErrNotExist) {
 				t.Fatalf("base log should be absent, stat err = %v", baseErr)
 			}
 
@@ -444,7 +613,7 @@ func TestRotateShimDebugLogIfNeededScenarios(t *testing.T) {
 				if rotatedErr != nil {
 					t.Fatalf("rotated log missing: %v", rotatedErr)
 				}
-			} else if !os.IsNotExist(rotatedErr) {
+			} else if !errors.Is(rotatedErr, os.ErrNotExist) {
 				t.Fatalf("rotated log should not exist, stat err = %v", rotatedErr)
 			}
 		})
@@ -579,10 +748,10 @@ func TestPruneRotatedShimDebugLogsContinuesAfterRemoveError(t *testing.T) {
 		t.Fatalf("remove calls = %v, want 2 files", removed)
 	}
 
-	if _, statErr := os.Stat(log2); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(log2); errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("failed file should remain: %s", log2)
 	}
-	if _, statErr := os.Stat(log1); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(log1); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("other old file should still be pruned, stat err = %v", statErr)
 	}
 }
@@ -780,7 +949,9 @@ func TestDebugLogFallbackMessageIgnoresWhitespaceInput(t *testing.T) {
 	}
 }
 
-func TestApplyModelTransformSafeOnLoaderError(t *testing.T) {
+func TestApplyModelTransformSafeSwallowsLoaderError(t *testing.T) {
+	// Shim spec: config load failure is swallowed by applyModelTransform.
+	// The safe wrapper receives (false, nil) and passes through unchanged.
 	req := ipc.TmuxRequest{
 		Command: "split-window",
 		Args:    []string{"--model claude-opus-4-6"},
@@ -790,8 +961,8 @@ func TestApplyModelTransformSafeOnLoaderError(t *testing.T) {
 	changed, err := applyModelTransformSafeWith(&req, func() (*config.AgentModel, error) {
 		return nil, errors.New("load failed")
 	}, applyModelTransform)
-	if err == nil {
-		t.Fatal("expected error")
+	if err != nil {
+		t.Fatalf("expected nil error (shim spec: load errors swallowed), got: %v", err)
 	}
 	if changed {
 		t.Fatal("changed should be false when loader fails")
@@ -1283,8 +1454,624 @@ func TestParseCommandAdditionalCoverage(t *testing.T) {
 	}
 }
 
+func TestParseCommandSelectPaneWithTitle(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantT     string
+		wantTitle string
+		wantErr   bool
+	}{
+		{
+			name:      "select-pane with -t and -T",
+			args:      []string{"select-pane", "-t", "multiagent:0.0", "-T", "boss1"},
+			wantT:     "multiagent:0.0",
+			wantTitle: "boss1",
+		},
+		{
+			name:      "select-pane with -T only",
+			args:      []string{"select-pane", "-T", "worker1"},
+			wantTitle: "worker1",
+		},
+		{
+			name:    "select-pane -T without value",
+			args:    []string{"select-pane", "-T"},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := parseCommand(tt.args)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := asString(req.Flags["-t"]); got != tt.wantT {
+				t.Errorf("-t = %q, want %q", got, tt.wantT)
+			}
+			if got := asString(req.Flags["-T"]); got != tt.wantTitle {
+				t.Errorf("-T = %q, want %q", got, tt.wantTitle)
+			}
+		})
+	}
+}
+
+func TestParseCommandAttachSession(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantT   string
+		wantErr bool
+	}{
+		{
+			name:  "attach-session with -t",
+			args:  []string{"attach-session", "-t", "multiagent"},
+			wantT: "multiagent",
+		},
+		{
+			name:  "attach-session with session:window target",
+			args:  []string{"attach-session", "-t", "president:0"},
+			wantT: "president:0",
+		},
+		{
+			name:  "attach-session with session:window.pane target",
+			args:  []string{"attach-session", "-t", "president:0.0"},
+			wantT: "president:0.0",
+		},
+		{
+			name:    "attach-session with whitespace-only -t",
+			args:    []string{"attach-session", "-t", "   "},
+			wantErr: true,
+		},
+		{
+			name:    "attach-session without -t",
+			args:    []string{"attach-session"},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := parseCommand(tt.args)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if req.Command != "attach-session" {
+				t.Fatalf("command = %q, want attach-session", req.Command)
+			}
+			if got := asString(req.Flags["-t"]); got != tt.wantT {
+				t.Errorf("-t = %q, want %q", got, tt.wantT)
+			}
+		})
+	}
+}
+
 func TestTmuxRequestStructFieldCountForCloneTransformRequest(t *testing.T) {
-	if got := reflect.TypeOf(ipc.TmuxRequest{}).NumField(); got != 5 {
+	if got := reflect.TypeFor[ipc.TmuxRequest]().NumField(); got != 5 {
 		t.Fatalf("ipc.TmuxRequest field count = %d, want 5 (command, flags, args, env, caller_pane)", got)
+	}
+}
+
+func TestParseCommandNewCommands(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantCmd   string
+		wantFlags map[string]any
+		wantArgs  []string
+		wantEnv   map[string]string
+		wantErr   bool
+	}{
+		// --- kill-pane ---
+		{
+			name:      "kill-pane with -t target",
+			args:      []string{"kill-pane", "-t", "%1"},
+			wantCmd:   "kill-pane",
+			wantFlags: map[string]any{"-t": "%1"},
+		},
+		{
+			name:    "kill-pane without flags succeeds",
+			args:    []string{"kill-pane"},
+			wantCmd: "kill-pane",
+		},
+		// --- rename-session ---
+		{
+			name:      "rename-session with -t and new-name",
+			args:      []string{"rename-session", "-t", "old", "newname"},
+			wantCmd:   "rename-session",
+			wantFlags: map[string]any{"-t": "old"},
+			wantArgs:  []string{"newname"},
+		},
+		{
+			name:    "rename-session missing -t errors",
+			args:    []string{"rename-session", "newname"},
+			wantErr: true,
+		},
+		{
+			name:    "rename-session missing new-name errors",
+			args:    []string{"rename-session", "-t", "old"},
+			wantErr: true,
+		},
+		{
+			name:    "rename-session whitespace-only new-name errors",
+			args:    []string{"rename-session", "-t", "old", "  "},
+			wantErr: true,
+		},
+		// --- resize-pane ---
+		{
+			name:      "resize-pane with -t -x -y",
+			args:      []string{"resize-pane", "-t", "%0", "-x", "100", "-y", "30"},
+			wantCmd:   "resize-pane",
+			wantFlags: map[string]any{"-t": "%0", "-x": 100, "-y": 30},
+		},
+		{
+			name:    "resize-pane -x non-integer errors",
+			args:    []string{"resize-pane", "-t", "%0", "-x", "notint"},
+			wantErr: true,
+		},
+		// --- I-7: resize-pane direction flags ---
+		{
+			name:      "resize-pane -U direction up",
+			args:      []string{"resize-pane", "-t", "%0", "-U"},
+			wantCmd:   "resize-pane",
+			wantFlags: map[string]any{"-t": "%0", "-U": true},
+		},
+		{
+			name:      "resize-pane -D direction down",
+			args:      []string{"resize-pane", "-t", "%0", "-D"},
+			wantCmd:   "resize-pane",
+			wantFlags: map[string]any{"-t": "%0", "-D": true},
+		},
+		{
+			name:      "resize-pane -L direction left",
+			args:      []string{"resize-pane", "-t", "%0", "-L"},
+			wantCmd:   "resize-pane",
+			wantFlags: map[string]any{"-t": "%0", "-L": true},
+		},
+		{
+			name:      "resize-pane -R direction right",
+			args:      []string{"resize-pane", "-t", "%0", "-R"},
+			wantCmd:   "resize-pane",
+			wantFlags: map[string]any{"-t": "%0", "-R": true},
+		},
+		{
+			name:      "resize-pane -Z toggle zoom",
+			args:      []string{"resize-pane", "-t", "%0", "-Z"},
+			wantCmd:   "resize-pane",
+			wantFlags: map[string]any{"-t": "%0", "-Z": true},
+		},
+		{
+			name:      "resize-pane direction with size",
+			args:      []string{"resize-pane", "-t", "%0", "-U", "-y", "10"},
+			wantCmd:   "resize-pane",
+			wantFlags: map[string]any{"-t": "%0", "-U": true, "-y": 10},
+		},
+		// --- show-environment ---
+		{
+			name:      "show-environment with -t",
+			args:      []string{"show-environment", "-t", "test"},
+			wantCmd:   "show-environment",
+			wantFlags: map[string]any{"-t": "test"},
+		},
+		{
+			name:      "show-environment with -g",
+			args:      []string{"show-environment", "-g"},
+			wantCmd:   "show-environment",
+			wantFlags: map[string]any{"-g": true},
+		},
+		{
+			name:      "show-environment with -t and variable arg",
+			args:      []string{"show-environment", "-t", "test", "MY_VAR"},
+			wantCmd:   "show-environment",
+			wantFlags: map[string]any{"-t": "test"},
+			wantArgs:  []string{"MY_VAR"},
+		},
+		// S-52: show-environment with -t -g combined
+		{
+			name:      "show-environment with -t and -g combined",
+			args:      []string{"show-environment", "-t", "test", "-g"},
+			wantCmd:   "show-environment",
+			wantFlags: map[string]any{"-t": "test", "-g": true},
+		},
+		// --- set-environment ---
+		{
+			name:      "set-environment with -t and key value args",
+			args:      []string{"set-environment", "-t", "test", "MY_VAR", "my_value"},
+			wantCmd:   "set-environment",
+			wantFlags: map[string]any{"-t": "test"},
+			wantArgs:  []string{"MY_VAR", "my_value"},
+		},
+		{
+			name:      "set-environment with -t -u and key arg",
+			args:      []string{"set-environment", "-t", "test", "-u", "MY_VAR"},
+			wantCmd:   "set-environment",
+			wantFlags: map[string]any{"-t": "test", "-u": true},
+			wantArgs:  []string{"MY_VAR"},
+		},
+		{
+			name:      "set-environment with -g and key value args",
+			args:      []string{"set-environment", "-g", "MY_VAR", "my_value"},
+			wantCmd:   "set-environment",
+			wantFlags: map[string]any{"-g": true},
+			wantArgs:  []string{"MY_VAR", "my_value"},
+		},
+		{
+			name:    "set-environment missing key errors",
+			args:    []string{"set-environment", "-t", "test"},
+			wantErr: true,
+		},
+		{
+			name:    "set-environment missing value errors",
+			args:    []string{"set-environment", "-t", "test", "MY_VAR"},
+			wantErr: true,
+		},
+		// I-5: set-environment with empty string VALUE
+		{
+			name:      "set-environment with empty string value",
+			args:      []string{"set-environment", "-t", "test", "MY_VAR", ""},
+			wantCmd:   "set-environment",
+			wantFlags: map[string]any{"-t": "test"},
+			wantArgs:  []string{"MY_VAR", ""},
+		},
+		// --- list-windows ---
+		{
+			name:      "list-windows with -t",
+			args:      []string{"list-windows", "-t", "test"},
+			wantCmd:   "list-windows",
+			wantFlags: map[string]any{"-t": "test"},
+		},
+		{
+			name:      "list-windows with -a",
+			args:      []string{"list-windows", "-a"},
+			wantCmd:   "list-windows",
+			wantFlags: map[string]any{"-a": true},
+		},
+		{
+			name:      "list-windows with -a and -F format",
+			args:      []string{"list-windows", "-a", "-F", "#{window_name}"},
+			wantCmd:   "list-windows",
+			wantFlags: map[string]any{"-a": true, "-F": "#{window_name}"},
+		},
+		// --- rename-window ---
+		{
+			name:      "rename-window with -t and new-name",
+			args:      []string{"rename-window", "-t", "test:0", "newname"},
+			wantCmd:   "rename-window",
+			wantFlags: map[string]any{"-t": "test:0"},
+			wantArgs:  []string{"newname"},
+		},
+		{
+			name:    "rename-window missing new-name errors",
+			args:    []string{"rename-window", "-t", "test:0"},
+			wantErr: true,
+		},
+		{
+			name:    "rename-window whitespace-only new-name errors",
+			args:    []string{"rename-window", "-t", "test:0", "   "},
+			wantErr: true,
+		},
+		// --- new-window ---
+		{
+			name:      "new-window with -t and -n",
+			args:      []string{"new-window", "-t", "test", "-n", "second"},
+			wantCmd:   "new-window",
+			wantFlags: map[string]any{"-t": "test", "-n": "second"},
+		},
+		{
+			name:      "new-window with all flags env and args after --",
+			args:      []string{"new-window", "-dP", "-F", "#{pane_id}", "-t", "test", "-n", "win2", "-c", "/tmp", "-e", "MY_KEY=val", "--", "cmd", "arg1"},
+			wantCmd:   "new-window",
+			wantFlags: map[string]any{"-d": true, "-P": true, "-F": "#{pane_id}", "-t": "test", "-n": "win2", "-c": "/tmp"},
+			wantArgs:  []string{"cmd", "arg1"},
+			wantEnv:   map[string]string{"MY_KEY": "val"},
+		},
+		// I-6: new-window with -n only
+		{
+			name:    "new-window with -n mywin (missing -t errors)",
+			args:    []string{"new-window", "-n", "mywin"},
+			wantErr: true,
+		},
+		// I-6: new-window with -t and command arg (requires -n for child session name)
+		{
+			name:    "new-window with -t but missing -n errors",
+			args:    []string{"new-window", "-t", "demo", "bash"},
+			wantErr: true,
+		},
+		// I-6: new-window with -dP combined and -n
+		{
+			name:      "new-window -dP combined with -n",
+			args:      []string{"new-window", "-dP", "-t", "demo", "-n", "mywin"},
+			wantCmd:   "new-window",
+			wantFlags: map[string]any{"-d": true, "-P": true, "-t": "demo", "-n": "mywin"},
+		},
+		// --- kill-window ---
+		{
+			name:      "kill-window with -t",
+			args:      []string{"kill-window", "-t", "test:1"},
+			wantCmd:   "kill-window",
+			wantFlags: map[string]any{"-t": "test:1"},
+		},
+		{
+			name:    "kill-window missing -t errors",
+			args:    []string{"kill-window"},
+			wantErr: true,
+		},
+		// --- select-window ---
+		{
+			name:      "select-window with -t",
+			args:      []string{"select-window", "-t", "test:0"},
+			wantCmd:   "select-window",
+			wantFlags: map[string]any{"-t": "test:0"},
+		},
+		{
+			name:    "select-window missing -t errors",
+			args:    []string{"select-window"},
+			wantErr: true,
+		},
+		// S-52: list-sessions with -F
+		{
+			name:      "list-sessions with -F format",
+			args:      []string{"list-sessions", "-F", "#{session_name}"},
+			wantCmd:   "list-sessions",
+			wantFlags: map[string]any{"-F": "#{session_name}"},
+		},
+		// S-52: list-sessions without flags
+		{
+			name:    "list-sessions without flags",
+			args:    []string{"list-sessions"},
+			wantCmd: "list-sessions",
+		},
+		// S-52: list-sessions with compound format
+		{
+			name:      "list-sessions with compound format",
+			args:      []string{"list-sessions", "-F", "#{session_name}:#{session_id}"},
+			wantCmd:   "list-sessions",
+			wantFlags: map[string]any{"-F": "#{session_name}:#{session_id}"},
+		},
+		// S-52: show-environment combined flags
+		{
+			name:      "show-environment -g -t combined",
+			args:      []string{"show-environment", "-g", "-t", "demo"},
+			wantCmd:   "show-environment",
+			wantFlags: map[string]any{"-g": true, "-t": "demo"},
+		},
+		// S-53: flagEnv with = in VALUE
+		{
+			name:      "split-window -e with = in VALUE",
+			args:      []string{"split-window", "-t", "%0", "-e", "PATH=/usr/bin:/usr/local/bin"},
+			wantCmd:   "split-window",
+			wantFlags: map[string]any{"-t": "%0"},
+			wantEnv:   map[string]string{"PATH": "/usr/bin:/usr/local/bin"},
+		},
+		// S-53: new-session -e with = in VALUE
+		{
+			name:      "new-session -e with = in VALUE",
+			args:      []string{"new-session", "-s", "demo", "-e", "OPTS=--flag=val"},
+			wantCmd:   "new-session",
+			wantFlags: map[string]any{"-s": "demo"},
+			wantEnv:   map[string]string{"OPTS": "--flag=val"},
+		},
+		// S-53: flagEnv with multiple = in VALUE
+		{
+			name:      "split-window -e with multiple = in VALUE",
+			args:      []string{"split-window", "-t", "%0", "-e", "CMD=a=b=c"},
+			wantCmd:   "split-window",
+			wantFlags: map[string]any{"-t": "%0"},
+			wantEnv:   map[string]string{"CMD": "a=b=c"},
+		},
+		// S-53: flagEnv with = only as VALUE
+		{
+			name:      "new-session -e with = only as VALUE",
+			args:      []string{"new-session", "-s", "demo", "-e", "SEP=="},
+			wantCmd:   "new-session",
+			wantFlags: map[string]any{"-s": "demo"},
+			wantEnv:   map[string]string{"SEP": "="},
+		},
+		// S-53: flagEnv with spaces around key
+		{
+			name:      "split-window -e with spaces around key",
+			args:      []string{"split-window", "-t", "%0", "-e", "PATH =/usr/bin"},
+			wantCmd:   "split-window",
+			wantFlags: map[string]any{"-t": "%0"},
+			wantEnv:   map[string]string{"PATH": "/usr/bin"},
+		},
+		// I-5: set-environment missing value (only key) errors
+		{
+			name:    "set-environment missing value (only key) errors",
+			args:    []string{"set-environment", "-t", "test", "MY_VAR"},
+			wantErr: true,
+		},
+		// I-5: set-environment -u does not require value
+		{
+			name:      "set-environment -u does not require value",
+			args:      []string{"set-environment", "-t", "test", "-u", "MY_VAR"},
+			wantCmd:   "set-environment",
+			wantFlags: map[string]any{"-t": "test", "-u": true},
+			wantArgs:  []string{"MY_VAR"},
+		},
+		// I-7: resize-pane combined direction flags
+		{
+			name:      "resize-pane combined -UR direction",
+			args:      []string{"resize-pane", "-UR"},
+			wantCmd:   "resize-pane",
+			wantFlags: map[string]any{"-U": true, "-R": true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := parseCommand(tt.args)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if req.Command != tt.wantCmd {
+				t.Fatalf("command = %q, want %q", req.Command, tt.wantCmd)
+			}
+			for flag, want := range tt.wantFlags {
+				got := req.Flags[flag]
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("flag %s = %v (%T), want %v (%T)", flag, got, got, want, want)
+				}
+			}
+			if tt.wantArgs != nil {
+				if !reflect.DeepEqual(req.Args, tt.wantArgs) {
+					t.Errorf("args = %v, want %v", req.Args, tt.wantArgs)
+				}
+			}
+			if tt.wantEnv != nil {
+				for k, v := range tt.wantEnv {
+					if req.Env[k] != v {
+						t.Errorf("env[%s] = %q, want %q", k, req.Env[k], v)
+					}
+				}
+			}
+		})
+	}
+}
+
+// S-30: "--" at end of args
+func TestParseCommandDoubleDashAtEnd(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantCmd   string
+		wantFlags map[string]any
+		wantArgs  []string
+	}{
+		{
+			name:      "split-window with -- at end (no trailing args)",
+			args:      []string{"split-window", "-t", "%0", "--"},
+			wantCmd:   "split-window",
+			wantFlags: map[string]any{"-t": "%0"},
+			wantArgs:  nil,
+		},
+		{
+			name:      "new-session with -- at end (no trailing args)",
+			args:      []string{"new-session", "-s", "demo", "--"},
+			wantCmd:   "new-session",
+			wantFlags: map[string]any{"-s": "demo"},
+			wantArgs:  nil,
+		},
+		{
+			name:      "new-window with -- at end (no trailing args)",
+			args:      []string{"new-window", "-t", "test", "-n", "child1", "--"},
+			wantCmd:   "new-window",
+			wantFlags: map[string]any{"-t": "test", "-n": "child1"},
+			wantArgs:  nil,
+		},
+		{
+			name:      "send-keys with -- at end",
+			args:      []string{"send-keys", "-t", "%0", "--"},
+			wantCmd:   "send-keys",
+			wantFlags: map[string]any{"-t": "%0"},
+			wantArgs:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := parseCommand(tt.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if req.Command != tt.wantCmd {
+				t.Fatalf("command = %q, want %q", req.Command, tt.wantCmd)
+			}
+			for flag, want := range tt.wantFlags {
+				got := req.Flags[flag]
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("flag %s = %v (%T), want %v (%T)", flag, got, got, want, want)
+				}
+			}
+			if tt.wantArgs == nil {
+				if len(req.Args) != 0 {
+					t.Errorf("args = %v, want empty", req.Args)
+				}
+			} else if !reflect.DeepEqual(req.Args, tt.wantArgs) {
+				t.Errorf("args = %v, want %v", req.Args, tt.wantArgs)
+			}
+		})
+	}
+}
+
+// NOTE: list-sessions and show-environment integration scenarios are consolidated
+// into TestParseCommandNewCommands to avoid test duplication (I-20).
+
+// NOTE: flagEnv with = in VALUE scenarios are consolidated into
+// TestParseCommandNewCommands to avoid test duplication (I-20).
+
+// NOTE: set-environment empty string VALUE scenarios are consolidated into
+// TestParseCommandNewCommands to avoid test duplication (I-20).
+
+// NOTE: resize-pane direction flag scenarios are consolidated into
+// TestParseCommandNewCommands to avoid test duplication (I-20).
+
+// C-03: Verify pruneRotatedShimDebugLogs does not recurse through debugLog.
+// Before the fix, an invalid filename (shim-debug-abc.log) would trigger
+// debugLog -> rotateShimDebugLogIfNeeded -> pruneRotatedShimDebugLogs -> debugLog
+// creating infinite recursion. After the fix, pruneLogWarning writes to stderr
+// directly without going through debugLog.
+func TestPruneRotatedShimDebugLogsDoesNotRecurseThroughDebugLog(t *testing.T) {
+	prepareDebugLogFallbackState(t)
+
+	logDir := t.TempDir()
+
+	// Create a valid rotated log to keep.
+	validLog := filepath.Join(logDir, "shim-debug-1700005000.log")
+	if err := os.WriteFile(validLog, []byte("valid"), 0o644); err != nil {
+		t.Fatalf("failed to create valid rotated log: %v", err)
+	}
+
+	// Create a file with invalid timestamp that triggers the warning path.
+	invalidLog := filepath.Join(logDir, "shim-debug-notanumber.log")
+	if err := os.WriteFile(invalidLog, []byte("invalid"), 0o644); err != nil {
+		t.Fatalf("failed to create invalid rotated log: %v", err)
+	}
+
+	// If pruneRotatedShimDebugLogs still called debugLog, this would recurse
+	// infinitely when debugLog triggers rotation. The fact that this returns
+	// without stack overflow proves the recursion is broken.
+	output := captureStderr(t, func() {
+		err := pruneRotatedShimDebugLogs(logDir, 10)
+		if err != nil {
+			t.Fatalf("pruneRotatedShimDebugLogs() unexpected error = %v", err)
+		}
+	})
+
+	// Verify the warning was written to stderr (via pruneLogWarning, not debugLog).
+	if !strings.Contains(output, "skip rotated shim debug log with invalid unix timestamp") {
+		t.Fatalf("stderr output = %q, want warning about invalid timestamp", output)
+	}
+	if !strings.Contains(output, "shim-debug-notanumber.log") {
+		t.Fatalf("stderr output = %q, want filename in warning", output)
+	}
+}
+
+// C-03: Verify pruneLogWarning writes to stderr without going through debugLog.
+func TestPruneLogWarningWritesToStderr(t *testing.T) {
+	output := captureStderr(t, func() {
+		pruneLogWarning("test warning: %s", "hello")
+	})
+	if !strings.Contains(output, "[DEBUG-SHIM]") {
+		t.Fatalf("stderr output = %q, want [DEBUG-SHIM] prefix", output)
+	}
+	if !strings.Contains(output, "test warning: hello") {
+		t.Fatalf("stderr output = %q, want formatted message", output)
 	}
 }

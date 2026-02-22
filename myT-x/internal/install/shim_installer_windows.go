@@ -87,7 +87,7 @@ func NeedsShimInstall() (bool, error) {
 
 	target := filepath.Join(installDir, "tmux.exe")
 	if _, err := os.Stat(target); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return true, nil
 		}
 		return false, err
@@ -186,7 +186,7 @@ func writeFileAtomically(target string, content []byte, perm os.FileMode) (retEr
 				slog.Debug("[DEBUG-SHIM] failed to close temp file during rollback",
 					"path", tmpPath, "error", closeErr)
 			}
-			if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			if removeErr := os.Remove(tmpPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 				slog.Debug("[DEBUG-SHIM] failed to remove temp file during rollback",
 					"path", tmpPath, "error", removeErr)
 			}
@@ -213,7 +213,7 @@ func matchesHashFile(hashFilePath, expectedHash string) bool {
 	if err != nil {
 		// NOTE: File not found is expected on first install; other IO errors
 		// (permission, disk failure) are logged for diagnostics.
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			slog.Debug("[DEBUG-SHIM] failed to read hash file", "path", hashFilePath, "error", err)
 		}
 		return false

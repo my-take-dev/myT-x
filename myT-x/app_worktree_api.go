@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -38,8 +39,8 @@ var executeSetupCommandFn = func(ctx context.Context, shell, shellFlag, script, 
 // WorktreeSessionOptions holds options for creating a session with a worktree.
 //
 // Mode semantics (invariant):
-//   - BranchName is required (non-empty) → Named branch mode
-//   - BaseBranch == ""  → Uses current HEAD as the base for the worktree
+//   - BranchName is required (non-empty) -> Named branch mode
+//   - BaseBranch == ""  -> Uses current HEAD as the base for the worktree
 //
 // NOTE: Detached HEAD mode was removed from the UI. Existing detached worktrees
 // (via CreateSessionWithExistingWorktree) are still supported and can be
@@ -49,6 +50,8 @@ type WorktreeSessionOptions struct {
 	BaseBranch       string `json:"base_branch"`        // empty = current HEAD
 	PullBeforeCreate bool   `json:"pull_before_create"` // pull latest before creating worktree
 	EnableAgentTeam  bool   `json:"enable_agent_team"`  // set Agent Teams env vars on initial pane
+	UseClaudeEnv     bool   `json:"use_claude_env"`     // apply claude_env config to panes
+	UsePaneEnv       bool   `json:"use_pane_env"`       // apply pane_env config to additional panes
 }
 
 // WorktreeStatus holds the pre-close status of a worktree session.
@@ -147,10 +150,17 @@ func (a *App) CreateSessionWithWorktree(
 	}
 	worktreeCreated = true
 
-	createdName, err = a.createSessionForDirectory(router, wtPath, sessionName, opts.EnableAgentTeam)
+	createdName, err = a.createSessionForDirectory(router, wtPath, sessionName, CreateSessionOptions{
+		EnableAgentTeam: opts.EnableAgentTeam,
+		UseClaudeEnv:    opts.UseClaudeEnv,
+		UsePaneEnv:      opts.UsePaneEnv,
+	})
 	if err != nil {
 		return tmux.SessionSnapshot{}, err
 	}
+
+	// Set session-level env flags before any additional pane can be created.
+	applySessionEnvFlags(sessions, createdName, opts.UseClaudeEnv, opts.UsePaneEnv)
 
 	// Store worktree metadata on the session.
 	if err := sessions.SetWorktreeInfo(createdName, &tmux.SessionWorktreeInfo{
@@ -177,8 +187,18 @@ func (a *App) CreateSessionWithWorktree(
 		})
 	}
 
+	// Copy configured directories (e.g. .vscode) from repo to worktree.
+	if copyDirFailures := copyConfigDirsToWorktree(repoPath, wtPath, cfg.Worktree.CopyDirs); len(copyDirFailures) > 0 {
+		slog.Warn("[WARN-GIT] failed to copy one or more configured directories to worktree",
+			"session", createdName, "path", wtPath, "dirs", copyDirFailures)
+		a.emitRuntimeEvent("worktree:copy-dirs-failed", map[string]any{
+			"sessionName": createdName,
+			"dirs":        copyDirFailures,
+		})
+	}
+
 	// NOTE: Setup scripts run regardless of copy failures because they are
-	// independent operations. Copy files (e.g. .env) are best-effort;
+	// independent operations. Copy files/dirs are best-effort;
 	// blocking setup scripts on copy failure would degrade the user experience
 	// for unrelated issues.
 
@@ -210,11 +230,17 @@ func (a *App) CreateSessionWithWorktree(
 	return snapshot, retErr
 }
 
+// createSessionForDirectory creates a tmux session rooted at sessionDir.
+//
+// DESIGN NOTE: opts.UsePaneEnv is not directly referenced in this function.
+// It is intentionally forwarded to callers who apply it via applySessionEnvFlags
+// after session creation succeeds. This separation keeps session creation
+// (tmux new-session) decoupled from session-level flag storage.
 func (a *App) createSessionForDirectory(
 	router *tmux.CommandRouter,
 	sessionDir,
 	sessionName string,
-	enableAgentTeam bool,
+	opts CreateSessionOptions,
 ) (string, error) {
 	req := ipc.TmuxRequest{
 		Command: "new-session",
@@ -223,8 +249,38 @@ func (a *App) createSessionForDirectory(
 			"-s": sessionName,
 		},
 	}
-	if enableAgentTeam {
+	if opts.EnableAgentTeam {
 		req.Env = agentTeamEnvVars(sessionName)
+	}
+
+	// Merge claude_env into initial pane env when enabled.
+	//
+	// DESIGN NOTE (initial pane vs additional pane env merge):
+	// Initial pane reads cfg.ClaudeEnv.Vars directly from the config snapshot
+	// (fill-only merge: agent_team env takes priority). This is a point-in-time
+	// capture at session creation; pane_env is NOT applied to the initial pane.
+	//
+	// Additional panes use CommandRouter.buildPaneEnvForSession() which reads
+	// claudeEnvView() (runtime-updated values via UpdateClaudeEnv) and applies
+	// pane_env with overwrite semantics when both flags are enabled.
+	//
+	// This divergence is intentional:
+	//   - Initial pane: config snapshot for deterministic session bootstrap
+	//   - Additional panes: latest runtime values for hot-reloaded env changes
+	// If the merge rule for initial panes needs to change, update this block
+	// independently of buildPaneEnvForSession to avoid unintended side effects.
+	if opts.UseClaudeEnv {
+		cfg := a.getConfigSnapshot()
+		if cfg.ClaudeEnv != nil && len(cfg.ClaudeEnv.Vars) > 0 {
+			if req.Env == nil {
+				req.Env = make(map[string]string)
+			}
+			for k, v := range cfg.ClaudeEnv.Vars {
+				if _, exists := req.Env[k]; !exists {
+					req.Env[k] = v // fill-only (agent team env takes priority)
+				}
+			}
+		}
 	}
 	resp := executeRouterRequestFn(router, req)
 	if resp.ExitCode != 0 {
@@ -361,71 +417,123 @@ func waitForSetupScriptsCancellation(done <-chan struct{}, timeout time.Duration
 	}
 }
 
-// copyConfigFilesToWorktree copies configured files (e.g. .env) from the
-// repository root to the worktree. Returns a list of files that failed to copy.
-// Missing source files are silently skipped (common for optional files like .env).
-func copyConfigFilesToWorktree(repoPath, wtPath string, files []string) []string {
+var (
+	// copy_dirs guardrails prevent accidental large recursive copies from
+	// blocking worktree creation or exhausting disk space.
+	// Limits are enforced across all configured copy_dirs entries in one run.
+	// Kept as vars to allow deterministic limit tests via save/restore.
+	maxCopyDirsFileCount        = 10_000
+	maxCopyDirsTotalBytes int64 = 500 * 1024 * 1024
+	// NOTE: Package-level seams are process-global and not safe for t.Parallel.
+	// Tests that override these vars must run sequentially.
+
+	// walkDirFn is a test seam for directory walk behavior.
+	walkDirFn = filepath.WalkDir
+
+	// streamCopyFn is a test seam for file streaming copy behavior.
+	streamCopyFn = io.Copy
+
+	// syncFileFn is a test seam for destination fsync behavior.
+	syncFileFn = func(file *os.File) error {
+		return file.Sync()
+	}
+
+	// statFileInfoFn is a test seam for file metadata lookups.
+	statFileInfoFn = os.Stat
+
+	// removeFileFn is a test seam for destination cleanup behavior.
+	removeFileFn = os.Remove
+)
+
+type copyWalkBudget struct {
+	fileCount int
+	totalSize int64
+}
+
+func copyConfigEntriesToWorktree(
+	repoPath, wtPath string,
+	entries []string,
+	entryKind string,
+	copyFn func(repoBase, wtBase, entry string) bool,
+) []string {
 	var failures []string
+	if len(entries) == 0 {
+		return failures
+	}
 	repoBase, repoErr := resolveSymlinkEvaluatedBasePath(repoPath)
 	if repoErr != nil {
 		slog.Warn("[WARN-GIT] failed to resolve repository base path for copy",
-			"repoPath", repoPath, "error", repoErr)
-		return normalizeCopyFailures(files)
+			"repoPath", repoPath, "entryKind", entryKind, "error", repoErr)
+		return normalizeCopyFailures(entries)
 	}
 	wtBase, wtErr := resolveSymlinkEvaluatedBasePath(wtPath)
 	if wtErr != nil {
 		slog.Warn("[WARN-GIT] failed to resolve worktree base path for copy",
-			"worktreePath", wtPath, "error", wtErr)
-		return normalizeCopyFailures(files)
+			"worktreePath", wtPath, "entryKind", entryKind, "error", wtErr)
+		return normalizeCopyFailures(entries)
 	}
-	for _, file := range files {
-		if failed := copyConfigFileToWorktree(repoBase, wtBase, file); failed {
-			failures = append(failures, file)
+	for _, entry := range entries {
+		if failed := copyFn(repoBase, wtBase, entry); failed {
+			failures = append(failures, entry)
 		}
 	}
 	return failures
 }
 
-func copyConfigFileToWorktree(repoBase, wtBase, file string) bool {
-	cleaned := filepath.Clean(file)
+// copyConfigFilesToWorktree copies configured files (e.g. .env) from the
+// repository root to the worktree. Returns a list of files that failed to copy.
+// Missing source files are silently skipped (common for optional files like .env).
+func copyConfigFilesToWorktree(repoPath, wtPath string, files []string) []string {
+	return copyConfigEntriesToWorktree(repoPath, wtPath, files, "file", copyConfigFileToWorktree)
+}
+
+func validateAndResolveSourceEntry(
+	repoBase, wtBase, entry, configKey, fieldKey string,
+) (resolvedSrc, dstPath string, canProcess, failed bool) {
+	cleaned := filepath.Clean(entry)
 	if filepath.IsAbs(cleaned) || cleaned == "." || strings.HasPrefix(cleaned, "..") {
-		slog.Warn("[WARN-GIT] skipping unsafe copy_files entry", "file", file)
-		return false
+		slog.Warn(fmt.Sprintf("[WARN-GIT] skipping unsafe %s entry", configKey), fieldKey, entry)
+		return "", "", false, true
 	}
 
-	src := filepath.Join(repoBase, cleaned)
-	dst := filepath.Join(wtBase, cleaned)
-	if !isPathWithinBase(src, repoBase) || !isPathWithinBase(dst, wtBase) {
-		slog.Warn("[WARN-GIT] skipping copy_files entry escaping base directory", "file", file)
-		return false
+	srcPath := filepath.Join(repoBase, cleaned)
+	dstPath = filepath.Join(wtBase, cleaned)
+	if !isPathWithinBase(srcPath, repoBase) || !isPathWithinBase(dstPath, wtBase) {
+		slog.Warn(fmt.Sprintf("[WARN-GIT] skipping %s entry escaping base directory", configKey), fieldKey, entry)
+		return "", "", false, true
 	}
 
-	resolvedSrc, resolveSrcErr := filepath.EvalSymlinks(src)
+	var resolveSrcErr error
+	resolvedSrc, resolveSrcErr = filepath.EvalSymlinks(srcPath)
 	if resolveSrcErr != nil {
-		if !os.IsNotExist(resolveSrcErr) {
-			slog.Warn("[WARN-GIT] failed to resolve source file symlink for copy",
-				"src", src, "error", resolveSrcErr)
-			return true
+		if !errors.Is(resolveSrcErr, os.ErrNotExist) {
+			slog.Warn("[WARN-GIT] failed to resolve source symlink for copy",
+				"src", srcPath, "error", resolveSrcErr)
+			return "", "", false, true
 		}
-		return false
+		// Source does not exist — silent skip for optional entries.
+		return "", "", false, false
 	}
 	if !isPathWithinBase(resolvedSrc, repoBase) {
-		slog.Warn("[WARN-GIT] skipping copy_files entry escaping repository via symlink",
-			"file", file, "resolvedSrc", resolvedSrc)
+		slog.Warn(fmt.Sprintf("[WARN-GIT] skipping %s entry escaping repository via symlink", configKey),
+			fieldKey, entry, "resolvedSrc", resolvedSrc)
+		return "", "", false, true
+	}
+	return resolvedSrc, dstPath, true, false
+}
+
+func copyConfigFileToWorktree(repoBase, wtBase, file string) bool {
+	resolvedSrc, dst, canProcess, failed := validateAndResolveSourceEntry(
+		repoBase, wtBase, file, "copy_files", "file",
+	)
+	if failed {
+		return true
+	}
+	if !canProcess {
 		return false
 	}
 
-	data, readErr := os.ReadFile(resolvedSrc)
-	if readErr != nil {
-		if !os.IsNotExist(readErr) {
-			slog.Warn("[WARN-GIT] failed to read source file for copy",
-				"src", resolvedSrc, "error", readErr)
-			return true
-		}
-		return false
-	}
-
-	canWrite, failed := validateCopyDestination(dst, wtBase, file)
+	canWrite, failed := validateCopyDestination(dst, wtBase, file, "copy_files", "file")
 	if failed {
 		return true
 	}
@@ -433,31 +541,25 @@ func copyConfigFileToWorktree(repoBase, wtBase, file string) bool {
 		return false
 	}
 
-	if writeErr := os.WriteFile(dst, data, 0o600); writeErr != nil {
+	// Note: a TOCTOU window exists between destination validation and file open.
+	// This is acceptable because copy paths come from trusted local configuration.
+	if copyErr := copyFileByStreaming(resolvedSrc, dst); copyErr != nil {
+		if errors.Is(copyErr, os.ErrNotExist) {
+			slog.Debug("[DEBUG-GIT] source file disappeared before copy_files stream copy, skipping",
+				"src", resolvedSrc, "dst", dst)
+			return false
+		}
 		slog.Warn("[WARN-GIT] failed to copy file to worktree",
-			"src", resolvedSrc, "dst", dst, "error", writeErr)
+			"src", resolvedSrc, "dst", dst, "error", copyErr)
 		return true
 	}
 	return false
 }
 
-func validateCopyDestination(dst, wtBase, file string) (canWrite bool, failed bool) {
+func validateCopyDestination(dst, wtBase, entry, configKey, fieldKey string) (canWrite bool, failed bool) {
 	if dstDir := filepath.Dir(dst); dstDir != "." {
-		if mkErr := os.MkdirAll(dstDir, 0o755); mkErr != nil {
-			slog.Warn("[WARN-GIT] failed to create destination directory",
-				"dir", dstDir, "error", mkErr)
+		if !ensureDirWithinBase(dstDir, wtBase, entry, configKey, fieldKey) {
 			return false, true
-		}
-		resolvedDstDir, resolveDstDirErr := filepath.EvalSymlinks(dstDir)
-		if resolveDstDirErr != nil {
-			slog.Warn("[WARN-GIT] failed to resolve destination directory symlink for copy",
-				"dir", dstDir, "error", resolveDstDirErr)
-			return false, true
-		}
-		if !isPathWithinBase(resolvedDstDir, wtBase) {
-			slog.Warn("[WARN-GIT] skipping copy_files entry escaping worktree via symlink",
-				"file", file, "resolvedDstDir", resolvedDstDir)
-			return false, false
 		}
 	}
 
@@ -470,22 +572,50 @@ func validateCopyDestination(dst, wtBase, file string) (canWrite bool, failed bo
 				return false, true
 			}
 			if !isPathWithinBase(resolvedDst, wtBase) {
-				slog.Warn("[WARN-GIT] skipping copy_files entry writing outside worktree via symlink",
-					"file", file, "resolvedDst", resolvedDst)
-				return false, false
+				slog.Warn(fmt.Sprintf("[WARN-GIT] skipping %s entry writing outside worktree via symlink", configKey),
+					fieldKey, entry, "resolvedDst", resolvedDst)
+				return false, true
 			}
 			return true, false
 		}
-		if info.Mode().IsRegular() {
-			slog.Warn("[WARN-GIT] overwriting existing destination file from copy_files",
-				"file", file, "dst", dst)
+		if info.IsDir() {
+			slog.Warn(fmt.Sprintf("[WARN-GIT] skipping %s entry because destination is an existing directory", configKey),
+				fieldKey, entry, "dst", dst)
+			return false, true
 		}
-	} else if !os.IsNotExist(lstatErr) {
+		if !info.Mode().IsRegular() {
+			slog.Warn(fmt.Sprintf("[WARN-GIT] skipping %s entry because destination is not a regular file", configKey),
+				fieldKey, entry, "dst", dst, "mode", info.Mode())
+			return false, true
+		}
+		slog.Warn(fmt.Sprintf("[WARN-GIT] overwriting existing destination file from %s", configKey),
+			fieldKey, entry, "dst", dst)
+	} else if !errors.Is(lstatErr, os.ErrNotExist) {
 		slog.Warn("[WARN-GIT] failed to inspect destination file before copy",
 			"dst", dst, "error", lstatErr)
 		return false, true
 	}
 	return true, false
+}
+
+func ensureDirWithinBase(dirPath, basePath, entry, configKey, fieldKey string) bool {
+	if mkErr := os.MkdirAll(dirPath, 0o755); mkErr != nil {
+		slog.Warn("[WARN-GIT] failed to create destination directory",
+			"dir", dirPath, "error", mkErr)
+		return false
+	}
+	resolvedDir, resolveDirErr := filepath.EvalSymlinks(dirPath)
+	if resolveDirErr != nil {
+		slog.Warn("[WARN-GIT] failed to resolve destination directory symlink for copy",
+			"dir", dirPath, "error", resolveDirErr)
+		return false
+	}
+	if !isPathWithinBase(resolvedDir, basePath) {
+		slog.Warn(fmt.Sprintf("[WARN-GIT] skipping %s entry escaping worktree via symlink", configKey),
+			fieldKey, entry, "resolvedDstDir", resolvedDir)
+		return false
+	}
+	return true
 }
 
 func normalizeCopyFailures(files []string) []string {
@@ -521,6 +651,304 @@ func isPathWithinBase(path, base string) bool {
 		return false
 	}
 	return true
+}
+
+// copyConfigDirsToWorktree copies configured directories from the
+// repository root to the worktree. Returns a list of dirs that failed to copy.
+// Missing source directories are silently skipped (common for optional directories).
+func copyConfigDirsToWorktree(repoPath, wtPath string, dirs []string) []string {
+	sharedBudget := &copyWalkBudget{}
+	return copyConfigEntriesToWorktree(
+		repoPath,
+		wtPath,
+		dirs,
+		"directory",
+		func(repoBase, wtBase, dir string) bool {
+			return copyConfigDirToWorktreeWithBudget(repoBase, wtBase, dir, sharedBudget)
+		},
+	)
+}
+
+func copyConfigDirToWorktreeWithBudget(repoBase, wtBase, dir string, budget *copyWalkBudget) bool {
+	if budget == nil {
+		// Defensive fallback for direct unit tests and future callers.
+		budget = &copyWalkBudget{}
+	}
+
+	resolvedSrc, dstDir, canProcess, failed := validateAndResolveSourceEntry(
+		repoBase, wtBase, dir, "copy_dirs", "dir",
+	)
+	if failed {
+		return true
+	}
+	if !canProcess {
+		return false
+	}
+
+	// Verify source is actually a directory.
+	srcInfo, statErr := statFileInfoFn(resolvedSrc)
+	if statErr != nil {
+		if !errors.Is(statErr, os.ErrNotExist) {
+			slog.Warn("[WARN-GIT] failed to stat source directory for copy",
+				"src", resolvedSrc, "error", statErr)
+			return true
+		}
+		return false
+	}
+	if !srcInfo.IsDir() {
+		// Entry points to a regular file, not a directory — skip silently.
+		slog.Debug("[DEBUG-GIT] copy_dirs entry is not a directory, skipping",
+			"dir", dir, "src", resolvedSrc)
+		return false
+	}
+
+	// hadError tracks whether any error occurred during walk (monotonically set to true).
+	hadError := false
+	walkErr := walkDirFn(resolvedSrc, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			slog.Warn("[WARN-GIT] walk error in copy_dirs",
+				"path", path, "error", err)
+			hadError = true
+			// Continue walking remaining entries.
+			return nil
+		}
+
+		// Compute relative path from resolved source root.
+		relPath, relErr := filepath.Rel(resolvedSrc, path)
+		if relErr != nil {
+			slog.Warn("[WARN-GIT] failed to compute relative path in copy_dirs",
+				"path", path, "error", relErr)
+			hadError = true
+			return nil
+		}
+
+		targetPath := filepath.Join(dstDir, relPath)
+
+		// SECURITY: validate target stays within worktree.
+		if !isPathWithinBase(targetPath, wtBase) {
+			slog.Warn("[WARN-GIT] skipping copy_dirs entry escaping worktree",
+				"dir", dir, "targetPath", targetPath)
+			hadError = true
+			return nil
+		}
+
+		// Handle symlinks: resolve and check containment.
+		if d.Type()&os.ModeSymlink != 0 {
+			return handleSymlinkInWalk(path, targetPath, repoBase, wtBase, dir, &hadError, budget)
+		}
+
+		if d.IsDir() {
+			if !ensureDirWithinBase(targetPath, wtBase, dir, "copy_dirs", "dir") {
+				hadError = true
+			}
+			return nil
+		}
+
+		if !d.Type().IsRegular() {
+			// Skip special files (devices, sockets, etc.).
+			slog.Debug("[DEBUG-GIT] skipping non-regular file in copy_dirs",
+				"path", path, "type", d.Type())
+			return nil
+		}
+
+		fileInfo, infoErr := d.Info()
+		if infoErr != nil {
+			slog.Warn("[WARN-GIT] failed to read file metadata in copy_dirs",
+				"path", path, "error", infoErr)
+			hadError = true
+			return nil
+		}
+		canCopy, budgetErr := reserveCopyWalkBudget(budget, fileInfo.Size(), dir, path, &hadError)
+		if budgetErr != nil {
+			return budgetErr
+		}
+		if !canCopy {
+			return nil
+		}
+
+		return copyFileInWalk(path, targetPath, wtBase, dir, &hadError)
+	})
+
+	if walkErr != nil {
+		slog.Warn("[WARN-GIT] directory walk failed in copy_dirs",
+			"dir", dir, "error", walkErr)
+		return true
+	}
+	return hadError
+}
+
+// handleSymlinkInWalk resolves a symlink encountered during directory walk,
+// validates containment, and copies the target content.
+func handleSymlinkInWalk(path, targetPath, repoBase, wtBase, dirEntry string, hadError *bool, budget *copyWalkBudget) error {
+	if budget == nil {
+		slog.Warn("[WARN-GIT] missing budget in copy_dirs symlink handling", "path", path)
+		*hadError = true
+		return nil
+	}
+	resolvedLink, linkErr := filepath.EvalSymlinks(path)
+	if linkErr != nil {
+		slog.Warn("[WARN-GIT] failed to resolve symlink in copy_dirs",
+			"path", path, "error", linkErr)
+		*hadError = true
+		return nil
+	}
+	if !isPathWithinBase(resolvedLink, repoBase) {
+		slog.Debug("[DEBUG-GIT] skipping symlink escaping repository in copy_dirs",
+			"path", path, "resolvedLink", resolvedLink)
+		// Skip without counting as failure — intentional symlink outside repo.
+		return nil
+	}
+	linkInfo, linkStatErr := statFileInfoFn(resolvedLink)
+	if linkStatErr != nil {
+		slog.Warn("[WARN-GIT] failed to stat resolved symlink in copy_dirs",
+			"path", resolvedLink, "error", linkStatErr)
+		*hadError = true
+		return nil
+	}
+	if linkInfo.IsDir() {
+		// Create directory in worktree for symlinked directory.
+		// NOTE: Contents of the symlinked directory are intentionally NOT recursed.
+		// filepath.WalkDir does not follow symlinks, so this creates an empty
+		// directory shell. This is a safety measure to prevent infinite loops
+		// from circular symlinks and unexpected data exposure.
+		if !ensureDirWithinBase(targetPath, wtBase, dirEntry, "copy_dirs", "dir") {
+			*hadError = true
+		} else {
+			slog.Info("[INFO-GIT] created empty directory shell for symlinked directory in copy_dirs",
+				"path", path, "resolvedLink", resolvedLink, "targetPath", targetPath)
+		}
+		return nil
+	}
+	if !linkInfo.Mode().IsRegular() {
+		slog.Debug("[DEBUG-GIT] skipping non-regular symlink target in copy_dirs",
+			"path", resolvedLink, "mode", linkInfo.Mode())
+		return nil
+	}
+	// Symlink points to a regular file — copy it.
+	canCopy, budgetErr := reserveCopyWalkBudget(budget, linkInfo.Size(), dirEntry, resolvedLink, hadError)
+	if budgetErr != nil {
+		return budgetErr
+	}
+	if !canCopy {
+		return nil
+	}
+	return copyFileInWalk(resolvedLink, targetPath, wtBase, dirEntry, hadError)
+}
+
+// copyFileInWalk copies a single file during directory walk.
+// Updates hadError on failure. Returns nil to continue walking.
+func copyFileInWalk(srcPath, dstPath, wtBase, dirEntry string, hadError *bool) error {
+	// Note: a TOCTOU window exists between destination validation and file open.
+	// This is acceptable because copy paths come from trusted local configuration.
+	canWrite, failed := validateCopyDestination(dstPath, wtBase, dirEntry, "copy_dirs", "dir")
+	if failed {
+		*hadError = true
+		return nil
+	}
+	if !canWrite {
+		return nil
+	}
+
+	if copyErr := copyFileByStreaming(srcPath, dstPath); copyErr != nil {
+		if errors.Is(copyErr, os.ErrNotExist) {
+			slog.Debug("[DEBUG-GIT] source file disappeared during copy_dirs walk, skipping",
+				"src", srcPath, "dst", dstPath)
+			return nil
+		}
+		slog.Warn("[WARN-GIT] failed to copy file in copy_dirs",
+			"src", srcPath, "dst", dstPath, "error", copyErr)
+		*hadError = true
+	}
+	return nil
+}
+
+func reserveCopyWalkBudget(
+	budget *copyWalkBudget,
+	fileSize int64,
+	dirEntry string,
+	srcPath string,
+	hadError *bool,
+) (canCopy bool, walkErr error) {
+	if fileSize < 0 {
+		slog.Warn("[WARN-GIT] skipping copy_dirs entry with invalid file size",
+			"dir", dirEntry, "path", srcPath, "size", fileSize)
+		*hadError = true
+		return false, nil
+	}
+	nextFileCount := budget.fileCount + 1
+	if nextFileCount > maxCopyDirsFileCount {
+		slog.Warn("[WARN-GIT] aborting copy_dirs walk due to file count limit",
+			"dir", dirEntry,
+			"limit", maxCopyDirsFileCount,
+			"processedFiles", budget.fileCount)
+		*hadError = true
+		return false, filepath.SkipAll
+	}
+	if budget.totalSize > maxCopyDirsTotalBytes || fileSize > maxCopyDirsTotalBytes-budget.totalSize {
+		slog.Warn("[WARN-GIT] aborting copy_dirs walk due to total size limit",
+			"dir", dirEntry,
+			"limitBytes", maxCopyDirsTotalBytes,
+			"processedBytes", budget.totalSize,
+			"path", srcPath,
+			"nextFileSize", fileSize)
+		*hadError = true
+		return false, filepath.SkipAll
+	}
+	nextTotalSize := budget.totalSize + fileSize
+	budget.fileCount = nextFileCount
+	budget.totalSize = nextTotalSize
+	return true, nil
+}
+
+func copyFileByStreaming(srcPath, dstPath string) (retErr error) {
+	srcFile, openSrcErr := os.Open(srcPath)
+	if openSrcErr != nil {
+		if errors.Is(openSrcErr, os.ErrNotExist) {
+			return openSrcErr
+		}
+		return fmt.Errorf("open source file: %w", openSrcErr)
+	}
+	defer closeFileAndJoinError(srcFile, "source file", &retErr)
+
+	// Create destination files with owner-only permissions.
+	// We intentionally do not preserve source mode bits for copied config data.
+	dstFile, openDstErr := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if openDstErr != nil {
+		return fmt.Errorf("open destination file: %w", openDstErr)
+	}
+	synced := false
+	defer func() {
+		if retErr == nil || synced {
+			return
+		}
+		if removeErr := removeFileFn(dstPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove partial destination file: %w", removeErr))
+		}
+	}()
+	defer closeFileAndJoinError(dstFile, "destination file", &retErr)
+
+	if _, copyErr := streamCopyFn(dstFile, srcFile); copyErr != nil {
+		return fmt.Errorf("stream copy file: %w", copyErr)
+	}
+	if syncErr := syncFileFn(dstFile); syncErr != nil {
+		return fmt.Errorf("sync destination file: %w", syncErr)
+	}
+	synced = true
+	return nil
+}
+
+func closeFileAndJoinError(file *os.File, label string, retErr *error) {
+	if file == nil {
+		return
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		wrapped := fmt.Errorf("close %s: %w", label, closeErr)
+		if *retErr == nil {
+			*retErr = wrapped
+			return
+		}
+		*retErr = errors.Join(*retErr, wrapped)
+	}
 }
 
 // IsGitRepository checks if the given path is a git repository.
@@ -892,12 +1320,12 @@ func (a *App) GetCurrentBranch(repoPath string) (string, error) {
 // CreateSessionWithExistingWorktree creates a session using an existing worktree.
 // No new worktree is created; the session opens in the given worktree path.
 // Returns an error if the worktree path is already in use by another session.
-// When enableAgentTeam is true, Agent Teams environment variables are set.
+// When opts.EnableAgentTeam is true, Agent Teams environment variables are set.
 func (a *App) CreateSessionWithExistingWorktree(
 	repoPath string,
 	sessionName string,
 	worktreePath string,
-	enableAgentTeam bool,
+	opts CreateSessionOptions,
 ) (snapshot tmux.SessionSnapshot, retErr error) {
 	sessions, router, err := a.requireSessionsAndRouter()
 	if err != nil {
@@ -923,7 +1351,7 @@ func (a *App) CreateSessionWithExistingWorktree(
 	}
 
 	if _, err := os.Stat(worktreePath); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return tmux.SessionSnapshot{}, fmt.Errorf("worktree path does not exist: %s", worktreePath)
 		}
 		return tmux.SessionSnapshot{}, fmt.Errorf("failed to stat worktree path %s: %w", worktreePath, err)
@@ -973,10 +1401,13 @@ func (a *App) CreateSessionWithExistingWorktree(
 		a.requestSnapshot(true)
 	}()
 
-	createdName, err = a.createSessionForDirectory(router, worktreePath, sessionName, enableAgentTeam)
+	createdName, err = a.createSessionForDirectory(router, worktreePath, sessionName, opts)
 	if err != nil {
 		return tmux.SessionSnapshot{}, err
 	}
+
+	// Set session-level env flags before any additional pane can be created.
+	applySessionEnvFlags(sessions, createdName, opts.UseClaudeEnv, opts.UsePaneEnv)
 
 	if err := sessions.SetWorktreeInfo(createdName, &tmux.SessionWorktreeInfo{
 		Path:       worktreePath,

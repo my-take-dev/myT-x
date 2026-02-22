@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestRecoverBackgroundPanic(t *testing.T) {
@@ -46,24 +45,8 @@ func TestRecoverBackgroundPanic(t *testing.T) {
 	})
 }
 
-func TestNextPanicRestartBackoff(t *testing.T) {
-	tests := []struct {
-		name    string
-		current time.Duration
-		want    time.Duration
-	}{
-		{name: "zero uses initial", current: 0, want: initialPanicRestartBackoff},
-		{name: "negative uses initial", current: -time.Second, want: initialPanicRestartBackoff},
-		{name: "doubles under cap", current: 200 * time.Millisecond, want: 400 * time.Millisecond},
-		{name: "caps at max", current: maxPanicRestartBackoff, want: maxPanicRestartBackoff},
-		{name: "caps overflow", current: maxPanicRestartBackoff / 2 * 3, want: maxPanicRestartBackoff},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := nextPanicRestartBackoff(tt.current); got != tt.want {
-				t.Fatalf("nextPanicRestartBackoff(%s) = %s, want %s", tt.current, got, tt.want)
-			}
-		})
-	}
-}
+// NOTE: The retry-loop exhaustion tests (TestNextPanicRestartBackoff,
+// TestMaxPanicRestartRetriesLimit) were removed when the inline panic recovery
+// loops in startPaneFeedWorker and startIdleMonitor were replaced by
+// workerutil.RunWithPanicRecovery. The equivalent tests now live in
+// internal/workerutil/recovery_test.go.

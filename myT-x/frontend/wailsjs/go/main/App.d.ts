@@ -20,19 +20,35 @@ export function CleanupWorktree(arg1:string):Promise<void>;
 
 export function CommitAndPushWorktree(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
-export function CreateSession(arg1:string,arg2:string,arg3:boolean):Promise<tmux.SessionSnapshot>;
+export function CreateSession(arg1:string,arg2:string,arg3:main.CreateSessionOptions):Promise<tmux.SessionSnapshot>;
 
-export function CreateSessionWithExistingWorktree(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<tmux.SessionSnapshot>;
+export function CreateSessionWithExistingWorktree(arg1:string,arg2:string,arg3:string,arg4:main.CreateSessionOptions):Promise<tmux.SessionSnapshot>;
 
 export function CreateSessionWithWorktree(arg1:string,arg2:string,arg3:main.WorktreeSessionOptions):Promise<tmux.SessionSnapshot>;
 
 export function DetachSession(arg1:string):Promise<void>;
+
+export function DevPanelCommitDiff(arg1:string,arg2:string):Promise<string>;
+
+export function DevPanelGitLog(arg1:string,arg2:number,arg3:boolean):Promise<Array<main.GitGraphCommit>>;
+
+export function DevPanelGitStatus(arg1:string):Promise<main.GitStatusResult>;
+
+export function DevPanelListBranches(arg1:string):Promise<Array<string>>;
+
+export function DevPanelListDir(arg1:string,arg2:string):Promise<Array<main.FileEntry>>;
+
+export function DevPanelReadFile(arg1:string,arg2:string):Promise<main.FileContent>;
+
+export function DevPanelWorkingDiff(arg1:string):Promise<main.WorkingDiffResult>;
 
 export function FocusPane(arg1:string):Promise<void>;
 
 export function GetActiveSession():Promise<string>;
 
 export function GetAllowedShells():Promise<Array<string>>;
+
+export function GetClaudeEnvVarDescriptions():Promise<Record<string, string>>;
 
 export function GetConfig():Promise<config.Config>;
 
@@ -46,7 +62,13 @@ export function GetPaneReplay(arg1:string):Promise<string>;
 
 export function GetSessionEnv(arg1:string):Promise<Record<string, string>>;
 
+export function GetSessionErrorLog():Promise<Array<main.SessionLogEntry>>;
+
+export function GetSessionLogFilePath():Promise<string>;
+
 export function GetValidationRules():Promise<main.ValidationRules>;
+
+export function GetWebSocketURL():Promise<string>;
 
 export function InstallTmuxShim():Promise<install.ShimInstallResult>;
 

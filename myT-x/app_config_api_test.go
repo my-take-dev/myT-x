@@ -42,7 +42,7 @@ func TestSaveConfigEmitsUpdatedConfigEvent(t *testing.T) {
 	eventCount := 0
 	var eventName string
 	var eventPayload configUpdatedEvent
-	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
 		eventCount++
 		eventName = name
 		if len(data) == 0 {
@@ -98,7 +98,7 @@ func TestSaveConfigEmitsMonotonicEventVersion(t *testing.T) {
 	app.setConfigSnapshot(config.DefaultConfig())
 
 	var versions []uint64
-	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
 		if name != "config:updated" || len(data) == 0 {
 			return
 		}
@@ -140,7 +140,7 @@ func TestSaveConfigKeepsPreviousStateOnValidationError(t *testing.T) {
 	app.configPath = newConfigPathForAPITest(t, "config.yaml")
 
 	events := 0
-	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
 		events++
 	}
 
@@ -189,7 +189,7 @@ func TestSessionAPIsEmitEventsThroughRuntimeEventsEmitFn(t *testing.T) {
 
 	var mu sync.Mutex
 	events := make([]string, 0, 3)
-	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...any) {
 		mu.Lock()
 		events = append(events, name)
 		mu.Unlock()
@@ -241,7 +241,7 @@ func TestInstallTmuxShimDoesNotEmitOnError(t *testing.T) {
 	app.workspace = t.TempDir()
 
 	eventCount := 0
-	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
 		eventCount++
 	}
 	ensureShimInstalledFn = func(string) (install.ShimInstallResult, error) {
@@ -267,7 +267,7 @@ func TestSaveConfigRejectsEmptyConfigPath(t *testing.T) {
 	app.configPath = "   "
 
 	eventCount := 0
-	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
 		eventCount++
 	}
 
@@ -290,6 +290,76 @@ func TestSaveConfigWithLockDoesNotIncrementEventVersionOnSaveError(t *testing.T)
 	}
 	if got := app.configEventVersion.Load(); got != 7 {
 		t.Fatalf("configEventVersion = %d, want 7", got)
+	}
+}
+
+func TestApplyRuntimeClaudeEnvUpdateRouterNil(t *testing.T) {
+	app := NewApp()
+	// router is nil — must not panic.
+	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+		Config:  config.DefaultConfig(),
+		Version: 1,
+	})
+	if app.claudeEnvAppliedVersion != 0 {
+		t.Fatalf("claudeEnvAppliedVersion = %d, want 0 (should not update when router is nil)", app.claudeEnvAppliedVersion)
+	}
+}
+
+func TestApplyRuntimeClaudeEnvUpdateSkipsStaleVersion(t *testing.T) {
+	app := NewApp()
+	app.router = tmux.NewCommandRouter(nil, nil, tmux.RouterOptions{})
+
+	newerCfg := config.DefaultConfig()
+	newerCfg.ClaudeEnv = &config.ClaudeEnvConfig{Vars: map[string]string{"A": "new"}}
+	olderCfg := config.DefaultConfig()
+	olderCfg.ClaudeEnv = &config.ClaudeEnvConfig{Vars: map[string]string{"A": "old"}}
+
+	// Apply version 2 first, then stale version 1 — version 1 must be rejected.
+	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+		Config:  newerCfg,
+		Version: 2,
+	})
+	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+		Config:  olderCfg,
+		Version: 1,
+	})
+
+	if got := app.claudeEnvAppliedVersion; got != 2 {
+		t.Fatalf("claudeEnvAppliedVersion = %d, want 2", got)
+	}
+	// Verify actual router ClaudeEnv reflects version 2 (not stale version 1).
+	if env := app.router.ClaudeEnvSnapshot(); env["A"] != "new" {
+		t.Fatalf("router ClaudeEnv[A] = %q, want %q (stale version was applied)", env["A"], "new")
+	}
+
+	// Apply version 3 to confirm forward progress works.
+	v3Cfg := config.DefaultConfig()
+	v3Cfg.ClaudeEnv = &config.ClaudeEnvConfig{Vars: map[string]string{"B": "v3"}}
+	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+		Config:  v3Cfg,
+		Version: 3,
+	})
+	if got := app.claudeEnvAppliedVersion; got != 3 {
+		t.Fatalf("claudeEnvAppliedVersion after newer update = %d, want 3", got)
+	}
+	// Verify router ClaudeEnv reflects version 3 content.
+	env3 := app.router.ClaudeEnvSnapshot()
+	if env3["B"] != "v3" {
+		t.Fatalf("router ClaudeEnv[B] = %q, want %q", env3["B"], "v3")
+	}
+	if _, exists := env3["A"]; exists {
+		t.Fatal("router ClaudeEnv still contains key A from version 2 after version 3 overwrite")
+	}
+
+	// Apply duplicate version 3 — must be rejected (defensive <= check).
+	dupCfg := config.DefaultConfig()
+	dupCfg.ClaudeEnv = &config.ClaudeEnvConfig{Vars: map[string]string{"B": "dup"}}
+	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+		Config:  dupCfg,
+		Version: 3,
+	})
+	if env := app.router.ClaudeEnvSnapshot(); env["B"] != "v3" {
+		t.Fatalf("router ClaudeEnv[B] = %q after duplicate version, want %q", env["B"], "v3")
 	}
 }
 
@@ -425,7 +495,7 @@ func TestGetValidationRules(t *testing.T) {
 	app := NewApp()
 	rules := app.GetValidationRules()
 
-	if got := reflect.TypeOf(ValidationRules{}).NumField(); got != 1 {
+	if got := reflect.TypeFor[ValidationRules]().NumField(); got != 1 {
 		t.Fatalf("ValidationRules field count = %d, want 1; update TestGetValidationRules for new fields", got)
 	}
 	if rules.MinOverrideNameLen != config.MinOverrideNameLen() {
@@ -437,8 +507,47 @@ func TestGetValidationRules(t *testing.T) {
 	}
 }
 
+// TestGetClaudeEnvVarDescriptionsMutationSafety verifies that the map returned
+// by GetClaudeEnvVarDescriptions is a defensive copy. Mutating the returned map
+// must not affect subsequent calls — callers cannot corrupt the global descriptions.
+func TestGetClaudeEnvVarDescriptionsMutationSafety(t *testing.T) {
+	app := NewApp()
+
+	// First call: get a reference and capture the original size.
+	first := app.GetClaudeEnvVarDescriptions()
+	if len(first) == 0 {
+		t.Fatal("GetClaudeEnvVarDescriptions() returned empty map; expected non-empty global descriptions")
+	}
+	originalLen := len(first)
+
+	// Pick an existing key to mutate and verify the original value is known.
+	var existingKey string
+	var originalValue string
+	for k, v := range first {
+		existingKey = k
+		originalValue = v
+		break
+	}
+
+	// Mutate the returned map: overwrite an existing key and add a new key.
+	first[existingKey] = "MUTATED_VALUE"
+	first["INJECTED_BY_CALLER"] = "injected"
+
+	// Second call: the global map must be unaffected by the mutations above.
+	second := app.GetClaudeEnvVarDescriptions()
+	if len(second) != originalLen {
+		t.Fatalf("GetClaudeEnvVarDescriptions() length after mutation = %d, want %d (original)", len(second), originalLen)
+	}
+	if got := second[existingKey]; got != originalValue {
+		t.Fatalf("GetClaudeEnvVarDescriptions()[%q] = %q after mutation, want %q (original)", existingKey, got, originalValue)
+	}
+	if _, injected := second["INJECTED_BY_CALLER"]; injected {
+		t.Fatal("GetClaudeEnvVarDescriptions() contains INJECTED_BY_CALLER; defensive copy failed")
+	}
+}
+
 func TestConfigEventFieldCounts(t *testing.T) {
-	if got := reflect.TypeOf(configUpdatedEvent{}).NumField(); got != 3 {
+	if got := reflect.TypeFor[configUpdatedEvent]().NumField(); got != 3 {
 		t.Fatalf("configUpdatedEvent field count = %d, want 3; update emit payload and tests for new fields", got)
 	}
 }
@@ -457,7 +566,7 @@ func TestGetConfigAndFlushWarningsEmitsPendingConfigLoadWarningOnce(t *testing.T
 	eventCount := 0
 	lastEvent := ""
 	var lastPayload map[string]string
-	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
 		eventCount++
 		lastEvent = name
 		if len(data) == 0 {
@@ -495,7 +604,7 @@ func TestGetConfigDoesNotFlushPendingWarnings(t *testing.T) {
 	app.addPendingConfigLoadWarning("warning-to-flush-later")
 
 	eventCount := 0
-	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...any) {
 		if name == "config:load-failed" {
 			eventCount++
 		}
@@ -540,7 +649,7 @@ func TestGetConfigAndFlushWarningsEmitsCombinedPendingConfigLoadWarnings(t *test
 	eventCount := 0
 	lastEvent := ""
 	var lastPayload map[string]string
-	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
 		eventCount++
 		lastEvent = name
 		if len(data) == 0 {
@@ -580,7 +689,7 @@ func TestConfigAndSessionAPIsSkipRuntimeEventsWhenContextIsNil(t *testing.T) {
 	app.workspace = t.TempDir()
 
 	eventCount := 0
-	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
 		eventCount++
 	}
 	ensureShimInstalledFn = func(string) (install.ShimInstallResult, error) {
@@ -621,7 +730,7 @@ func TestSetActiveSessionUpdatesStateAndEmitsTrimmedName(t *testing.T) {
 
 	eventCount := 0
 	emittedName := ""
-	runtimeEventsEmitFn = func(_ context.Context, name string, data ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
 		if name != "tmux:active-session" {
 			return
 		}
@@ -654,7 +763,7 @@ func TestSetActiveSessionTrimsWhitespaceOnlyToEmpty(t *testing.T) {
 	t.Cleanup(func() {
 		runtimeEventsEmitFn = origEmit
 	})
-	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...interface{}) {}
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {}
 
 	app := NewApp()
 	app.SetActiveSession("   ")
@@ -678,7 +787,7 @@ func TestSaveConfigSerializesConcurrentUpdates(t *testing.T) {
 	secondEventEntered := make(chan struct{})
 	var eventCount atomic.Int32
 
-	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...interface{}) {
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
 		current := eventCount.Add(1)
 		if current == 1 {
 			close(enterFirstEvent)

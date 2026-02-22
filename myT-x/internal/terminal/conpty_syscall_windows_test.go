@@ -152,7 +152,7 @@ func readUTF16Block(ptr *uint16) []uint16 {
 	nullCount := 0
 	const maxUTF16Units = 1 << 20
 	const utf16UnitSize = uintptr(unsafe.Sizeof(uint16(0)))
-	for i := 0; i < maxUTF16Units; i++ {
+	for i := range maxUTF16Units {
 		ch := *(*uint16)(unsafe.Pointer(uintptr(p) + uintptr(i)*utf16UnitSize))
 		result = append(result, ch)
 		if ch == 0 {

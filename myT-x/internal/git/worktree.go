@@ -96,11 +96,11 @@ func (r *Repository) ListWorktrees() ([]string, error) {
 	}
 
 	var worktrees []string
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "worktree ") {
+	lines := strings.SplitSeq(output, "\n")
+	for line := range lines {
+		if after, ok := strings.CutPrefix(line, "worktree "); ok {
 			// git returns forward slashes on Windows; normalize to OS path separator.
-			worktrees = append(worktrees, filepath.FromSlash(strings.TrimPrefix(line, "worktree ")))
+			worktrees = append(worktrees, filepath.FromSlash(after))
 		}
 	}
 	return worktrees, nil

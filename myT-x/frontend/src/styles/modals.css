@@ -1,283 +1,302 @@
-/* 笏笏 Modal overlay & panel 笏笏 */
+/* --- Modal overlay & panel --- */
 .modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: modal-fade-in 0.15s ease;
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: modal-fade-in 0.15s ease;
 }
 
 @keyframes modal-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 
 .modal-panel {
-  background: var(--bg-panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  width: 420px;
-  max-width: 90vw;
-  max-height: 85vh;
-  overflow-y: auto;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
-  animation: modal-slide-in 0.15s ease;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    width: 420px;
+    max-width: 90vw;
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    animation: modal-slide-in 0.15s ease;
 }
 
 @keyframes modal-slide-in {
-  from { opacity: 0; transform: translateY(-12px); }
-  to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(-12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .modal-header {
-  padding: 16px 18px 12px;
-  border-bottom: 1px solid var(--line);
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid var(--line);
 }
 
 .modal-header h2 {
-  margin: 0;
-  font-size: 1rem;
-  color: var(--fg-main);
+    margin: 0;
+    font-size: 1rem;
+    color: var(--fg-main);
 }
 
 .modal-body {
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
 }
 
 .modal-footer {
-  padding: 12px 18px 16px;
-  border-top: 1px solid var(--line);
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
+    padding: 12px 18px 16px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
 }
 
-/* 笏笏 Form elements 笏笏 */
+/* --- Form elements --- */
 .form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .form-label {
-  font-size: 0.78rem;
-  color: var(--fg-dim);
-  letter-spacing: 0.03em;
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+    letter-spacing: 0.03em;
 }
 
 .form-input,
 .form-select {
-  font: inherit;
-  font-size: 0.88rem;
-  padding: 7px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--bg-elev);
-  color: var(--fg-main);
-  outline: none;
-  transition: border-color 0.15s;
+    font: inherit;
+    font-size: 0.88rem;
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    color: var(--fg-main);
+    outline: none;
+    transition: border-color 0.15s;
 }
 
 .form-input:focus,
 .form-select:focus {
-  border-color: var(--accent);
+    border-color: var(--accent);
 }
 
 .form-checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .form-checkbox-row input[type="checkbox"] {
-  accent-color: var(--accent);
-  width: 16px;
-  height: 16px;
+    accent-color: var(--accent);
+    width: 16px;
+    height: 16px;
 }
 
 .form-checkbox-row label {
-  font-size: 0.86rem;
-  color: var(--fg-main);
-  cursor: pointer;
+    font-size: 0.86rem;
+    color: var(--fg-main);
+    cursor: pointer;
 }
 
-/* 笏笏 Modal buttons 笏笏 */
+/* --- Modal buttons --- */
 .modal-btn {
-  font: inherit;
-  font-size: 0.84rem;
-  padding: 7px 16px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--bg-elev);
-  color: var(--fg-main);
-  cursor: pointer;
-  transition: filter 0.12s, border-color 0.12s;
+    font: inherit;
+    font-size: 0.84rem;
+    padding: 7px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    color: var(--fg-main);
+    cursor: pointer;
+    transition: filter 0.12s, border-color 0.12s;
 }
 
 .modal-btn:hover {
-  filter: brightness(1.12);
+    filter: brightness(1.12);
 }
 
 .modal-btn.primary {
-  border-color: var(--accent);
-  background: linear-gradient(145deg, rgba(246, 211, 101, 0.18), rgba(246, 211, 101, 0.08));
-  color: var(--accent);
-  font-weight: 600;
+    border-color: var(--accent);
+    background: linear-gradient(145deg, rgba(246, 211, 101, 0.18), rgba(246, 211, 101, 0.08));
+    color: var(--accent);
+    font-weight: 600;
 }
 
 .modal-btn.danger {
-  border-color: var(--danger);
-  background: linear-gradient(145deg, rgba(255, 107, 107, 0.18), rgba(255, 107, 107, 0.08));
-  color: var(--danger);
-  font-weight: 600;
+    border-color: var(--danger);
+    background: linear-gradient(145deg, rgba(255, 107, 107, 0.18), rgba(255, 107, 107, 0.08));
+    color: var(--danger);
+    font-weight: 600;
 }
 
 .modal-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
-/* 笏笏 Worktree branch badge 笏笏 */
+/* --- Worktree branch badge --- */
 .worktree-branch-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.64rem;
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: 999px;
-  letter-spacing: 0.04em;
-  color: #c8f7e8;
-  background: rgba(40, 160, 130, 0.3);
-  border: 1px solid rgba(61, 228, 183, 0.6);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.64rem;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 999px;
+    letter-spacing: 0.04em;
+    color: #c8f7e8;
+    background: rgba(40, 160, 130, 0.3);
+    border: 1px solid rgba(61, 228, 183, 0.6);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .worktree-branch-badge.detached {
-  color: #f0d8a8;
-  background: rgba(180, 130, 50, 0.28);
-  border-color: rgba(246, 211, 101, 0.6);
+    color: #f0d8a8;
+    background: rgba(180, 130, 50, 0.28);
+    border-color: rgba(246, 211, 101, 0.6);
 }
 
-/* 笏笏 Worktree repo badge 笏笏 */
+/* --- Worktree repo badge --- */
 .worktree-repo-badge {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.62rem;
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: 999px;
-  letter-spacing: 0.03em;
-  color: var(--fg-dim);
-  background: rgba(100, 100, 120, 0.2);
-  border: 1px solid rgba(120, 120, 140, 0.3);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.62rem;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 999px;
+    letter-spacing: 0.03em;
+    color: var(--fg-dim);
+    background: rgba(100, 100, 120, 0.2);
+    border: 1px solid rgba(120, 120, 140, 0.3);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-/* 笏笏 Worktree base-branch badge 笏笏 */
+/* --- Worktree base-branch badge --- */
 .worktree-base-branch-badge {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.62rem;
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: 999px;
-  letter-spacing: 0.03em;
-  color: #b8c8e8;
-  background: rgba(80, 100, 150, 0.22);
-  border: 1px solid rgba(130, 155, 200, 0.4);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.62rem;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 999px;
+    letter-spacing: 0.03em;
+    color: #b8c8e8;
+    background: rgba(80, 100, 150, 0.22);
+    border: 1px solid rgba(130, 155, 200, 0.4);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-/* 笏笏 Arrow separator between base and working branch 笏笏 */
+/* --- Arrow separator between base and working branch --- */
 .worktree-branch-arrow {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.58rem;
-  color: var(--fg-dim);
-  margin: 0 2px;
-  opacity: 0.7;
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.58rem;
+    color: var(--fg-dim);
+    margin: 0 2px;
+    opacity: 0.7;
 }
 
-/* 笏笏 Error text 笏笏 */
+/* --- Error text --- */
 .form-error {
-  font-size: 0.78rem;
-  color: var(--danger);
+    font-size: 0.78rem;
+    color: var(--danger);
 }
 
-/* 笏笏 Loading spinner for modals 笏笏 */
+.form-warning {
+    font-size: 0.78rem;
+    color: #f0d8a8;
+    background: rgba(180, 130, 50, 0.18);
+    border: 1px solid rgba(246, 211, 101, 0.35);
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+
+/* --- Loading spinner for modals --- */
 .modal-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  color: var(--fg-dim);
-  font-size: 0.86rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    color: var(--fg-dim);
+    font-size: 0.86rem;
 }
 
-/* 笏笏 Radio button row (worktree source selection) 笏笏 */
+/* --- Radio button row (worktree source selection) --- */
 .form-radio-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .form-radio-row input[type="radio"] {
-  accent-color: var(--accent);
-  width: 16px;
-  height: 16px;
+    accent-color: var(--accent);
+    width: 16px;
+    height: 16px;
 }
 
 .form-radio-row label {
-  font-size: 0.86rem;
-  color: var(--fg-main);
-  cursor: pointer;
+    font-size: 0.86rem;
+    color: var(--fg-main);
+    cursor: pointer;
 }
 
-/* 笏笏 Indented sub-options 笏笏 */
+/* --- Indented sub-options --- */
 .form-group.indented {
-  margin-left: 24px;
-  padding-left: 12px;
-  border-left: 2px solid var(--line);
+    margin-left: 24px;
+    padding-left: 12px;
+    border-left: 2px solid var(--line);
 }
 
-/* 笏笏 Session mode selector 笏笏 */
+/* --- Session mode selector --- */
 .session-mode-selector {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 
-/* 笏笏 Current branch info display 笏笏 */
+/* --- Current branch info display --- */
 .current-branch-info {
-  font-size: 0.82rem;
-  color: var(--fg-dim);
-  padding: 4px 0;
+    font-size: 0.82rem;
+    color: var(--fg-dim);
+    padding: 4px 0;
 }
 
 .current-branch-name {
-  font-weight: 600;
-  color: var(--accent);
+    font-weight: 600;
+    color: var(--accent);
 }
 
-/* 笏笏 Hint text 笏笏 */
+/* --- Hint text --- */
 .form-hint {
-  font-size: 0.76rem;
-  color: var(--fg-dim);
-  margin: 2px 0 0 24px;
+    font-size: 0.76rem;
+    color: var(--fg-dim);
+    margin: 2px 0 0 24px;
 }

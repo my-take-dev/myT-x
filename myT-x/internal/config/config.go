@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,6 +26,9 @@ const (
 	// Use a short linear backoff: baseDelay * (1..maxRenameRetry).
 	renameRetryBaseDelay = 10 * time.Millisecond
 	minOverrideNameLen   = 5
+	// maxValidPort is the highest TCP/UDP port number (2^16 - 1).
+	// Port 0 is valid and means "OS auto-assign".
+	maxValidPort = 65535
 )
 
 // defaultConfigDirFn is a test seam; tests override it to simulate
@@ -63,16 +67,30 @@ func ConsumeDefaultPathWarnings() []string {
 	return out
 }
 
+// ClaudeEnvConfig holds Claude Code environment variable settings.
+// Vars contains key-value pairs applied to terminal panes.
+// DefaultEnabled controls the checkbox default in the new session modal.
+type ClaudeEnvConfig struct {
+	DefaultEnabled bool              `yaml:"default_enabled" json:"default_enabled"`
+	Vars           map[string]string `yaml:"vars,omitempty" json:"vars,omitempty"`
+}
+
 // Config is myT-x runtime configuration.
 type Config struct {
-	Shell        string            `yaml:"shell" json:"shell"`
-	Prefix       string            `yaml:"prefix" json:"prefix"`
-	Keys         map[string]string `yaml:"keys" json:"keys"`
-	QuakeMode    bool              `yaml:"quake_mode" json:"quake_mode"`
-	GlobalHotkey string            `yaml:"global_hotkey" json:"global_hotkey"`
-	Worktree     WorktreeConfig    `yaml:"worktree" json:"worktree"`
-	AgentModel   *AgentModel       `yaml:"agent_model,omitempty" json:"agent_model,omitempty"`
-	PaneEnv      map[string]string `yaml:"pane_env,omitempty" json:"pane_env,omitempty"`
+	Shell                 string            `yaml:"shell" json:"shell"`
+	Prefix                string            `yaml:"prefix" json:"prefix"`
+	Keys                  map[string]string `yaml:"keys" json:"keys"`
+	QuakeMode             bool              `yaml:"quake_mode" json:"quake_mode"`
+	GlobalHotkey          string            `yaml:"global_hotkey" json:"global_hotkey"`
+	Worktree              WorktreeConfig    `yaml:"worktree" json:"worktree"`
+	AgentModel            *AgentModel       `yaml:"agent_model,omitempty" json:"agent_model,omitempty"`
+	PaneEnv               map[string]string `yaml:"pane_env,omitempty" json:"pane_env,omitempty"`
+	PaneEnvDefaultEnabled bool              `yaml:"pane_env_default_enabled" json:"pane_env_default_enabled"`
+	ClaudeEnv             *ClaudeEnvConfig  `yaml:"claude_env,omitempty" json:"claude_env,omitempty"`
+	// WebSocketPort is the port for the local WebSocket server used for
+	// high-throughput pane data streaming. 0 (default) lets the OS assign
+	// an available port, which is recommended to avoid port conflicts.
+	WebSocketPort int `yaml:"websocket_port" json:"websocket_port"`
 }
 
 // AgentModel holds from-to model name mapping for Agent Teams.
@@ -80,8 +98,13 @@ type Config struct {
 // agent commands is replaced: From -> To.
 // Overrides take priority: if --agent-name contains an override's Name,
 // --model is replaced with that override's Model (first match wins).
+//
+// Special wildcard: when From is "ALL" (case-insensitive), every --model
+// value is replaced with To regardless of its current value. This allows
+// blanket model substitution across all child agents. The wildcard check
+// is performed by isAllModelFrom() in the tmux-shim model_transform layer.
 type AgentModel struct {
-	From      string               `yaml:"from" json:"from"`                               // source model name to match
+	From      string               `yaml:"from" json:"from"`                               // source model name to match (or "ALL" wildcard)
 	To        string               `yaml:"to" json:"to"`                                   // replacement model name
 	Overrides []AgentModelOverride `yaml:"overrides,omitempty" json:"overrides,omitempty"` // agent-name-based overrides
 }
@@ -97,7 +120,7 @@ type AgentModelOverride struct {
 // WorktreeConfig holds worktree-related settings.
 // The .wt directory path is auto-computed from repoPath (e.g. /path/to/repo.wt/).
 //
-// SECURITY: SetupScripts and CopyFiles are trusted configuration values
+// SECURITY: SetupScripts, CopyFiles and CopyDirs are trusted configuration values
 // loaded from a protected config file (LOCALAPPDATA/myT-x/config.yaml, 0o600).
 // These fields are editable through the settings UI modal, which writes back
 // to the same protected config file. This is the intended configuration flow.
@@ -107,6 +130,7 @@ type WorktreeConfig struct {
 	ForceCleanup bool     `yaml:"force_cleanup" json:"force_cleanup"` // Skip uncommitted changes check when removing worktree
 	SetupScripts []string `yaml:"setup_scripts" json:"setup_scripts"` // Scripts to run after worktree creation
 	CopyFiles    []string `yaml:"copy_files" json:"copy_files"`
+	CopyDirs     []string `yaml:"copy_dirs" json:"copy_dirs"` // Directories to recursively copy from repo to worktree
 }
 
 // allowedShells is the set of permitted shell executables (matched by base
@@ -138,6 +162,7 @@ func DefaultConfig() Config {
 			Enabled:      true,
 			SetupScripts: []string{},
 			CopyFiles:    []string{},
+			CopyDirs:     []string{},
 		},
 	}
 }
@@ -179,7 +204,7 @@ func Load(path string) (Config, error) {
 
 	raw, err := readLimitedFile(path, maxConfigFileBytes)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return cfg, nil
 		}
 		return cfg, err
@@ -220,7 +245,7 @@ func EnsureFile(path string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
 		if _, err := Save(path, cfg); err != nil {
 			return cfg, err
 		}
@@ -252,13 +277,12 @@ func Clone(src Config) Config {
 
 	if src.Keys != nil {
 		dst.Keys = make(map[string]string, len(src.Keys))
-		for k, v := range src.Keys {
-			dst.Keys[k] = v
-		}
+		maps.Copy(dst.Keys, src.Keys)
 	}
 
 	dst.Worktree.SetupScripts = cloneStringSlice(src.Worktree.SetupScripts)
 	dst.Worktree.CopyFiles = cloneStringSlice(src.Worktree.CopyFiles)
+	dst.Worktree.CopyDirs = cloneStringSlice(src.Worktree.CopyDirs)
 
 	if src.AgentModel != nil {
 		agentModelCopy := *src.AgentModel
@@ -268,9 +292,16 @@ func Clone(src Config) Config {
 
 	if src.PaneEnv != nil {
 		dst.PaneEnv = make(map[string]string, len(src.PaneEnv))
-		for k, v := range src.PaneEnv {
-			dst.PaneEnv[k] = v
+		maps.Copy(dst.PaneEnv, src.PaneEnv)
+	}
+
+	if src.ClaudeEnv != nil {
+		claudeEnvCopy := *src.ClaudeEnv
+		if src.ClaudeEnv.Vars != nil {
+			claudeEnvCopy.Vars = make(map[string]string, len(src.ClaudeEnv.Vars))
+			maps.Copy(claudeEnvCopy.Vars, src.ClaudeEnv.Vars)
 		}
+		dst.ClaudeEnv = &claudeEnvCopy
 	}
 
 	return dst
@@ -340,7 +371,7 @@ func atomicWrite(path string, data []byte) (err error) {
 			}
 		}
 		if err != nil {
-			if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			if removeErr := os.Remove(tmpPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 				slog.Warn("[DEBUG-CONFIG] failed to remove temp file", "path", tmpPath, "error", removeErr)
 			}
 		}
@@ -423,6 +454,7 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	if isZeroConfig(*cfg) {
 		*cfg = defaults
 		sanitizePaneEnv(cfg)
+		sanitizeClaudeEnv(cfg)
 		return normalizeAndValidateAgentModel(cfg.AgentModel)
 	}
 
@@ -447,10 +479,15 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	if cfg.Worktree.CopyFiles == nil {
 		cfg.Worktree.CopyFiles = append([]string(nil), defaults.Worktree.CopyFiles...)
 	}
+	if cfg.Worktree.CopyDirs == nil {
+		cfg.Worktree.CopyDirs = append([]string(nil), defaults.Worktree.CopyDirs...)
+	}
 	if err := normalizeAndValidateAgentModel(cfg.AgentModel); err != nil {
 		return err
 	}
+	validateWebSocketPort(cfg)
 	sanitizePaneEnv(cfg)
+	sanitizeClaudeEnv(cfg)
 	return nil
 }
 
@@ -480,10 +517,25 @@ func normalizeAndValidateAgentModel(am *AgentModel) error {
 	return nil
 }
 
+// validateWebSocketPort checks that WebSocketPort is within the valid TCP port
+// range (0-65535). Port 0 means "let the OS auto-assign an available port".
+// Invalid values are logged and reset to 0 (auto-assign) to keep the
+// application startable even with a misconfigured config file.
+// NOTE: non-fatal — invalid port falls back to default (0) instead of
+// returning an error, consistent with the project policy that parse errors
+// must not prevent startup.
+func validateWebSocketPort(cfg *Config) {
+	if cfg.WebSocketPort < 0 || cfg.WebSocketPort > maxValidPort {
+		slog.Warn("[DEBUG-CONFIG] websocket_port out of valid range (0-65535), falling back to 0 (auto-assign)",
+			"configured", cfg.WebSocketPort, "max", maxValidPort)
+		cfg.WebSocketPort = 0
+	}
+}
+
 // warnOnlyBlockedKeys lists system environment keys that should not be
 // overridden. This is a config-layer early-warning subset; the authoritative
 // blocklist lives in tmux.blockedEnvironmentKeys and is enforced at process
-// creation time by mergeEnvironment → sanitizeCustomEnvironmentEntry.
+// creation time by mergeEnvironment -> sanitizeCustomEnvironmentEntry.
 var warnOnlyBlockedKeys = map[string]struct{}{
 	"PATH":         {},
 	"PATHEXT":      {},
@@ -506,9 +558,7 @@ var warnOnlyBlockedKeys = map[string]struct{}{
 // frontend settingsValidation.ts BLOCKED_ENV_KEYS.
 func BlockedKeyNames() map[string]struct{} {
 	cp := make(map[string]struct{}, len(warnOnlyBlockedKeys))
-	for k, v := range warnOnlyBlockedKeys {
-		cp[k] = v
-	}
+	maps.Copy(cp, warnOnlyBlockedKeys)
 	return cp
 }
 
@@ -517,71 +567,87 @@ func BlockedKeyNames() map[string]struct{} {
 // Why 8192: matches tmux.maxCustomEnvValueBytes for early user feedback.
 const maxCustomEnvValueBytes = 8192
 
-// sanitizePaneEnv removes invalid entries from PaneEnv (null bytes in keys/values,
-// empty keys after trimming, keys containing '='). Values are trimmed but allowed
-// to be empty (note: GUI saves skip empty values, so empty values only appear when
-// set via config.yaml directly).
-// Duplicate key detection is case-insensitive (Windows env vars are case-insensitive),
-// keeping the first occurrence's original case.
+// sanitizePaneEnv removes invalid entries from PaneEnv using sanitizeEnvMap.
 // Blocked-key validation is deferred to CommandRouter's sanitizeCustomEnvironmentEntry.
 func sanitizePaneEnv(cfg *Config) {
-	if len(cfg.PaneEnv) == 0 {
+	cfg.PaneEnv = sanitizeEnvMap(cfg.PaneEnv, "pane_env")
+}
+
+// sanitizeClaudeEnv removes invalid entries from ClaudeEnv.Vars using sanitizeEnvMap.
+// Operates on cfg.ClaudeEnv.Vars; keeps the struct for DefaultEnabled even when
+// all vars are removed.
+func sanitizeClaudeEnv(cfg *Config) {
+	if cfg.ClaudeEnv == nil {
 		return
 	}
-	cleaned := make(map[string]string, len(cfg.PaneEnv))
+	cfg.ClaudeEnv.Vars = sanitizeEnvMap(cfg.ClaudeEnv.Vars, "claude_env")
+}
+
+// sanitizeEnvMap validates and cleans environment variable entries.
+// It removes entries with empty keys, null bytes in keys, '=' in keys,
+// and strips null bytes from values. Values are trimmed but allowed to be empty
+// (note: GUI saves skip empty values, so empty values only appear when set via
+// config.yaml directly).
+// Duplicate key detection is case-insensitive (Windows env vars are case-insensitive),
+// keeping the first occurrence's original case (sorted alphabetically for determinism).
+// Returns nil when the input is empty or all entries are removed.
+func sanitizeEnvMap(entries map[string]string, logPrefix string) map[string]string {
+	if len(entries) == 0 {
+		return nil
+	}
+	cleaned := make(map[string]string, len(entries))
 	// seen tracks uppercase keys for case-insensitive duplicate detection.
-	seen := make(map[string]string, len(cfg.PaneEnv)) // uppercase -> original key
+	seen := make(map[string]string, len(entries)) // uppercase -> original key
 	// Sort keys for deterministic duplicate resolution (Go map iteration is random).
-	sortedKeys := make([]string, 0, len(cfg.PaneEnv))
-	for k := range cfg.PaneEnv {
+	sortedKeys := make([]string, 0, len(entries))
+	for k := range entries {
 		sortedKeys = append(sortedKeys, k)
 	}
 	sort.Strings(sortedKeys)
 	for _, k := range sortedKeys {
-		v := cfg.PaneEnv[k]
+		v := entries[k]
 		k = strings.TrimSpace(k)
 		if k == "" {
-			slog.Debug("[DEBUG-CONFIG] pane_env: dropped entry with empty key")
+			slog.Debug("[DEBUG-CONFIG] " + logPrefix + ": dropped entry with empty key")
 			continue
 		}
 		if strings.ContainsRune(k, '\x00') {
-			slog.Warn("[DEBUG-CONFIG] pane_env: dropped entry with null byte in key", "key", k)
+			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": dropped entry with null byte in key", "key", k)
 			continue
 		}
 		// Windows environment variable keys cannot contain '='.
 		if strings.ContainsRune(k, '=') {
-			slog.Warn("[DEBUG-CONFIG] pane_env: dropped entry with '=' in key", "key", k)
+			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": dropped entry with '=' in key", "key", k)
 			continue
 		}
 		// Early warning for blocked system keys (actual enforcement is downstream).
 		if _, blocked := warnOnlyBlockedKeys[strings.ToUpper(k)]; blocked {
-			slog.Warn("[DEBUG-CONFIG] pane_env: blocked system key will be rejected at process creation", "key", k)
+			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": blocked system key will be rejected at process creation", "key", k)
 		}
 		origLen := len(v)
 		v = strings.ReplaceAll(v, "\x00", "")
 		if len(v) != origLen {
-			slog.Warn("[DEBUG-CONFIG] pane_env: stripped null bytes from value", "key", k)
+			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": stripped null bytes from value", "key", k)
 		}
 		v = strings.TrimSpace(v)
 		// Case-insensitive duplicate detection (Windows env vars are case-insensitive).
 		upperK := strings.ToUpper(k)
 		if firstKey, exists := seen[upperK]; exists {
-			slog.Warn("[DEBUG-CONFIG] pane_env: duplicate key (case-insensitive), keeping first", "key", k, "kept", firstKey)
+			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": duplicate key (case-insensitive), keeping first", "key", k, "kept", firstKey)
 			continue // first-wins
 		}
 		// Early warning for excessively long values (downstream enforces hard limit).
 		if len(v) > maxCustomEnvValueBytes {
-			slog.Warn("[DEBUG-CONFIG] pane_env: value exceeds recommended limit", "key", k, "bytes", len(v), "limit", maxCustomEnvValueBytes)
+			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": value exceeds recommended limit", "key", k, "bytes", len(v), "limit", maxCustomEnvValueBytes)
 		}
 		seen[upperK] = k
 		cleaned[k] = v
 	}
 	// Normalize to nil when all entries were removed, consistent with Clone() behavior.
 	if len(cleaned) == 0 {
-		cfg.PaneEnv = nil
-		return
+		return nil
 	}
-	cfg.PaneEnv = cleaned
+	return cleaned
 }
 
 // validateShell ensures the configured shell is safe for process creation.
@@ -694,7 +760,7 @@ func isZeroConfig(cfg Config) bool {
 
 func renameFileWithRetry(sourcePath string, targetPath string) error {
 	var lastErr error
-	for attempt := 0; attempt < maxRenameRetry; attempt++ {
+	for attempt := range maxRenameRetry {
 		err := os.Rename(sourcePath, targetPath)
 		if err == nil {
 			return nil

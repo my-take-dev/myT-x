@@ -81,8 +81,7 @@ func IsConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
+	if opErr, ok := errors.AsType[*net.OpError](err); ok {
 		return opErr.Op == "dial" || opErr.Op == "open"
 	}
 	return false

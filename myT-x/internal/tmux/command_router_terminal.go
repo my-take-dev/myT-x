@@ -37,6 +37,20 @@ var blockedEnvironmentKeys = map[string]struct{}{
 	"USERPROFILE":  {},
 }
 
+// isBlockedEnvironmentKey returns true if the given key (case-insensitive)
+// must not be overridden by client-supplied values.
+func isBlockedEnvironmentKey(key string) bool {
+	_, blocked := blockedEnvironmentKeys[strings.ToUpper(key)]
+	return blocked
+}
+
+func (r *CommandRouter) attachPaneTerminal(pane *TmuxPane, workDir string, env map[string]string, source *TmuxPane) error {
+	if r.attachTerminalFn == nil {
+		return fmt.Errorf("attach terminal function is not configured")
+	}
+	return r.attachTerminalFn(pane, workDir, env, source)
+}
+
 func (r *CommandRouter) attachTerminal(pane *TmuxPane, workDir string, env map[string]string, source *TmuxPane) error {
 	shell := r.opts.DefaultShell
 	if shell == "" {
@@ -45,10 +59,10 @@ func (r *CommandRouter) attachTerminal(pane *TmuxPane, workDir string, env map[s
 	cols := pane.Width
 	rows := pane.Height
 	if cols <= 0 {
-		cols = 120
+		cols = DefaultTerminalCols
 	}
 	if rows <= 0 {
-		rows = 40
+		rows = DefaultTerminalRows
 	}
 
 	merged := mergeEnvironment(env)

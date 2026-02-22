@@ -161,6 +161,18 @@ func TestIsZeroConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "worktree copy dirs non-nil empty",
+			mutate: func(cfg *Config) {
+				cfg.Worktree.CopyDirs = make([]string, 0)
+			},
+		},
+		{
+			name: "worktree copy dirs set",
+			mutate: func(cfg *Config) {
+				cfg.Worktree.CopyDirs = []string{".vscode"}
+			},
+		},
+		{
 			name: "agent model set",
 			mutate: func(cfg *Config) {
 				cfg.AgentModel = &AgentModel{}
@@ -170,6 +182,24 @@ func TestIsZeroConfig(t *testing.T) {
 			name: "pane env set",
 			mutate: func(cfg *Config) {
 				cfg.PaneEnv = map[string]string{"K": "V"}
+			},
+		},
+		{
+			name: "pane env default enabled",
+			mutate: func(cfg *Config) {
+				cfg.PaneEnvDefaultEnabled = true
+			},
+		},
+		{
+			name: "claude env set",
+			mutate: func(cfg *Config) {
+				cfg.ClaudeEnv = &ClaudeEnvConfig{}
+			},
+		},
+		{
+			name: "websocket port set",
+			mutate: func(cfg *Config) {
+				cfg.WebSocketPort = 8080
 			},
 		},
 	}
@@ -495,11 +525,14 @@ func TestDefaultConfigWorktreeDefaults(t *testing.T) {
 	if cfg.Worktree.ForceCleanup {
 		t.Error("Worktree.ForceCleanup default should be false")
 	}
-	if len(cfg.Worktree.SetupScripts) != 0 {
-		t.Errorf("Worktree.SetupScripts default should be empty, got %v", cfg.Worktree.SetupScripts)
+	if cfg.Worktree.SetupScripts == nil || len(cfg.Worktree.SetupScripts) != 0 {
+		t.Errorf("Worktree.SetupScripts: want non-nil empty slice, got %v", cfg.Worktree.SetupScripts)
 	}
-	if len(cfg.Worktree.CopyFiles) != 0 {
-		t.Errorf("Worktree.CopyFiles default should be empty, got %v", cfg.Worktree.CopyFiles)
+	if cfg.Worktree.CopyFiles == nil || len(cfg.Worktree.CopyFiles) != 0 {
+		t.Errorf("Worktree.CopyFiles: want non-nil empty slice, got %v", cfg.Worktree.CopyFiles)
+	}
+	if cfg.Worktree.CopyDirs == nil || len(cfg.Worktree.CopyDirs) != 0 {
+		t.Errorf("Worktree.CopyDirs: want non-nil empty slice, got %v", cfg.Worktree.CopyDirs)
 	}
 }
 
@@ -774,10 +807,10 @@ func TestLoadAgentModelOverrides(t *testing.T) {
 }
 
 func TestAgentModelStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeOf(AgentModelOverride{}).NumField(); got != 2 {
+	if got := reflect.TypeFor[AgentModelOverride]().NumField(); got != 2 {
 		t.Fatalf("AgentModelOverride field count = %d, want 2", got)
 	}
-	if got := reflect.TypeOf(AgentModel{}).NumField(); got != 3 {
+	if got := reflect.TypeFor[AgentModel]().NumField(); got != 3 {
 		t.Fatalf("AgentModel field count = %d, want 3", got)
 	}
 }
@@ -825,6 +858,31 @@ func TestNormalizeAndValidateAgentModel(t *testing.T) {
 		am := &AgentModel{To: "claude-sonnet-4-5"}
 		if err := normalizeAndValidateAgentModel(am); err == nil {
 			t.Fatal("expected error for to without from")
+		}
+	})
+
+	// ALL wildcard semantics: when From is "ALL" (case-insensitive), every
+	// --model value in child agent commands is replaced with To, regardless of
+	// the current model name. This is a blanket substitution mode. The actual
+	// matching logic lives in isAllModelFrom() in tmux-shim/model_transform.go;
+	// the config layer only validates that "ALL" is accepted as a valid From value.
+	t.Run("ALL wildcard from is accepted", func(t *testing.T) {
+		am := &AgentModel{From: "ALL", To: "claude-sonnet-4-5"}
+		if err := normalizeAndValidateAgentModel(am); err != nil {
+			t.Fatalf("normalizeAndValidateAgentModel(ALL) error = %v", err)
+		}
+		if am.From != "ALL" {
+			t.Fatalf("From = %q, want %q", am.From, "ALL")
+		}
+	})
+
+	t.Run("ALL wildcard from with whitespace is trimmed", func(t *testing.T) {
+		am := &AgentModel{From: "  ALL  ", To: "claude-sonnet-4-5"}
+		if err := normalizeAndValidateAgentModel(am); err != nil {
+			t.Fatalf("normalizeAndValidateAgentModel(ALL trimmed) error = %v", err)
+		}
+		if am.From != "ALL" {
+			t.Fatalf("From = %q, want %q", am.From, "ALL")
 		}
 	})
 
@@ -878,6 +936,7 @@ func TestSave(t *testing.T) {
 		}
 		cfg.Worktree.SetupScripts = []string{"npm install"}
 		cfg.Worktree.CopyFiles = []string{".env"}
+		cfg.Worktree.CopyDirs = []string{".vscode"}
 		cfg.PaneEnv = map[string]string{"MY_VAR": "val", "ANOTHER": "x"}
 
 		if _, err := Save(path, cfg); err != nil {
@@ -917,6 +976,9 @@ func TestSave(t *testing.T) {
 		if len(loaded.Worktree.CopyFiles) != 1 || loaded.Worktree.CopyFiles[0] != ".env" {
 			t.Errorf("CopyFiles = %v", loaded.Worktree.CopyFiles)
 		}
+		if len(loaded.Worktree.CopyDirs) != 1 || loaded.Worktree.CopyDirs[0] != ".vscode" {
+			t.Errorf("CopyDirs = %v", loaded.Worktree.CopyDirs)
+		}
 		if !reflect.DeepEqual(loaded.PaneEnv, cfg.PaneEnv) {
 			t.Errorf("PaneEnv = %v, want %v", loaded.PaneEnv, cfg.PaneEnv)
 		}
@@ -946,6 +1008,9 @@ func TestSave(t *testing.T) {
 		}
 		if normalized.Worktree.Enabled != DefaultConfig().Worktree.Enabled {
 			t.Errorf("normalized.Worktree.Enabled = %v, want %v", normalized.Worktree.Enabled, DefaultConfig().Worktree.Enabled)
+		}
+		if normalized.Worktree.CopyDirs == nil || len(normalized.Worktree.CopyDirs) != 0 {
+			t.Errorf("normalized.Worktree.CopyDirs = %v, want non-nil empty slice", normalized.Worktree.CopyDirs)
 		}
 	})
 
@@ -1230,11 +1295,14 @@ func TestAllowedShellListIsSorted(t *testing.T) {
 }
 
 func TestConfigStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeOf(Config{}).NumField(); got != 8 {
-		t.Fatalf("Config field count = %d, want 8; update isZeroConfig tests for new fields", got)
+	if got := reflect.TypeFor[Config]().NumField(); got != 11 {
+		t.Fatalf("Config field count = %d, want 11; update isZeroConfig tests for new fields", got)
 	}
-	if got := reflect.TypeOf(WorktreeConfig{}).NumField(); got != 4 {
-		t.Fatalf("WorktreeConfig field count = %d, want 4 (enabled, force_cleanup, setup_scripts, copy_files)", got)
+	if got := reflect.TypeFor[WorktreeConfig]().NumField(); got != 5 {
+		t.Fatalf("WorktreeConfig field count = %d, want 5 (enabled, force_cleanup, setup_scripts, copy_files, copy_dirs)", got)
+	}
+	if got := reflect.TypeFor[ClaudeEnvConfig]().NumField(); got != 2 {
+		t.Fatalf("ClaudeEnvConfig field count = %d, want 2 (default_enabled, vars); update Clone/sanitize for new fields", got)
 	}
 }
 
@@ -1243,6 +1311,7 @@ func TestCloneDeepCopyIndependence(t *testing.T) {
 	src.Keys["custom-action"] = "a"
 	src.Worktree.SetupScripts = []string{"script-a"}
 	src.Worktree.CopyFiles = []string{".env"}
+	src.Worktree.CopyDirs = []string{"vendor"}
 	src.AgentModel = &AgentModel{
 		From: "claude-opus-4-6",
 		To:   "claude-sonnet-4-5",
@@ -1261,6 +1330,9 @@ func TestCloneDeepCopyIndependence(t *testing.T) {
 	if &cloned.Worktree.CopyFiles == &src.Worktree.CopyFiles {
 		t.Fatal("Clone() should deep-copy CopyFiles slice")
 	}
+	if &cloned.Worktree.CopyDirs == &src.Worktree.CopyDirs {
+		t.Fatal("Clone() should deep-copy CopyDirs slice")
+	}
 	if cloned.AgentModel == src.AgentModel {
 		t.Fatal("Clone() should deep-copy AgentModel pointer")
 	}
@@ -1268,6 +1340,7 @@ func TestCloneDeepCopyIndependence(t *testing.T) {
 	cloned.Keys["custom-action"] = "b"
 	cloned.Worktree.SetupScripts[0] = "script-b"
 	cloned.Worktree.CopyFiles[0] = ".env.local"
+	cloned.Worktree.CopyDirs[0] = "node_modules"
 	cloned.AgentModel.From = "changed-from"
 	cloned.AgentModel.Overrides[0].Model = "changed-model"
 
@@ -1279,6 +1352,9 @@ func TestCloneDeepCopyIndependence(t *testing.T) {
 	}
 	if src.Worktree.CopyFiles[0] != ".env" {
 		t.Fatalf("source CopyFiles mutated: %q", src.Worktree.CopyFiles[0])
+	}
+	if src.Worktree.CopyDirs[0] != "vendor" {
+		t.Fatalf("source CopyDirs mutated: %q", src.Worktree.CopyDirs[0])
 	}
 	if src.AgentModel.From != "claude-opus-4-6" {
 		t.Fatalf("source AgentModel.From mutated: %q", src.AgentModel.From)
@@ -1301,6 +1377,9 @@ func TestClonePreservesNilCollections(t *testing.T) {
 	if cloned.Worktree.CopyFiles != nil {
 		t.Fatalf("CopyFiles = %#v, want nil", cloned.Worktree.CopyFiles)
 	}
+	if cloned.Worktree.CopyDirs != nil {
+		t.Fatalf("CopyDirs = %#v, want nil", cloned.Worktree.CopyDirs)
+	}
 	if cloned.AgentModel != nil {
 		t.Fatalf("AgentModel = %#v, want nil", cloned.AgentModel)
 	}
@@ -1310,6 +1389,7 @@ func TestClonePreservesNonNilEmptySlices(t *testing.T) {
 	src := Config{}
 	src.Worktree.SetupScripts = make([]string, 0)
 	src.Worktree.CopyFiles = make([]string, 0)
+	src.Worktree.CopyDirs = make([]string, 0)
 
 	cloned := Clone(src)
 
@@ -1319,11 +1399,17 @@ func TestClonePreservesNonNilEmptySlices(t *testing.T) {
 	if cloned.Worktree.CopyFiles == nil {
 		t.Fatal("CopyFiles = nil, want non-nil empty slice")
 	}
+	if cloned.Worktree.CopyDirs == nil {
+		t.Fatal("CopyDirs = nil, want non-nil empty slice")
+	}
 	if len(cloned.Worktree.SetupScripts) != 0 {
 		t.Fatalf("SetupScripts length = %d, want 0", len(cloned.Worktree.SetupScripts))
 	}
 	if len(cloned.Worktree.CopyFiles) != 0 {
 		t.Fatalf("CopyFiles length = %d, want 0", len(cloned.Worktree.CopyFiles))
+	}
+	if len(cloned.Worktree.CopyDirs) != 0 {
+		t.Fatalf("CopyDirs length = %d, want 0", len(cloned.Worktree.CopyDirs))
 	}
 }
 
@@ -1726,12 +1812,10 @@ func TestSaveConcurrentWrites(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, writers*iterations)
 
-	for i := 0; i < writers; i++ {
+	for i := range writers {
 		writerID := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+		wg.Go(func() {
+			for j := range iterations {
 				cfg := DefaultConfig()
 				if (writerID+j)%2 == 0 {
 					cfg.Shell = "cmd.exe"
@@ -1743,7 +1827,7 @@ func TestSaveConcurrentWrites(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1761,5 +1845,408 @@ func TestSaveConcurrentWrites(t *testing.T) {
 	}
 	if loaded.Shell != "cmd.exe" && loaded.Shell != "pwsh.exe" {
 		t.Fatalf("final shell = %q, want cmd.exe or pwsh.exe", loaded.Shell)
+	}
+}
+
+func TestCloneClaudeEnv(t *testing.T) {
+	t.Run("nil ClaudeEnv stays nil", func(t *testing.T) {
+		src := DefaultConfig()
+		dst := Clone(src)
+		if dst.ClaudeEnv != nil {
+			t.Fatal("ClaudeEnv should be nil")
+		}
+	})
+	t.Run("deep copy independence", func(t *testing.T) {
+		src := DefaultConfig()
+		src.ClaudeEnv = &ClaudeEnvConfig{
+			DefaultEnabled: true,
+			Vars:           map[string]string{"KEY": "val"},
+		}
+		dst := Clone(src)
+		if dst.ClaudeEnv == src.ClaudeEnv {
+			t.Fatal("ClaudeEnv should be different pointer")
+		}
+		dst.ClaudeEnv.Vars["KEY"] = "modified"
+		if src.ClaudeEnv.Vars["KEY"] != "val" {
+			t.Fatal("modifying clone mutated source")
+		}
+		dst.ClaudeEnv.DefaultEnabled = false
+		if !src.ClaudeEnv.DefaultEnabled {
+			t.Fatal("modifying clone's DefaultEnabled mutated source")
+		}
+	})
+	t.Run("nil vars stays nil", func(t *testing.T) {
+		src := DefaultConfig()
+		src.ClaudeEnv = &ClaudeEnvConfig{DefaultEnabled: true}
+		dst := Clone(src)
+		if dst.ClaudeEnv.Vars != nil {
+			t.Fatal("Vars should be nil")
+		}
+		if !dst.ClaudeEnv.DefaultEnabled {
+			t.Fatal("DefaultEnabled should be true")
+		}
+	})
+}
+
+func TestSanitizeClaudeEnv(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    *ClaudeEnvConfig
+		wantVars map[string]string
+	}{
+		{
+			name:  "nil config",
+			input: nil,
+		},
+		{
+			name:     "empty vars",
+			input:    &ClaudeEnvConfig{Vars: map[string]string{}},
+			wantVars: nil, // normalized to nil
+		},
+		{
+			name:     "blocked key warned but preserved",
+			input:    &ClaudeEnvConfig{Vars: map[string]string{"PATH": "/usr/bin", "MY_KEY": "val"}},
+			wantVars: map[string]string{"PATH": "/usr/bin", "MY_KEY": "val"},
+		},
+		{
+			name:     "null byte in key removed",
+			input:    &ClaudeEnvConfig{Vars: map[string]string{"KEY\x00BAD": "val"}},
+			wantVars: nil,
+		},
+		{
+			name:     "null byte in value stripped",
+			input:    &ClaudeEnvConfig{Vars: map[string]string{"KEY": "val\x00ue"}},
+			wantVars: map[string]string{"KEY": "value"},
+		},
+		{
+			name:     "equals in key removed",
+			input:    &ClaudeEnvConfig{Vars: map[string]string{"K=V": "val"}},
+			wantVars: nil,
+		},
+		{
+			name:     "case insensitive dedup keeps first",
+			input:    &ClaudeEnvConfig{Vars: map[string]string{"key": "lower", "KEY": "upper"}},
+			wantVars: map[string]string{"KEY": "upper"}, // sorted: KEY < key, so KEY wins
+		},
+		{
+			name:     "DefaultEnabled preserved when vars emptied",
+			input:    &ClaudeEnvConfig{DefaultEnabled: true, Vars: map[string]string{"K=V": "/bad"}},
+			wantVars: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{ClaudeEnv: tt.input}
+			sanitizeClaudeEnv(cfg)
+			if tt.input == nil {
+				if cfg.ClaudeEnv != nil {
+					t.Fatal("ClaudeEnv should remain nil")
+				}
+				return
+			}
+			if !reflect.DeepEqual(cfg.ClaudeEnv.Vars, tt.wantVars) {
+				t.Errorf("Vars = %v, want %v", cfg.ClaudeEnv.Vars, tt.wantVars)
+			}
+			// Verify DefaultEnabled is preserved
+			if tt.name == "DefaultEnabled preserved when vars emptied" {
+				if !cfg.ClaudeEnv.DefaultEnabled {
+					t.Error("DefaultEnabled should be preserved")
+				}
+			}
+		})
+	}
+}
+
+// TestSanitizeEnvMap tests environment variable sanitization via the production
+// sanitizeEnvMap function. This test lives in config_test.go (package config)
+// because sanitizeEnvMap is intentionally unexported.
+func TestSanitizeEnvMap(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries map[string]string
+		want    map[string]string
+		wantNil bool
+	}{
+		{
+			name:    "nil input returns nil",
+			entries: nil,
+			want:    nil,
+			wantNil: true,
+		},
+		{
+			name:    "empty map returns nil",
+			entries: map[string]string{},
+			want:    nil,
+			wantNil: true,
+		},
+		{
+			name:    "single valid entry",
+			entries: map[string]string{"KEY": "value"},
+			want:    map[string]string{"KEY": "value"},
+		},
+		{
+			name:    "empty key dropped",
+			entries: map[string]string{"": "value"},
+			want:    nil,
+			wantNil: true,
+		},
+		{
+			name: "whitespace-only key dropped",
+			entries: map[string]string{
+				"   ": "value",
+				"KEY": "value",
+			},
+			want: map[string]string{"KEY": "value"},
+		},
+		{
+			name: "null byte in key dropped",
+			entries: map[string]string{
+				"KEY\x00EVIL": "value",
+				"VALID":       "value",
+			},
+			want: map[string]string{"VALID": "value"},
+		},
+		{
+			name: "equals sign in key dropped",
+			entries: map[string]string{
+				"KEY=INVALID": "value",
+				"VALID":       "value",
+			},
+			want: map[string]string{"VALID": "value"},
+		},
+		{
+			name: "null bytes in value stripped",
+			entries: map[string]string{
+				"KEY": "val\x00ue",
+			},
+			want: map[string]string{"KEY": "value"},
+		},
+		{
+			// Production sorts keys alphabetically before iterating, so
+			// "KEY" < "Key" < "key". The first alphabetical key wins.
+			name: "case-insensitive duplicate detection keeps first alphabetically",
+			entries: map[string]string{
+				"KEY": "first",
+				"key": "second",
+				"Key": "third",
+			},
+			want: map[string]string{"KEY": "first"},
+		},
+		{
+			name: "whitespace trimmed from value",
+			entries: map[string]string{
+				"KEY": "  value  ",
+			},
+			want: map[string]string{"KEY": "value"},
+		},
+		{
+			name:    "key with empty value keeps entry",
+			entries: map[string]string{"KEY": ""},
+			want:    map[string]string{"KEY": ""},
+		},
+		{
+			name: "mixed valid and invalid",
+			entries: map[string]string{
+				"VALID1": "value1",
+				"":       "dropped",
+				"VALID2": "value2",
+				"BAD=":   "dropped",
+			},
+			want: map[string]string{
+				"VALID1": "value1",
+				"VALID2": "value2",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeEnvMap(tt.entries, "test")
+			if tt.wantNil && got != nil {
+				t.Errorf("sanitizeEnvMap() = %v, want nil", got)
+				return
+			}
+			if !tt.wantNil && got == nil {
+				t.Errorf("sanitizeEnvMap() = nil, want non-nil")
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("sanitizeEnvMap() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadSaveClaudeEnv(t *testing.T) {
+	t.Run("round trip with vars", func(t *testing.T) {
+		path := newConfigPathForSaveTest(t, "config.yaml")
+		cfg := DefaultConfig()
+		cfg.ClaudeEnv = &ClaudeEnvConfig{
+			DefaultEnabled: true,
+			Vars:           map[string]string{"ANTHROPIC_API_KEY": "sk-test", "CLAUDE_CODE_EFFORT_LEVEL": "high"},
+		}
+		cfg.PaneEnvDefaultEnabled = true
+		if _, err := Save(path, cfg); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+		loaded, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if loaded.ClaudeEnv == nil {
+			t.Fatal("ClaudeEnv is nil after round-trip")
+		}
+		if !loaded.ClaudeEnv.DefaultEnabled {
+			t.Error("DefaultEnabled should be true")
+		}
+		if len(loaded.ClaudeEnv.Vars) != 2 {
+			t.Errorf("Vars count = %d, want 2", len(loaded.ClaudeEnv.Vars))
+		}
+		if loaded.ClaudeEnv.Vars["ANTHROPIC_API_KEY"] != "sk-test" {
+			t.Errorf("ANTHROPIC_API_KEY = %q", loaded.ClaudeEnv.Vars["ANTHROPIC_API_KEY"])
+		}
+		if !loaded.PaneEnvDefaultEnabled {
+			t.Error("PaneEnvDefaultEnabled should be true")
+		}
+	})
+
+	t.Run("default_enabled false serialized", func(t *testing.T) {
+		path := newConfigPathForSaveTest(t, "config.yaml")
+		cfg := DefaultConfig()
+		cfg.ClaudeEnv = &ClaudeEnvConfig{
+			DefaultEnabled: false,
+			Vars:           map[string]string{"MY_KEY": "val"},
+		}
+		if _, err := Save(path, cfg); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+		loaded, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if loaded.ClaudeEnv == nil {
+			t.Fatal("ClaudeEnv is nil")
+		}
+		if loaded.ClaudeEnv.DefaultEnabled {
+			t.Error("DefaultEnabled should be false")
+		}
+	})
+
+	t.Run("omitted claude_env loads as nil", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		raw := []byte("shell: powershell.exe\n")
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if loaded.ClaudeEnv != nil {
+			t.Errorf("ClaudeEnv should be nil when omitted, got %+v", loaded.ClaudeEnv)
+		}
+		if loaded.PaneEnvDefaultEnabled {
+			t.Error("PaneEnvDefaultEnabled should be false when omitted")
+		}
+	})
+}
+
+// TestValidateWebSocketPort verifies port range validation (0-65535).
+// Port 0 means "auto-assign"; values outside the range fall back to 0.
+func TestValidateWebSocketPort(t *testing.T) {
+	tests := []struct {
+		name     string
+		port     int
+		wantPort int
+	}{
+		{name: "valid port 8080", port: 8080, wantPort: 8080},
+		{name: "port 0 auto-assign", port: 0, wantPort: 0},
+		{name: "port 1 minimum usable", port: 1, wantPort: 1},
+		{name: "port 65535 max valid", port: 65535, wantPort: 65535},
+		{name: "port 65536 exceeds max falls back to 0", port: 65536, wantPort: 0},
+		{name: "negative port falls back to 0", port: -1, wantPort: 0},
+		{name: "large negative falls back to 0", port: -9999, wantPort: 0},
+		{name: "very large port falls back to 0", port: 100000, wantPort: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{WebSocketPort: tt.port}
+			validateWebSocketPort(cfg)
+			if cfg.WebSocketPort != tt.wantPort {
+				t.Errorf("validateWebSocketPort() port = %d, want %d", cfg.WebSocketPort, tt.wantPort)
+			}
+		})
+	}
+}
+
+// TestWebSocketPortSaveRoundTrip verifies that saving a config with a non-zero
+// WebSocketPort and loading it back preserves the value.
+// S-23: Ensures the websocket_port field survives the Save -> Load cycle.
+func TestWebSocketPortSaveRoundTrip(t *testing.T) {
+	tests := []struct {
+		name     string
+		port     int
+		wantPort int
+	}{
+		{name: "port 0 auto-assign", port: 0, wantPort: 0},
+		{name: "port 8080", port: 8080, wantPort: 8080},
+		{name: "port 65535 max valid", port: 65535, wantPort: 65535},
+		{name: "port 1 minimum usable", port: 1, wantPort: 1},
+		{name: "port 443 common HTTPS", port: 443, wantPort: 443},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := newConfigPathForSaveTest(t, "config.yaml")
+			cfg := DefaultConfig()
+			cfg.WebSocketPort = tt.port
+
+			if _, err := Save(path, cfg); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+
+			loaded, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if loaded.WebSocketPort != tt.wantPort {
+				t.Errorf("WebSocketPort = %d, want %d after round-trip", loaded.WebSocketPort, tt.wantPort)
+			}
+		})
+	}
+}
+
+// TestLoadWebSocketPortValidation verifies that Load applies port range
+// validation end-to-end: invalid ports in config files fall back to 0.
+func TestLoadWebSocketPortValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		wantPort int
+	}{
+		{name: "valid port preserved", yaml: "websocket_port: 8080\n", wantPort: 8080},
+		{name: "port 0 preserved", yaml: "websocket_port: 0\n", wantPort: 0},
+		{name: "max port preserved", yaml: "websocket_port: 65535\n", wantPort: 65535},
+		{name: "port exceeding max falls back", yaml: "websocket_port: 65536\n", wantPort: 0},
+		{name: "negative port falls back", yaml: "websocket_port: -1\n", wantPort: 0},
+		{name: "omitted port defaults to 0", yaml: "shell: powershell.exe\n", wantPort: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.WebSocketPort != tt.wantPort {
+				t.Errorf("WebSocketPort = %d, want %d", cfg.WebSocketPort, tt.wantPort)
+			}
+		})
 	}
 }

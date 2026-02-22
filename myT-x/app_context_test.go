@@ -28,28 +28,24 @@ func TestRuntimeContextConcurrentSetGet(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 
-	for i := 0; i < goroutines; i++ {
-		wg.Add(2)
-
-		go func(id int) {
-			defer wg.Done()
+	for i := range goroutines {
+		wg.Go(func() {
 			<-start
-			for j := 0; j < iterations; j++ {
-				if (id+j)%2 == 0 {
+			for j := range iterations {
+				if (i+j)%2 == 0 {
 					app.setRuntimeContext(context.Background())
 				} else {
 					app.setRuntimeContext(nil)
 				}
 			}
-		}(i)
+		})
 
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
-			for j := 0; j < iterations; j++ {
+			for range iterations {
 				_ = app.runtimeContext()
 			}
-		}()
+		})
 	}
 
 	close(start)

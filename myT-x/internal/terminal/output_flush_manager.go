@@ -43,15 +43,17 @@ func NewOutputFlushManager(interval time.Duration, maxBytes int, emit func(strin
 		interval = 16 * time.Millisecond
 	}
 	if maxBytes <= 0 {
-		maxBytes = 8 * 1024
+		// Default 32 KiB: see outputFlushThreshold rationale in app_events.go.
+		maxBytes = 32 * 1024
 	}
 	if emit == nil {
 		emit = func(string, []byte) {}
 	}
-	maxBufferedAge := interval * 4
-	if maxBufferedAge < 64*time.Millisecond {
-		maxBufferedAge = 64 * time.Millisecond
-	}
+	// maxBufferedAge caps the maximum time data sits unbatched. 64ms minimum
+	// ensures at least ~15 fps equivalent flush rate even under low throughput.
+	// nextInterval() backs off the ticker when traffic is low (flushed <= 2
+	// per interval), doubling the interval to reduce wakeups during idle periods.
+	maxBufferedAge := max(interval*4, 64*time.Millisecond)
 	return &OutputFlushManager{
 		interval:       interval,
 		maxBytes:       maxBytes,
