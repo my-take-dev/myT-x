@@ -3,6 +3,7 @@
 package install
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,7 +107,7 @@ func TestCopyFile(t *testing.T) {
 			t.Fatal("copyFile() expected error for missing source")
 		}
 		// Destination should not exist.
-		if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		if _, err := os.Stat(dst); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("destination should not exist after failed copy, stat err = %v", err)
 		}
 	})
@@ -143,8 +144,8 @@ func TestCopyFile(t *testing.T) {
 
 func TestFileExists(t *testing.T) {
 	tests := []struct {
-		name string
-		want bool
+		name  string
+		want  bool
 		setup func(t *testing.T) string
 	}{
 		{

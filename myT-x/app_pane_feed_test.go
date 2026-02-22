@@ -131,6 +131,27 @@ func TestEnqueuePaneStateFeed(t *testing.T) {
 		app.enqueuePaneStateFeed("%0", []byte("data"))
 	})
 
+	t.Run("empty paneID is enqueued without panic", func(t *testing.T) {
+		app := NewApp()
+		app.paneStates = panestate.NewManager(4096)
+
+		ctx := context.Background()
+		app.startPaneFeedWorker(ctx)
+		defer app.stopPaneFeedWorker()
+
+		// Should not panic even with empty paneID.
+		app.enqueuePaneStateFeed("", []byte("data for empty paneID"))
+
+		// Give worker time to consume the item.
+		time.Sleep(50 * time.Millisecond)
+
+		// Verify the channel was consumed (item was processed, even if paneID
+		// doesn't correspond to a real pane).
+		if got := len(app.paneFeedCh); got != 0 {
+			t.Fatalf("paneFeedCh length = %d, want 0 after worker consumes item", got)
+		}
+	})
+
 	t.Run("channel full falls back to direct Feed", func(t *testing.T) {
 		var logs bytes.Buffer
 		originalLogger := slog.Default()
@@ -157,8 +178,10 @@ func TestEnqueuePaneStateFeed(t *testing.T) {
 		if !strings.Contains(snap, "fallback data") {
 			t.Errorf("fallback direct Feed should have written data, snapshot = %q", snap)
 		}
-		if !strings.Contains(logs.String(), "[DEBUG-feed] channel full, falling back to direct feed") {
-			t.Fatalf("expected channel-full debug log, output=%q", logs.String())
+		// Check for log message (format varies based on handler, so check for key content)
+		logOutput := logs.String()
+		if !strings.Contains(logOutput, "channel full") || !strings.Contains(logOutput, "direct feed") {
+			t.Fatalf("expected channel-full debug log, output=%q", logOutput)
 		}
 	})
 }
@@ -197,7 +220,7 @@ func TestFeedBytePoolDataIntegrity(t *testing.T) {
 	}{
 		{"small chunk", []byte("hello")},
 		{"medium chunk", bytes.Repeat([]byte("X"), 4096)},
-		{"large chunk exceeding default cap", bytes.Repeat([]byte("Y"), 8192)},
+		{"large chunk exceeding default cap", bytes.Repeat([]byte("Y"), 16384)},
 	}
 
 	for _, tt := range tests {
@@ -226,6 +249,14 @@ func TestFeedBytePoolDataIntegrity(t *testing.T) {
 	}
 }
 
+// I-11: putFeedBuffer(nil) must not panic. The nil guard at the top of
+// putFeedBuffer is the only protection against a nil pool pointer being
+// passed (e.g., from a partially initialised feedItem or a default zero-value).
+func TestPutFeedBufferNilDoesNotPanic(t *testing.T) {
+	// Must not panic.
+	putFeedBuffer(nil)
+}
+
 func TestPutFeedBufferDropsBuffersLargerThanMaxPoolSize(t *testing.T) {
 	oversized := make([]byte, maxPoolBufSize+1)
 	oversizedPtr := &oversized
@@ -240,9 +271,63 @@ func TestPutFeedBufferDropsBuffersLargerThanMaxPoolSize(t *testing.T) {
 }
 
 func TestPaneFeedItemFieldCount(t *testing.T) {
-	if got := reflect.TypeOf(paneFeedItem{}).NumField(); got != 3 {
+	if got := reflect.TypeFor[paneFeedItem]().NumField(); got != 3 {
 		t.Fatalf("paneFeedItem field count = %d, want 3; update feed worker/copy logic and tests for new fields", got)
 	}
+}
+
+func TestFeedBytePoolMaxPoolBufSizeBoundary(t *testing.T) {
+	// Verify maxPoolBufSize is 128 KiB and boundary behavior is correct.
+	if maxPoolBufSize != 128*1024 {
+		t.Fatalf("maxPoolBufSize = %d, want %d (128 KiB)", maxPoolBufSize, 128*1024)
+	}
+
+	t.Run("at boundary is returned to pool", func(t *testing.T) {
+		// Verify that a buffer with cap == maxPoolBufSize is accepted into the pool.
+		// NOTE: sync.Pool makes no guarantee about reuse timing (depends on GC),
+		// so we cannot assert that getFeedBuffer returns the same exact buffer.
+		// Instead, we verify:
+		// 1. putFeedBuffer does not panic or error (accepts the buffer)
+		// 2. getFeedBuffer subsequently returns a buffer with capacity <= maxPoolBufSize
+		buf := make([]byte, maxPoolBufSize)
+		bp := &buf
+		putFeedBuffer(bp) // Should not discard: cap == maxPoolBufSize.
+
+		// Get a new buffer and verify it does not exceed the boundary.
+		// This indirectly confirms the boundary buffer was accepted into the pool.
+		retrieved, rp := getFeedBuffer(1)
+		if cap(retrieved) > maxPoolBufSize {
+			t.Fatalf("pool returned oversized buffer cap=%d (> %d)", cap(retrieved), maxPoolBufSize)
+		}
+		*rp = retrieved
+		putFeedBuffer(rp)
+	})
+
+	t.Run("above boundary is discarded", func(t *testing.T) {
+		// Verify that a buffer with cap > maxPoolBufSize is discarded (not pooled).
+		// We test this by:
+		// 1. Putting an oversized buffer (should be rejected by putFeedBuffer)
+		// 2. Getting a small buffer multiple times
+		// 3. Confirming each small buffer capacity is still within bounds
+		//    (if the oversized buffer had been pooled, a subsequent get might
+		//     reuse it and exceed maxPoolBufSize)
+		buf := make([]byte, maxPoolBufSize+1)
+		bp := &buf
+		putFeedBuffer(bp) // Should discard: cap > maxPoolBufSize.
+
+		// Verify pool does not return an oversized buffer.
+		// Multiple gets help increase confidence that the oversized buffer
+		// was not pooled (though sync.Pool offers no hard guarantee).
+		for attempt := range 3 {
+			small, smallPtr := getFeedBuffer(1)
+			if cap(small) > maxPoolBufSize {
+				t.Fatalf("attempt %d: pool returned oversized buffer cap=%d (> %d)",
+					attempt, cap(small), maxPoolBufSize)
+			}
+			*smallPtr = small
+			putFeedBuffer(smallPtr)
+		}
+	})
 }
 
 func BenchmarkFeedBytePool(b *testing.B) {
@@ -250,7 +335,7 @@ func BenchmarkFeedBytePool(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buf, bp := getFeedBuffer(len(chunk))
 		copy(buf, chunk)
 		*bp = buf

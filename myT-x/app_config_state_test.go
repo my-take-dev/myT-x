@@ -27,23 +27,23 @@ func TestGetConfigSnapshotReturnsIndependentCopy(t *testing.T) {
 	}
 }
 
-func TestGetConfigReadOnlySharesReferenceFields(t *testing.T) {
+func TestGetConfigInternalUnsafeSharesReferenceFields(t *testing.T) {
 	app := &App{}
 	cfg := config.DefaultConfig()
 	cfg.Keys = map[string]string{"base": "value"}
 	cfg.Worktree.SetupScripts = []string{"setup-a"}
 	app.setConfigSnapshot(cfg)
 
-	readOnly := app.getConfigReadOnly()
+	readOnly := app.getConfigInternalUnsafe()
 	readOnly.Keys["shared-map"] = "mutated"
 	readOnly.Worktree.SetupScripts[0] = "setup-mutated"
 
 	latest := app.getConfigSnapshot()
 	if latest.Keys["shared-map"] != "mutated" {
-		t.Fatal("getConfigReadOnly should expose shared map references")
+		t.Fatal("getConfigInternalUnsafe should expose shared map references")
 	}
 	if len(latest.Worktree.SetupScripts) == 0 || latest.Worktree.SetupScripts[0] != "setup-mutated" {
-		t.Fatal("getConfigReadOnly should expose shared slice references")
+		t.Fatal("getConfigInternalUnsafe should expose shared slice references")
 	}
 }
 
@@ -57,23 +57,21 @@ func TestConfigSnapshotConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
+	for i := range goroutines {
+		wg.Go(func() {
 			<-start
 
-			for j := 0; j < iterations; j++ {
+			for j := range iterations {
 				cfg := app.getConfigSnapshot()
-				cfg.Keys[fmt.Sprintf("goroutine-%d", id)] = fmt.Sprintf("%d", j)
-				cfg.Worktree.SetupScripts = append(cfg.Worktree.SetupScripts, fmt.Sprintf("script-%d-%d", id, j))
-				if id%2 == 0 {
+				cfg.Keys[fmt.Sprintf("goroutine-%d", i)] = fmt.Sprintf("%d", j)
+				cfg.Worktree.SetupScripts = append(cfg.Worktree.SetupScripts, fmt.Sprintf("script-%d-%d", i, j))
+				if i%2 == 0 {
 					app.setConfigSnapshot(cfg)
 					continue
 				}
 				_ = app.getConfigSnapshot()
 			}
-		}(i)
+		})
 	}
 
 	close(start)

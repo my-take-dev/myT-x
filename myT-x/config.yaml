@@ -13,6 +13,7 @@ worktree:
   force_cleanup: false
   setup_scripts: []
   copy_files: []
+  copy_dirs: []
 agent_model:
   from: "claude-opus-4-6"
   to: "claude-sonnet-4-5-20250929"
@@ -25,3 +26,14 @@ agent_model:
       model: "claude-sonnet-4-5-20250929"
 pane_env:
   CLAUDE_CODE_EFFORT_LEVEL: "high"
+pane_env_default_enabled: true
+# websocket_port: ターミナル出力WebSocketサーバーのポート番号
+# 0 を指定するとOSが自動でポートを割り当てる（推奨）
+websocket_port: 0
+# claude_env: Claude Code専用の環境変数設定
+# default_enabled: 新規セッション作成時のチェックボックスのデフォルト値
+# vars: Claude Codeプロセスに設定する環境変数のキー・バリューペア
+# claude_env:
+#   default_enabled: false
+#   vars:
+#     CLAUDE_CODE_EFFORT_LEVEL: "high"

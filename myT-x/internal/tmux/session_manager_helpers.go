@@ -2,9 +2,20 @@ package tmux
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 )
+
+// copyBoolPtr returns a shallow copy of a *bool pointer.
+// Returns nil when src is nil.
+func copyBoolPtr(src *bool) *bool {
+	if src == nil {
+		return nil
+	}
+	v := *src
+	return &v
+}
 
 func copyEnvMap(input map[string]string) map[string]string {
 	// Preserve caller safety by always returning a mutable map:
@@ -13,9 +24,7 @@ func copyEnvMap(input map[string]string) map[string]string {
 		return map[string]string{}
 	}
 	out := make(map[string]string, len(input))
-	for k, v := range input {
-		out[k] = v
-	}
+	maps.Copy(out, input)
 	return out
 }
 

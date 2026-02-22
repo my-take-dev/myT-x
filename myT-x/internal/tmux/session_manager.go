@@ -11,13 +11,14 @@ import (
 
 // TmuxSession models a tmux-like session.
 type TmuxSession struct {
-	ID           int               `json:"id"`
-	Name         string            `json:"name"`
-	Windows      []*TmuxWindow     `json:"windows"`
-	CreatedAt    time.Time         `json:"created_at"`
-	LastActivity time.Time         `json:"-"`
-	IsIdle       bool              `json:"-"`
-	Env          map[string]string `json:"env,omitempty"`
+	ID             int               `json:"id"`
+	Name           string            `json:"name"`
+	Windows        []*TmuxWindow     `json:"windows"`
+	ActiveWindowID int               `json:"active_window_id"`
+	CreatedAt      time.Time         `json:"created_at"`
+	LastActivity   time.Time         `json:"-"`
+	IsIdle         bool              `json:"-"`
+	Env            map[string]string `json:"env,omitempty"`
 
 	// IsAgentTeam is omitted when false. Frontend treats missing as false.
 	IsAgentTeam bool `json:"is_agent_team,omitempty"`
@@ -30,6 +31,13 @@ type TmuxSession struct {
 	// Set via SetRootPath independently from SetWorktreeInfo; for worktree sessions,
 	// this stores the repository root (not the worktree directory) for conflict detection.
 	RootPath string `json:"root_path,omitempty"`
+
+	// UseClaudeEnv controls whether claude_env config is applied to panes in this session.
+	// nil = legacy session (IPC-created), pointer semantics distinguish unset from false.
+	UseClaudeEnv *bool `json:"use_claude_env,omitempty"`
+	// UsePaneEnv controls whether pane_env config is applied to additional panes.
+	// nil = legacy session (pane_env always fills, backward compatible).
+	UsePaneEnv *bool `json:"use_pane_env,omitempty"`
 }
 
 // SessionWorktreeInfo is frontend-safe git/worktree metadata for a session.
@@ -128,6 +136,8 @@ type SessionSnapshot struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 	IsIdle    bool      `json:"is_idle"`
+	// ActiveWindowID identifies the active window in this session snapshot.
+	ActiveWindowID int `json:"active_window_id"`
 	// IsAgentTeam is omitted when false. Frontend treats missing as false.
 	IsAgentTeam bool             `json:"is_agent_team,omitempty"`
 	Windows     []WindowSnapshot `json:"windows"`
@@ -147,6 +157,7 @@ type SessionManager struct {
 
 	nextSessionID int
 	nextPaneID    int
+	nextWindowID  int
 	now           func() time.Time
 	idleThreshold time.Duration
 

@@ -43,7 +43,7 @@ func TestShouldUseConPty(t *testing.T) {
 		{name: "disable=false does not disable", disable: "false", enable: "", want: true},
 		{name: "disable=random_string does not disable", disable: "random_string", enable: "", want: true},
 
-		// Whitespace-only ENABLE defaults to enabled (TrimSpace → empty → default)
+		// Whitespace-only ENABLE defaults to enabled (TrimSpace -> empty -> default)
 		{name: "enable=whitespace defaults true", disable: "", enable: "   ", want: true},
 
 		// Both non-standard values default to enabled

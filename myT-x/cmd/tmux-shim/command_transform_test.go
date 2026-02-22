@@ -3,6 +3,7 @@ package main
 import (
 	"reflect"
 	"runtime"
+	"slices"
 	"testing"
 
 	"myT-x/internal/ipc"
@@ -156,5 +157,188 @@ func TestApplyShellTransformInitializesNilMaps(t *testing.T) {
 	}
 	if req.Env == nil {
 		t.Fatal("Env should be initialized")
+	}
+}
+
+// --- I-31: Direct unit tests for transform functions ---
+
+func TestApplyNewProcessTransformDirectCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		req         ipc.TmuxRequest
+		wantChanged bool
+	}{
+		{
+			name: "nil flags and env are handled",
+			req: ipc.TmuxRequest{
+				Command: "new-session",
+				Flags:   nil,
+				Env:     nil,
+				Args:    []string{"echo hello"},
+			},
+		},
+		{
+			name: "empty args no change",
+			req: ipc.TmuxRequest{
+				Command: "new-window",
+				Flags:   map[string]any{},
+				Env:     map[string]string{},
+				Args:    []string{},
+			},
+		},
+		{
+			name: "nil args no change",
+			req: ipc.TmuxRequest{
+				Command: "split-window",
+				Flags:   map[string]any{},
+				Env:     map[string]string{},
+				Args:    nil,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// applyNewProcessTransform should not panic on edge cases
+			changed := applyNewProcessTransform(&tt.req)
+			if tt.wantChanged != changed {
+				t.Errorf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+		})
+	}
+}
+
+func TestApplySendKeysTransformDirectCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantChanged bool
+	}{
+		{
+			name:        "empty args no change",
+			args:        []string{},
+			wantChanged: false,
+		},
+		{
+			name:        "nil args no change",
+			args:        nil,
+			wantChanged: false,
+		},
+		{
+			name:        "plain text no change",
+			args:        []string{"echo hello", "Enter"},
+			wantChanged: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := ipc.TmuxRequest{
+				Command: "send-keys",
+				Flags:   map[string]any{"-t": "%0"},
+				Env:     map[string]string{},
+				Args:    tt.args,
+			}
+			changed := applySendKeysTransform(&req)
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+		})
+	}
+}
+
+func TestApplyShellTransformNewWindowSameAsNewSession(t *testing.T) {
+	// Verify new-window follows the same transform path as new-session/split-window
+	req := ipc.TmuxRequest{
+		Command: "new-window",
+		Flags:   map[string]any{},
+		Env:     map[string]string{},
+		Args:    []string{"echo test"},
+	}
+
+	changed := applyShellTransform(&req)
+	// On non-windows, no change; on windows, depends on content
+	if runtime.GOOS != "windows" {
+		if changed {
+			t.Fatal("non-windows new-window should not be transformed")
+		}
+	}
+}
+
+// TestApplyNewProcessTransformWindowsPathAndEnv is a direct test of Windows path and environment variable transformation.
+func TestApplyNewProcessTransformWindowsPathAndEnv(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only transform test")
+	}
+	req := ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-c": `C:\start`},
+		Env:     map[string]string{},
+		Args: []string{
+			`cd 'C:\projects\foo' && BAR=1 'C:\bin\app.exe' --flag`,
+		},
+	}
+	changed := applyNewProcessTransform(&req)
+	if !changed {
+		t.Fatal("expected change on windows")
+	}
+	if got := asString(req.Flags["-c"]); got != `C:\projects\foo` {
+		t.Fatalf("-c = %q, want %q", got, `C:\projects\foo`)
+	}
+	if req.Env["BAR"] != "1" {
+		t.Fatalf("BAR env = %q, want 1", req.Env["BAR"])
+	}
+	// Args should be cleaned up (cd removed, env removed)
+	if len(req.Args) == 0 {
+		t.Fatal("Args should not be empty after transform")
+	}
+}
+
+// TestApplySendKeysTransformWithWindowsArgs is a direct test of Windows command transformation in send-keys.
+func TestApplySendKeysTransformWithWindowsArgs(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only send-keys transform test")
+	}
+	req := ipc.TmuxRequest{
+		Command: "send-keys",
+		Flags:   map[string]any{"-t": "%1"},
+		Env:     map[string]string{},
+		Args: []string{
+			`cd 'C:\projects' && FOO=bar 'C:\bin\claude.exe' --resume abc`,
+			"Enter",
+		},
+	}
+	changed := applySendKeysTransform(&req)
+	if !changed {
+		t.Fatal("expected change on windows with unix-style command")
+	}
+	// After translation, Enter should still be present
+	hasEnter := slices.Contains(req.Args, "Enter")
+	if !hasEnter {
+		t.Fatalf("args after transform = %v, expected to contain Enter", req.Args)
+	}
+}
+
+// TestApplyNewProcessTransformNoChangeWhenCleanArgs verifies idempotence when args
+// contain no shell expansion patterns (no cd, no KEY=VAL, no quoted executable).
+// Uses a pre-joined single-arg form to avoid platform-specific join normalisation
+// on Windows (ParseUnixCommand always joins []string into one string).
+func TestApplyNewProcessTransformNoChangeWhenCleanArgs(t *testing.T) {
+	// Single-arg form is idempotent on all platforms:
+	// - non-Windows: ParseUnixCommand returns CleanArgs == input slice
+	// - Windows:     join("powershell.exe -Command Get-Process") == same string -> no change
+	req := ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{},
+		Env:     map[string]string{},
+		Args:    []string{"powershell.exe -Command Get-Process"},
+	}
+	origArg := req.Args[0]
+	changed := applyNewProcessTransform(&req)
+	if changed {
+		t.Fatalf("changed = true, want false for clean single-arg input")
+	}
+	if len(req.Args) != 1 || req.Args[0] != origArg {
+		t.Fatalf("args changed unexpectedly: got %v, want [%q]", req.Args, origArg)
 	}
 }

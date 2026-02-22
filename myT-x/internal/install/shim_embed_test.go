@@ -203,7 +203,7 @@ func TestEnsureShimInstalled_SkipsWhenHashMatches(t *testing.T) {
 		t.Fatalf("Stat(%s) after skip error = %v", target, err)
 	}
 	if !info2.ModTime().Equal(modTime1) {
-		t.Fatalf("tmux.exe was rewritten when hash matched (modtime changed: %v → %v)", modTime1, info2.ModTime())
+		t.Fatalf("tmux.exe was rewritten when hash matched (modtime changed: %v -> %v)", modTime1, info2.ModTime())
 	}
 }
 

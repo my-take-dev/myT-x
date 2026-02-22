@@ -10,6 +10,7 @@
   --bg-panel: #101928;
   --bg-panel-strong: #17243a;
   --bg-elev: #1b2a43;
+  --surface-3: rgba(227, 238, 249, 0.08);
   --fg-main: #e3eef9;
   --fg-dim: #90a6bd;
   --line: rgba(201, 221, 242, 0.16);
@@ -23,6 +24,8 @@
   --danger-08: rgba(255, 107, 107, 0.08);
   --danger-20: rgba(255, 107, 107, 0.2);
   --danger-40: rgba(255, 107, 107, 0.4);
+  --warning: rgb(246, 173, 85);
+  --warning-10: rgba(246, 173, 85, 0.1);
   --session-running-border: rgba(61, 228, 183, 0.66);
   --session-running-glow: rgba(55, 193, 157, 0.3);
   --session-running-bg:
@@ -35,6 +38,22 @@
   --session-selected-glow: rgba(246, 211, 101, 0.34);
   --session-selected-bg:
     linear-gradient(140deg, rgba(86, 58, 19, 0.95), rgba(170, 125, 42, 0.54));
+
+  /* ── Layout ── */
+  --sidebar-width: 280px;
+  --activity-strip-width: 36px;
+  /* ── Z-index ── */
+  --z-activity-strip: 50;
+  --z-viewer-overlay: 40;
+  /* ── Git colors ── */
+  --git-ahead: rgba(61, 228, 183, 0.9);
+  --git-modified: rgba(246, 211, 101, 0.8);
+  --git-staged: rgba(61, 228, 183, 0.8);
+  --git-head-bg: rgba(61, 228, 183, 0.12);
+  --git-head-fg: rgba(61, 228, 183, 0.9);
+  --git-head-border: rgba(61, 228, 183, 0.3);
+  --diff-added-bg: rgba(61, 228, 183, 0.15);
+  --selection-bg: rgba(99, 140, 255, 0.25);
 }
 
 * {
@@ -78,7 +97,7 @@ button {
 }
 
 .sidebar {
-  width: 280px;
+  width: var(--sidebar-width);
   min-width: 240px;
   max-width: 340px;
   border-right: 1px solid var(--line);
@@ -362,6 +381,7 @@ button {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  margin-right: var(--activity-strip-width);
 }
 
 .session-view,

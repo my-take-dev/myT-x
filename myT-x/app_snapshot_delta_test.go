@@ -12,20 +12,22 @@ import (
 
 func testSnapshot(name string, id int, idle bool) tmux.SessionSnapshot {
 	return tmux.SessionSnapshot{
-		ID:        id,
-		Name:      name,
-		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		IsIdle:    idle,
-		Windows:   []tmux.WindowSnapshot{},
+		ID:             id,
+		Name:           name,
+		CreatedAt:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		IsIdle:         idle,
+		ActiveWindowID: 0,
+		Windows:        []tmux.WindowSnapshot{},
 	}
 }
 
 func testSnapshotWithPane(name string, paneTitle string) tmux.SessionSnapshot {
 	return tmux.SessionSnapshot{
-		ID:        1,
-		Name:      name,
-		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		IsIdle:    false,
+		ID:             1,
+		Name:           name,
+		CreatedAt:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		IsIdle:         false,
+		ActiveWindowID: 0,
 		Windows: []tmux.WindowSnapshot{
 			{
 				ID:       0,
@@ -121,28 +123,58 @@ func TestSnapshotDeltaDetectsNestedPaneChange(t *testing.T) {
 	}
 }
 
+func TestSnapshotDeltaDetectsActiveWindowIDChange(t *testing.T) {
+	app := NewApp()
+	base := tmux.SessionSnapshot{
+		ID:             1,
+		Name:           "alpha",
+		CreatedAt:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ActiveWindowID: 0,
+		Windows: []tmux.WindowSnapshot{
+			{ID: 0, Name: "main", ActivePN: 0},
+			{ID: 1, Name: "second", ActivePN: 0},
+		},
+	}
+	_, _, _ = app.snapshotDelta([]tmux.SessionSnapshot{base})
+
+	changed := base
+	changed.ActiveWindowID = 1
+	delta, hasChanges, initial := app.snapshotDelta([]tmux.SessionSnapshot{changed})
+	if initial {
+		t.Fatal("second snapshot should not be marked as initial")
+	}
+	if !hasChanges {
+		t.Fatal("ActiveWindowID change should produce delta")
+	}
+	if len(delta.Upserts) != 1 {
+		t.Fatalf("upserts length = %d, want 1", len(delta.Upserts))
+	}
+	if delta.Upserts[0].ActiveWindowID != 1 {
+		t.Fatalf("upserted ActiveWindowID = %d, want 1", delta.Upserts[0].ActiveWindowID)
+	}
+}
+
 // TestSnapshotFieldCounts guards against field drift in hand-written equality
 // functions. If a field is added to a snapshot struct, the corresponding
 // equality function must be updated, and this test will fail as a reminder.
 func TestSnapshotFieldCounts(t *testing.T) {
 	tests := []struct {
 		name     string
-		typ      any
+		numField int
 		expected int
 	}{
-		{"TmuxSession", tmux.TmuxSession{}, 10},
-		{"SessionSnapshot", tmux.SessionSnapshot{}, 8},
-		{"SessionWorktreeInfo", tmux.SessionWorktreeInfo{}, 5},
-		{"PaneContextSnapshot", tmux.PaneContextSnapshot{}, 6},
-		{"WindowSnapshot", tmux.WindowSnapshot{}, 5},
-		{"PaneSnapshot", tmux.PaneSnapshot{}, 6},
-		{"LayoutNode", tmux.LayoutNode{}, 5},
+		{"TmuxSession", reflect.TypeFor[tmux.TmuxSession]().NumField(), 13},
+		{"SessionSnapshot", reflect.TypeFor[tmux.SessionSnapshot]().NumField(), 9},
+		{"SessionWorktreeInfo", reflect.TypeFor[tmux.SessionWorktreeInfo]().NumField(), 5},
+		{"PaneContextSnapshot", reflect.TypeFor[tmux.PaneContextSnapshot]().NumField(), 9},
+		{"WindowSnapshot", reflect.TypeFor[tmux.WindowSnapshot]().NumField(), 5},
+		{"PaneSnapshot", reflect.TypeFor[tmux.PaneSnapshot]().NumField(), 6},
+		{"LayoutNode", reflect.TypeFor[tmux.LayoutNode]().NumField(), 5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			n := reflect.TypeOf(tt.typ).NumField()
-			if n != tt.expected {
-				t.Fatalf("%s has %d fields (expected %d); update the corresponding *Equal and estimate* functions", tt.name, n, tt.expected)
+			if tt.numField != tt.expected {
+				t.Fatalf("%s has %d fields (expected %d); update the corresponding *Equal and estimate* functions", tt.name, tt.numField, tt.expected)
 			}
 		})
 	}
@@ -488,14 +520,12 @@ func TestSnapshotDeltaConcurrentCallsRemainStable(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	runWorker := func(build func(i int) []tmux.SessionSnapshot) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
-			for i := 0; i < 100; i++ {
+			for i := range 100 {
 				app.snapshotDelta(build(i))
 			}
-		}()
+		})
 	}
 
 	runWorker(func(i int) []tmux.SessionSnapshot {
@@ -537,7 +567,7 @@ func BenchmarkSnapshotDelta(b *testing.B) {
 
 			b.ReportAllocs()
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				app := NewApp()
 				app.snapshotDelta(snapshots) // prime
 				app.snapshotDelta(snapshots) // steady state (no changes)
@@ -556,7 +586,7 @@ func BenchmarkSnapshotDelta(b *testing.B) {
 
 			b.ReportAllocs()
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				app := NewApp()
 				app.snapshotDelta(base)    // prime
 				app.snapshotDelta(changed) // with upsert

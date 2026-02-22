@@ -44,7 +44,6 @@ func TestNormalizePipeInput(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := string(normalizePipeInput([]byte(tc.in)))
 			if got != tc.out {

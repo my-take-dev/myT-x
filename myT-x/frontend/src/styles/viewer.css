@@ -1,0 +1,857 @@
+/* ── Activity Strip (right edge icon bar) ── */
+.viewer-activity-strip {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--activity-strip-width);
+    background: var(--bg-panel);
+    border-left: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 40px;
+    gap: 2px;
+    z-index: var(--z-activity-strip);
+}
+
+.viewer-strip-spacer {
+    flex: 1;
+    min-height: 0;
+}
+
+.viewer-strip-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    transition: color 0.15s, background 0.15s;
+}
+
+.viewer-strip-btn:hover {
+    color: var(--fg-main);
+    background: var(--accent-06);
+}
+
+.viewer-strip-btn.active {
+    color: var(--accent);
+    background: var(--accent-10);
+}
+
+.viewer-strip-btn.active::before {
+    content: "";
+    position: absolute;
+    left: -4px;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+}
+
+.viewer-strip-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    border: 1.5px solid var(--bg-panel);
+    pointer-events: none;
+}
+
+/* ── View Overlay (full-screen view container) ── */
+.viewer-overlay {
+    position: fixed;
+    top: 0;
+    left: var(--sidebar-width);
+    right: var(--activity-strip-width);
+    bottom: 0;
+    z-index: var(--z-viewer-overlay);
+    background: var(--bg-base);
+    animation: viewer-slide-in 150ms ease;
+}
+
+@keyframes viewer-slide-in {
+    from {
+        opacity: 0;
+        transform: translateX(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* ── Shared View Header ── */
+.viewer-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+    min-height: 40px;
+}
+
+.viewer-header-title {
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--fg-main);
+    margin: 0;
+}
+
+.viewer-header-spacer {
+    flex: 1;
+}
+
+.viewer-header-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    transition: color 0.15s, background 0.15s;
+}
+
+.viewer-header-btn:hover {
+    color: var(--fg-main);
+    background: var(--accent-06);
+}
+
+/* ── File Tree View ── */
+.file-tree-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.file-tree-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.file-tree-sidebar {
+    width: var(--sidebar-width);
+    min-width: 200px;
+    border-right: 1px solid var(--line);
+    background: var(--bg-panel);
+    overflow: hidden;
+}
+
+.file-tree-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Tree node row */
+.tree-node-row {
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    cursor: pointer;
+    color: var(--fg-main);
+    font-size: 0.82rem;
+    height: 28px;
+    gap: 4px;
+    user-select: none;
+    transition: background 0.1s;
+}
+
+.tree-node-row:hover {
+    background: var(--accent-04);
+}
+
+.tree-node-row.selected {
+    background: var(--accent-10);
+    color: var(--accent);
+}
+
+.tree-node-arrow {
+    width: 14px;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--fg-dim);
+    transition: transform 0.15s;
+}
+
+.tree-node-arrow.expanded {
+    transform: rotate(90deg);
+}
+
+.tree-node-icon {
+    width: 16px;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 0.78rem;
+}
+
+.tree-node-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tree-node-size {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    margin-left: 8px;
+}
+
+.tree-node-loading {
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    animation: pulse 1.2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 0.4;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+/* File content viewer */
+.file-content-viewer {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.file-content-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+    font-size: 0.82rem;
+    color: var(--fg-dim);
+}
+
+.file-content-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-main);
+}
+
+.file-content-size {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+}
+
+/* Copy path button in file content header */
+.file-content-copy-path {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: color 0.15s, background 0.15s;
+}
+
+.file-content-copy-path:hover {
+    color: var(--fg-main);
+    background: var(--accent-06);
+}
+
+.file-content-copy-path:active {
+    background: var(--accent-10);
+}
+
+.file-content-body {
+    flex: 1;
+    overflow: auto;
+    padding: 8px 0;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    user-select: text;
+    cursor: text;
+}
+
+.file-content-body:focus {
+    outline: none;
+}
+
+.file-content-body ::selection {
+    background: var(--selection-bg);
+    color: inherit;
+}
+
+.file-content-line {
+    display: flex;
+    padding: 0 12px;
+    min-height: 1.5em;
+}
+
+.file-content-line:hover {
+    background: var(--accent-04);
+}
+
+.file-content-line-number {
+    width: 48px;
+    flex-shrink: 0;
+    text-align: right;
+    padding-right: 12px;
+    color: var(--fg-dim);
+    user-select: none;
+    opacity: 0.5;
+}
+
+.file-content-line-text {
+    flex: 1;
+    min-width: 0;
+    white-space: pre;
+    overflow-x: visible;
+    user-select: text;
+}
+
+.file-content-empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+}
+
+.file-content-binary {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+}
+
+/* ── Git Graph View ── */
+.git-graph-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.git-graph-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+/* Branch status bar */
+.git-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+    font-size: 0.82rem;
+}
+
+.git-status-branch {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.git-status-counts {
+    display: flex;
+    gap: 8px;
+    color: var(--fg-dim);
+    font-size: 0.78rem;
+}
+
+.git-status-ahead {
+    color: var(--git-ahead);
+}
+
+.git-status-behind {
+    color: var(--danger);
+}
+
+.git-status-changes {
+    display: flex;
+    gap: 8px;
+    font-size: 0.78rem;
+}
+
+.git-status-modified {
+    color: var(--git-modified);
+}
+
+.git-status-staged {
+    color: var(--git-staged);
+}
+
+.git-status-untracked {
+    color: var(--fg-dim);
+}
+
+/* Git graph + commit list area */
+.git-graph-commits {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Commit row */
+.commit-row {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    padding-right: 12px;
+    transition: background 0.1s;
+}
+
+.commit-row:hover {
+    background: var(--accent-04);
+}
+
+.commit-row.selected {
+    background: var(--accent-10);
+}
+
+.commit-graph-cell {
+    flex-shrink: 0;
+    height: 32px;
+    overflow: hidden;
+}
+
+.commit-hash {
+    width: 64px;
+    flex-shrink: 0;
+    color: var(--accent);
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 0.75rem;
+    padding: 0 8px;
+}
+
+.commit-message {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-main);
+}
+
+.commit-ref-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    margin-right: 4px;
+    background: var(--accent-10);
+    color: var(--accent);
+    border: 1px solid var(--accent-25);
+}
+
+.commit-ref-badge.head {
+    background: var(--git-head-bg);
+    color: var(--git-head-fg);
+    border-color: var(--git-head-border);
+}
+
+.commit-author {
+    width: 100px;
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 8px;
+}
+
+.commit-date {
+    width: 80px;
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    text-align: right;
+    font-size: 0.72rem;
+}
+
+/* Commit detail + diff panel */
+.git-detail-panel {
+    border-top: 1px solid var(--line);
+    max-height: 50%;
+    overflow: auto;
+    background: var(--bg-panel);
+}
+
+.git-detail-header {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.82rem;
+}
+
+.git-detail-hash {
+    color: var(--accent);
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 0.78rem;
+}
+
+.git-detail-author {
+    color: var(--fg-dim);
+    font-size: 0.78rem;
+    margin-top: 2px;
+}
+
+.git-detail-message {
+    color: var(--fg-main);
+    margin-top: 4px;
+    white-space: pre-wrap;
+}
+
+/* Diff viewer */
+.diff-viewer {
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+}
+
+.diff-file-header {
+    display: flex;
+    align-items: center;
+    padding: 4px 12px;
+    background: var(--bg-elev);
+    border-top: 1px solid var(--line);
+    color: var(--fg-main);
+    font-weight: 600;
+    font-size: 0.78rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.diff-file-header:hover {
+    background: var(--accent-06);
+}
+
+.diff-hunk-header {
+    padding: 2px 12px;
+    background: var(--accent-10);
+    color: var(--accent);
+    font-size: 0.72rem;
+}
+
+.diff-line {
+    display: flex;
+    padding: 0 12px;
+    min-height: 1.5em;
+}
+
+.diff-line.added {
+    background: var(--diff-added-bg);
+}
+
+.diff-line.removed {
+    background: var(--danger-08);
+}
+
+.diff-line-number {
+    width: 40px;
+    flex-shrink: 0;
+    text-align: right;
+    padding-right: 8px;
+    color: var(--fg-dim);
+    user-select: none;
+    opacity: 0.5;
+}
+
+.diff-line-content {
+    flex: 1;
+    min-width: 0;
+    white-space: pre;
+}
+
+/* Branch selector dropdown */
+.git-branch-select {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--fg-main);
+    font-size: 0.78rem;
+    padding: 2px 6px;
+    cursor: pointer;
+    outline: none;
+}
+
+.git-branch-select:focus {
+    border-color: var(--accent);
+}
+
+/* Load more button */
+.git-load-more {
+    display: flex;
+    justify-content: center;
+    padding: 8px;
+}
+
+.git-load-more button {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--bg-elev);
+    color: var(--fg-dim);
+    padding: 4px 16px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+
+.git-load-more button:hover {
+    color: var(--fg-main);
+    background: var(--accent-06);
+}
+
+/* View message states */
+.viewer-message {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+    padding: 20px;
+    text-align: center;
+}
+
+/* ── Error Log View ── */
+.error-log-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.error-log-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    user-select: text;
+    cursor: text;
+}
+
+.error-log-body:focus {
+    outline: none;
+}
+
+.error-log-body ::selection {
+    background: var(--selection-bg);
+    color: inherit;
+}
+
+.error-log-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.error-log-entry:hover {
+    background: var(--accent-04);
+}
+
+.error-log-ts {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    width: 140px;
+}
+
+.error-log-level {
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    min-width: 40px;
+    text-align: center;
+}
+
+.error-log-level.error {
+    background: var(--danger-08);
+    color: var(--danger);
+}
+
+.error-log-level.warn {
+    background: var(--warning-10);
+    color: var(--warning);
+}
+
+.error-log-msg {
+    flex: 1;
+    min-width: 0;
+    color: var(--fg-main);
+    word-break: break-word;
+}
+
+.error-log-source {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 0.68rem;
+    opacity: 0.7;
+}
+
+.error-log-empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+}
+
+/* ── Diff View ── */
+.diff-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.diff-header-stats {
+    font-size: 0.82rem;
+    font-family: "Consolas", "Monaco", monospace;
+    white-space: nowrap;
+}
+
+.diff-header-file-count {
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+    white-space: nowrap;
+}
+
+.diff-header-truncated {
+    color: var(--warning);
+    font-size: 0.82rem;
+}
+
+.diff-tree-stats {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    font-family: "Consolas", "Monaco", monospace;
+    margin-left: 8px;
+    white-space: nowrap;
+}
+
+.diff-tree-additions {
+    color: var(--git-staged);
+}
+
+.diff-tree-deletions {
+    color: var(--danger);
+}
+
+.diff-content-viewer {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.diff-content-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+    font-size: 0.82rem;
+}
+
+.diff-content-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-main);
+    font-family: "Consolas", "Monaco", monospace;
+}
+
+.diff-content-body {
+    flex: 1;
+    overflow: auto;
+    user-select: text;
+    cursor: text;
+}
+
+.diff-content-body:focus {
+    outline: none;
+}
+
+.diff-content-body ::selection {
+    background: var(--selection-bg);
+    color: inherit;
+}
+
+.diff-content-empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+}
+
+.diff-expand-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 12px;
+    background: var(--accent-06);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    cursor: default;
+    user-select: none;
+    transition: background 0.15s;
+}
+
+.diff-expand-bar:hover {
+    background: var(--surface-3, var(--accent-10));
+    color: var(--fg-main);
+    cursor: pointer;
+}

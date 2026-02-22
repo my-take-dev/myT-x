@@ -6,6 +6,175 @@ import (
 	"testing"
 )
 
+func generationForTest(manager *SessionManager) uint64 {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.generation
+}
+
+func TestSessionEnvKeyValidation(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		run     func() error
+		wantErr string
+	}{
+		{
+			name:    "SetSessionEnv rejects empty key",
+			run:     func() error { return manager.SetSessionEnv("demo", "", "value") },
+			wantErr: "environment variable name is required",
+		},
+		{
+			name:    "SetSessionEnv rejects whitespace key",
+			run:     func() error { return manager.SetSessionEnv("demo", "   ", "value") },
+			wantErr: "environment variable name is required",
+		},
+		{
+			name:    "UnsetSessionEnv rejects empty key",
+			run:     func() error { return manager.UnsetSessionEnv("demo", "") },
+			wantErr: "environment variable name is required",
+		},
+		{
+			name:    "UnsetSessionEnv rejects whitespace key",
+			run:     func() error { return manager.UnsetSessionEnv("demo", "   ") },
+			wantErr: "environment variable name is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	if err := manager.SetSessionEnv("demo", "FOO", "bar"); err != nil {
+		t.Fatalf("SetSessionEnv(valid) error = %v", err)
+	}
+	if err := manager.UnsetSessionEnv("demo", "FOO"); err != nil {
+		t.Fatalf("UnsetSessionEnv(valid) error = %v", err)
+	}
+}
+
+func TestSessionEnvMissingSessionErrors(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		run     func() error
+		wantErr string
+	}{
+		{
+			name: "SetSessionEnv on missing session",
+			run: func() error {
+				return manager.SetSessionEnv("missing", "FOO", "bar")
+			},
+			wantErr: "session not found: missing",
+		},
+		{
+			name: "UnsetSessionEnv on missing session",
+			run: func() error {
+				return manager.UnsetSessionEnv("missing", "FOO")
+			},
+			wantErr: "session not found: missing",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestUnsetSessionEnvNoMutationWhenKeyMissing(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := manager.SetSessionEnv("demo", "FOO", "bar"); err != nil {
+		t.Fatalf("SetSessionEnv() error = %v", err)
+	}
+
+	beforeGeneration := generationForTest(manager)
+	if err := manager.UnsetSessionEnv("demo", "MISSING"); err != nil {
+		t.Fatalf("UnsetSessionEnv(missing) error = %v", err)
+	}
+	afterGeneration := generationForTest(manager)
+	if afterGeneration != beforeGeneration {
+		t.Fatalf("generation changed on missing key unset: before=%d after=%d", beforeGeneration, afterGeneration)
+	}
+
+	env, err := manager.GetSessionEnv("demo")
+	if err != nil {
+		t.Fatalf("GetSessionEnv() error = %v", err)
+	}
+	if got := env["FOO"]; got != "bar" {
+		t.Fatalf("FOO = %q, want %q", got, "bar")
+	}
+}
+
+func TestSetRootPathTrimsAndNoopsOnEquivalentValue(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	if err := manager.SetRootPath("demo", "  C:\\Projects\\repo  "); err != nil {
+		t.Fatalf("SetRootPath(trimmed) error = %v", err)
+	}
+	session, ok := manager.GetSession("demo")
+	if !ok {
+		t.Fatal("GetSession(demo) returned missing session")
+	}
+	if session.RootPath != `C:\Projects\repo` {
+		t.Fatalf("RootPath = %q, want %q", session.RootPath, `C:\Projects\repo`)
+	}
+
+	beforeGeneration := generationForTest(manager)
+	if err := manager.SetRootPath("demo", `C:\Projects\repo`); err != nil {
+		t.Fatalf("SetRootPath(equivalent) error = %v", err)
+	}
+	afterGeneration := generationForTest(manager)
+	if afterGeneration != beforeGeneration {
+		t.Fatalf("generation changed for equivalent root path: before=%d after=%d", beforeGeneration, afterGeneration)
+	}
+}
+
+func TestSetSessionEnvNoMutationWhenValueUnchanged(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := manager.SetSessionEnv("demo", "FOO", "bar"); err != nil {
+		t.Fatalf("SetSessionEnv() error = %v", err)
+	}
+
+	beforeGeneration := generationForTest(manager)
+	if err := manager.SetSessionEnv("demo", "FOO", "bar"); err != nil {
+		t.Fatalf("SetSessionEnv(same value) error = %v", err)
+	}
+	afterGeneration := generationForTest(manager)
+	if afterGeneration != beforeGeneration {
+		t.Fatalf("generation changed on equivalent SetSessionEnv: before=%d after=%d", beforeGeneration, afterGeneration)
+	}
+}
+
 func TestGetWorktreeInfoReturnsCopy(t *testing.T) {
 	manager := NewSessionManager()
 	if _, _, err := manager.CreateSession("demo", "0", 120, 40); err != nil {
@@ -349,8 +518,15 @@ func TestGetPaneContextSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
+	// Use RenamePane for the title to go through the proper locking path.
+	if _, err := manager.RenamePane(pane.IDString(), "editor"); err != nil {
+		t.Fatalf("RenamePane() error = %v", err)
+	}
+	// No public SetPaneEnv API exists; mutate pane.Env under the manager lock.
+	// This test is single-threaded and serialized before any concurrent access.
+	manager.mu.Lock()
 	pane.Env["FOO"] = "bar"
-	pane.Title = "editor"
+	manager.mu.Unlock()
 
 	snapshot, err := manager.GetPaneContextSnapshot(pane.ID)
 	if err != nil {
@@ -362,6 +538,9 @@ func TestGetPaneContextSnapshot(t *testing.T) {
 	if snapshot.SessionName != session.Name {
 		t.Fatalf("SessionName = %q, want %q", snapshot.SessionName, session.Name)
 	}
+	if snapshot.WindowID != pane.Window.ID {
+		t.Fatalf("WindowID = %d, want %d", snapshot.WindowID, pane.Window.ID)
+	}
 	if snapshot.Title != pane.Title {
 		t.Fatalf("Title = %q, want %q", snapshot.Title, pane.Title)
 	}
@@ -370,6 +549,12 @@ func TestGetPaneContextSnapshot(t *testing.T) {
 	}
 	if snapshot.Layout == nil {
 		t.Fatal("Layout is nil, want non-nil")
+	}
+	if snapshot.PaneWidth != 120 {
+		t.Fatalf("PaneWidth = %d, want 120", snapshot.PaneWidth)
+	}
+	if snapshot.PaneHeight != 40 {
+		t.Fatalf("PaneHeight = %d, want 40", snapshot.PaneHeight)
 	}
 
 	snapshot.Env["FOO"] = "mutated"
@@ -506,6 +691,66 @@ func TestGetPaneContextSnapshotSessionWorkDir(t *testing.T) {
 			}
 			if snapshot.SessionWorkDir != tt.wantDir {
 				t.Fatalf("SessionWorkDir = %q, want %q", snapshot.SessionWorkDir, tt.wantDir)
+			}
+		})
+	}
+}
+
+func TestGetPaneContextSnapshotPaneDimensions(t *testing.T) {
+	tests := []struct {
+		name       string
+		width      int
+		height     int
+		wantWidth  int
+		wantHeight int
+	}{
+		{
+			name:       "default dimensions",
+			width:      120,
+			height:     40,
+			wantWidth:  120,
+			wantHeight: 40,
+		},
+		{
+			name:       "small terminal",
+			width:      80,
+			height:     24,
+			wantWidth:  80,
+			wantHeight: 24,
+		},
+		{
+			name:       "large terminal",
+			width:      300,
+			height:     100,
+			wantWidth:  300,
+			wantHeight: 100,
+		},
+		{
+			name:       "minimum dimensions",
+			width:      1,
+			height:     1,
+			wantWidth:  1,
+			wantHeight: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewSessionManager()
+			_, pane, err := manager.CreateSession("demo", "0", tt.width, tt.height)
+			if err != nil {
+				t.Fatalf("CreateSession() error = %v", err)
+			}
+
+			snapshot, err := manager.GetPaneContextSnapshot(pane.ID)
+			if err != nil {
+				t.Fatalf("GetPaneContextSnapshot() error = %v", err)
+			}
+			if snapshot.PaneWidth != tt.wantWidth {
+				t.Fatalf("PaneWidth = %d, want %d", snapshot.PaneWidth, tt.wantWidth)
+			}
+			if snapshot.PaneHeight != tt.wantHeight {
+				t.Fatalf("PaneHeight = %d, want %d", snapshot.PaneHeight, tt.wantHeight)
 			}
 		})
 	}

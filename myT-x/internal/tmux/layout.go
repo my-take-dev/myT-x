@@ -177,12 +177,9 @@ func buildTiledLayout(paneIDs []int) *LayoutNode {
 	}
 	rows := (n + cols - 1) / cols
 	rowNodes := make([]*LayoutNode, 0, rows)
-	for r := 0; r < rows; r++ {
+	for r := range rows {
 		start := r * cols
-		end := start + cols
-		if end > n {
-			end = n
-		}
+		end := min(start+cols, n)
 		rowNodes = append(rowNodes, buildEvenSplit(paneIDs[start:end], SplitHorizontal))
 	}
 	return buildEvenSplitNodes(rowNodes, SplitVertical)

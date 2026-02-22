@@ -4,17 +4,25 @@ import (
 	"context"
 	"log/slog"
 	"sync"
-	"time"
+
+	"myT-x/internal/workerutil"
 )
 
 // feedBytePool recycles byte slices used to copy PTY output chunks,
 // reducing GC pressure on the high-frequency feed path.
 var feedBytePool = sync.Pool{
 	New: func() any {
-		buf := make([]byte, 0, 4096)
+		// 8 KiB initial capacity: aligns with typical high-speed model chunk sizes,
+		// reducing grow-copy cycles on the hot feed path.
+		buf := make([]byte, 0, 8192)
 		return &buf
 	},
 }
+
+// maxPoolBufSize is the upper bound for buffers returned to feedBytePool.
+// 128 KiB upper bound: accommodates occasional large chunks from high-throughput
+// models without polluting the pool with rare oversized allocations.
+const maxPoolBufSize = 128 * 1024
 
 // getFeedBuffer retrieves a byte slice from feedBytePool, growing it if needed.
 // Returns (usable slice, pool pointer). The pool pointer is kept in sync with
@@ -31,10 +39,6 @@ func getFeedBuffer(size int) ([]byte, *[]byte) {
 	*bp = buf // keep pool pointer in sync with possibly-grown slice
 	return buf, bp
 }
-
-// maxPoolBufSize is the upper bound for buffers returned to feedBytePool.
-// Buffers larger than this are discarded to prevent pool pollution from rare large chunks.
-const maxPoolBufSize = 64 * 1024
 
 // putFeedBuffer returns a buffer to feedBytePool for reuse.
 // The caller must not use the buffer after calling this function.
@@ -60,50 +64,20 @@ func (a *App) startPaneFeedWorker(parent context.Context) {
 	ch := a.paneFeedCh
 	paneStates := a.paneStates
 
-	a.bgWG.Add(1)
-	go func() {
-		defer a.bgWG.Done()
-		restartDelay := initialPanicRestartBackoff
+	workerutil.RunWithPanicRecovery(ctx, "pane-feed-worker", &a.bgWG, func(ctx context.Context) {
 		for {
-			panicked := false
-			func() {
-				defer func() {
-					if recoverBackgroundPanic("pane-feed-worker", recover()) {
-						panicked = true
-					}
-				}()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case item := <-ch:
-						paneStates.Feed(item.paneID, item.chunk)
-						putFeedBuffer(item.poolPtr)
-					}
-				}
-			}()
-			if !panicked || ctx.Err() != nil {
-				return
-			}
-			slog.Warn("[DEBUG-PANIC] restarting worker after panic",
-				"worker", "pane-feed-worker",
-				"restartDelay", restartDelay,
-			)
-			a.emitRuntimeEventWithContext(a.runtimeContext(), "tmux:worker-panic", map[string]any{
-				"worker": "pane-feed-worker",
-			})
-			restartTimer := time.NewTimer(restartDelay)
 			select {
 			case <-ctx.Done():
-				if !restartTimer.Stop() {
-					<-restartTimer.C
-				}
 				return
-			case <-restartTimer.C:
+			case item := <-ch:
+				// NOTE: If FeedTrimmed panics, putFeedBuffer will not be called
+				// and the pool buffer will leak (one per panic). GC will eventually
+				// collect it, so this is acceptable.
+				paneStates.FeedTrimmed(item.paneID, item.chunk)
+				putFeedBuffer(item.poolPtr)
 			}
-			restartDelay = nextPanicRestartBackoff(restartDelay)
 		}
-	}()
+	}, a.defaultRecoveryOptions())
 }
 
 func (a *App) stopPaneFeedWorker() {
@@ -133,11 +107,16 @@ func (a *App) enqueuePaneStateFeed(paneID string, chunk []byte) {
 		chunk:   pooled,
 		poolPtr: bp,
 	}
+	// NOTE: When the channel is full, the direct-feed fallback bypasses the worker,
+	// so ordering between the fallback chunk and the worker's next dequeue is not
+	// guaranteed. This is acceptable because xterm.js buffers and renders output
+	// asynchronously; minor reordering within a single flush cycle is invisible
+	// to the user and does not corrupt terminal state.
 	select {
 	case a.paneFeedCh <- item:
 	default:
-		slog.Debug("[DEBUG-feed] channel full, falling back to direct feed", "paneId", paneID, "chunkLen", len(chunk))
-		a.paneStates.Feed(paneID, pooled)
+		slog.Debug("[DEBUG-FEED] channel full, falling back to direct feed", "paneId", paneID, "chunkLen", len(chunk))
+		a.paneStates.FeedTrimmed(paneID, pooled)
 		putFeedBuffer(bp)
 	}
 }

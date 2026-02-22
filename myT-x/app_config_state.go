@@ -10,12 +10,19 @@ func (a *App) getConfigSnapshot() config.Config {
 	return config.Clone(a.cfg)
 }
 
-// getConfigReadOnly returns the current config without cloning.
-// Reference-type fields (maps/slices/pointers) are shared with internal state.
+// getConfigInternalUnsafe returns the current config without cloning.
+//
+// WARNING: Reference-type fields (maps/slices/pointers) are shared with internal
+// state. Callers MUST NOT modify the returned value or its nested fields.
 // Use only for short-lived read-only access on the current goroutine.
 // Callers that retain values or pass config data to long-lived goroutines must
 // use getConfigSnapshot instead.
-func (a *App) getConfigReadOnly() config.Config {
+//
+// Call sites: currently used only in test code (app_config_state_test.go) to verify
+// that reference-type fields share internal state. No production call sites exist.
+// If a production call site is added, document it here and audit the caller for
+// accidental mutation.
+func (a *App) getConfigInternalUnsafe() config.Config {
 	a.cfgMu.RLock()
 	defer a.cfgMu.RUnlock()
 	return a.cfg

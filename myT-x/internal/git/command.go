@@ -159,7 +159,7 @@ func runGitCLIWithContextAndDeps(
 	defer releaseGitSemaphore()
 
 	var lastErrMsg string
-	for attempt := 0; attempt < maxGitRetries; attempt++ {
+	for attempt := range maxGitRetries {
 		stdout, stderrText, err := runner(ctx, dir, args, env)
 		if err == nil {
 			return stdout, nil
@@ -260,4 +260,11 @@ func (r *Repository) runGitCommandRaw(args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(string(output), "\n\r"), nil
+}
+
+// RunGitCLIPublic is a public wrapper around runGitCLI for use by app-layer
+// code that needs to run git commands without opening a Repository first.
+// SECURITY: executes only "git" binary with application-constructed args.
+func RunGitCLIPublic(dir string, args []string) ([]byte, error) {
+	return runGitCLI(dir, args)
 }

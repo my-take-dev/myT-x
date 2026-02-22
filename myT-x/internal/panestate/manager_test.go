@@ -109,24 +109,20 @@ func TestManagerConcurrentFeedSnapshot(t *testing.T) {
 
 	// Concurrent feeds to different panes.
 	for _, id := range paneIDs {
-		wg.Add(1)
-		go func(paneID string) {
-			defer wg.Done()
-			for i := 0; i < 1000; i++ {
-				manager.Feed(paneID, []byte(fmt.Sprintf("data-%d\n", i)))
+		wg.Go(func() {
+			for i := range 1000 {
+				manager.Feed(id, fmt.Appendf(nil, "data-%d\n", i))
 			}
-		}(id)
+		})
 	}
 
 	// Concurrent snapshots from different panes.
 	for _, id := range paneIDs {
-		wg.Add(1)
-		go func(paneID string) {
-			defer wg.Done()
-			for i := 0; i < 100; i++ {
-				_ = manager.Snapshot(paneID)
+		wg.Go(func() {
+			for range 100 {
+				_ = manager.Snapshot(id)
 			}
-		}(id)
+		})
 	}
 
 	wg.Wait()
@@ -148,24 +144,20 @@ func TestManagerConcurrentFeedAndRemove(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Feed in a loop.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 500; i++ {
+	wg.Go(func() {
+		for range 500 {
 			manager.Feed("%0", []byte("data\n"))
 		}
-	}()
+	})
 
 	// Remove while feeding (should not panic).
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 50; i++ {
+	wg.Go(func() {
+		for range 50 {
 			manager.RemovePane("%0")
 			manager.EnsurePane("%0", 80, 24)
 			manager.SetActivePanes(map[string]struct{}{"%0": {}})
 		}
-	}()
+	})
 
 	wg.Wait()
 
@@ -186,33 +178,27 @@ func TestManagerConcurrentFeedSnapshotRemove(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// goroutine 1: Feed loop.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 500; i++ {
-			manager.Feed("%0", []byte(fmt.Sprintf("feed-%d\n", i)))
+	wg.Go(func() {
+		for i := range 500 {
+			manager.Feed("%0", fmt.Appendf(nil, "feed-%d\n", i))
 		}
-	}()
+	})
 
 	// goroutine 2: Snapshot loop.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 200; i++ {
+	wg.Go(func() {
+		for range 200 {
 			_ = manager.Snapshot("%0")
 		}
-	}()
+	})
 
 	// goroutine 3: RemovePane + EnsurePane cycle.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 50; i++ {
+	wg.Go(func() {
+		for range 50 {
 			manager.RemovePane("%0")
 			manager.EnsurePane("%0", 80, 24)
 			manager.SetActivePanes(map[string]struct{}{"%0": {}})
 		}
-	}()
+	})
 
 	wg.Wait()
 
@@ -314,7 +300,7 @@ func BenchmarkReplayRingSnapshot(b *testing.B) {
 
 	b.Run("snapshot_alloc", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = ring.snapshot()
 		}
 	})
@@ -322,7 +308,7 @@ func BenchmarkReplayRingSnapshot(b *testing.B) {
 	b.Run("snapshotInto_reuse", func(b *testing.B) {
 		buf := make([]byte, 0, 512*1024)
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			buf = ring.snapshotInto(buf)
 		}
 	})
@@ -334,7 +320,7 @@ func BenchmarkManagerConcurrentFeed(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		manager := NewManager(4096)
 		for _, id := range paneIDs {
 			manager.EnsurePane(id, 80, 24)
@@ -345,13 +331,11 @@ func BenchmarkManagerConcurrentFeed(b *testing.B) {
 
 		var wg sync.WaitGroup
 		for _, id := range paneIDs {
-			wg.Add(1)
-			go func(paneID string) {
-				defer wg.Done()
-				for j := 0; j < 100; j++ {
-					manager.Feed(paneID, chunk)
+			wg.Go(func() {
+				for range 100 {
+					manager.Feed(id, chunk)
 				}
-			}(id)
+			})
 		}
 		wg.Wait()
 	}

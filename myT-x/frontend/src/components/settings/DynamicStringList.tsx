@@ -5,6 +5,7 @@ interface DynamicStringListProps {
   onChange: (items: string[]) => void;
   placeholder?: string;
   addLabel?: string;
+  itemErrors?: Record<number, string>;
 }
 
 function sameItems(left: string[] | null, right: string[]): boolean {
@@ -19,7 +20,13 @@ function sameItems(left: string[] | null, right: string[]): boolean {
   return true;
 }
 
-export function DynamicStringList({ items, onChange, placeholder, addLabel }: DynamicStringListProps) {
+export function DynamicStringList({
+  items,
+  onChange,
+  placeholder,
+  addLabel,
+  itemErrors,
+}: DynamicStringListProps) {
   const nextRowIDRef = useRef(items.length);
   const prevItemsRef = useRef(items);
   const expectedNextItemsRef = useRef<string[] | null>(null);
@@ -58,31 +65,34 @@ export function DynamicStringList({ items, onChange, placeholder, addLabel }: Dy
   return (
     <div className="dynamic-list">
       {items.map((item, index) => (
-        <div key={rowIDs[index] ?? `dsl-pending-${index}`} className="dynamic-list-row">
-          <input
-            className="form-input"
-            value={item}
-            aria-label={placeholder ? `${placeholder} ${index + 1}` : `Item ${index + 1}`}
-            onChange={(e) => {
-              const next = [...items];
-              next[index] = e.target.value;
-              expectedNextItemsRef.current = next;
-              onChange(next);
-            }}
-            placeholder={placeholder}
-          />
-          <button
-            type="button"
-            className="dynamic-list-remove"
-            onClick={() => {
-              const next = items.filter((_, i) => i !== index);
-              expectedNextItemsRef.current = next;
-              onChange(next);
-            }}
-            title="削除"
-          >
-            &times;
-          </button>
+        <div key={rowIDs[index] ?? `dsl-pending-${index}`} className="dynamic-list-row-group">
+          <div className="dynamic-list-row">
+            <input
+              className={`form-input ${itemErrors?.[index] ? "input-error" : ""}`}
+              value={item}
+              aria-label={placeholder ? `${placeholder} ${index + 1}` : `Item ${index + 1}`}
+              onChange={(e) => {
+                const next = [...items];
+                next[index] = e.target.value;
+                expectedNextItemsRef.current = next;
+                onChange(next);
+              }}
+              placeholder={placeholder}
+            />
+            <button
+              type="button"
+              className="dynamic-list-remove"
+              onClick={() => {
+                const next = items.filter((_, i) => i !== index);
+                expectedNextItemsRef.current = next;
+                onChange(next);
+              }}
+              title="削除"
+            >
+              &times;
+            </button>
+          </div>
+          {itemErrors?.[index] && <span className="form-error">{itemErrors[index]}</span>}
         </div>
       ))}
       <button

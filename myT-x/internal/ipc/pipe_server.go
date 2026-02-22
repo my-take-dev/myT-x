@@ -78,8 +78,7 @@ func (s *PipeServer) Start() error {
 
 	s.listener = listener
 	s.started = true
-	s.wg.Add(1)
-	go s.acceptLoop()
+	s.wg.Go(s.acceptLoop)
 	return nil
 }
 
@@ -106,7 +105,6 @@ func (s *PipeServer) Stop() error {
 }
 
 func (s *PipeServer) acceptLoop() {
-	defer s.wg.Done()
 	consecutiveErrors := 0
 	for {
 		s.mu.Lock()
@@ -145,12 +143,14 @@ func (s *PipeServer) acceptLoop() {
 			continue
 		}
 
-		s.wg.Add(1)
-		go func(conn net.Conn) {
-			defer s.wg.Done()
+		// Go 1.22+: for-loop variables are scoped per iteration, so conn
+		// refers to the specific connection accepted in this iteration.
+		// Each goroutine captures a distinct conn value and does not share
+		// it with other iterations.
+		s.wg.Go(func() {
 			defer s.releaseConnectionSlot()
 			s.handleConnection(conn)
-		}(conn)
+		})
 	}
 }
 

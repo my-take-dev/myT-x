@@ -5,7 +5,9 @@ export type OverrideEntry = AppConfigAgentModelOverride & { id: string };
 
 export type PaneEnvEntry = { id: string; key: string; value: string };
 
-export type SettingsCategory = "general" | "keybinds" | "worktree" | "agent-model" | "pane-env";
+export type ClaudeEnvEntry = { id: string; key: string; value: string };
+
+export type SettingsCategory = "general" | "keybinds" | "worktree" | "agent-model" | "claude-env" | "pane-env";
 
 export interface FormState {
   shell: string;
@@ -17,11 +19,15 @@ export interface FormState {
   wtForceCleanup: boolean;
   wtSetupScripts: string[];
   wtCopyFiles: string[];
+  wtCopyDirs: string[];
   agentFrom: string;
   agentTo: string;
   overrides: OverrideEntry[];
   effortLevel: string;
   paneEnvEntries: PaneEnvEntry[];
+  paneEnvDefaultEnabled: boolean;
+  claudeEnvDefaultEnabled: boolean;
+  claudeEnvEntries: ClaudeEnvEntry[];
   minOverrideNameLen: number;
   allowedShells: string[];
   loading: boolean;
@@ -45,7 +51,9 @@ export type FormAction =
   | { type: "SET_OVERRIDES"; overrides: OverrideEntry[] }
   | { type: "UPDATE_OVERRIDE"; index: number; field: "name" | "model"; value: string }
   | { type: "SET_PANE_ENV_ENTRIES"; entries: PaneEnvEntry[] }
-  | { type: "UPDATE_PANE_ENV_ENTRY"; index: number; field: "key" | "value"; value: string };
+  | { type: "UPDATE_PANE_ENV_ENTRY"; index: number; field: "key" | "value"; value: string }
+  | { type: "SET_CLAUDE_ENV_ENTRIES"; entries: ClaudeEnvEntry[] }
+  | { type: "UPDATE_CLAUDE_ENV_ENTRY"; index: number; field: "key" | "value"; value: string };
 
 export type FormDispatch = Dispatch<FormAction>;
 

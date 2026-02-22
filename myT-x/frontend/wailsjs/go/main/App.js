@@ -46,6 +46,34 @@ export function DetachSession(arg1) {
   return window['go']['main']['App']['DetachSession'](arg1);
 }
 
+export function DevPanelCommitDiff(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelCommitDiff'](arg1, arg2);
+}
+
+export function DevPanelGitLog(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DevPanelGitLog'](arg1, arg2, arg3);
+}
+
+export function DevPanelGitStatus(arg1) {
+  return window['go']['main']['App']['DevPanelGitStatus'](arg1);
+}
+
+export function DevPanelListBranches(arg1) {
+  return window['go']['main']['App']['DevPanelListBranches'](arg1);
+}
+
+export function DevPanelListDir(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelListDir'](arg1, arg2);
+}
+
+export function DevPanelReadFile(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelReadFile'](arg1, arg2);
+}
+
+export function DevPanelWorkingDiff(arg1) {
+  return window['go']['main']['App']['DevPanelWorkingDiff'](arg1);
+}
+
 export function FocusPane(arg1) {
   return window['go']['main']['App']['FocusPane'](arg1);
 }
@@ -56,6 +84,10 @@ export function GetActiveSession() {
 
 export function GetAllowedShells() {
   return window['go']['main']['App']['GetAllowedShells']();
+}
+
+export function GetClaudeEnvVarDescriptions() {
+  return window['go']['main']['App']['GetClaudeEnvVarDescriptions']();
 }
 
 export function GetConfig() {
@@ -82,8 +114,20 @@ export function GetSessionEnv(arg1) {
   return window['go']['main']['App']['GetSessionEnv'](arg1);
 }
 
+export function GetSessionErrorLog() {
+  return window['go']['main']['App']['GetSessionErrorLog']();
+}
+
+export function GetSessionLogFilePath() {
+  return window['go']['main']['App']['GetSessionLogFilePath']();
+}
+
 export function GetValidationRules() {
   return window['go']['main']['App']['GetValidationRules']();
+}
+
+export function GetWebSocketURL() {
+  return window['go']['main']['App']['GetWebSocketURL']();
 }
 
 export function InstallTmuxShim() {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -490,13 +491,7 @@ func assertBranchPresence(t *testing.T, repo *Repository, branchName string, wan
 	if err != nil {
 		t.Fatalf("ListBranches() error = %v", err)
 	}
-	present := false
-	for _, branch := range branches {
-		if branch == branchName {
-			present = true
-			break
-		}
-	}
+	present := slices.Contains(branches, branchName)
 	if present != wantPresent {
 		t.Fatalf("branch %q presence = %v, want %v (branches=%v)", branchName, present, wantPresent, branches)
 	}
@@ -629,7 +624,7 @@ func TestHasUnpushedCommits(t *testing.T) {
 func TestHasUnpushedCommitsNoUpstream(t *testing.T) {
 	testutil.SkipIfNoGit(t)
 
-	// Repo without remote → should return false, not error.
+	// Repo without remote -> should return false, not error.
 	dir := testutil.CreateTempGitRepo(t)
 	repo, err := Open(dir)
 	if err != nil {
@@ -813,12 +808,7 @@ func TestListBranchesForWorktreeBase(t *testing.T) {
 	testutil.SkipIfNoGit(t)
 
 	contains := func(branches []string, target string) bool {
-		for _, branch := range branches {
-			if branch == target {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(branches, target)
 	}
 
 	tests := []struct {

@@ -1,8 +1,10 @@
 package git
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"myT-x/internal/testutil"
@@ -28,7 +30,7 @@ func TestCreateWorktreeDetached(t *testing.T) {
 	}
 
 	// Verify worktree directory exists.
-	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
+	if _, err := os.Stat(wtPath); errors.Is(err, os.ErrNotExist) {
 		t.Error("worktree directory was not created")
 	}
 
@@ -37,13 +39,7 @@ func TestCreateWorktreeDetached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorktrees() error = %v", err)
 	}
-	found := false
-	for _, wt := range worktrees {
-		if wt == wtPath {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(worktrees, wtPath)
 	if !found {
 		t.Errorf("worktree %q not found in list: %v", wtPath, worktrees)
 	}
@@ -74,7 +70,7 @@ func TestCreateWorktreeWithBranch(t *testing.T) {
 	}
 
 	// Verify worktree directory exists.
-	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
+	if _, err := os.Stat(wtPath); errors.Is(err, os.ErrNotExist) {
 		t.Error("worktree directory was not created")
 	}
 
@@ -125,7 +121,7 @@ func TestCreateWorktreeWithCommitishBase(t *testing.T) {
 		t.Fatalf("CreateWorktree() with commit-ish base error = %v", err)
 	}
 
-	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
+	if _, err := os.Stat(wtPath); errors.Is(err, os.ErrNotExist) {
 		t.Fatal("worktree directory was not created")
 	}
 
@@ -212,7 +208,7 @@ func TestCreateWorktreeFromBranch(t *testing.T) {
 		t.Fatalf("CreateWorktreeFromBranch() error = %v", err)
 	}
 
-	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
+	if _, err := os.Stat(wtPath); errors.Is(err, os.ErrNotExist) {
 		t.Fatal("worktree directory was not created")
 	}
 

@@ -157,7 +157,7 @@ func TestInstallShimIfChangedEmptySourceHash(t *testing.T) {
 		t.Fatal("writeFn should be called when sourceHash is empty")
 	}
 	// Hash file should NOT be written when sourceHash is empty.
-	if _, err := os.Stat(hashFile); !os.IsNotExist(err) {
+	if _, err := os.Stat(hashFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("hash file should not exist when sourceHash is empty, stat err = %v", err)
 	}
 }
@@ -178,7 +178,7 @@ func TestInstallShimIfChangedWriteFnError(t *testing.T) {
 		t.Fatalf("installShimIfChanged() error = %v, want %v", err, writeErr)
 	}
 	// Hash file must NOT be written when writeFn fails.
-	if _, statErr := os.Stat(hashFile); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(hashFile); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("hash file should not exist when writeFn fails, stat err = %v", statErr)
 	}
 }

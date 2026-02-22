@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -160,7 +162,7 @@ func TestLoadAgentModelConfigConcurrentCalls(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
 			model, err := loadAgentModelConfig()
@@ -553,6 +555,91 @@ func TestApplyModelTransformMultipleModelFlagsInSingleArgument(t *testing.T) {
 	}
 }
 
+// I-18: Verify that --model=value inline form (within a single argument string)
+// is detected and replaced by both anyModelFlagPattern and fromTo pattern.
+func TestApplyModelTransformInlineModelEqualsForm(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfg         *config.AgentModel
+		args        []string
+		wantArgs    []string
+		wantChanged bool
+	}{
+		{
+			name: "fromTo: inline --model=FROM replaced",
+			cfg: &config.AgentModel{
+				From: "claude-opus-4-6",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"claude --model=claude-opus-4-6 --flag x"},
+			wantArgs:    []string{"claude --model=claude-sonnet-4-5 --flag x"},
+			wantChanged: true,
+		},
+		{
+			name: "fromTo: inline --model=OTHER not replaced",
+			cfg: &config.AgentModel{
+				From: "claude-opus-4-6",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"claude --model=claude-haiku-4 --flag x"},
+			wantArgs:    []string{"claude --model=claude-haiku-4 --flag x"},
+			wantChanged: false,
+		},
+		{
+			name: "ALL: inline --model=value replaced",
+			cfg: &config.AgentModel{
+				From: "ALL",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"claude --model=claude-opus-4-6 --flag x"},
+			wantArgs:    []string{"claude --model=claude-sonnet-4-5 --flag x"},
+			wantChanged: true,
+		},
+		{
+			name: "override: inline --model=value replaced via override",
+			cfg: &config.AgentModel{
+				From: "claude-opus-4-6",
+				To:   "claude-sonnet-4-5",
+				Overrides: []config.AgentModelOverride{
+					{Name: "security", Model: "claude-opus-4-6"},
+				},
+			},
+			args:        []string{"--agent-name security-bot --model=claude-haiku-4"},
+			wantArgs:    []string{"--agent-name security-bot --model=claude-opus-4-6"},
+			wantChanged: true,
+		},
+		{
+			name: "fromTo: inline --model=FROM at end of string",
+			cfg: &config.AgentModel{
+				From: "claude-opus-4-6",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"claude --model=claude-opus-4-6"},
+			wantArgs:    []string{"claude --model=claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := ipc.TmuxRequest{
+				Command: "send-keys",
+				Args:    append([]string(nil), tt.args...),
+			}
+			changed, err := applyModelTransform(&req, staticModelLoader(tt.cfg))
+			if err != nil {
+				t.Fatalf("applyModelTransform() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			if !slices.Equal(req.Args, tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", req.Args, tt.wantArgs)
+			}
+		})
+	}
+}
+
 func TestApplyModelTransformOverridePriorityByDeclarationOrder(t *testing.T) {
 	modelCfg := &config.AgentModel{
 		From: "claude-opus-4-6",
@@ -608,7 +695,15 @@ func TestApplyModelTransformAcrossArgElements(t *testing.T) {
 	}
 }
 
-func TestApplyModelTransformReturnsErrorWithoutMutatingArgs(t *testing.T) {
+func TestApplyModelTransformSkipsOnLoaderError(t *testing.T) {
+	// Shim spec: config load failure must not block forwarding.
+	// applyModelTransform logs the error via debugLog and returns (false, nil).
+	//
+	// T-8: Verify that the error is written to the debug log file per CLAUDE.md
+	// spec "エラーはログにだけ出力しておくこと".
+	logDir := t.TempDir()
+	t.Setenv("LOCALAPPDATA", logDir)
+
 	req := ipc.TmuxRequest{
 		Command: "split-window",
 		Args:    []string{"--model claude-opus-4-6"},
@@ -618,14 +713,24 @@ func TestApplyModelTransformReturnsErrorWithoutMutatingArgs(t *testing.T) {
 	changed, err := applyModelTransform(&req, func() (*config.AgentModel, error) {
 		return nil, errors.New("load failed")
 	})
-	if err == nil {
-		t.Fatal("expected loader error")
+	if err != nil {
+		t.Fatalf("expected nil error (shim spec: swallow load errors), got: %v", err)
 	}
 	if changed {
 		t.Fatal("changed should be false on loader error")
 	}
 	if !slices.Equal(req.Args, before) {
 		t.Fatalf("args mutated on loader error: got %#v, want %#v", req.Args, before)
+	}
+
+	// Verify the error was written to the debug log file.
+	logPath := filepath.Join(logDir, "myT-x", "shim-debug.log")
+	logContent, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatalf("debug log file should exist at %s: %v", logPath, readErr)
+	}
+	if !strings.Contains(string(logContent), "config load failed") {
+		t.Fatalf("debug log should contain error message, got: %s", string(logContent))
 	}
 }
 
@@ -677,6 +782,265 @@ func TestApplyModelTransformEmptyArgsNoop(t *testing.T) {
 	}
 	if req.Args == nil {
 		t.Fatal("args slice should remain non-nil")
+	}
+}
+
+// resetModelConfigCache is a convenience alias for resetModelConfigLoadState.
+// It resets the global model config cache so that subsequent calls to
+// loadAgentModelConfig will re-read from disk.
+func resetModelConfigCache() {
+	resetModelConfigLoadState()
+}
+
+func TestResetModelConfigCacheClearsLoadedState(t *testing.T) {
+	// Verify that resetModelConfigCache properly resets the cache,
+	// allowing loadAgentModelConfig to re-read from disk.
+	resetModelConfigCache()
+	t.Cleanup(resetModelConfigCache)
+
+	localAppData := t.TempDir()
+	t.Setenv("LOCALAPPDATA", localAppData)
+	t.Setenv("APPDATA", "")
+
+	configPath := config.DefaultPath()
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("agent_model:\n  from: a\n  to: b\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	first, err := loadAgentModelConfig()
+	if err != nil {
+		t.Fatalf("first load error: %v", err)
+	}
+	if first == nil || first.From != "a" {
+		t.Fatalf("first load = %+v, want from=a", first)
+	}
+
+	// Write a different config
+	if err := os.WriteFile(configPath, []byte("agent_model:\n  from: x\n  to: y\n"), 0o600); err != nil {
+		t.Fatalf("overwrite config: %v", err)
+	}
+
+	// Without reset, cache returns stale data
+	cached, err := loadAgentModelConfig()
+	if err != nil {
+		t.Fatalf("cached load error: %v", err)
+	}
+	if cached.From != "a" {
+		t.Fatalf("cached should return stale from=a, got %q", cached.From)
+	}
+
+	// After reset, fresh data is loaded
+	resetModelConfigCache()
+	fresh, err := loadAgentModelConfig()
+	if err != nil {
+		t.Fatalf("fresh load error: %v", err)
+	}
+	if fresh.From != "x" || fresh.To != "y" {
+		t.Fatalf("fresh load = %+v, want from=x to=y", fresh)
+	}
+}
+
+func TestApplyModelOverrideModelEqualsEmptyValue(t *testing.T) {
+	// I-25: Verify that --model= with empty value after equals is skipped.
+	modelCfg := &config.AgentModel{
+		Overrides: []config.AgentModelOverride{
+			{Name: "security", Model: "claude-opus-4-6"},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		args        []string
+		wantArgs    []string
+		wantChanged bool
+	}{
+		{
+			name:        "--model= empty value (override path)",
+			args:        []string{"--agent-name", "security-bot", "--model="},
+			wantArgs:    []string{"--agent-name", "security-bot", "--model="},
+			wantChanged: false,
+		},
+		{
+			name:        "--model= whitespace value (override path)",
+			args:        []string{"--agent-name", "security-bot", "--model=  "},
+			wantArgs:    []string{"--agent-name", "security-bot", "--model=  "},
+			wantChanged: false,
+		},
+		{
+			name:        "--model= valid value (override path)",
+			args:        []string{"--agent-name", "security-bot", "--model=claude-sonnet-4-5"},
+			wantArgs:    []string{"--agent-name", "security-bot", "--model=claude-opus-4-6"},
+			wantChanged: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := ipc.TmuxRequest{
+				Command: "send-keys",
+				Args:    append([]string(nil), tt.args...),
+			}
+			changed, err := applyModelTransform(&req, staticModelLoader(modelCfg))
+			if err != nil {
+				t.Fatalf("applyModelTransform() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			if !slices.Equal(req.Args, tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", req.Args, tt.wantArgs)
+			}
+		})
+	}
+}
+
+func TestIsAllModelFrom(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"ALL", true},
+		{"all", true},
+		{"All", true},
+		{"aLl", true},
+		{" ALL ", true},
+		{"  all  ", true},
+		{"ALLX", false},
+		{"XALL", false},
+		{"model", false},
+		{"", false},
+		{" ", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := isAllModelFrom(tt.input); got != tt.want {
+				t.Fatalf("isAllModelFrom(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyModelTransformAllWildcard(t *testing.T) {
+	const targetModel = "claude-sonnet-4-5"
+
+	tests := []struct {
+		name        string
+		from        string
+		overrides   []config.AgentModelOverride
+		args        []string
+		wantArgs    []string
+		wantChanged bool
+	}{
+		{
+			name:        "ALL replaces any model (inline)",
+			from:        "ALL",
+			args:        []string{"--model claude-opus-4-6"},
+			wantArgs:    []string{"--model claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name:        "ALL replaces any model (tokenized)",
+			from:        "ALL",
+			args:        []string{"--model", "claude-opus-4-6"},
+			wantArgs:    []string{"--model", "claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name:        "ALL replaces any model (--model=)",
+			from:        "ALL",
+			args:        []string{"--model=claude-opus-4-6"},
+			wantArgs:    []string{"--model=claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name:        "case insensitivity: all",
+			from:        "all",
+			args:        []string{"--model claude-opus-4-6"},
+			wantArgs:    []string{"--model claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name:        "case insensitivity: All",
+			from:        "All",
+			args:        []string{"--model claude-opus-4-6"},
+			wantArgs:    []string{"--model claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name: "override wins over ALL",
+			from: "ALL",
+			overrides: []config.AgentModelOverride{
+				{Name: "security", Model: "claude-opus-4-6"},
+			},
+			args:        []string{"--agent-name security-bot --model claude-haiku-4"},
+			wantArgs:    []string{"--agent-name security-bot --model claude-opus-4-6"},
+			wantChanged: true,
+		},
+		{
+			name: "ALL fallback when override does not match",
+			from: "ALL",
+			overrides: []config.AgentModelOverride{
+				{Name: "security", Model: "claude-opus-4-6"},
+			},
+			args:        []string{"--agent-name explorer --model claude-haiku-4"},
+			wantArgs:    []string{"--agent-name explorer --model claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name:        "ALL with no --model flag",
+			from:        "ALL",
+			args:        []string{"--agent-name foo --agent-type Explore"},
+			wantArgs:    []string{"--agent-name foo --agent-type Explore"},
+			wantChanged: false,
+		},
+		{
+			name:        "ALL replaces multiple --model in single arg",
+			from:        "ALL",
+			args:        []string{"--model claude-opus-4-6 --flag x --model claude-haiku-4"},
+			wantArgs:    []string{"--model claude-sonnet-4-5 --flag x --model claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name:        "ALL with empty --model= value skipped",
+			from:        "ALL",
+			args:        []string{"--model="},
+			wantArgs:    []string{"--model="},
+			wantChanged: false,
+		},
+		{
+			name:        "ALL with whitespace --model value skipped",
+			from:        "ALL",
+			args:        []string{"--model", "   "},
+			wantArgs:    []string{"--model", "   "},
+			wantChanged: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			modelCfg := &config.AgentModel{
+				From:      tt.from,
+				To:        targetModel,
+				Overrides: tt.overrides,
+			}
+			req := ipc.TmuxRequest{
+				Command: "send-keys",
+				Args:    append([]string(nil), tt.args...),
+			}
+			changed, err := applyModelTransform(&req, staticModelLoader(modelCfg))
+			if err != nil {
+				t.Fatalf("applyModelTransform() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			if !slices.Equal(req.Args, tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", req.Args, tt.wantArgs)
+			}
+		})
 	}
 }
 
@@ -742,6 +1106,241 @@ func TestApplyModelTransformConfiguredOverridesFromUserConfig(t *testing.T) {
 			want := `--agent-name ` + tt.agentName + ` --model ` + tt.wantModel
 			if got := req.Args[0]; got != want {
 				t.Fatalf("args[0] = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// I-27: Verify anyModelFlagPattern greedy \S+ handles multiple --model flags correctly.
+// The greedy quantifier is correct because \S+ stops at whitespace, ensuring each
+// --model occurrence is matched independently by ReplaceAllString.
+func TestAnyModelFlagPatternMultipleFlagCoexistence(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfg         *config.AgentModel
+		args        []string
+		wantArgs    []string
+		wantChanged bool
+	}{
+		{
+			name: "fromTo: two --model space-separated in single arg",
+			cfg: &config.AgentModel{
+				From: "claude-opus-4-6",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"--model claude-opus-4-6 --flag x --model claude-opus-4-6"},
+			wantArgs:    []string{"--model claude-sonnet-4-5 --flag x --model claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name: "fromTo: two --model= equals-joined in single arg",
+			cfg: &config.AgentModel{
+				From: "claude-opus-4-6",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"--model=claude-opus-4-6 --flag x --model=claude-opus-4-6"},
+			wantArgs:    []string{"--model=claude-sonnet-4-5 --flag x --model=claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name: "fromTo: mixed space and equals in single arg",
+			cfg: &config.AgentModel{
+				From: "claude-opus-4-6",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"--model claude-opus-4-6 --flag x --model=claude-opus-4-6"},
+			wantArgs:    []string{"--model claude-sonnet-4-5 --flag x --model=claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name: "fromTo: only first matches from value, second is different model",
+			cfg: &config.AgentModel{
+				From: "claude-opus-4-6",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"--model claude-opus-4-6 --flag x --model claude-haiku-4"},
+			wantArgs:    []string{"--model claude-sonnet-4-5 --flag x --model claude-haiku-4"},
+			wantChanged: true,
+		},
+		{
+			name: "ALL: replaces both different models in single arg",
+			cfg: &config.AgentModel{
+				From: "ALL",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"--model claude-opus-4-6 --flag x --model claude-haiku-4"},
+			wantArgs:    []string{"--model claude-sonnet-4-5 --flag x --model claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name: "fromTo: multiple flags across separate arg elements",
+			cfg: &config.AgentModel{
+				From: "claude-opus-4-6",
+				To:   "claude-sonnet-4-5",
+			},
+			args:        []string{"--model claude-opus-4-6", "--model claude-opus-4-6"},
+			wantArgs:    []string{"--model claude-sonnet-4-5", "--model claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := ipc.TmuxRequest{
+				Command: "send-keys",
+				Args:    append([]string(nil), tt.args...),
+			}
+			changed, err := applyModelTransform(&req, staticModelLoader(tt.cfg))
+			if err != nil {
+				t.Fatalf("applyModelTransform() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			if !slices.Equal(req.Args, tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", req.Args, tt.wantArgs)
+			}
+		})
+	}
+}
+
+// I-28: Verify applyFromToReplacement empty value guards are symmetric with applyModelOverride.
+func TestApplyFromToReplacementEmptyValueGuard(t *testing.T) {
+	modelCfg := &config.AgentModel{
+		From: "claude-opus-4-6",
+		To:   "claude-sonnet-4-5",
+	}
+
+	tests := []struct {
+		name        string
+		args        []string
+		wantArgs    []string
+		wantChanged bool
+	}{
+		{
+			name:        "tokenized --model with empty next arg",
+			args:        []string{"--model", ""},
+			wantArgs:    []string{"--model", ""},
+			wantChanged: false,
+		},
+		{
+			name:        "tokenized --model with whitespace next arg",
+			args:        []string{"--model", "   "},
+			wantArgs:    []string{"--model", "   "},
+			wantChanged: false,
+		},
+		{
+			name:        "--model= with empty value",
+			args:        []string{"--model="},
+			wantArgs:    []string{"--model="},
+			wantChanged: false,
+		},
+		{
+			name:        "--model= with whitespace value",
+			args:        []string{"--model=  "},
+			wantArgs:    []string{"--model=  "},
+			wantChanged: false,
+		},
+		{
+			name:        "tokenized --model with matching value replaces",
+			args:        []string{"--model", "claude-opus-4-6"},
+			wantArgs:    []string{"--model", "claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name:        "--model= with matching value replaces",
+			args:        []string{"--model=claude-opus-4-6"},
+			wantArgs:    []string{"--model=claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := ipc.TmuxRequest{
+				Command: "send-keys",
+				Args:    append([]string(nil), tt.args...),
+			}
+			changed, err := applyModelTransform(&req, staticModelLoader(modelCfg))
+			if err != nil {
+				t.Fatalf("applyModelTransform() error = %v", err)
+			}
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			if !slices.Equal(req.Args, tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", req.Args, tt.wantArgs)
+			}
+		})
+	}
+}
+
+// S-23: Exercise the splitModelEqualsArg defense-in-depth path in applyFromToReplacement.
+// This path is normally dead code (the regex handles --model=<value>), but is retained
+// as a safety net. This test verifies it works correctly if ever reached.
+func TestApplyFromToReplacementSplitModelEqualsDefenseInDepth(t *testing.T) {
+	// To exercise the splitModelEqualsArg path in applyFromToReplacement, we need
+	// a --model=<value> token that is NOT matched by the regex but IS parseable by
+	// splitModelEqualsArg. The regex uses (?i), so case won't help. Instead we
+	// directly test the transformer's applyFromToReplacement method with a
+	// modelPattern that intentionally does not match a specific value, forcing
+	// fallthrough to the splitModelEqualsArg path.
+	transformer := &modelTransformer{
+		modelFrom: "claude-opus-4-6",
+		modelTo:   "claude-sonnet-4-5",
+		// Pattern that matches only the space-separated form, not equals form.
+		// This is artificial — in production the pattern covers both. Used here
+		// to exercise the defense-in-depth splitModelEqualsArg fallback.
+		modelPattern: regexp.MustCompile(`(?i)(--model\s+)claude-opus-4-6(\s|$)`),
+	}
+
+	tests := []struct {
+		name        string
+		args        []string
+		wantArgs    []string
+		wantChanged bool
+	}{
+		{
+			name:        "splitModelEqualsArg path matches from value",
+			args:        []string{"--model=claude-opus-4-6"},
+			wantArgs:    []string{"--model=claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+		{
+			name:        "splitModelEqualsArg path skips non-matching value",
+			args:        []string{"--model=claude-haiku-4"},
+			wantArgs:    []string{"--model=claude-haiku-4"},
+			wantChanged: false,
+		},
+		{
+			name:        "splitModelEqualsArg path skips empty value",
+			args:        []string{"--model="},
+			wantArgs:    []string{"--model="},
+			wantChanged: false,
+		},
+		{
+			name:        "splitModelEqualsArg path skips whitespace value",
+			args:        []string{"--model=  "},
+			wantArgs:    []string{"--model=  "},
+			wantChanged: false,
+		},
+		{
+			name:        "space-separated form still works via regex",
+			args:        []string{"--model claude-opus-4-6"},
+			wantArgs:    []string{"--model claude-sonnet-4-5"},
+			wantChanged: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string(nil), tt.args...)
+			changed := transformer.applyFromToReplacement(args)
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			if !slices.Equal(args, tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
 			}
 		})
 	}

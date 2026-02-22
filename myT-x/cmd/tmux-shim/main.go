@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -86,7 +87,9 @@ func debugLogFallback(err error) {
 	// NOTE: stderr fallback logging is best-effort for debug visibility only.
 	// Message ordering is not guaranteed across concurrent writers.
 	if _, writeErr := fmt.Fprintf(os.Stderr, "[DEBUG-SHIM] logging unavailable: %v\n", err); writeErr != nil {
-		// Best effort: stderr itself may be unavailable.
+		// S-11: Practically unreachable — stderr would need to be closed or redirected
+		// to a broken pipe for this branch to execute. Kept as defense-in-depth to avoid
+		// panicking if the OS environment is severely degraded.
 	}
 }
 
@@ -148,6 +151,8 @@ func main() {
 	}
 
 	req.CallerPane = strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	// NOTE: applyModelTransform always returns nil error (config failures are swallowed per shim spec).
+	// transformErr is non-nil only when runTransformSafe recovers from a panic — handled below.
 	transformed, transformErr := runTransformSafe("model", &req, func() (bool, error) {
 		return applyModelTransform(&req, nil)
 	})
@@ -226,7 +231,7 @@ func writeLineToStderr(message string) {
 func rotateShimDebugLogIfNeeded(basePath string, maxBytes int64, unixTime int64) error {
 	info, err := os.Stat(basePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -236,7 +241,7 @@ func rotateShimDebugLogIfNeeded(basePath string, maxBytes int64, unixTime int64)
 	}
 
 	logDir := filepath.Dir(basePath)
-	for retry := 0; retry < 4; retry++ {
+	for retry := range 4 {
 		nextPath, err := nextRotatedShimDebugLogPath(logDir, unixTime+int64(retry))
 		if err != nil {
 			return err
@@ -252,10 +257,10 @@ func rotateShimDebugLogIfNeeded(basePath string, maxBytes int64, unixTime int64)
 			}
 			return nil
 		}
-		if os.IsExist(err) {
+		if errors.Is(err, os.ErrExist) {
 			continue
 		}
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			// Another process already rotated/deleted it.
 			return nil
 		}
@@ -268,11 +273,11 @@ func nextRotatedShimDebugLogPath(logDir string, unixTime int64) (string, error) 
 	// keep=32 is the normal steady state, and 64 keeps 2x headroom for
 	// short timestamp collisions during concurrent rotations.
 	const maxAttempts = 64
-	for offset := int64(0); offset < maxAttempts; offset++ {
+	for offset := range int64(maxAttempts) {
 		candidateUnix := unixTime + offset
 		candidate := filepath.Join(logDir, fmt.Sprintf("shim-debug-%d.log", candidateUnix))
 		_, err := os.Stat(candidate)
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return candidate, nil
 		}
 		if err != nil {
@@ -352,6 +357,11 @@ func parseRotatedShimDebugLogUnix(path string) (int64, bool) {
 
 // pruneRotatedShimDebugLogs keeps the newest keep generations and removes
 // older rotated shim logs.
+//
+// IMPORTANT: This function MUST NOT call debugLog() because it is invoked from
+// the rotation path: debugLog -> rotateShimDebugLogIfNeeded -> pruneRotatedShimDebugLogs.
+// Calling debugLog here would create infinite recursion -> stack overflow (C-03).
+// Use pruneLogWarning() for any diagnostic output instead.
 func pruneRotatedShimDebugLogs(logDir string, keep int) error {
 	if keep <= 0 {
 		return nil
@@ -376,7 +386,8 @@ func pruneRotatedShimDebugLogs(logDir string, keep int) error {
 		timestamp, ok := parseRotatedShimDebugLogUnix(name)
 		if !ok {
 			if strings.HasPrefix(name, "shim-debug-") && strings.HasSuffix(name, ".log") {
-				debugLog("skip rotated shim debug log with invalid unix timestamp: %s", name)
+				// Cannot use debugLog here — see function doc comment (C-03 recursion guard).
+				pruneLogWarning("skip rotated shim debug log with invalid unix timestamp: %s", name)
 			}
 			continue
 		}
@@ -393,11 +404,23 @@ func pruneRotatedShimDebugLogs(logDir string, keep int) error {
 
 	var removeErrs []error
 	for i := keep; i < len(logs); i++ {
-		if err := removeFileFn(logs[i].path); err != nil && !os.IsNotExist(err) {
+		if err := removeFileFn(logs[i].path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			removeErrs = append(removeErrs, fmt.Errorf("remove %s: %w", logs[i].path, err))
 		}
 	}
 	return errors.Join(removeErrs...)
+}
+
+// pruneLogWarning writes a warning directly to stderr, bypassing debugLog
+// to avoid infinite recursion in the log rotation path (C-03).
+// This is intentionally best-effort: if stderr is unavailable the warning is silently dropped.
+// Uses fmt.Fprintf instead of log.New to avoid allocating a new Logger per call.
+func pruneLogWarning(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	now := time.Now().Format("2006/01/02 15:04:05")
+	// NOTE: stderr write is best-effort for debug visibility only.
+	// Failure to write is silently ignored (shim must not block on diagnostics).
+	fmt.Fprintf(os.Stderr, "[DEBUG-SHIM] %s %s\n", now, msg)
 }
 
 // runTransformSafe executes one transform stage with panic recovery and request rollback.
@@ -436,15 +459,11 @@ func cloneTransformRequest(req *ipc.TmuxRequest) ipc.TmuxRequest {
 	clone := *req
 	if req.Flags != nil {
 		clone.Flags = make(map[string]any, len(req.Flags))
-		for key, value := range req.Flags {
-			clone.Flags[key] = value
-		}
+		maps.Copy(clone.Flags, req.Flags)
 	}
 	if req.Env != nil {
 		clone.Env = make(map[string]string, len(req.Env))
-		for key, value := range req.Env {
-			clone.Env[key] = value
-		}
+		maps.Copy(clone.Env, req.Env)
 	}
 	if req.Args != nil {
 		clone.Args = append([]string(nil), req.Args...)

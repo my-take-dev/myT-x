@@ -1,11 +1,13 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -103,7 +105,7 @@ func GenerateWorktreePath(repoPath, identifier string) string {
 // If basePath already exists, it appends -2, -3, ... until a free path is found.
 func FindAvailableWorktreePath(basePath string) string {
 	if _, err := os.Stat(basePath); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return basePath
 		}
 		// NOTE: Permission errors or other I/O failures are logged but treated
@@ -114,7 +116,7 @@ func FindAvailableWorktreePath(basePath string) string {
 	for i := 2; i <= maxWorktreePathSuffix; i++ {
 		candidate := fmt.Sprintf("%s-%d", basePath, i)
 		if _, err := os.Stat(candidate); err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				return candidate
 			}
 			slog.Debug("[DEBUG-GIT] FindAvailableWorktreePath: stat returned non-NotExist error",
@@ -138,10 +140,8 @@ func ValidateWorktreePath(path string) error {
 	segments := strings.FieldsFunc(path, func(r rune) bool {
 		return r == '/' || r == '\\'
 	})
-	for _, segment := range segments {
-		if segment == ".." {
-			return fmt.Errorf("worktree path must not contain '..' path segment: %s", path)
-		}
+	if slices.Contains(segments, "..") {
+		return fmt.Errorf("worktree path must not contain '..' path segment: %s", path)
 	}
 
 	base := filepath.Base(cleanedPath)

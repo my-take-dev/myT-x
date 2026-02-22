@@ -213,11 +213,11 @@ func nextToken(s string) (string, string) {
 		return "", s
 	}
 
-	idx := strings.IndexByte(s, ' ')
-	if idx < 0 {
+	before, after, ok := strings.Cut(s, " ")
+	if !ok {
 		return s, ""
 	}
-	return s[:idx], s[idx+1:]
+	return before, after
 }
 
 func addCallOperatorIfNeeded(cmd string) string {

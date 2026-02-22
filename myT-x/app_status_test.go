@@ -121,3 +121,105 @@ func TestResolvePaneTitleUsesActivePaneIndex(t *testing.T) {
 		t.Fatalf("resolvePaneTitle() = %q, want %q", got, "by-index")
 	}
 }
+
+func TestResolvePaneTitleEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		panes    []tmux.PaneSnapshot
+		activePN int
+		want     string
+	}{
+		{
+			// activePN does not match any pane.Index; fall back to pane with Active=true.
+			name: "activePN mismatch falls back to Active=true pane",
+			panes: []tmux.PaneSnapshot{
+				{ID: "%1", Index: 0, Title: "inactive-pane", Active: false},
+				{ID: "%2", Index: 1, Title: "active-pane", Active: true},
+			},
+			activePN: 99,
+			want:     "active-pane",
+		},
+		{
+			// activePN mismatch, no Active=true pane: return the first pane with a non-empty Title.
+			name: "activePN mismatch and no Active pane returns first titled pane",
+			panes: []tmux.PaneSnapshot{
+				{ID: "%1", Index: 0, Title: "", Active: false},
+				{ID: "%2", Index: 1, Title: "only-titled", Active: false},
+			},
+			activePN: 99,
+			want:     "only-titled",
+		},
+		{
+			// activePN mismatch, no Active=true, no titled pane: return first pane ID as last resort.
+			name: "activePN mismatch and no titled pane falls back to first pane ID",
+			panes: []tmux.PaneSnapshot{
+				{ID: "%3", Index: 0, Title: "", Active: false},
+				{ID: "%4", Index: 1, Title: "", Active: false},
+			},
+			activePN: 99,
+			want:     "%3",
+		},
+		{
+			// activePN matches but matched pane has no title; fall back to any titled pane.
+			name: "matched pane has empty title falls back to other titled pane",
+			panes: []tmux.PaneSnapshot{
+				{ID: "%1", Index: 0, Title: "", Active: true},
+				{ID: "%2", Index: 1, Title: "other-title", Active: false},
+			},
+			activePN: 0,
+			want:     "other-title",
+		},
+		{
+			name:     "empty panes returns empty string",
+			panes:    nil,
+			activePN: 0,
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolvePaneTitle(tt.panes, tt.activePN)
+			if got != tt.want {
+				t.Fatalf("resolvePaneTitle() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveActiveWindowSnapshotUsesActiveWindowID(t *testing.T) {
+	windows := []tmux.WindowSnapshot{
+		{ID: 10, Name: "first"},
+		{ID: 20, Name: "second"},
+	}
+
+	got := resolveActiveWindowSnapshot(windows, 20)
+	if got == nil {
+		t.Fatal("resolveActiveWindowSnapshot() = nil, want non-nil")
+	}
+	if got.ID != 20 {
+		t.Fatalf("resolveActiveWindowSnapshot().ID = %d, want %d", got.ID, 20)
+	}
+}
+
+func TestResolveActiveWindowSnapshotFallsBackToFirst(t *testing.T) {
+	windows := []tmux.WindowSnapshot{
+		{ID: 10, Name: "first"},
+		{ID: 20, Name: "second"},
+	}
+
+	got := resolveActiveWindowSnapshot(windows, 999)
+	if got == nil {
+		t.Fatal("resolveActiveWindowSnapshot() = nil, want non-nil")
+	}
+	if got.ID != 10 {
+		t.Fatalf("resolveActiveWindowSnapshot().ID = %d, want %d", got.ID, 10)
+	}
+}
+
+func TestResolveActiveWindowSnapshotReturnsNilOnEmptyWindows(t *testing.T) {
+	got := resolveActiveWindowSnapshot(nil, 1)
+	if got != nil {
+		t.Fatalf("resolveActiveWindowSnapshot() = %#v, want nil", got)
+	}
+}

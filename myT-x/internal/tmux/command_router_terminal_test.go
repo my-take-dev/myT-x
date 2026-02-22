@@ -415,7 +415,7 @@ func TestMergePaneEnvDefaultsNilEnv(t *testing.T) {
 }
 
 func TestMergeEnvironmentBlocksPaneEnvBlockedKeys(t *testing.T) {
-	// Simulate the full flow: paneEnv → mergePaneEnvDefaults → mergeEnvironment.
+	// Simulate the full flow: paneEnv -> mergePaneEnvDefaults -> mergeEnvironment.
 	// Blocked keys set via paneEnv must be rejected by mergeEnvironment.
 	env := map[string]string{"SAFE": "ok"}
 	paneEnv := map[string]string{
@@ -491,5 +491,112 @@ func TestBlockedKeyListsMatch(t *testing.T) {
 			t.Errorf("blocked key mismatch at index %d: config=%q, tmux=%q\nconfig keys: %v\ntmux keys:   %v",
 				i, configSorted[i], tmuxSorted[i], configSorted, tmuxSorted)
 		}
+	}
+}
+
+// TestFrontendBackendBlockedEnvKeysConsistency verifies that the backend
+// blockedEnvironmentKeys matches the frontend BLOCKED_ENV_KEYS constant
+// from settingsValidation.ts. This test guards against accidental drift
+// when one list is updated without updating the other.
+//
+// INVARIANT: These keys must match frontend/src/components/settings/settingsValidation.ts BLOCKED_ENV_KEYS.
+// If this test fails, you MUST update BOTH:
+//  1. backend (this file): blockedEnvironmentKeys variable in command_router_terminal.go
+//  2. frontend: BLOCKED_ENV_KEYS constant in settingsValidation.ts
+//
+// Failure to keep them in sync will result in security bypass where frontend
+// validation allows a key that backend rejects (or vice versa).
+func TestFrontendBackendBlockedEnvKeysConsistency(t *testing.T) {
+	// These keys are hardcoded from frontend/src/components/settings/settingsValidation.ts
+	// BLOCKED_ENV_KEYS as of the last update. If the test fails, update this list
+	// to match the frontend const and update blockedEnvironmentKeys above.
+	//
+	// SYNC REQUIREMENT: フロントエンド側の BLOCKED_ENV_KEYS と同期が必要。
+	// When adding or removing a key from blockedEnvironmentKeys, you MUST also
+	// update the frontend BLOCKED_ENV_KEYS in settingsValidation.ts AND this test.
+	frontendBlockedKeys := []string{
+		"PATH",
+		"PATHEXT",
+		"COMSPEC",
+		"SYSTEMROOT",
+		"WINDIR",
+		"SYSTEMDRIVE",
+		"APPDATA",
+		"LOCALAPPDATA",
+		"PSMODULEPATH",
+		"TEMP",
+		"TMP",
+		"USERPROFILE",
+	}
+
+	// Convert to sorted slices for readable error messages on mismatch.
+	backendSorted := make([]string, 0, len(blockedEnvironmentKeys))
+	for k := range blockedEnvironmentKeys {
+		backendSorted = append(backendSorted, k)
+	}
+	sort.Strings(backendSorted)
+
+	frontendSorted := make([]string, len(frontendBlockedKeys))
+	copy(frontendSorted, frontendBlockedKeys)
+	sort.Strings(frontendSorted)
+
+	// Check length first for early exit.
+	if len(backendSorted) != len(frontendSorted) {
+		t.Fatalf("BLOCKED_ENV_KEYS count mismatch:\nbackend (%d): %v\nfrontend (%d): %v\n"+
+			"ACTION REQUIRED: Update both backend blockedEnvironmentKeys and frontend BLOCKED_ENV_KEYS to match",
+			len(backendSorted), backendSorted, len(frontendSorted), frontendSorted)
+	}
+
+	// Check each key matches (frontend is upper-cased in the check because isBlockedEnvironmentKey is case-insensitive).
+	for _, frontendKey := range frontendSorted {
+		if !isBlockedEnvironmentKey(frontendKey) {
+			t.Errorf("key %q is in frontend BLOCKED_ENV_KEYS but not in backend blockedEnvironmentKeys\n"+
+				"ACTION REQUIRED: Add %q to backend blockedEnvironmentKeys in command_router_terminal.go",
+				frontendKey, frontendKey)
+		}
+	}
+
+	// Also verify no extra backend keys that are missing from frontend list.
+	// This catches the case where backend added a new key but frontend wasn't updated.
+	for _, backendKey := range backendSorted {
+		found := false
+		for _, frontendKey := range frontendSorted {
+			if strings.EqualFold(backendKey, frontendKey) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("key %q is in backend blockedEnvironmentKeys but not in frontend BLOCKED_ENV_KEYS\n"+
+				"ACTION REQUIRED: Add %q to frontend BLOCKED_ENV_KEYS in settingsValidation.ts",
+				backendKey, backendKey)
+		}
+	}
+}
+
+// TestBlockedEnvironmentKeysCountGuard is a field-count guard that catches
+// additions or removals to blockedEnvironmentKeys. When the count changes,
+// you MUST update:
+//  1. This test's expected count
+//  2. TestFrontendBackendBlockedEnvKeysConsistency's frontendBlockedKeys list
+//  3. frontend/src/components/settings/settingsValidation.ts BLOCKED_ENV_KEYS
+//  4. internal/config/config.go warnOnlyBlockedKeys (verified by TestBlockedKeyListsMatch)
+//
+// SYNC REQUIREMENT: フロントエンド側の BLOCKED_ENV_KEYS と同期が必要。
+func TestBlockedEnvironmentKeysCountGuard(t *testing.T) {
+	// 12 blocked keys: PATH, PATHEXT, COMSPEC, SYSTEMROOT, WINDIR, SYSTEMDRIVE,
+	// APPDATA, LOCALAPPDATA, PSMODULEPATH, TEMP, TMP, USERPROFILE.
+	const expectedCount = 12
+	if got := len(blockedEnvironmentKeys); got != expectedCount {
+		// Extract sorted key list for diagnostic output.
+		keys := make([]string, 0, got)
+		for k := range blockedEnvironmentKeys {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		t.Fatalf("blockedEnvironmentKeys count = %d, want %d\nkeys: %v\n"+
+			"ACTION REQUIRED: Update this test, TestFrontendBackendBlockedEnvKeysConsistency, "+
+			"frontend BLOCKED_ENV_KEYS, and config.warnOnlyBlockedKeys to match",
+			got, expectedCount, keys)
 	}
 }

@@ -71,12 +71,9 @@ func (t *terminalState) Resize(cols int, rows int) {
 
 	if rows != t.rows {
 		// Linearize ring buffer into logical order before reshaping.
-		oldRows := t.rows
-		if oldRows > len(t.lines) {
-			oldRows = len(t.lines)
-		}
+		oldRows := min(t.rows, len(t.lines))
 		linearized := make([][]rune, oldRows)
-		for i := 0; i < oldRows; i++ {
+		for i := range oldRows {
 			linearized[i] = t.lines[t.physIdx(i)]
 		}
 
@@ -223,7 +220,7 @@ func (t *terminalState) consumeRune(r rune) {
 		}
 	case '\t':
 		spaces := 8 - (t.col % 8)
-		for i := 0; i < spaces; i++ {
+		for range spaces {
 			t.putRune(' ')
 		}
 	default:

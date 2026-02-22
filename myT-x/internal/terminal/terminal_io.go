@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -109,26 +110,27 @@ func (t *Terminal) ReadLoop(onData func([]byte)) {
 	slog.Info("[terminal] ReadLoop: using pipe mode")
 	var wg sync.WaitGroup
 	if stdout != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			readSource(stdout, onData)
-		}()
+		})
 	}
 	if stderr != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			readSource(stderr, onData)
-		}()
+		})
 	}
 	wg.Wait()
 	slog.Info("[terminal] ReadLoop: pipe mode ended")
 }
 
+// readBufSize is the I/O buffer size for the terminal read loop.
+// 64 KiB matches the typical ConPTY output chunk size and reduces
+// the number of read syscalls under heavy output load.
+const readBufSize = 64 * 1024
+
 func readSource(reader io.Reader, onData func([]byte)) {
 	slog.Info("[terminal] readSource started")
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, readBufSize)
 	for {
 		n, err := reader.Read(buf)
 		if n > 0 {
@@ -150,19 +152,13 @@ func normalizePipeInput(data []byte) []byte {
 		return data
 	}
 
-	hasCR := false
-	for _, b := range data {
-		if b == '\r' {
-			hasCR = true
-			break
-		}
-	}
+	hasCR := slices.Contains(data, '\r')
 	if !hasCR {
 		return data
 	}
 
 	out := make([]byte, 0, len(data)+8)
-	for i := 0; i < len(data); i++ {
+	for i := range data {
 		b := data[i]
 		if b != '\r' {
 			out = append(out, b)

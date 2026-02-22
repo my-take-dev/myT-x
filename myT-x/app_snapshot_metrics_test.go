@@ -86,20 +86,19 @@ func TestRecordSnapshotEmissionCountsFullPayloads(t *testing.T) {
 func TestSnapshotMetricsFieldCounts(t *testing.T) {
 	tests := []struct {
 		name     string
-		typ      any
+		numField int
 		expected int
 	}{
-		{"SessionSnapshot", tmux.SessionSnapshot{}, 8},
-		{"SessionWorktreeInfo", tmux.SessionWorktreeInfo{}, 5},
-		{"WindowSnapshot", tmux.WindowSnapshot{}, 5},
-		{"PaneSnapshot", tmux.PaneSnapshot{}, 6},
-		{"LayoutNode", tmux.LayoutNode{}, 5},
+		{"SessionSnapshot", reflect.TypeFor[tmux.SessionSnapshot]().NumField(), 9},
+		{"SessionWorktreeInfo", reflect.TypeFor[tmux.SessionWorktreeInfo]().NumField(), 5},
+		{"WindowSnapshot", reflect.TypeFor[tmux.WindowSnapshot]().NumField(), 5},
+		{"PaneSnapshot", reflect.TypeFor[tmux.PaneSnapshot]().NumField(), 6},
+		{"LayoutNode", reflect.TypeFor[tmux.LayoutNode]().NumField(), 5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reflect.TypeOf(tt.typ).NumField()
-			if got != tt.expected {
-				t.Fatalf("%s field count = %d, want %d; update estimate* helpers in app_snapshot_metrics.go", tt.name, got, tt.expected)
+			if tt.numField != tt.expected {
+				t.Fatalf("%s field count = %d, want %d; update estimate* helpers in app_snapshot_metrics.go", tt.name, tt.numField, tt.expected)
 			}
 		})
 	}

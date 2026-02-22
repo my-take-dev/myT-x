@@ -13,7 +13,17 @@ import (
 
 var (
 	agentNameFlagPattern = regexp.MustCompile(`--agent-name(?:\s+|=)(\S+)`)
-	anyModelFlagPattern  = regexp.MustCompile(`(?i)(--model\s+)\S+(\s|$)`)
+	// anyModelFlagPattern matches both "--model <value>" (space-separated) and
+	// "--model=<value>" (equals-joined) forms when they appear inline within a
+	// single argument string (e.g. "claude --model opus --flag" or
+	// "claude --model=opus --flag").
+	//
+	// I-27: \S+ is greedy but this is correct — \S+ stops at whitespace by
+	// definition, so greedy vs non-greedy (\S+?) produces identical results.
+	// With "..--model=v1 --model=v2", \S+ matches "v1" (stops at space),
+	// then ReplaceAllString finds the second "--model=v2" as a separate match.
+	// Both occurrences are replaced as expected.
+	anyModelFlagPattern = regexp.MustCompile(`(?i)(--model(?:\s+|=))\S+(\s|$)`)
 
 	modelConfigLoadMu sync.Mutex
 	modelConfigCached *config.AgentModel
@@ -22,6 +32,7 @@ var (
 
 var modelTransformCommands = map[string]struct{}{
 	"new-session":  {},
+	"new-window":   {},
 	"split-window": {},
 	"send-keys":    {},
 }
@@ -31,6 +42,7 @@ type modelConfigLoader func() (*config.AgentModel, error)
 type modelTransformer struct {
 	modelFrom    string
 	modelTo      string
+	matchAll     bool // true when From == "ALL" (case-insensitive wildcard)
 	modelPattern *regexp.Regexp
 	overrides    []modelOverrideRule
 }
@@ -41,8 +53,8 @@ type modelOverrideRule struct {
 }
 
 // applyModelTransform rewrites --model values according to agent_model config.
-// It returns (false, nil) when the command is out of scope or no rewrite applies.
-// It returns (false, err) when config loading fails or cannot be parsed.
+// It returns (false, nil) when the command is out of scope, no rewrite applies,
+// or config loading fails (shim spec: never block on transform failure).
 func applyModelTransform(req *ipc.TmuxRequest, load modelConfigLoader) (bool, error) {
 	// Defensive guard: upstream currently always provides non-nil requests.
 	// Keep this to prevent future call-site regressions from crashing shim flow.
@@ -58,7 +70,10 @@ func applyModelTransform(req *ipc.TmuxRequest, load modelConfigLoader) (bool, er
 
 	agentModel, err := load()
 	if err != nil {
-		return false, err
+		// Shim spec: transform failure must not block forwarding.
+		// Log the error and skip model transformation.
+		debugLog("applyModelTransform: config load failed: %v", err)
+		return false, nil
 	}
 
 	transformer := newModelTransformer(agentModel)
@@ -74,6 +89,16 @@ func applyModelTransform(req *ipc.TmuxRequest, load modelConfigLoader) (bool, er
 // loadAgentModelConfig loads agent_model from the default config path.
 // Successful reads are cached per process. Read errors are not cached so that
 // transient failures (e.g. temporary lock/parse race) can recover on retry.
+//
+// Thread safety: guarded by modelConfigLoadMu. Safe for concurrent calls from
+// multiple goroutines. The cached result pointer is immutable after first
+// successful load; callers must not modify the returned *AgentModel.
+//
+// NOTE: Global cache is not refreshed during process lifetime. This is
+// acceptable because the shim is a short-lived process (one invocation per
+// tmux command). If the shim becomes long-lived (daemon mode), add a TTL or
+// file-watcher reset mechanism. Tests that exercise this function must reset
+// the cache via resetModelConfigLoadState and must NOT use t.Parallel().
 func loadAgentModelConfig() (*config.AgentModel, error) {
 	modelConfigLoadMu.Lock()
 	defer modelConfigLoadMu.Unlock()
@@ -97,6 +122,12 @@ func isModelTransformCommand(command string) bool {
 	return ok
 }
 
+// isAllModelFrom returns true when from is the special wildcard "ALL" (case-insensitive).
+// When ALL is specified, all --model values are replaced with the target model.
+func isAllModelFrom(from string) bool {
+	return strings.EqualFold(strings.TrimSpace(from), "ALL")
+}
+
 func newModelTransformer(agentModel *config.AgentModel) *modelTransformer {
 	if agentModel == nil {
 		return nil
@@ -109,9 +140,15 @@ func newModelTransformer(agentModel *config.AgentModel) *modelTransformer {
 	}
 
 	if transformer.modelFrom != "" && transformer.modelTo != "" {
-		transformer.modelPattern = regexp.MustCompile(
-			`(?i)(--model\s+)` + regexp.QuoteMeta(transformer.modelFrom) + `(\s|$)`,
-		)
+		if isAllModelFrom(transformer.modelFrom) {
+			transformer.matchAll = true
+		} else {
+			// Match both "--model <from>" (space-separated) and "--model=<from>"
+			// (equals-joined) forms within inline argument strings.
+			transformer.modelPattern = regexp.MustCompile(
+				`(?i)(--model(?:\s+|=))` + regexp.QuoteMeta(transformer.modelFrom) + `(\s|$)`,
+			)
+		}
 	}
 
 	for _, override := range agentModel.Overrides {
@@ -126,21 +163,44 @@ func newModelTransformer(agentModel *config.AgentModel) *modelTransformer {
 		})
 	}
 
-	if transformer.modelPattern == nil && len(transformer.overrides) == 0 {
+	if transformer.modelPattern == nil && !transformer.matchAll && len(transformer.overrides) == 0 {
 		return nil
 	}
 	return transformer
 }
 
+// transform applies the model replacement strategy in priority order:
+//
+// S-07: 2-step fallthrough logic —
+//
+//	Step 1 (Override): If --agent-name matches a configured override rule, the
+//	  override's model is applied unconditionally via applyModelOverride. No further
+//	  steps run because overrides are agent-specific and take absolute precedence.
+//	Step 2 (Wildcard / From-To): When no override matched, the generic replacement
+//	  runs. "ALL" (matchAll) replaces every --model value; otherwise only values
+//	  matching modelFrom are replaced. These two branches are mutually exclusive
+//	  because newModelTransformer sets either matchAll or modelPattern, never both.
+//
+// Both steps use applyModelOverride for the actual replacement when the target
+// model is already known (override and ALL paths). applyFromToReplacement is
+// used only for the specific From->To case where value matching is required.
 func (t *modelTransformer) transform(args []string) {
 	if len(args) == 0 {
 		return
 	}
 
+	// Step 1: Agent-specific override (highest priority, exclusive).
 	if overrideModel, ok := t.findOverrideModel(args); ok {
-		if t.applyModelOverride(args, overrideModel) {
-			return
-		}
+		// Override found: apply it exclusively. Do not fall through to matchAll/fromTo
+		// even if --model flag is absent in args (agent may set model via other means).
+		t.applyModelOverride(args, overrideModel)
+		return
+	}
+
+	// Step 2: Generic model replacement (wildcard ALL or specific From->To).
+	if t.matchAll {
+		t.applyModelOverride(args, t.modelTo)
+		return
 	}
 
 	if t.modelPattern != nil {
@@ -148,12 +208,15 @@ func (t *modelTransformer) transform(args []string) {
 	}
 }
 
+// findOverrideModel scans args for an --agent-name value and matches it against
+// the configured override rules. Overrides are evaluated in declaration order
+// (first match wins). If no override matches, ("", false) is returned.
 func (t *modelTransformer) findOverrideModel(args []string) (string, bool) {
 	if len(t.overrides) == 0 {
 		return "", false
 	}
 
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		candidate, found := extractAgentName(args, i)
 		if !found {
 			continue
@@ -181,8 +244,13 @@ func (t *modelTransformer) applyModelOverride(args []string, targetModel string)
 		}
 
 		if !isModelFlagToken(currentArg) {
-			prefix, _, ok := splitModelEqualsArg(currentArg)
+			prefix, value, ok := splitModelEqualsArg(currentArg)
 			if !ok {
+				continue
+			}
+			// Defensive guard: skip replacement when --model= has empty value.
+			if strings.TrimSpace(value) == "" {
+				debugLog("applyModelOverride: skipping empty --model= value at args[%d]", i)
 				continue
 			}
 			args[i] = prefix + targetModel
@@ -209,6 +277,12 @@ func (t *modelTransformer) applyModelOverride(args []string, targetModel string)
 }
 
 func (t *modelTransformer) applyFromToReplacement(args []string) bool {
+	// Defense-in-depth: newModelTransformer guards against reaching here with
+	// empty from/to, but an explicit check prevents silent no-ops if call
+	// sites are added in the future.
+	if t.modelFrom == "" || t.modelTo == "" {
+		return false
+	}
 	replaced := false
 	safeModelTo := escapeRegexpReplacement(t.modelTo)
 	for i, currentArg := range args {
@@ -219,8 +293,23 @@ func (t *modelTransformer) applyFromToReplacement(args []string) bool {
 			continue
 		}
 		if !isModelFlagToken(currentArg) {
+			// S-23: Defense-in-depth — this splitModelEqualsArg path handles the case
+			// where --model=<value> appears as a standalone token (not embedded in a
+			// longer inline string). In practice, the regex pattern above should catch
+			// all --model=<value> forms, making this branch effectively dead code.
+			// Retained as a safety net against future regex changes or edge cases.
 			prefix, modelValue, ok := splitModelEqualsArg(currentArg)
-			if ok && strings.EqualFold(modelValue, t.modelFrom) {
+			if !ok {
+				continue
+			}
+			// I-28: Empty value guard — symmetric with applyModelOverride's guard.
+			// Skip replacement when --model= has empty value to prevent writing
+			// an empty model name into the argument.
+			if strings.TrimSpace(modelValue) == "" {
+				debugLog("applyFromToReplacement: skipping empty --model= value at args[%d]", i)
+				continue
+			}
+			if strings.EqualFold(modelValue, t.modelFrom) {
 				args[i] = prefix + t.modelTo
 				replaced = true
 			}
@@ -230,6 +319,13 @@ func (t *modelTransformer) applyFromToReplacement(args []string) bool {
 			continue
 		}
 		if isLikelyOptionToken(args[i+1]) {
+			continue
+		}
+		// I-28: Empty value guard — symmetric with applyModelOverride's guard.
+		// Skip replacement when next arg is empty/whitespace to prevent
+		// accidental empty model assignment if args are malformed.
+		if strings.TrimSpace(args[i+1]) == "" {
+			debugLog("applyFromToReplacement: skipping empty model value at args[%d]", i+1)
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(args[i+1]), t.modelFrom) {

@@ -1,106 +1,134 @@
-import type { FormDispatch, FormState } from "./types";
-import { generateId } from "./types";
+import type {FormDispatch, FormState} from "./types";
+import {generateId} from "./types";
 
 interface PaneEnvSettingsProps {
-  s: FormState;
-  dispatch: FormDispatch;
+    s: FormState;
+    dispatch: FormDispatch;
 }
 
-export function PaneEnvSettings({ s, dispatch }: PaneEnvSettingsProps) {
-  return (
-    <div className="settings-section">
-      <div className="settings-section-title">環境変数</div>
-      <span className="settings-desc" style={{ marginBottom: 8, display: "block" }}>
-        ペイン生成時に自動で埋め込む環境変数を設定します。
+export function PaneEnvSettings({s, dispatch}: PaneEnvSettingsProps) {
+    return (
+        <div className="settings-section">
+            <div className="settings-section-title">追加ペイン用 環境変数</div>
+            <span className="settings-desc" style={{marginBottom: 8, display: "block"}}>
+        セッション開始後に追加されるペインに自動で埋め込む環境変数を設定します。
+        セッション開始時の初期ターミナルには適用されません。
         コマンドの -e フラグで同じキーを指定した場合、-e の値が優先されます。
       </span>
 
-      <div className="form-group">
-        <label className="form-label">思考Level (CLAUDE_CODE_EFFORT_LEVEL)</label>
-        <select
-          className={`form-input ${s.validationErrors["pane_env_effort"] ? "input-error" : ""}`}
-          value={s.effortLevel}
-          onChange={(e) => dispatch({ type: "SET_FIELD", field: "effortLevel", value: e.target.value })}
-        >
-          <option value="">未設定</option>
-          <option value="low">low</option>
-          <option value="medium">medium</option>
-          <option value="high">high</option>
-        </select>
-        {s.validationErrors["pane_env_effort"] && (
-          <span className="form-error">{s.validationErrors["pane_env_effort"]}</span>
-        )}
-        <span className="settings-desc">
+            <div className="form-checkbox-row" style={{marginBottom: 12}}>
+                <input
+                    type="checkbox"
+                    id="pane-env-default-enabled"
+                    checked={s.paneEnvDefaultEnabled}
+                    onChange={(e) =>
+                        dispatch({type: "SET_FIELD", field: "paneEnvDefaultEnabled", value: e.target.checked})
+                    }
+                />
+                <label htmlFor="pane-env-default-enabled">
+                    セッション作成時にデフォルトON
+                </label>
+            </div>
+
+            <div className="form-group">
+                <label className="form-label">思考Level (CLAUDE_CODE_EFFORT_LEVEL)</label>
+                <select
+                    className={`form-input ${s.validationErrors["pane_env_effort"] ? "input-error" : ""}`}
+                    value={s.effortLevel}
+                    onChange={(e) => dispatch({type: "SET_FIELD", field: "effortLevel", value: e.target.value})}
+                >
+                    <option value="">未設定</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                </select>
+                {s.validationErrors["pane_env_effort"] && (
+                    <span className="form-error">{s.validationErrors["pane_env_effort"]}</span>
+                )}
+                <span className="settings-desc">
           CLAUDE_CODE_EFFORT_LEVEL 環境変数として設定されます
         </span>
-      </div>
+            </div>
 
-      <div className="form-group" style={{ marginTop: 8 }}>
-        <label className="form-label">カスタム環境変数</label>
-        <div className="settings-note">
-          追加の環境変数を設定します。システム変数(PATH等)は上書きできません。
-        </div>
+            <div className="form-group" style={{marginTop: 8}}>
+                <label className="form-label">カスタム環境変数</label>
+                <div className="settings-note">
+                    追加の環境変数を設定します。システム変数(PATH等)は上書きできません。
+                </div>
 
-        <div className="dynamic-list">
-          {s.paneEnvEntries.map((entry, index) => (
-            <div key={entry.id} className="override-row">
-              <div className="override-fields">
-                <div className="form-group">
-                  <input
-                    className={`form-input ${s.validationErrors[`pane_env_key_${index}`] ? "input-error" : ""}`}
-                    value={entry.key}
-                    onChange={(e) => dispatch({ type: "UPDATE_PANE_ENV_ENTRY", index, field: "key", value: e.target.value })}
-                    placeholder="変数名"
-                    aria-label={`環境変数名 ${index + 1}`}
-                  />
-                  {s.validationErrors[`pane_env_key_${index}`] && (
-                    <span className="form-error">
+                <div className="dynamic-list">
+                    {s.paneEnvEntries.map((entry, index) => (
+                        <div key={entry.id} className="override-row">
+                            <div className="override-fields">
+                                <div className="form-group">
+                                    <input
+                                        className={`form-input ${s.validationErrors[`pane_env_key_${index}`] ? "input-error" : ""}`}
+                                        value={entry.key}
+                                        onChange={(e) => dispatch({
+                                            type: "UPDATE_PANE_ENV_ENTRY",
+                                            index,
+                                            field: "key",
+                                            value: e.target.value
+                                        })}
+                                        placeholder="変数名"
+                                        aria-label={`環境変数名 ${index + 1}`}
+                                    />
+                                    {s.validationErrors[`pane_env_key_${index}`] && (
+                                        <span className="form-error">
                       {s.validationErrors[`pane_env_key_${index}`]}
                     </span>
-                  )}
-                </div>
-                <div className="form-group">
-                  <input
-                    className={`form-input ${s.validationErrors[`pane_env_val_${index}`] ? "input-error" : ""}`}
-                    value={entry.value}
-                    onChange={(e) => dispatch({ type: "UPDATE_PANE_ENV_ENTRY", index, field: "value", value: e.target.value })}
-                    placeholder="値"
-                    aria-label={`環境変数値 ${index + 1}`}
-                  />
-                  {s.validationErrors[`pane_env_val_${index}`] && (
-                    <span className="form-error">
+                                    )}
+                                </div>
+                                <div className="form-group">
+                                    <input
+                                        className={`form-input ${s.validationErrors[`pane_env_val_${index}`] ? "input-error" : ""}`}
+                                        value={entry.value}
+                                        onChange={(e) => dispatch({
+                                            type: "UPDATE_PANE_ENV_ENTRY",
+                                            index,
+                                            field: "value",
+                                            value: e.target.value
+                                        })}
+                                        placeholder="値"
+                                        aria-label={`環境変数値 ${index + 1}`}
+                                    />
+                                    {s.validationErrors[`pane_env_val_${index}`] && (
+                                        <span className="form-error">
                       {s.validationErrors[`pane_env_val_${index}`]}
                     </span>
-                  )}
+                                    )}
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                className="dynamic-list-remove"
+                                onClick={() =>
+                                    dispatch({
+                                        type: "SET_PANE_ENV_ENTRIES",
+                                        entries: s.paneEnvEntries.filter((e) => e.id !== entry.id)
+                                    })
+                                }
+                                title="削除"
+                                aria-label={`環境変数 ${entry.key || `項目${index + 1}`} を削除`}
+                            >
+                                &times;
+                            </button>
+                        </div>
+                    ))}
+                    <button
+                        type="button"
+                        className="modal-btn dynamic-list-add"
+                        onClick={() =>
+                            dispatch({
+                                type: "SET_PANE_ENV_ENTRIES",
+                                entries: [...s.paneEnvEntries, {id: generateId(), key: "", value: ""}],
+                            })
+                        }
+                    >
+                        + 環境変数追加
+                    </button>
                 </div>
-              </div>
-              <button
-                type="button"
-                className="dynamic-list-remove"
-                onClick={() =>
-                  dispatch({ type: "SET_PANE_ENV_ENTRIES", entries: s.paneEnvEntries.filter((_, i) => i !== index) })
-                }
-                title="削除"
-                aria-label={`環境変数 ${entry.key || `項目${index + 1}`} を削除`}
-              >
-                &times;
-              </button>
             </div>
-          ))}
-          <button
-            type="button"
-            className="modal-btn dynamic-list-add"
-            onClick={() =>
-              dispatch({
-                type: "SET_PANE_ENV_ENTRIES",
-                entries: [...s.paneEnvEntries, { id: generateId(), key: "", value: "" }],
-              })
-            }
-          >
-            + 環境変数追加
-          </button>
         </div>
-      </div>
-    </div>
-  );
+    );
 }

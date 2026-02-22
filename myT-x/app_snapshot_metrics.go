@@ -19,8 +19,19 @@ type snapshotMetrics struct {
 	deltaSamples int
 }
 
+// snapshotMetricsWindow is the rolling time window over which snapshot emission
+// statistics (counts, bytes, rates) are aggregated before being logged and reset.
 const snapshotMetricsWindow = 10 * time.Second
+
+// snapshotPayloadSampleEvery controls the payload size sampling rate.
+// Only every Nth snapshot emission triggers the (relatively expensive) payload
+// size estimation. Value 8 means ~12.5% of emissions are sampled, providing
+// representative byte-rate metrics without adding estimation overhead to every
+// snapshot on the hot path.
 const snapshotPayloadSampleEvery = 8
+
+// snapshotPayloadNotSampled is the sentinel value returned by
+// estimateSnapshotPayloadBytes when the current emission is not sampled.
 const snapshotPayloadNotSampled = -1
 
 // payloadSizeBytes estimates the JSON-serialized byte size of the given snapshot
@@ -65,12 +76,15 @@ func estimateSessionSnapshotListSize(snapshots []tmux.SessionSnapshot) int {
 }
 
 func estimateSessionSnapshotSize(snapshot tmux.SessionSnapshot) int {
-	// {"id":...,"name":"...","created_at":"...","is_idle":...,"windows":[...],"worktree":{...}}
-	size := 84
+	// Fixed overhead = sum of JSON key/punctuation bytes for all SessionSnapshot fields:
+	//   {"id":,"name":"","created_at":"","is_idle":,"active_window_id":,"is_agent_team":,"windows":,"worktree":,"root_path":""}
+	// Counted as: 2 (braces) + 9 field keys with quotes/colons/commas + string-value quotes = 103 bytes.
+	size := 103
 	size += estimateIntSize(snapshot.ID)
 	size += estimateStringSize(snapshot.Name)
 	size += estimateStringSize(snapshot.CreatedAt.Format(time.RFC3339Nano))
 	size += estimateBoolSize(snapshot.IsIdle)
+	size += estimateIntSize(snapshot.ActiveWindowID)
 	size += estimateBoolSize(snapshot.IsAgentTeam)
 	size += estimateWindowSnapshotListSize(snapshot.Windows)
 	size += estimateSessionWorktreeInfoSize(snapshot.Worktree)
