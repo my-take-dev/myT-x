@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -35,6 +36,8 @@ const (
 // directory-resolution failures in validateConfigPath.
 var defaultConfigDirFn = defaultConfigDir
 var userHomeDirFn = os.UserHomeDir
+var windowsEnvTokenPattern = regexp.MustCompile(`%[A-Za-z_][A-Za-z0-9_]*%`)
+var posixEnvTokenPattern = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*`)
 var yamlUnmarshalConfigMetadataFn = func(raw []byte, out *map[string]any) error {
 	return yaml.Unmarshal(raw, out)
 }
@@ -91,6 +94,13 @@ type Config struct {
 	// high-throughput pane data streaming. 0 (default) lets the OS assign
 	// an available port, which is recommended to avoid port conflicts.
 	WebSocketPort int `yaml:"websocket_port" json:"websocket_port"`
+	// ViewerShortcuts maps right-sidebar view IDs to keyboard shortcut strings.
+	// Example: {"file-tree": "Ctrl+Shift+E", "git-graph": "Ctrl+Shift+G"}
+	// When nil or a key is absent, the frontend uses its compiled-in default shortcut.
+	ViewerShortcuts map[string]string `yaml:"viewer_shortcuts,omitempty" json:"viewer_shortcuts,omitempty"`
+	// DefaultSessionDir is the directory used by Quick Start Session.
+	// Empty string means "use the application launch directory".
+	DefaultSessionDir string `yaml:"default_session_dir,omitempty" json:"default_session_dir,omitempty"`
 }
 
 // AgentModel holds from-to model name mapping for Agent Teams.
@@ -304,6 +314,11 @@ func Clone(src Config) Config {
 		dst.ClaudeEnv = &claudeEnvCopy
 	}
 
+	if src.ViewerShortcuts != nil {
+		dst.ViewerShortcuts = make(map[string]string, len(src.ViewerShortcuts))
+		maps.Copy(dst.ViewerShortcuts, src.ViewerShortcuts)
+	}
+
 	return dst
 }
 
@@ -488,6 +503,7 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	validateWebSocketPort(cfg)
 	sanitizePaneEnv(cfg)
 	sanitizeClaudeEnv(cfg)
+	validateDefaultSessionDir(cfg)
 	return nil
 }
 
@@ -530,6 +546,67 @@ func validateWebSocketPort(cfg *Config) {
 			"configured", cfg.WebSocketPort, "max", maxValidPort)
 		cfg.WebSocketPort = 0
 	}
+}
+
+// validateDefaultSessionDir normalizes DefaultSessionDir in place.
+// Expands ~ prefix to the user's home directory, applies filepath.Clean,
+// and clears non-absolute paths with a warning log (non-fatal).
+func validateDefaultSessionDir(cfg *Config) {
+	dir := strings.TrimSpace(cfg.DefaultSessionDir)
+	if dir == "" {
+		cfg.DefaultSessionDir = ""
+		return
+	}
+	// Expand ~ prefix to user home directory.
+	if strings.HasPrefix(dir, "~") {
+		home, err := userHomeDirFn()
+		if err != nil {
+			slog.Warn("[DEBUG-CONFIG] default_session_dir: failed to expand ~, ignoring",
+				"path", dir, "error", err)
+			cfg.DefaultSessionDir = ""
+			return
+		}
+		dir = filepath.Join(home, dir[1:])
+	}
+	// Expand environment variables for parity with shell-style path inputs.
+	dir = expandDefaultSessionDirEnv(dir)
+	dir = filepath.Clean(dir)
+	if !filepath.IsAbs(dir) {
+		slog.Warn("[DEBUG-CONFIG] default_session_dir is not an absolute path, ignoring", "path", dir)
+		cfg.DefaultSessionDir = ""
+		return
+	}
+	cfg.DefaultSessionDir = dir
+}
+
+func expandDefaultSessionDirEnv(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	// Expand Windows-style %VAR% tokens on all platforms for portability.
+	expanded := windowsEnvTokenPattern.ReplaceAllStringFunc(dir, func(token string) string {
+		key := token[1 : len(token)-1]
+		if value, ok := os.LookupEnv(key); ok {
+			return value
+		}
+		return token
+	})
+	// Skip POSIX-style $VAR expansion on Windows: '$' is a valid character
+	// in Windows file paths (e.g. C:\Users\foo$bar) and should not be
+	// interpreted as an environment variable reference.
+	if runtime.GOOS == "windows" {
+		return expanded
+	}
+	expanded = posixEnvTokenPattern.ReplaceAllStringFunc(expanded, func(token string) string {
+		key := strings.TrimPrefix(token, "$")
+		key = strings.TrimPrefix(key, "{")
+		key = strings.TrimSuffix(key, "}")
+		if value, ok := os.LookupEnv(key); ok {
+			return value
+		}
+		return token
+	})
+	return expanded
 }
 
 // warnOnlyBlockedKeys lists system environment keys that should not be

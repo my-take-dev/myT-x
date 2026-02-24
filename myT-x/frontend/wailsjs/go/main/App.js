@@ -102,6 +102,14 @@ export function GetCurrentBranch(arg1) {
   return window['go']['main']['App']['GetCurrentBranch'](arg1);
 }
 
+export function GetInputHistory() {
+  return window['go']['main']['App']['GetInputHistory']();
+}
+
+export function GetInputHistoryFilePath() {
+  return window['go']['main']['App']['GetInputHistoryFilePath']();
+}
+
 export function GetPaneEnv(arg1) {
   return window['go']['main']['App']['GetPaneEnv'](arg1);
 }
@@ -162,12 +170,20 @@ export function ListWorktreesByRepo(arg1) {
   return window['go']['main']['App']['ListWorktreesByRepo'](arg1);
 }
 
+export function LogFrontendEvent(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LogFrontendEvent'](arg1, arg2, arg3);
+}
+
 export function PickSessionDirectory() {
   return window['go']['main']['App']['PickSessionDirectory']();
 }
 
 export function PromoteWorktreeToBranch(arg1, arg2) {
   return window['go']['main']['App']['PromoteWorktreeToBranch'](arg1, arg2);
+}
+
+export function QuickStartSession() {
+  return window['go']['main']['App']['QuickStartSession']();
 }
 
 export function RenamePane(arg1, arg2) {

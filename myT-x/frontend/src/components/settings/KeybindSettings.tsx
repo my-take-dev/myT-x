@@ -1,5 +1,6 @@
 import type { FormDispatch, FormState } from "./types";
 import { ShortcutInput } from "./ShortcutInput";
+import { ViewerShortcutSettings } from "./ViewerShortcutSettings";
 import type { KnownKeyBinding } from "../../types/tmux";
 
 const KEY_BINDINGS: { key: KnownKeyBinding; label: string; defaultVal: string }[] = [
@@ -17,23 +18,28 @@ interface KeybindSettingsProps {
 
 export function KeybindSettings({ s, dispatch }: KeybindSettingsProps) {
   return (
-    <div className="settings-section">
-      <div className="settings-section-title">キーバインド</div>
-      <span className="settings-desc" style={{ marginBottom: 8, display: "block" }}>
-        プレフィックスキーに続けて入力するアクションキー
-      </span>
+    <>
+      <div className="settings-section">
+        <div className="settings-section-title">キーバインド</div>
+        <span className="settings-desc" style={{ marginBottom: 8, display: "block" }}>
+          プレフィックスキーに続けて入力するアクションキー
+        </span>
 
-      {KEY_BINDINGS.map((kb) => (
-        <div className="form-group" key={kb.key}>
-          <label className="shortcut-label">{kb.label}</label>
-          <ShortcutInput
-            value={s.keys[kb.key] || ""}
-            onChange={(v) => dispatch({ type: "UPDATE_KEY", key: kb.key, value: v })}
-            placeholder={kb.defaultVal}
-            ariaLabel={`${kb.key} shortcut`}
-          />
-        </div>
-      ))}
-    </div>
+        {KEY_BINDINGS.map((kb) => (
+          <div className="form-group" key={kb.key}>
+            <label className="shortcut-label" htmlFor={`keybind-${kb.key}`}>{kb.label}</label>
+            <ShortcutInput
+              id={`keybind-${kb.key}`}
+              value={s.keys[kb.key] || ""}
+              onChange={(v) => dispatch({ type: "UPDATE_KEY", key: kb.key, value: v })}
+              placeholder={kb.defaultVal}
+              ariaLabel={`${kb.key} shortcut`}
+            />
+          </div>
+        ))}
+      </div>
+
+      <ViewerShortcutSettings s={s} dispatch={dispatch} />
+    </>
   );
 }

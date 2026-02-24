@@ -1,15 +1,35 @@
-import {useEffect, useMemo, useState} from "react";
-import {ActivityStrip} from "./ActivityStrip";
-import {ViewOverlay} from "./ViewOverlay";
-import {useViewerStore} from "./viewerStore";
-import {getRegisteredViews, subscribeRegistry} from "./viewerRegistry";
-import {isImeTransitionalEvent} from "../../utils/ime";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityStrip } from "./ActivityStrip";
+import { ViewOverlay } from "./ViewOverlay";
+import { useViewerStore } from "./viewerStore";
+import { getRegisteredViews, subscribeRegistry } from "./viewerRegistry";
+import {
+    buildShortcutFromKeyboardEvent,
+    getEffectiveViewerShortcut,
+    hasShortcutModifier,
+    normalizeShortcut,
+} from "./viewerShortcutUtils";
+import { useTmuxStore } from "../../stores/tmuxStore";
+import { isImeTransitionalEvent } from "../../utils/ime";
 
 // Side-effect imports: each view self-registers into the registry.
+//
+// 【サイドバーアイコンの配置ルール】
+// 1. エラーログ表示以外のアイコンは、上から表示させたい順にここで import してください。
+// 2. エラーログ表示 (error-log) は必ず一番下に配置してください。
+// 3. エラーログ表示の下には絶対に新しいアイコンを追加（import）しないでください。
+// 4. 新しいビューを追加する場合、position フィールドは省略してください（= "top" がデフォルト）。
+// 5. position: "bottom" は error-log 専用です。他のビューには使用しないでください。
+
 import "./views/file-tree";
 import "./views/git-graph";
-import "./views/error-log";
 import "./views/diff-view";
+import "./views/input-history"; // DIFFの直下に配置
+
+// ---------------------------------------------------------
+// これより下にはエラーログ表示以外のアイコンを追加しないこと
+// ---------------------------------------------------------
+import "./views/error-log";
 
 export function ViewerSystem() {
     const activeViewId = useViewerStore((s) => s.activeViewId);
@@ -26,17 +46,42 @@ export function ViewerSystem() {
     }, []);
 
     const views = useMemo(() => getRegisteredViews(), [registryVersion]);
+    const viewerShortcutsConfig = useTmuxStore((s) => s.config?.viewer_shortcuts ?? null);
 
-    // Shortcut map is derived from the current registry snapshot.
+    // Shortcut map: config overrides take priority over registry defaults.
     const shortcutMap = useMemo(() => {
         const map = new Map<string, string>();
         for (const view of views) {
-            if (view.shortcut) {
-                map.set(view.shortcut.toLowerCase(), view.id);
+            const effectiveShortcut = getEffectiveViewerShortcut(
+                viewerShortcutsConfig?.[view.id],
+                view.shortcut,
+            );
+            if (!effectiveShortcut) {
+                continue;
             }
+            if (!hasShortcutModifier(effectiveShortcut)) {
+                if (import.meta.env.DEV) {
+                    console.warn(`[viewer-shortcut] ignored non-modifier shortcut for "${view.id}": "${effectiveShortcut}"`);
+                }
+                continue;
+            }
+            const normalized = normalizeShortcut(effectiveShortcut);
+            if (!normalized) {
+                continue;
+            }
+            const existingOwner = map.get(normalized);
+            if (existingOwner) {
+                if (import.meta.env.DEV) {
+                    console.warn(
+                        `[viewer-shortcut] duplicate shortcut "${normalized}" for "${existingOwner}" and "${view.id}"; keeping first`,
+                    );
+                }
+                continue;
+            }
+            map.set(normalized, view.id);
         }
         return map;
-    }, [views]);
+    }, [views, viewerShortcutsConfig]);
 
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
@@ -49,13 +94,14 @@ export function ViewerSystem() {
                 return;
             }
 
-            if (e.ctrlKey && e.shiftKey) {
-                const combo = `ctrl+shift+${e.key.toLowerCase()}`;
-                const viewId = shortcutMap.get(combo);
-                if (viewId) {
-                    e.preventDefault();
-                    toggleView(viewId);
-                }
+            const combo = buildShortcutFromKeyboardEvent(e);
+            if (combo === "") {
+                return;
+            }
+            const viewId = shortcutMap.get(combo);
+            if (viewId) {
+                e.preventDefault();
+                toggleView(viewId);
             }
         };
 
@@ -69,8 +115,8 @@ export function ViewerSystem() {
 
     return (
         <>
-            <ActivityStrip/>
-            <ViewOverlay/>
+            <ActivityStrip />
+            <ViewOverlay />
         </>
     );
 }

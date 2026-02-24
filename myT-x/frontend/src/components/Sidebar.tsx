@@ -157,9 +157,9 @@ export function Sidebar(props: SidebarProps) {
 
   const activateSession = useCallback(
     async (sessionName: string) => {
-      setActiveSession(sessionName);
       try {
         await api.SetActiveSession(sessionName);
+        setActiveSession(sessionName);
       } catch (error) {
         console.error("[sidebar] SetActiveSession failed", { sessionName, error });
         addNotification(`Failed to activate session "${sessionName}".`, "warn");

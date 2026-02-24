@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -52,6 +53,26 @@ func (a *App) initSessionLog() {
 	slog.Info("[session-log] initialized", "path", fullPath)
 }
 
+func parseSessionLogFileSortKey(name string) (timestamp string, pid int, ok bool) {
+	if !strings.HasPrefix(name, "session-") || !strings.HasSuffix(name, ".jsonl") {
+		return "", 0, false
+	}
+	core := strings.TrimSuffix(strings.TrimPrefix(name, "session-"), ".jsonl")
+	lastDash := strings.LastIndex(core, "-")
+	if lastDash <= 0 || lastDash+1 >= len(core) {
+		return "", 0, false
+	}
+	timestamp = core[:lastDash]
+	if len(timestamp) != len("20060102-150405") {
+		return "", 0, false
+	}
+	parsedPID, err := strconv.Atoi(core[lastDash+1:])
+	if err != nil {
+		return "", 0, false
+	}
+	return timestamp, parsedPID, true
+}
+
 // cleanupOldSessionLogs removes the oldest session log files when the count
 // exceeds sessionLogMaxFiles.
 func (a *App) cleanupOldSessionLogs() {
@@ -78,11 +99,25 @@ func (a *App) cleanupOldSessionLogs() {
 		}
 	}
 
-	// NOTE: sort.Strings sorts lexicographically. Files with the same timestamp but
-	// different PIDs are ordered by PID string value (not numeric). This is acceptable
-	// because cleanup only needs approximate age ordering -- the timestamp prefix
-	// ensures files are primarily ordered by creation time.
-	sort.Strings(logFiles)
+	// Canonical files are ordered by timestamp and numeric PID.
+	sort.Slice(logFiles, func(i, j int) bool {
+		leftTS, leftPID, leftOK := parseSessionLogFileSortKey(logFiles[i])
+		rightTS, rightPID, rightOK := parseSessionLogFileSortKey(logFiles[j])
+		if leftOK && rightOK {
+			if leftTS != rightTS {
+				return leftTS < rightTS
+			}
+			if leftPID != rightPID {
+				return leftPID < rightPID
+			}
+			return logFiles[i] < logFiles[j]
+		}
+		if leftOK != rightOK {
+			// Prefer trimming malformed/non-canonical files before canonical ones.
+			return !leftOK
+		}
+		return logFiles[i] < logFiles[j]
+	})
 
 	excess := len(logFiles) - sessionLogMaxFiles
 	if excess <= 0 {
@@ -90,6 +125,7 @@ func (a *App) cleanupOldSessionLogs() {
 	}
 
 	deleted := 0
+	deleteErrors := 0
 	for _, name := range logFiles {
 		if deleted >= excess {
 			break
@@ -105,10 +141,20 @@ func (a *App) cleanupOldSessionLogs() {
 		target := filepath.Join(logDir, name)
 		if err := os.Remove(target); err != nil {
 			slog.Warn("[session-log] failed to delete old log file", "path", target, "error", err)
+			deleteErrors++
 			continue
 		}
 		slog.Debug("[session-log] deleted old log file", "path", target)
 		deleted++
+	}
+	if deleted < excess {
+		slog.Warn(
+			"[session-log] cleanup could not enforce max file count",
+			"dir", logDir,
+			"maxFiles", sessionLogMaxFiles,
+			"remainingOverLimit", excess-deleted,
+			"deleteErrors", deleteErrors,
+		)
 	}
 }
 
@@ -238,4 +284,71 @@ func (a *App) GetSessionLogFilePath() string {
 	a.sessionLogMu.RLock()
 	defer a.sessionLogMu.RUnlock()
 	return a.sessionLogPath
+}
+
+// frontendLogMaxMsgLen and frontendLogMaxSourceLen cap the rune count of
+// frontend-submitted content to prevent unbounded JSONL file growth.
+const (
+	frontendLogMaxMsgLen    = 2000 // rune characters
+	frontendLogMaxSourceLen = 200  // rune characters
+)
+
+// truncateRunes returns s capped to maxRunes runes without allocating when
+// s is already within the limit.
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 || s == "" {
+		return ""
+	}
+	runeCount := 0
+	for byteIndex := range s {
+		if runeCount == maxRunes {
+			return s[:byteIndex]
+		}
+		runeCount++
+	}
+	return s
+}
+
+// normalizeLogLevel maps an arbitrary level string to one of the canonical
+// values used by the session log system: "error", "warn", "debug", or "info".
+// Any unrecognized value maps to "info" as a safe default.
+func normalizeLogLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "error":
+		return "error"
+	case "warn", "warning":
+		return "warn"
+	case "debug":
+		return "debug"
+	default:
+		return "info"
+	}
+}
+
+// LogFrontendEvent writes a frontend-originated event into the session log.
+// Wails-bound: called by the frontend to persist UI-layer errors (unhandled
+// exceptions, React crashes, API failures) alongside backend slog records.
+//
+// Inputs are sanitized before storage:
+//   - level is normalized to "error", "warn", "debug", or "info" via normalizeLogLevel.
+//   - msg and source are trimmed and capped by rune count.
+//   - Empty msg after trimming is silently discarded.
+func (a *App) LogFrontendEvent(level, msg, source string) {
+	level = normalizeLogLevel(level)
+	msg = strings.TrimSpace(msg)
+	source = strings.TrimSpace(source)
+	if msg == "" {
+		// NOTE: Silently discard empty messages. LogFrontendEvent is a
+		// fire-and-forget Wails call with no return value; callers cannot
+		// observe the discard.
+		return
+	}
+	msg = truncateRunes(msg, frontendLogMaxMsgLen)
+	source = truncateRunes(source, frontendLogMaxSourceLen)
+	a.writeSessionLogEntry(SessionLogEntry{
+		Timestamp: time.Now().Format("20060102150405"),
+		Level:     level,
+		Message:   msg,
+		Source:    source,
+	})
 }

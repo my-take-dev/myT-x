@@ -15,6 +15,8 @@ export interface FormState {
   quakeMode: boolean;
   globalHotkey: string;
   keys: Record<string, string>;
+  viewerShortcuts: Record<string, string>;
+  defaultSessionDir: string;
   wtEnabled: boolean;
   wtForceCleanup: boolean;
   wtSetupScripts: string[];
@@ -53,7 +55,8 @@ export type FormAction =
   | { type: "SET_PANE_ENV_ENTRIES"; entries: PaneEnvEntry[] }
   | { type: "UPDATE_PANE_ENV_ENTRY"; index: number; field: "key" | "value"; value: string }
   | { type: "SET_CLAUDE_ENV_ENTRIES"; entries: ClaudeEnvEntry[] }
-  | { type: "UPDATE_CLAUDE_ENV_ENTRY"; index: number; field: "key" | "value"; value: string };
+  | { type: "UPDATE_CLAUDE_ENV_ENTRY"; index: number; field: "key" | "value"; value: string }
+  | { type: "UPDATE_VIEWER_SHORTCUT"; viewId: string; value: string };
 
 export type FormDispatch = Dispatch<FormAction>;
 

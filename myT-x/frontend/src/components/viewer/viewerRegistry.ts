@@ -1,4 +1,5 @@
 import type {ComponentType} from "react";
+import {normalizeShortcut} from "./viewerShortcutUtils";
 
 type ViewPosition = "top" | "bottom";
 
@@ -9,7 +10,17 @@ export interface ViewPlugin {
     component: ComponentType;
     /** Keyboard shortcut in format "Ctrl+Shift+X". Used by ViewerSystem for dynamic binding. */
     shortcut?: string;
+    /**
+     * Vertical placement in the ActivityStrip sidebar.
+     * - Omit (or use "top") for standard views - displayed in import order.
+     * - "bottom" is reserved exclusively for error-log. Using it on other views
+     *   places them below the spacer, which breaks the intended icon order.
+     */
     position?: ViewPosition;
+    /** Optional unread indicator source for ActivityStrip badges. */
+    getBadgeCount?: () => number;
+    /** Optional unread indicator subscription for reactive ActivityStrip badges. */
+    subscribeBadgeCount?: (listener: () => void) => () => void;
 }
 
 const REGISTRY_KEY = Symbol.for("mytx.viewer.registry");
@@ -70,12 +81,25 @@ export function registerView(plugin: ViewPlugin): void {
     };
 
     if (import.meta.env.DEV && plugin.shortcut) {
-        const normalized = plugin.shortcut.toLowerCase();
-        const existing = registryState.plugins.find(
-            (v) => v.shortcut?.toLowerCase() === normalized && v.id !== plugin.id,
-        );
-        if (existing) {
-            console.warn(`[Registry] Duplicate shortcut "${plugin.shortcut}" between "${existing.id}" and "${plugin.id}"`);
+        const normalized = normalizeShortcut(plugin.shortcut);
+        if (normalized !== "") {
+            const existing = registryState.plugins.find((v) => {
+                if (v.id === plugin.id || !v.shortcut) {
+                    return false;
+                }
+                return normalizeShortcut(v.shortcut) === normalized;
+            });
+            if (existing) {
+                console.warn(`[Registry] Duplicate shortcut "${plugin.shortcut}" between "${existing.id}" and "${plugin.id}"`);
+            }
+        }
+    }
+    if (import.meta.env.DEV) {
+        if (plugin.getBadgeCount && !plugin.subscribeBadgeCount) {
+            console.warn(`[Registry] View "${plugin.id}" provides getBadgeCount without subscribeBadgeCount; badge may not update reactively`);
+        }
+        if (!plugin.getBadgeCount && plugin.subscribeBadgeCount) {
+            console.warn(`[Registry] View "${plugin.id}" provides subscribeBadgeCount without getBadgeCount`);
         }
     }
     const index = registryState.plugins.findIndex((existing) => existing.id === plugin.id);
@@ -100,3 +124,4 @@ export function subscribeRegistry(listener: () => void): () => void {
 export function getRegisteredViews(): readonly ViewPlugin[] {
     return registryState.plugins;
 }
+

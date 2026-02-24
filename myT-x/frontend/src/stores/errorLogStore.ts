@@ -58,10 +58,11 @@ export const useErrorLogStore = create<ErrorLogState>((set) => ({
             if (import.meta.env.DEV && incoming.length > 0 && entries.length === 0) {
                 console.warn("[error-log] dropped all incoming entries due to invalid shape", incoming);
             }
-            const maxNewSeq = entries.at(-1)?.seq ?? 0;
+            const latestEntry = entries.length > 0 ? entries[entries.length - 1] : undefined;
+            const maxNewSeq = latestEntry?.seq ?? 0;
 
             let lastReadSeq = state.lastReadSeq;
-            // Backend restart resets seq to 1. If the latest seq regresses, clear read marker.
+            // Backend restart resets seq to 1. If the latest seq regresses, align read marker to new max.
             if (maxNewSeq > 0 && maxNewSeq < lastReadSeq) {
                 lastReadSeq = maxNewSeq;
             }
@@ -81,7 +82,8 @@ export const useErrorLogStore = create<ErrorLogState>((set) => ({
         }),
     markAllRead: () =>
         set((state) => {
-            const lastReadSeq = state.entries.at(-1)?.seq ?? state.lastReadSeq;
+            const latestEntry = state.entries.length > 0 ? state.entries[state.entries.length - 1] : undefined;
+            const lastReadSeq = latestEntry?.seq ?? state.lastReadSeq;
             return {unreadCount: 0, lastReadSeq};
         }),
 }));

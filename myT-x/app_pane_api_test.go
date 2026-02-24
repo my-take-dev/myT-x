@@ -69,6 +69,42 @@ func TestSendSyncInput(t *testing.T) {
 	})
 }
 
+func TestResolveSessionNameForPane(t *testing.T) {
+	t.Run("returns session name for valid pane", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		_, pane, err := app.sessions.CreateSession("session-a", "0", 120, 40)
+		if err != nil {
+			t.Fatalf("CreateSession() error = %v", err)
+		}
+
+		got := app.resolveSessionNameForPane(app.sessions, pane.IDString())
+		if got != "session-a" {
+			t.Fatalf("resolveSessionNameForPane() = %q, want %q", got, "session-a")
+		}
+	})
+
+	t.Run("returns empty string for invalid pane", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+
+		got := app.resolveSessionNameForPane(app.sessions, "%999")
+		if got != "" {
+			t.Fatalf("resolveSessionNameForPane() = %q, want empty string", got)
+		}
+	})
+
+	t.Run("returns empty string when session manager is unavailable", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = nil
+
+		got := app.resolveSessionNameForPane(app.sessions, "%1")
+		if got != "" {
+			t.Fatalf("resolveSessionNameForPane() = %q, want empty string", got)
+		}
+	})
+}
+
 func TestResizePane(t *testing.T) {
 	t.Run("returns error when session manager is unavailable", func(t *testing.T) {
 		app := NewApp()

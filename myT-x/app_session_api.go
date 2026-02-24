@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -31,6 +32,86 @@ func agentTeamEnvVars(teamName string) map[string]string {
 		"CLAUDE_CODE_AGENT_ID":                 "lead",
 		"CLAUDE_CODE_AGENT_TYPE":               "lead",
 	}
+}
+
+// QuickStartSession creates a session using the configured default directory
+// (config.DefaultSessionDir) or the app launch directory as a fallback.
+// If the directory is already in use by an existing session, that session is
+// activated and returned instead of creating a new one.
+func (a *App) QuickStartSession() (tmux.SessionSnapshot, error) {
+	cfg := a.getConfigSnapshot()
+	dir := strings.TrimSpace(cfg.DefaultSessionDir)
+	if dir == "" {
+		dir = a.launchDir
+	}
+	if dir == "" {
+		return tmux.SessionSnapshot{}, errors.New("no directory available for quick start session")
+	}
+
+	// [C2] Environment variables and ~ are expanded by config.validateDefaultSessionDir
+	// at load/save time. This guard handles direct API calls with unexpanded paths.
+	if strings.HasPrefix(dir, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = filepath.Join(home, dir[1:])
+		}
+	}
+
+	// Resolve symlinks up front to avoid creating duplicate sessions for
+	// path aliases that point to the same directory.
+	if resolvedDir, evalErr := filepath.EvalSymlinks(dir); evalErr == nil {
+		dir = resolvedDir
+	} else if !errors.Is(evalErr, os.ErrNotExist) {
+		slog.Debug("[DEBUG-SESSION] quick start path canonicalization skipped",
+			"path", dir, "error", evalErr)
+	}
+
+	// [I1] os.MkdirAll is idempotent; calling it on an existing directory returns nil.
+	// We call it unconditionally to avoid the TOCTOU race of Stat → MkdirAll.
+	if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+		return tmux.SessionSnapshot{}, fmt.Errorf("quick start directory create failed: %w", mkErr)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return tmux.SessionSnapshot{}, fmt.Errorf("quick start directory not accessible: %w", err)
+	}
+	if !info.IsDir() {
+		return tmux.SessionSnapshot{}, fmt.Errorf("quick start path is not a directory: %s", dir)
+	}
+
+	// If directory is already used by an existing session, activate it.
+	// NOTE: This check is intentionally best-effort. If the session disappears
+	// between findSessionByRootPath and the snapshot loop (TOCTOU window), we
+	// safely fall through to CreateSession.
+	if conflict := a.findSessionByRootPath(dir); conflict != "" {
+		// NOTE: findSessionByRootPath internally calls requireSessions().Snapshot()
+		// but only returns the session name. We need a fresh SessionSnapshot to
+		// return to the caller, hence this second requireSessions() call.
+		// The Snapshot() call itself is a lightweight in-memory copy.
+		sessions, sErr := a.requireSessions()
+		if sErr == nil {
+			for _, s := range sessions.Snapshot() {
+				if s.Name == conflict {
+					a.setActiveSessionName(conflict)
+					a.requestSnapshot(true)
+					a.emitBackendEvent("tmux:active-session", map[string]any{"name": conflict})
+					return s, nil
+				}
+			}
+		} else {
+			slog.Debug("[DEBUG-SESSION] quick start conflict snapshot unavailable; creating new session",
+				"session", conflict, "path", dir, "error", sErr)
+		}
+		// NOTE: If we reach here, the conflict session disappeared between
+		// findSessionByRootPath and the snapshot loop (TOCTOU window).
+		// Fall through to CreateSession as documented above.
+	}
+
+	sessionName := filepath.Base(dir)
+	if sessionName == "" || sessionName == "." || sessionName == string(os.PathSeparator) || (len(sessionName) == 2 && sessionName[1] == ':') {
+		sessionName = "quick-session"
+	}
+
+	return a.CreateSession(dir, sessionName, CreateSessionOptions{})
 }
 
 // CreateSession creates a new session rooted at path.
@@ -317,7 +398,7 @@ func (a *App) emitWorktreeCleanupFailure(sessionName, wtPath string, err error) 
 		// NOTE: During shutdown, runtimeContext() may return nil. Event is intentionally
 		// dropped as no frontend receiver exists. The error is still logged in the
 		// slog.Warn below for post-mortem diagnostics.
-		slog.Warn("[DEBUG-WORKTREE] emitWorktreeCleanupFailure: runtime context is nil, event dropped",
+		slog.Warn("[WARN-WORKTREE] emitWorktreeCleanupFailure: runtime context is nil, event dropped",
 			"sessionName", sessionName, "path", wtPath, "error", err)
 		return
 	}

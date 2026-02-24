@@ -96,6 +96,8 @@ func TestIsZeroConfig(t *testing.T) {
 		}
 	})
 
+	defaultSessionDir := filepath.Clean(t.TempDir())
+
 	cases := []struct {
 		name   string
 		mutate func(*Config)
@@ -202,6 +204,18 @@ func TestIsZeroConfig(t *testing.T) {
 				cfg.WebSocketPort = 8080
 			},
 		},
+		{
+			name: "viewer shortcuts set",
+			mutate: func(cfg *Config) {
+				cfg.ViewerShortcuts = map[string]string{"file-tree": "Ctrl+Shift+E"}
+			},
+		},
+		{
+			name: "default session dir set",
+			mutate: func(cfg *Config) {
+				cfg.DefaultSessionDir = defaultSessionDir
+			},
+		},
 	}
 
 	for _, tt := range cases {
@@ -244,12 +258,13 @@ func TestLoadAcceptsAllowlistedShellName(t *testing.T) {
 }
 
 func TestDefaultPathUsesLocalAppDataWhenAvailable(t *testing.T) {
-	t.Setenv("LOCALAPPDATA", `C:\Users\tester\AppData\Local`)
+	localAppData := filepath.Join(t.TempDir(), "LocalAppData")
+	t.Setenv("LOCALAPPDATA", localAppData)
 	t.Setenv("APPDATA", "")
 
 	path := DefaultPath()
 
-	want := filepath.Join(`C:\Users\tester\AppData\Local`, "myT-x", "config.yaml")
+	want := filepath.Join(localAppData, "myT-x", "config.yaml")
 	if path != want {
 		t.Fatalf("DefaultPath() = %q, want %q", path, want)
 	}
@@ -298,11 +313,12 @@ func TestLoadAcceptsCaseInsensitiveShellName(t *testing.T) {
 
 func TestDefaultPathFallsBackToAppData(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", "")
-	t.Setenv("APPDATA", `C:\Users\tester\AppData\Roaming`)
+	appData := filepath.Join(t.TempDir(), "AppData")
+	t.Setenv("APPDATA", appData)
 
 	path := DefaultPath()
 
-	want := filepath.Join(`C:\Users\tester\AppData\Roaming`, "myT-x", "config.yaml")
+	want := filepath.Join(appData, "myT-x", "config.yaml")
 	if path != want {
 		t.Fatalf("DefaultPath() = %q, want %q", path, want)
 	}
@@ -1295,8 +1311,8 @@ func TestAllowedShellListIsSorted(t *testing.T) {
 }
 
 func TestConfigStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeFor[Config]().NumField(); got != 11 {
-		t.Fatalf("Config field count = %d, want 11; update isZeroConfig tests for new fields", got)
+	if got := reflect.TypeFor[Config]().NumField(); got != 13 {
+		t.Fatalf("Config field count = %d, want 13; update isZeroConfig tests for new fields", got)
 	}
 	if got := reflect.TypeFor[WorktreeConfig]().NumField(); got != 5 {
 		t.Fatalf("WorktreeConfig field count = %d, want 5 (enabled, force_cleanup, setup_scripts, copy_files, copy_dirs)", got)
@@ -2248,5 +2264,270 @@ func TestLoadWebSocketPortValidation(t *testing.T) {
 				t.Errorf("WebSocketPort = %d, want %d", cfg.WebSocketPort, tt.wantPort)
 			}
 		})
+	}
+}
+
+func TestLoadViewerShortcuts(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantNil bool
+		wantMap map[string]string
+	}{
+		{
+			name:    "viewer_shortcuts omitted returns nil",
+			yaml:    "shell: powershell.exe\n",
+			wantNil: true,
+		},
+		{
+			name: "viewer_shortcuts loaded correctly",
+			yaml: "viewer_shortcuts:\n  file-tree: \"Ctrl+Shift+1\"\n  git-graph: \"Ctrl+Shift+2\"\n",
+			wantMap: map[string]string{
+				"file-tree": "Ctrl+Shift+1",
+				"git-graph": "Ctrl+Shift+2",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if tt.wantNil {
+				if cfg.ViewerShortcuts != nil {
+					t.Errorf("ViewerShortcuts = %v, want nil", cfg.ViewerShortcuts)
+				}
+				return
+			}
+			if !reflect.DeepEqual(cfg.ViewerShortcuts, tt.wantMap) {
+				t.Errorf("ViewerShortcuts = %v, want %v", cfg.ViewerShortcuts, tt.wantMap)
+			}
+		})
+	}
+}
+
+func TestCloneViewerShortcuts(t *testing.T) {
+	t.Run("nil viewer shortcuts cloned as nil", func(t *testing.T) {
+		src := DefaultConfig()
+		dst := Clone(src)
+		if dst.ViewerShortcuts != nil {
+			t.Errorf("ViewerShortcuts = %v, want nil", dst.ViewerShortcuts)
+		}
+	})
+
+	t.Run("viewer shortcuts deep copied", func(t *testing.T) {
+		src := DefaultConfig()
+		src.ViewerShortcuts = map[string]string{"file-tree": "Ctrl+Shift+1"}
+		dst := Clone(src)
+		if !reflect.DeepEqual(src.ViewerShortcuts, dst.ViewerShortcuts) {
+			t.Errorf("Clone did not preserve ViewerShortcuts")
+		}
+		dst.ViewerShortcuts["file-tree"] = "Ctrl+Shift+9"
+		if src.ViewerShortcuts["file-tree"] != "Ctrl+Shift+1" {
+			t.Error("Clone ViewerShortcuts is not independent from source")
+		}
+	})
+}
+
+func TestSaveRoundTripViewerShortcuts(t *testing.T) {
+	path := newConfigPathForSaveTest(t, "config.yaml")
+	cfg := DefaultConfig()
+	cfg.ViewerShortcuts = map[string]string{
+		"file-tree": "Ctrl+Shift+1",
+		"git-graph": "Ctrl+Shift+2",
+	}
+	if _, err := Save(path, cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded.ViewerShortcuts, cfg.ViewerShortcuts) {
+		t.Errorf("ViewerShortcuts round-trip: got %v, want %v", loaded.ViewerShortcuts, cfg.ViewerShortcuts)
+	}
+}
+
+func TestValidateDefaultSessionDir(t *testing.T) {
+	absoluteDir := filepath.Clean(filepath.Join(t.TempDir(), "project"))
+	trimmedDir := filepath.Clean(filepath.Join(t.TempDir(), "trimmed"))
+
+	cases := []struct {
+		name string
+		dir  string
+		want string
+	}{
+		{name: "empty stays empty", dir: "", want: ""},
+		{name: "absolute path preserved", dir: absoluteDir, want: absoluteDir},
+		{name: "whitespace trimmed", dir: "  " + trimmedDir + "  ", want: trimmedDir},
+		{name: "relative path cleared", dir: filepath.Join("relative", "path"), want: ""},
+		{name: "dot path cleared", dir: ".", want: ""},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{DefaultSessionDir: tt.dir}
+			validateDefaultSessionDir(&cfg)
+			if cfg.DefaultSessionDir != tt.want {
+				t.Errorf("DefaultSessionDir = %q, want %q", cfg.DefaultSessionDir, tt.want)
+			}
+		})
+	}
+}
+
+func TestSaveRoundTripDefaultSessionDir(t *testing.T) {
+	path := newConfigPathForSaveTest(t, "config.yaml")
+	defaultSessionDir := filepath.Clean(filepath.Join(t.TempDir(), "project"))
+
+	cfg := DefaultConfig()
+	cfg.DefaultSessionDir = defaultSessionDir
+
+	if _, err := Save(path, cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.DefaultSessionDir != cfg.DefaultSessionDir {
+		t.Errorf("DefaultSessionDir round-trip: got %q, want %q", loaded.DefaultSessionDir, cfg.DefaultSessionDir)
+	}
+}
+
+func TestLoadDefaultSessionDir(t *testing.T) {
+	dir := t.TempDir()
+	rawDir := filepath.Clean(filepath.Join(t.TempDir(), "project"))
+	// Use forward slashes in YAML to avoid Windows backslash escape issues (\U etc.).
+	yamlDir := filepath.ToSlash(rawDir)
+	// After Load, validateDefaultSessionDir applies filepath.Clean which
+	// converts forward slashes to OS-native separators.
+	wantDir := filepath.Clean(rawDir)
+
+	cases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "set in yaml",
+			yaml: "default_session_dir: \"" + yamlDir + "\"\n",
+			want: wantDir,
+		},
+		{
+			name: "omitted in yaml",
+			yaml: "shell: powershell.exe\n",
+			want: "",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, tt.name+".yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.DefaultSessionDir != tt.want {
+				t.Errorf("DefaultSessionDir = %q, want %q", cfg.DefaultSessionDir, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateDefaultSessionDirTildeExpansion(t *testing.T) {
+	fakeHome := filepath.Clean(t.TempDir())
+	originalFn := userHomeDirFn
+	userHomeDirFn = func() (string, error) { return fakeHome, nil }
+	t.Cleanup(func() { userHomeDirFn = originalFn })
+
+	cases := []struct {
+		name string
+		dir  string
+		want string
+	}{
+		{name: "tilde alone", dir: "~", want: fakeHome},
+		{name: "tilde with subdir", dir: "~/projects/my-app", want: filepath.Join(fakeHome, "projects", "my-app")},
+		{name: "tilde with separator", dir: "~" + string(os.PathSeparator) + "work", want: filepath.Join(fakeHome, "work")},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{DefaultSessionDir: tt.dir}
+			validateDefaultSessionDir(&cfg)
+			if cfg.DefaultSessionDir != tt.want {
+				t.Errorf("DefaultSessionDir = %q, want %q", cfg.DefaultSessionDir, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateDefaultSessionDirEnvironmentExpansion(t *testing.T) {
+	homeDir := filepath.Clean(filepath.Join(t.TempDir(), "home"))
+	userProfileDir := filepath.Clean(filepath.Join(t.TempDir(), "profile"))
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", userProfileDir)
+
+	cases := []struct {
+		name string
+		dir  string
+		want string
+	}{
+		{name: "windows style env variable", dir: `%USERPROFILE%\project`, want: filepath.Join(userProfileDir, "project")},
+	}
+	// POSIX-style $VAR expansion is skipped on Windows to avoid corrupting
+	// paths that contain literal '$' characters (e.g. C:\Users\foo$bar).
+	if runtime.GOOS != "windows" {
+		cases = append(cases,
+			struct {
+				name string
+				dir  string
+				want string
+			}{name: "posix env variable", dir: "$HOME/projects/my-app", want: filepath.Join(homeDir, "projects", "my-app")},
+			struct {
+				name string
+				dir  string
+				want string
+			}{name: "posix braced env variable", dir: "${HOME}/work", want: filepath.Join(homeDir, "work")},
+		)
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{DefaultSessionDir: tt.dir}
+			validateDefaultSessionDir(&cfg)
+			if cfg.DefaultSessionDir != tt.want {
+				t.Errorf("DefaultSessionDir = %q, want %q", cfg.DefaultSessionDir, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateDefaultSessionDirUnknownEnvironmentVariable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// On Windows, POSIX-style $VAR expansion is intentionally skipped.
+		// The literal "$MYTX_DOES_NOT_EXIST/path" is treated as a regular path
+		// and rejected as non-absolute.
+		t.Skip("POSIX env expansion disabled on Windows")
+	}
+	cfg := Config{DefaultSessionDir: "$MYTX_DOES_NOT_EXIST/path"}
+	validateDefaultSessionDir(&cfg)
+	if cfg.DefaultSessionDir != "" {
+		t.Errorf("DefaultSessionDir = %q, want empty for unresolved env var path", cfg.DefaultSessionDir)
+	}
+}
+
+func TestValidateDefaultSessionDirTildeExpansionError(t *testing.T) {
+	originalFn := userHomeDirFn
+	userHomeDirFn = func() (string, error) { return "", errors.New("no home") }
+	t.Cleanup(func() { userHomeDirFn = originalFn })
+
+	cfg := Config{DefaultSessionDir: "~/projects"}
+	validateDefaultSessionDir(&cfg)
+	if cfg.DefaultSessionDir != "" {
+		t.Errorf("DefaultSessionDir = %q, want empty on home dir error", cfg.DefaultSessionDir)
 	}
 }

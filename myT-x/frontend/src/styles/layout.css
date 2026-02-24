@@ -430,3 +430,11 @@
     font-size: 0.84rem;
 }
 
+.quick-search-loading {
+    padding: 6px 12px;
+    text-align: center;
+    color: var(--fg-dim);
+    font-size: 0.82rem;
+    background: var(--bg-panel-strong);
+}
+

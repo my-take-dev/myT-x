@@ -1,11 +1,14 @@
 import { registerView } from "../../viewerRegistry";
+import {mustGetViewerShortcutDef} from "../../viewerShortcutDefinitions";
 import { GitGraphIcon } from "../../icons/GitGraphIcon";
 import { GitGraphView } from "./GitGraphView";
 
+const shortcutDef = mustGetViewerShortcutDef("git-graph");
+
 registerView({
-  id: "git-graph",
+  id: shortcutDef.viewId,
   icon: GitGraphIcon,
-  label: "Git Graph",
+  label: shortcutDef.label,
   component: GitGraphView,
-  shortcut: "Ctrl+Shift+G",
+  shortcut: shortcutDef.defaultShortcut,
 });

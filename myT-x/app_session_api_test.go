@@ -35,6 +35,23 @@ func stubExecuteRouterRequest(t *testing.T, fn func(*tmux.CommandRouter, ipc.Tmu
 	executeRouterRequestFn = fn
 }
 
+func stubNewSessionCommandSuccess(t *testing.T, app *App) {
+	t.Helper()
+	stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		if req.Command != "new-session" {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
+		}
+		sessionName, _ := req.Flags["-s"].(string)
+		if sessionName == "" {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "missing session name"}
+		}
+		if _, _, err := app.sessions.CreateSession(sessionName, "0", 120, 40); err != nil {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: err.Error()}
+		}
+		return ipc.TmuxResponse{ExitCode: 0, Stdout: sessionName}
+	})
+}
+
 func TestCreateSessionOptionsFieldCountGuard(t *testing.T) {
 	// Guard against silent divergence between CreateSessionOptions and
 	// WorktreeSessionOptions (which mirrors these fields at app_worktree_api.go:153-157).
@@ -680,6 +697,139 @@ func TestFindSessionByRootPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQuickStartSession(t *testing.T) {
+	t.Run("creates a new session from configured default directory", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		stubNewSessionCommandSuccess(t, app)
+
+		rootDir := filepath.Clean(filepath.Join(t.TempDir(), "quick-start-project"))
+		if err := os.MkdirAll(rootDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		wantRoot := rootDir
+		if resolvedRoot, err := filepath.EvalSymlinks(rootDir); err == nil {
+			wantRoot = resolvedRoot
+		}
+
+		cfg := config.DefaultConfig()
+		cfg.DefaultSessionDir = rootDir
+		app.setConfigSnapshot(cfg)
+
+		snapshot, err := app.QuickStartSession()
+		if err != nil {
+			t.Fatalf("QuickStartSession() error = %v", err)
+		}
+		if snapshot.RootPath != wantRoot {
+			t.Fatalf("RootPath = %q, want %q", snapshot.RootPath, wantRoot)
+		}
+		if got := app.getActiveSessionName(); got != snapshot.Name {
+			t.Fatalf("active session = %q, want %q", got, snapshot.Name)
+		}
+	})
+
+	t.Run("falls back to launch directory when default is empty", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		stubNewSessionCommandSuccess(t, app)
+
+		launchDir := filepath.Clean(filepath.Join(t.TempDir(), "launch-root"))
+		if err := os.MkdirAll(launchDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		wantRoot := launchDir
+		if resolvedRoot, err := filepath.EvalSymlinks(launchDir); err == nil {
+			wantRoot = resolvedRoot
+		}
+		app.launchDir = launchDir
+		app.setConfigSnapshot(config.DefaultConfig())
+
+		snapshot, err := app.QuickStartSession()
+		if err != nil {
+			t.Fatalf("QuickStartSession() error = %v", err)
+		}
+		if snapshot.RootPath != wantRoot {
+			t.Fatalf("RootPath = %q, want %q", snapshot.RootPath, wantRoot)
+		}
+	})
+
+	t.Run("reuses existing session when root path conflicts", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		stubNewSessionCommandSuccess(t, app)
+
+		rootDir := filepath.Clean(filepath.Join(t.TempDir(), "existing-root"))
+		if err := os.MkdirAll(rootDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		wantRoot := rootDir
+		if resolvedRoot, err := filepath.EvalSymlinks(rootDir); err == nil {
+			wantRoot = resolvedRoot
+		}
+		if _, _, err := app.sessions.CreateSession("existing-session", "0", 120, 40); err != nil {
+			t.Fatalf("CreateSession() error = %v", err)
+		}
+		if err := app.sessions.SetRootPath("existing-session", wantRoot); err != nil {
+			t.Fatalf("SetRootPath() error = %v", err)
+		}
+
+		cfg := config.DefaultConfig()
+		cfg.DefaultSessionDir = rootDir
+		app.setConfigSnapshot(cfg)
+
+		snapshot, err := app.QuickStartSession()
+		if err != nil {
+			t.Fatalf("QuickStartSession() error = %v", err)
+		}
+		if snapshot.Name != "existing-session" {
+			t.Fatalf("snapshot.Name = %q, want %q", snapshot.Name, "existing-session")
+		}
+		if snapshot.RootPath != wantRoot {
+			t.Fatalf("RootPath = %q, want %q", snapshot.RootPath, wantRoot)
+		}
+		if got := app.getActiveSessionName(); got != "existing-session" {
+			t.Fatalf("active session = %q, want %q", got, "existing-session")
+		}
+		if got := len(app.sessions.Snapshot()); got != 1 {
+			t.Fatalf("session count = %d, want 1", got)
+		}
+	})
+
+	t.Run("creates missing default directory before creating session", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+		stubNewSessionCommandSuccess(t, app)
+
+		missingDir := filepath.Clean(filepath.Join(t.TempDir(), "missing", "project"))
+		if _, err := os.Stat(missingDir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("precondition failed: expected missing directory, got err=%v", err)
+		}
+
+		cfg := config.DefaultConfig()
+		cfg.DefaultSessionDir = missingDir
+		app.setConfigSnapshot(cfg)
+
+		snapshot, err := app.QuickStartSession()
+		if err != nil {
+			t.Fatalf("QuickStartSession() error = %v", err)
+		}
+		if snapshot.RootPath != missingDir {
+			t.Fatalf("RootPath = %q, want %q", snapshot.RootPath, missingDir)
+		}
+		info, statErr := os.Stat(missingDir)
+		if statErr != nil {
+			t.Fatalf("Stat() error = %v", statErr)
+		}
+		if !info.IsDir() {
+			t.Fatalf("expected %q to be directory", missingDir)
+		}
+	})
 }
 
 func TestFindSessionByRootPathSkipsWorktreeSessions(t *testing.T) {

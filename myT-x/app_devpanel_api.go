@@ -625,7 +625,7 @@ func isFreshRepoStatusOutput(statusOutput []byte) bool {
 	}
 
 	normalized := strings.ReplaceAll(string(statusOutput), "\r\n", "\n")
-	for _, line := range strings.Split(normalized, "\n") {
+	for line := range strings.SplitSeq(normalized, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -967,13 +967,13 @@ func parseWorkingDiff(raw string) []WorkingDiffFile {
 				file.Status = WorkingDiffStatusAdded
 			} else if strings.HasPrefix(line, "deleted file mode") {
 				file.Status = WorkingDiffStatusDeleted
-			} else if strings.HasPrefix(line, "rename from ") {
-				if renamedFrom, ok := decodeGitPathLiteral(strings.TrimPrefix(line, "rename from ")); ok {
+			} else if after, ok := strings.CutPrefix(line, "rename from "); ok {
+				if renamedFrom, decoded := decodeGitPathLiteral(after); decoded {
 					file.OldPath = filepath.ToSlash(renamedFrom)
 				}
 				file.Status = WorkingDiffStatusRenamed
-			} else if strings.HasPrefix(line, "rename to ") {
-				if renamedTo, ok := decodeGitPathLiteral(strings.TrimPrefix(line, "rename to ")); ok {
+			} else if after, ok := strings.CutPrefix(line, "rename to "); ok {
+				if renamedTo, decoded := decodeGitPathLiteral(after); decoded {
 					file.Path = filepath.ToSlash(renamedTo)
 				}
 				file.Status = WorkingDiffStatusRenamed

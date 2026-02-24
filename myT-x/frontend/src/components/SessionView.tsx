@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {api} from "../api";
 import {useTmuxStore} from "../stores/tmuxStore";
 import type {PaneSnapshot, SessionSnapshot} from "../types/tmux";
@@ -13,6 +13,7 @@ interface SessionViewProps {
 export function SessionView(props: SessionViewProps) {
     const zoomPaneId = useTmuxStore((s) => s.zoomPaneId);
     const setZoomPaneId = useTmuxStore((s) => s.setZoomPaneId);
+    const setActiveSession = useTmuxStore((s) => s.setActiveSession);
     const syncInputMode = useTmuxStore((s) => s.syncInputMode);
     const toggleSyncInputMode = useTmuxStore((s) => s.toggleSyncInputMode);
 
@@ -76,6 +77,35 @@ export function SessionView(props: SessionViewProps) {
         });
     }, []);
 
+    const [quickStartLoading, setQuickStartLoading] = useState(false);
+    const [quickStartError, setQuickStartError] = useState("");
+
+    const mountedRef = useRef(true);
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
+    const handleQuickStart = useCallback(async () => {
+        setQuickStartLoading(true);
+        setQuickStartError("");
+        try {
+            const snapshot = await api.QuickStartSession();
+            if (!mountedRef.current) return;
+            setActiveSession(snapshot.name);
+        } catch (err) {
+            if (!mountedRef.current) return;
+            const message = err instanceof Error ? err.message : String(err ?? "Unknown error");
+            setQuickStartError(message);
+        } finally {
+            if (mountedRef.current) {
+                setQuickStartLoading(false);
+            }
+        }
+    }, [setActiveSession]);
+
     const onDetachSession = useCallback(() => {
         const sessionName = props.session?.name;
         if (!sessionName) {
@@ -88,7 +118,24 @@ export function SessionView(props: SessionViewProps) {
 
     const renderSessionContent = () => {
         if (!props.session) {
-            return <div className="session-empty">セッションを作成してください。</div>;
+            return (
+                <div className="session-empty">
+                    <div className="session-empty-content">
+                        <p className="session-empty-message">セッションを作成してください。</p>
+                        <button
+                            type="button"
+                            className="session-quick-start-btn"
+                            onClick={handleQuickStart}
+                            disabled={quickStartLoading}
+                        >
+                            {quickStartLoading ? "開始中..." : "\u25B6 クイックスタート"}
+                        </button>
+                        {quickStartError && (
+                            <p className="session-quick-start-error">{quickStartError}</p>
+                        )}
+                    </div>
+                </div>
+            );
         }
         if (props.session.windows.length === 0) {
             return <div className="session-empty">セッションにウィンドウがありません。</div>;

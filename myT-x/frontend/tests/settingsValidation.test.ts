@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   isUnsafeWorktreeCopyPath,
   normalizeRelativePath,
+  validateDefaultSessionDir,
+  validateViewerShortcuts,
   validateWorktreeCopyPathSettings,
 } from "../src/components/settings/settingsValidation";
 
@@ -59,5 +61,92 @@ describe("validateWorktreeCopyPathSettings", () => {
       ["vendor/assets", "templates/email"],
     );
     expect(errors).toEqual({});
+  });
+});
+
+describe("validateViewerShortcuts", () => {
+  it("accepts defaults when no custom shortcuts are provided", () => {
+    expect(validateViewerShortcuts({})).toEqual({});
+  });
+
+  it("rejects shortcuts without modifier keys", () => {
+    const errors = validateViewerShortcuts({
+      "file-tree": "f",
+    });
+    expect(errors).toHaveProperty("viewer_shortcut_file-tree");
+  });
+
+  it("allows function keys without modifier keys", () => {
+    const errors = validateViewerShortcuts({
+      "file-tree": "F12",
+    });
+    expect(errors).not.toHaveProperty("viewer_shortcut_file-tree");
+  });
+
+  it("rejects duplicate custom shortcuts (case-insensitive)", () => {
+    const errors = validateViewerShortcuts({
+      "file-tree": "Ctrl+Shift+Q",
+      "git-graph": "ctrl+shift+q",
+    });
+    expect(errors).toHaveProperty("viewer_shortcut_file-tree");
+    expect(errors).toHaveProperty("viewer_shortcut_git-graph");
+  });
+
+  it("rejects custom shortcut that conflicts with another view default", () => {
+    const errors = validateViewerShortcuts({
+      "file-tree": "Ctrl+Shift+G", // conflicts with git-graph default
+    });
+    expect(errors).toHaveProperty("viewer_shortcut_file-tree");
+    expect(errors).toHaveProperty("viewer_shortcut_git-graph");
+  });
+
+  it("normalizes modifier ordering before duplicate checks", () => {
+    const errors = validateViewerShortcuts({
+      "git-graph": "Shift+Ctrl+E", // conflicts with file-tree default Ctrl+Shift+E
+    });
+    expect(errors).toHaveProperty("viewer_shortcut_file-tree");
+    expect(errors).toHaveProperty("viewer_shortcut_git-graph");
+  });
+
+  it("rejects conflict with global hotkey", () => {
+    const errors = validateViewerShortcuts(
+      {
+        "diff": "Ctrl+Shift+F12",
+      },
+      "Ctrl+Shift+F12",
+    );
+    expect(errors).toHaveProperty("viewer_shortcut_diff");
+  });
+});
+
+describe("validateDefaultSessionDir", () => {
+  it("accepts empty value", () => {
+    expect(validateDefaultSessionDir("")).toEqual({});
+  });
+
+  it("accepts absolute paths", () => {
+    expect(validateDefaultSessionDir("C:\\Users\\tester\\project")).toEqual({});
+    expect(validateDefaultSessionDir("\\\\server\\share\\project")).toEqual({});
+  });
+
+  it("accepts tilde and env-var prefixes", () => {
+    expect(validateDefaultSessionDir("~/project")).toEqual({});
+    expect(validateDefaultSessionDir("$HOME/project")).toEqual({});
+    expect(validateDefaultSessionDir("%USERPROFILE%\\project")).toEqual({});
+  });
+
+  it("rejects drive-less rooted paths", () => {
+    expect(validateDefaultSessionDir("\\windows\\system32")).toEqual({
+      default_session_dir: "絶対パスを指定してください",
+    });
+    expect(validateDefaultSessionDir("/home/tester/project")).toEqual({
+      default_session_dir: "絶対パスを指定してください",
+    });
+  });
+
+  it("rejects relative paths", () => {
+    expect(validateDefaultSessionDir("relative/path")).toEqual({
+      default_session_dir: "絶対パスを指定してください",
+    });
   });
 });

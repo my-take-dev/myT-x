@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestInitSessionLog_CreatesDirectory(t *testing.T) {
@@ -512,7 +513,7 @@ func TestCleanupOldSessionLogs_PreservesCurrentFile(t *testing.T) {
 	}
 
 	// Create enough files to trigger cleanup.
-	for i := 0; i < sessionLogMaxFiles+20; i++ {
+	for i := range sessionLogMaxFiles + 20 {
 		name := fmt.Sprintf("session-%s-%04d.jsonl", formatIndexAsTimestamp(i), i)
 		if err := os.WriteFile(filepath.Join(logDir, name), []byte("old\n"), 0o600); err != nil {
 			t.Fatalf("failed to create old log file: %v", err)
@@ -524,6 +525,91 @@ func TestCleanupOldSessionLogs_PreservesCurrentFile(t *testing.T) {
 
 	if _, err := os.Stat(currentPath); err != nil {
 		t.Fatalf("current log file should not be deleted: %v", err)
+	}
+}
+
+func TestCleanupOldSessionLogs_SameTimestampOrdersByNumericPID(t *testing.T) {
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "session-logs")
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
+		t.Fatalf("failed to create log directory: %v", err)
+	}
+
+	pid9Name := "session-20260101-000000-9.jsonl"
+	pid10Name := "session-20260101-000000-10.jsonl"
+	for _, name := range []string{pid9Name, pid10Name} {
+		if err := os.WriteFile(filepath.Join(logDir, name), []byte("x\n"), 0o600); err != nil {
+			t.Fatalf("failed to create seed file %q: %v", name, err)
+		}
+	}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 1; i <= 98; i++ {
+		ts := base.Add(time.Duration(i) * time.Second).Format("20060102-150405")
+		name := fmt.Sprintf("session-%s-%d.jsonl", ts, 3000+i)
+		if err := os.WriteFile(filepath.Join(logDir, name), []byte("x\n"), 0o600); err != nil {
+			t.Fatalf("failed to create log file %q: %v", name, err)
+		}
+	}
+
+	currentPath := filepath.Join(logDir, "session-20260101-000200-9999.jsonl")
+	if err := os.WriteFile(currentPath, []byte("current\n"), 0o600); err != nil {
+		t.Fatalf("failed to create current log file: %v", err)
+	}
+
+	a := &App{sessionLogPath: currentPath}
+	stubRuntimeEventsEmit(t)
+	a.cleanupOldSessionLogs()
+
+	if _, err := os.Stat(filepath.Join(logDir, pid9Name)); err == nil {
+		t.Fatalf("expected %s to be deleted as oldest numeric PID", pid9Name)
+	}
+	if _, err := os.Stat(filepath.Join(logDir, pid10Name)); err != nil {
+		t.Fatalf("expected %s to remain, got err: %v", pid10Name, err)
+	}
+}
+
+func TestCleanupOldSessionLogs_DeletesMalformedBeforeCanonical(t *testing.T) {
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "session-logs")
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
+		t.Fatalf("failed to create log directory: %v", err)
+	}
+
+	malformedName := "session-malformed.jsonl"
+	if err := os.WriteFile(filepath.Join(logDir, malformedName), []byte("bad\n"), 0o600); err != nil {
+		t.Fatalf("failed to create malformed log file: %v", err)
+	}
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	oldestCanonical := ""
+	currentPath := ""
+	for i := 0; i < sessionLogMaxFiles; i++ {
+		ts := base.Add(time.Duration(i) * time.Second).Format("20060102-150405")
+		name := fmt.Sprintf("session-%s-%d.jsonl", ts, 4000+i)
+		fullPath := filepath.Join(logDir, name)
+		if err := os.WriteFile(fullPath, []byte("ok\n"), 0o600); err != nil {
+			t.Fatalf("failed to create canonical log file %q: %v", name, err)
+		}
+		if i == 0 {
+			oldestCanonical = fullPath
+		}
+		if i == sessionLogMaxFiles-1 {
+			currentPath = fullPath
+		}
+	}
+
+	a := &App{sessionLogPath: currentPath}
+	stubRuntimeEventsEmit(t)
+	a.cleanupOldSessionLogs()
+
+	if _, err := os.Stat(filepath.Join(logDir, malformedName)); err == nil {
+		t.Fatalf("expected malformed file %q to be deleted first", malformedName)
+	}
+	if _, err := os.Stat(oldestCanonical); err != nil {
+		t.Fatalf("expected oldest canonical file to remain, got err: %v", err)
+	}
+	if _, err := os.Stat(currentPath); err != nil {
+		t.Fatalf("expected current log file to remain, got err: %v", err)
 	}
 }
 
@@ -981,4 +1067,236 @@ func formatIndexAsTimestamp(index int) string {
 	base := time.Date(2006, 1, 1, 0, 0, 0, 0, time.UTC)
 	ts := base.Add(time.Duration(index) * time.Second)
 	return ts.Format("20060102-150405")
+}
+
+func TestNormalizeLogLevel(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "error stays error", input: "error", expected: "error"},
+		{name: "ERROR uppercase normalized", input: "ERROR", expected: "error"},
+		{name: "warn normalized", input: "warn", expected: "warn"},
+		{name: "warning alias normalized", input: "warning", expected: "warn"},
+		{name: "WARN uppercase normalized", input: "WARN", expected: "warn"},
+		{name: "WARNING uppercase alias normalized", input: "WARNING", expected: "warn"},
+		{name: "info stays info", input: "info", expected: "info"},
+		{name: "debug normalized to debug", input: "debug", expected: "debug"},
+		{name: "DEBUG uppercase normalized", input: "DEBUG", expected: "debug"},
+		{name: "unknown maps to info", input: "trace", expected: "info"},
+		{name: "empty maps to info", input: "", expected: "info"},
+		{name: "whitespace-only maps to info", input: "   ", expected: "info"},
+		{name: "level with leading/trailing spaces", input: "  error  ", expected: "error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeLogLevel(tt.input)
+			if got != tt.expected {
+				t.Errorf("normalizeLogLevel(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestLogFrontendEvent_WritesToSessionLog(t *testing.T) {
+	tests := []struct {
+		name          string
+		level         string
+		msg           string
+		source        string
+		expectedLevel string
+		expectEntry   bool
+	}{
+		{
+			name:          "error event written",
+			level:         "error",
+			msg:           "uncaught exception",
+			source:        "frontend/unhandled",
+			expectedLevel: "error",
+			expectEntry:   true,
+		},
+		{
+			name:          "warn event written",
+			level:         "warn",
+			msg:           "API call failed",
+			source:        "frontend/api",
+			expectedLevel: "warn",
+			expectEntry:   true,
+		},
+		{
+			name:          "debug level normalized to debug",
+			level:         "debug",
+			msg:           "some debug info",
+			source:        "frontend/ui",
+			expectedLevel: "debug",
+			expectEntry:   true,
+		},
+		{
+			name:          "unknown level normalized to info",
+			level:         "trace",
+			msg:           "some trace info",
+			source:        "frontend/ui",
+			expectedLevel: "info",
+			expectEntry:   true,
+		},
+		{
+			name:        "empty msg silently discarded",
+			level:       "error",
+			msg:         "",
+			source:      "frontend/ui",
+			expectEntry: false,
+		},
+		{
+			name:        "whitespace-only msg silently discarded",
+			level:       "error",
+			msg:         "   ",
+			source:      "frontend/ui",
+			expectEntry: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			a := &App{
+				configPath:        filepath.Join(tmpDir, "config.yaml"),
+				sessionLogEntries: newSessionLogRingBuffer(sessionLogMaxEntries),
+			}
+			stubRuntimeEventsEmit(t)
+			a.initSessionLog()
+			defer func() {
+				if a.sessionLogFile != nil {
+					a.sessionLogFile.Close()
+				}
+			}()
+
+			a.LogFrontendEvent(tt.level, tt.msg, tt.source)
+
+			result := a.GetSessionErrorLog()
+			if !tt.expectEntry {
+				if len(result) != 0 {
+					t.Errorf("expected no entries, got %d", len(result))
+				}
+				return
+			}
+			if len(result) != 1 {
+				t.Fatalf("expected 1 entry, got %d", len(result))
+			}
+			if result[0].Level != tt.expectedLevel {
+				t.Errorf("level = %q, want %q", result[0].Level, tt.expectedLevel)
+			}
+			if result[0].Source != strings.TrimSpace(tt.source) {
+				t.Errorf("source = %q, want %q", result[0].Source, strings.TrimSpace(tt.source))
+			}
+		})
+	}
+}
+
+func TestLogFrontendEvent_TruncatesLongInputs(t *testing.T) {
+	tests := []struct {
+		name         string
+		msgRunes     int
+		sourceRunes  int
+		expectMsgLen int
+		expectSrcLen int
+	}{
+		{
+			name:         "msg within limit preserved",
+			msgRunes:     100,
+			sourceRunes:  50,
+			expectMsgLen: 100,
+			expectSrcLen: 50,
+		},
+		{
+			name:         "msg at exact limit preserved",
+			msgRunes:     frontendLogMaxMsgLen,
+			sourceRunes:  10,
+			expectMsgLen: frontendLogMaxMsgLen,
+			expectSrcLen: 10,
+		},
+		{
+			name:         "msg over limit truncated",
+			msgRunes:     frontendLogMaxMsgLen + 100,
+			sourceRunes:  10,
+			expectMsgLen: frontendLogMaxMsgLen,
+			expectSrcLen: 10,
+		},
+		{
+			name:         "source over limit truncated",
+			msgRunes:     10,
+			sourceRunes:  frontendLogMaxSourceLen + 50,
+			expectMsgLen: 10,
+			expectSrcLen: frontendLogMaxSourceLen,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			a := &App{
+				configPath:        filepath.Join(tmpDir, "config.yaml"),
+				sessionLogEntries: newSessionLogRingBuffer(sessionLogMaxEntries),
+			}
+			stubRuntimeEventsEmit(t)
+			a.initSessionLog()
+			defer func() {
+				if a.sessionLogFile != nil {
+					a.sessionLogFile.Close()
+				}
+			}()
+
+			msg := strings.Repeat("日", tt.msgRunes) // multibyte rune to verify rune-safe truncation
+			source := strings.Repeat("x", tt.sourceRunes)
+
+			a.LogFrontendEvent("error", msg, source)
+
+			result := a.GetSessionErrorLog()
+			if len(result) != 1 {
+				t.Fatalf("expected 1 entry, got %d", len(result))
+			}
+			gotMsgRunes := len([]rune(result[0].Message))
+			gotSrcRunes := len([]rune(result[0].Source))
+			if gotMsgRunes != tt.expectMsgLen {
+				t.Errorf("msg rune len = %d, want %d", gotMsgRunes, tt.expectMsgLen)
+			}
+			if gotSrcRunes != tt.expectSrcLen {
+				t.Errorf("source rune len = %d, want %d", gotSrcRunes, tt.expectSrcLen)
+			}
+		})
+	}
+}
+
+func TestLogFrontendEvent_MultibyteSafeRune(t *testing.T) {
+	// Verify multibyte truncation produces valid UTF-8 (no partial rune sequences).
+	tmpDir := t.TempDir()
+	a := &App{
+		configPath:        filepath.Join(tmpDir, "config.yaml"),
+		sessionLogEntries: newSessionLogRingBuffer(sessionLogMaxEntries),
+	}
+	stubRuntimeEventsEmit(t)
+	a.initSessionLog()
+	defer func() {
+		if a.sessionLogFile != nil {
+			a.sessionLogFile.Close()
+		}
+	}()
+
+	// Build a message that is (frontendLogMaxMsgLen + 1) Japanese characters.
+	msg := strings.Repeat("日", frontendLogMaxMsgLen+1)
+	a.LogFrontendEvent("error", msg, "src")
+
+	result := a.GetSessionErrorLog()
+	if len(result) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(result))
+	}
+	runeCount := len([]rune(result[0].Message))
+	if runeCount != frontendLogMaxMsgLen {
+		t.Errorf("expected %d runes after truncation, got %d", frontendLogMaxMsgLen, runeCount)
+	}
+	// Verify valid UTF-8.
+	if !utf8.ValidString(result[0].Message) {
+		t.Error("truncated message is not valid UTF-8")
+	}
 }

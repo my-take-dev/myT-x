@@ -1,5 +1,4 @@
 *.exe
-*.lnk
 
 # Frontend dependencies and build artifacts
 frontend/node_modules/

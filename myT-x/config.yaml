@@ -30,6 +30,9 @@ pane_env_default_enabled: true
 # websocket_port: ターミナル出力WebSocketサーバーのポート番号
 # 0 を指定するとOSが自動でポートを割り当てる（推奨）
 websocket_port: 0
+# default_session_dir: クイックスタートで使用するデフォルト作業ディレクトリ
+# 未設定の場合はアプリ起動時のカレントディレクトリが使用されます
+# default_session_dir: "C:\\Users\\username\\projects"
 # claude_env: Claude Code専用の環境変数設定
 # default_enabled: 新規セッション作成時のチェックボックスのデフォルト値
 # vars: Claude Codeプロセスに設定する環境変数のキー・バリューペア
@@ -37,3 +40,11 @@ websocket_port: 0
 #   default_enabled: false
 #   vars:
 #     CLAUDE_CODE_EFFORT_LEVEL: "high"
+# viewer_shortcuts: ビューアーパネルのキーボードショートカット設定
+# 指定しない場合はデフォルトのショートカットが使用されます
+# viewer_shortcuts:
+#   file-tree: "Ctrl+Shift+E"
+#   git-graph: "Ctrl+Shift+G"
+#   error-log: "Ctrl+Shift+L"
+#   diff: "Ctrl+Shift+D"
+#   input-history: "Ctrl+Shift+H"

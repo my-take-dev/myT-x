@@ -131,6 +131,7 @@ func (a *App) startup(ctx context.Context) {
 		runtimeLogger.Warningf(ctx, "failed to resolve working directory: %v", err)
 	}
 	a.workspace = workspace
+	a.launchDir = workspace
 	a.configPath = config.DefaultPath()
 	for _, message := range config.ConsumeDefaultPathWarnings() {
 		a.addPendingConfigLoadWarning(message)
@@ -158,6 +159,7 @@ func (a *App) startup(ctx context.Context) {
 		a.writeSessionLogEntry(entry)
 	})
 	slog.SetDefault(slog.New(teeHandler))
+	a.initInputHistory()
 
 	cfg, err := config.EnsureFile(a.configPath)
 	if err != nil {
@@ -312,6 +314,11 @@ func (a *App) shutdown(_ context.Context) {
 		runtimeLogger.Warningf(logCtx, "timed out waiting for setup workers during shutdown")
 	}
 
+	// Flush pending input line buffers immediately after workers stop.
+	// This minimizes the window between shuttingDown.Store(true) and buffer
+	// persistence, preventing entry loss for partially-typed lines.
+	a.flushAllLineBuffers()
+
 	a.cleanupDetachedPaneStates(a.detachAllOutputBuffers())
 
 	if a.paneStates != nil {
@@ -344,6 +351,7 @@ func (a *App) shutdown(_ context.Context) {
 	if a.sessions != nil {
 		a.sessions.Close()
 	}
+	a.closeInputHistory()
 	a.closeSessionLog()
 }
 
