@@ -95,6 +95,8 @@ export namespace config {
 	    pane_env_default_enabled: boolean;
 	    claude_env?: ClaudeEnvConfig;
 	    websocket_port: number;
+	    viewer_shortcuts?: Record<string, string>;
+	    default_session_dir?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -113,6 +115,8 @@ export namespace config {
 	        this.pane_env_default_enabled = source["pane_env_default_enabled"];
 	        this.claude_env = this.convertValues(source["claude_env"], ClaudeEnvConfig);
 	        this.websocket_port = source["websocket_port"];
+	        this.viewer_shortcuts = source["viewer_shortcuts"];
+	        this.default_session_dir = source["default_session_dir"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -284,6 +288,28 @@ export namespace main {
 	        this.untracked = source["untracked"];
 	        this.ahead = source["ahead"];
 	        this.behind = source["behind"];
+	    }
+	}
+	export class InputHistoryEntry {
+	    seq: number;
+	    ts: string;
+	    pane_id: string;
+	    input: string;
+	    source: string;
+	    session: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new InputHistoryEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.seq = source["seq"];
+	        this.ts = source["ts"];
+	        this.pane_id = source["pane_id"];
+	        this.input = source["input"];
+	        this.source = source["source"];
+	        this.session = source["session"];
 	    }
 	}
 	export class SessionLogEntry {

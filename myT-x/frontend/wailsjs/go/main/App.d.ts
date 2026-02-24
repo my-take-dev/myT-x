@@ -56,6 +56,10 @@ export function GetConfigAndFlushWarnings():Promise<config.Config>;
 
 export function GetCurrentBranch(arg1:string):Promise<string>;
 
+export function GetInputHistory():Promise<Array<main.InputHistoryEntry>>;
+
+export function GetInputHistoryFilePath():Promise<string>;
+
 export function GetPaneEnv(arg1:string):Promise<Record<string, string>>;
 
 export function GetPaneReplay(arg1:string):Promise<string>;
@@ -86,9 +90,13 @@ export function ListSessions():Promise<Array<tmux.SessionSnapshot>>;
 
 export function ListWorktreesByRepo(arg1:string):Promise<Array<git.WorktreeInfo>>;
 
+export function LogFrontendEvent(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function PickSessionDirectory():Promise<string>;
 
 export function PromoteWorktreeToBranch(arg1:string,arg2:string):Promise<void>;
+
+export function QuickStartSession():Promise<tmux.SessionSnapshot>;
 
 export function RenamePane(arg1:string,arg2:string):Promise<void>;
 

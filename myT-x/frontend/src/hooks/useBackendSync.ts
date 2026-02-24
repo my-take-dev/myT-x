@@ -3,14 +3,18 @@ import {EventsOn} from "../../wailsjs/runtime/runtime";
 import {api} from "../api";
 import {connect as connectPaneStream, disconnect as disconnectPaneStream} from "../services/paneDataStream";
 import {useErrorLogStore} from "../stores/errorLogStore";
+import {useInputHistoryStore} from "../stores/inputHistoryStore";
 import {useNotificationStore} from "../stores/notificationStore";
 import {useTmuxStore} from "../stores/tmuxStore";
 import type {AppConfig, ParsedConfigUpdatedEvent, SessionSnapshot, SessionSnapshotDelta} from "../types/tmux";
 import {asArray, asObject} from "../utils/typeGuards";
+import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
 
 // SUG-20: Module-level constant — shared across renders, avoids re-creation inside useEffect.
 const ERROR_LOG_DEBOUNCE_MS = 80;
 const ERROR_LOG_FETCH_RETRY_DELAY_MS = 250;
+const INPUT_HISTORY_DEBOUNCE_MS = 80;
+const INPUT_HISTORY_FETCH_RETRY_DELAY_MS = 250;
 
 // ---------------------------------------------------------------------------
 // Backend event payload type map (I-37: eliminates any-typed handler)
@@ -42,6 +46,8 @@ interface BackendEventMap {
     // NOTE(A-0): Ping-only event — no payload. Frontend fetches full snapshot
     // via GetSessionErrorLog() on receipt. This eliminates data loss from throttling.
     "app:session-log-updated": null;
+    // Ping-only event for input history — same pattern as session-log-updated.
+    "app:input-history-updated": null;
 }
 
 function isAppConfigPayload(payload: unknown): payload is AppConfig {
@@ -228,6 +234,7 @@ export function useBackendSync() {
                     console.error("[SYNC] GetConfig failed:", configResult.reason);
                 }
                 notifyWarn("設定の読み込みに失敗しました。アプリを再起動してください。");
+                logFrontendEventSafe("error", "GetConfigAndFlushWarnings failed on startup", "frontend/api");
             }
 
             // --- session list ---
@@ -240,6 +247,7 @@ export function useBackendSync() {
                     console.warn("[SYNC] ListSessions failed:", sessionsResult.reason);
                 }
                 notifyWarn("Failed to load session list. Please restart the app and try again.");
+                logFrontendEventSafe("error", "ListSessions failed on startup", "frontend/api");
             }
 
             // --- active session (GetActiveSession takes priority) ---
@@ -252,6 +260,7 @@ export function useBackendSync() {
                     console.warn("[SYNC] GetActiveSession failed:", activeResult.reason);
                 }
                 notifyWarn("アクティブセッションの取得に失敗しました。");
+                logFrontendEventSafe("warn", "GetActiveSession failed on startup", "frontend/api");
                 // Fall back to the first available session from ListSessions.
                 const fallback = normalizedSessions[0]?.name ?? null;
                 setActiveSession(fallback);
@@ -447,6 +456,10 @@ export function useBackendSync() {
                     console.warn("[SYNC] tmux:worker-panic: invalid payload", payload);
                 }
                 notifyWarn("A background worker panic was recovered.");
+                // NOTE: Also persist to session log. The backend emits this event after
+                // recovering from a panic; the Go-side slog record may not always be
+                // present (e.g. if the panic occurred before the log write).
+                logFrontendEventSafe("warn", "A background worker panic was recovered", "frontend/worker");
                 return;
             }
             const workerName = event.worker.trim();
@@ -454,6 +467,7 @@ export function useBackendSync() {
                 console.warn("[SYNC] tmux:worker-panic:", workerName);
             }
             notifyWarn(`A background worker panic was recovered (${workerName}).`);
+            logFrontendEventSafe("warn", `A background worker panic was recovered (${workerName})`, "frontend/worker");
         });
 
         onEvent("tmux:worker-fatal", (payload) => {
@@ -465,15 +479,18 @@ export function useBackendSync() {
                     console.warn("[SYNC] tmux:worker-fatal: invalid payload", payload);
                 }
                 notifyWarn("A background worker has permanently stopped after exceeding max retries.");
+                // NOTE: Also persist to session log — fatal worker stops are high-severity events.
+                logFrontendEventSafe("error", "A background worker has permanently stopped after exceeding max retries", "frontend/worker");
                 return;
             }
             if (import.meta.env.DEV) {
                 console.warn("[SYNC] tmux:worker-fatal:", workerName, "maxRetries:", maxRetries);
             }
-            notifyWarn(
+            const fatalMsg =
                 `Background worker "${workerName}" has permanently stopped` +
-                (maxRetries != null ? ` after ${maxRetries} retries.` : "."),
-            );
+                (maxRetries != null ? ` after ${maxRetries} retries` : "");
+            notifyWarn(fatalMsg + ".");
+            logFrontendEventSafe("error", fatalMsg, "frontend/worker");
         });
 
         // NOTE(A-0): "ping + fetch" model — the backend sends a lightweight ping
@@ -538,6 +555,51 @@ export function useBackendSync() {
         // ensures only the latest response is applied.
         fetchErrorLog();
 
+        // --- Input History: same "ping + fetch" pattern as error log ---
+        let inputHistoryDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+        let inputHistoryRetryTimer: ReturnType<typeof setTimeout> | null = null;
+        let inputHistoryFetchSeq = 0;
+
+        const fetchInputHistory = (attempt = 0) => {
+            if (!isMountedRef.current) return;
+            const seq = ++inputHistoryFetchSeq;
+            void api.GetInputHistory()
+                .then((result) => {
+                    if (!isMountedRef.current || seq !== inputHistoryFetchSeq) return;
+                    if (inputHistoryRetryTimer != null) {
+                        clearTimeout(inputHistoryRetryTimer);
+                        inputHistoryRetryTimer = null;
+                    }
+                    useInputHistoryStore.getState().setEntries(result ?? []);
+                })
+                .catch((err: unknown) => {
+                    if (!isMountedRef.current || seq !== inputHistoryFetchSeq) return;
+                    if (import.meta.env.DEV) {
+                        console.warn("[SYNC] GetInputHistory failed:", err, "attempt:", attempt + 1);
+                    }
+                    if (attempt >= 1) {
+                        return;
+                    }
+                    if (inputHistoryRetryTimer != null) {
+                        clearTimeout(inputHistoryRetryTimer);
+                    }
+                    inputHistoryRetryTimer = setTimeout(() => {
+                        inputHistoryRetryTimer = null;
+                        fetchInputHistory(attempt + 1);
+                    }, INPUT_HISTORY_FETCH_RETRY_DELAY_MS);
+                });
+        };
+
+        onEvent("app:input-history-updated", () => {
+            if (!isMountedRef.current) return;
+            if (inputHistoryDebounceTimer != null) {
+                clearTimeout(inputHistoryDebounceTimer);
+            }
+            inputHistoryDebounceTimer = setTimeout(fetchInputHistory, INPUT_HISTORY_DEBOUNCE_MS);
+        });
+
+        fetchInputHistory();
+
         return () => {
             isMountedRef.current = false;
             disconnectPaneStream(); // WebSocket切断 + タイマークリア (#96)
@@ -549,6 +611,14 @@ export function useBackendSync() {
             if (errorLogRetryTimer != null) {
                 clearTimeout(errorLogRetryTimer);
                 errorLogRetryTimer = null;
+            }
+            if (inputHistoryDebounceTimer != null) {
+                clearTimeout(inputHistoryDebounceTimer);
+                inputHistoryDebounceTimer = null;
+            }
+            if (inputHistoryRetryTimer != null) {
+                clearTimeout(inputHistoryRetryTimer);
+                inputHistoryRetryTimer = null;
             }
             for (let i = cleanupFns.length - 1; i >= 0; i -= 1) {
                 try {

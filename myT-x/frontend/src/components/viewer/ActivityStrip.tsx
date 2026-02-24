@@ -1,39 +1,62 @@
-import {useCallback} from "react";
-import {useErrorLogStore} from "../../stores/errorLogStore";
+import React, {useSyncExternalStore} from "react";
+import {useTmuxStore} from "../../stores/tmuxStore";
 import type {ViewPlugin} from "./viewerRegistry";
 import {getRegisteredViews} from "./viewerRegistry";
+import {getEffectiveViewerShortcut} from "./viewerShortcutUtils";
 import {useViewerStore} from "./viewerStore";
+
+const EMPTY_UNSUBSCRIBE = () => {
+};
+const EMPTY_SUBSCRIBE = () => EMPTY_UNSUBSCRIBE;
+const ZERO_BADGE = () => 0;
 
 function isBottomView(view: ViewPlugin): boolean {
     return view.position === "bottom";
 }
 
+interface ActivityButtonProps {
+    view: ViewPlugin;
+    isActive: boolean;
+    viewerShortcutsConfig: Record<string, string> | null;
+    onToggle: (viewID: string) => void;
+}
+
+const ActivityButton = React.memo(function ActivityButton({
+                                                              view,
+                                                              isActive,
+                                                              viewerShortcutsConfig,
+                                                              onToggle
+                                                          }: ActivityButtonProps) {
+    const Icon = view.icon;
+    const effectiveShortcut = getEffectiveViewerShortcut(
+        viewerShortcutsConfig?.[view.id],
+        view.shortcut,
+    );
+    const subscribeBadge = view.subscribeBadgeCount ?? EMPTY_SUBSCRIBE;
+    const getBadgeCount = view.getBadgeCount ?? ZERO_BADGE;
+    const badgeCount = useSyncExternalStore(subscribeBadge, getBadgeCount, getBadgeCount);
+
+    return (
+        <button
+            className={`viewer-strip-btn${isActive ? " active" : ""}`}
+            onClick={() => onToggle(view.id)}
+            title={effectiveShortcut ? `${view.label} (${effectiveShortcut})` : view.label}
+        >
+            <Icon size={18}/>
+            {badgeCount > 0 && (
+                <span className="viewer-strip-badge"/>
+            )}
+        </button>
+    );
+});
+
 export function ActivityStrip() {
     const views = getRegisteredViews();
     const activeViewId = useViewerStore((s) => s.activeViewId);
     const toggleView = useViewerStore((s) => s.toggleView);
-    const unreadCount = useErrorLogStore((s) => s.unreadCount);
+    const viewerShortcutsConfig = useTmuxStore((s) => s.config?.viewer_shortcuts ?? null);
     const topViews = views.filter((view) => !isBottomView(view));
     const bottomViews = views.filter(isBottomView);
-
-    const renderViewButton = useCallback((view: ViewPlugin) => {
-        const Icon = view.icon;
-        const isActive = activeViewId === view.id;
-
-        return (
-            <button
-                key={view.id}
-                className={`viewer-strip-btn${isActive ? " active" : ""}`}
-                onClick={() => toggleView(view.id)}
-                title={view.shortcut ? `${view.label} (${view.shortcut})` : view.label}
-            >
-                <Icon size={18}/>
-                {view.id === "error-log" && unreadCount > 0 && (
-                    <span className="viewer-strip-badge"/>
-                )}
-            </button>
-        );
-    }, [activeViewId, toggleView, unreadCount]);
 
     if (views.length === 0) {
         return null;
@@ -41,9 +64,25 @@ export function ActivityStrip() {
 
     return (
         <div className="viewer-activity-strip">
-            {topViews.map(renderViewButton)}
+            {topViews.map((view) => (
+                <ActivityButton
+                    key={view.id}
+                    view={view}
+                    isActive={activeViewId === view.id}
+                    viewerShortcutsConfig={viewerShortcutsConfig}
+                    onToggle={toggleView}
+                />
+            ))}
             {bottomViews.length > 0 && <div className="viewer-strip-spacer"/>}
-            {bottomViews.map(renderViewButton)}
+            {bottomViews.map((view) => (
+                <ActivityButton
+                    key={view.id}
+                    view={view}
+                    isActive={activeViewId === view.id}
+                    viewerShortcutsConfig={viewerShortcutsConfig}
+                    onToggle={toggleView}
+                />
+            ))}
         </div>
     );
 }

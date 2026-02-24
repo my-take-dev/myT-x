@@ -17,8 +17,9 @@ export function AgentModelSettings({ s, dispatch }: AgentModelSettingsProps) {
       </span>
 
       <div className="form-group">
-        <label className="form-label">置換元 (from)</label>
+        <label className="form-label" htmlFor="agent-model-from">置換元 (from)</label>
         <input
+          id="agent-model-from"
           className={`form-input ${s.validationErrors["agent_model"] ? "input-error" : ""}`}
           value={s.agentFrom}
           onChange={(e) => dispatch({ type: "SET_FIELD", field: "agentFrom", value: e.target.value })}
@@ -27,8 +28,9 @@ export function AgentModelSettings({ s, dispatch }: AgentModelSettingsProps) {
       </div>
 
       <div className="form-group">
-        <label className="form-label">置換先 (to)</label>
+        <label className="form-label" htmlFor="agent-model-to">置換先 (to)</label>
         <input
+          id="agent-model-to"
           className={`form-input ${s.validationErrors["agent_model"] ? "input-error" : ""}`}
           value={s.agentTo}
           onChange={(e) => dispatch({ type: "SET_FIELD", field: "agentTo", value: e.target.value })}

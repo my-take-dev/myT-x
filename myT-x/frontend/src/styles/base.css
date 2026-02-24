@@ -1,406 +1,449 @@
 @font-face {
-  font-family: "Nunito";
-  font-style: normal;
-  font-weight: 400;
-  src: local(""), url("../assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+    font-family: "Nunito";
+    font-style: normal;
+    font-weight: 400;
+    src: local(""), url("../assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
 }
 
 :root {
-  --bg-base: #0a0f18;
-  --bg-panel: #101928;
-  --bg-panel-strong: #17243a;
-  --bg-elev: #1b2a43;
-  --surface-3: rgba(227, 238, 249, 0.08);
-  --fg-main: #e3eef9;
-  --fg-dim: #90a6bd;
-  --line: rgba(201, 221, 242, 0.16);
-  --accent: #f6d365;
-  --accent-22: rgba(246, 211, 101, 0.22);
-  --accent-04: rgba(246, 211, 101, 0.04);
-  --accent-06: rgba(246, 211, 101, 0.06);
-  --accent-10: rgba(246, 211, 101, 0.1);
-  --accent-25: rgba(246, 211, 101, 0.25);
-  --danger: #ff6b6b;
-  --danger-08: rgba(255, 107, 107, 0.08);
-  --danger-20: rgba(255, 107, 107, 0.2);
-  --danger-40: rgba(255, 107, 107, 0.4);
-  --warning: rgb(246, 173, 85);
-  --warning-10: rgba(246, 173, 85, 0.1);
-  --session-running-border: rgba(61, 228, 183, 0.66);
-  --session-running-glow: rgba(55, 193, 157, 0.3);
-  --session-running-bg:
-    linear-gradient(140deg, rgba(7, 55, 47, 0.9), rgba(25, 112, 93, 0.5));
-  --session-idle-border: rgba(160, 178, 205, 0.62);
-  --session-idle-glow: rgba(122, 148, 181, 0.24);
-  --session-idle-bg:
-    linear-gradient(140deg, rgba(34, 43, 58, 0.9), rgba(66, 84, 109, 0.48));
-  --session-selected-border: rgba(246, 211, 101, 0.95);
-  --session-selected-glow: rgba(246, 211, 101, 0.34);
-  --session-selected-bg:
-    linear-gradient(140deg, rgba(86, 58, 19, 0.95), rgba(170, 125, 42, 0.54));
+    --bg-base: #0a0f18;
+    --bg-panel: #101928;
+    --bg-panel-strong: #17243a;
+    --bg-elev: #1b2a43;
+    --surface-3: rgba(227, 238, 249, 0.08);
+    --fg-main: #e3eef9;
+    --fg-dim: #90a6bd;
+    --line: rgba(201, 221, 242, 0.16);
+    --accent: #f6d365;
+    --accent-22: rgba(246, 211, 101, 0.22);
+    --accent-04: rgba(246, 211, 101, 0.04);
+    --accent-06: rgba(246, 211, 101, 0.06);
+    --accent-10: rgba(246, 211, 101, 0.1);
+    --accent-25: rgba(246, 211, 101, 0.25);
+    --danger: #ff6b6b;
+    --danger-08: rgba(255, 107, 107, 0.08);
+    --danger-20: rgba(255, 107, 107, 0.2);
+    --danger-40: rgba(255, 107, 107, 0.4);
+    --warning: rgb(246, 173, 85);
+    --warning-10: rgba(246, 173, 85, 0.1);
+    --session-running-border: rgba(61, 228, 183, 0.66);
+    --session-running-glow: rgba(55, 193, 157, 0.3);
+    --session-running-bg: linear-gradient(140deg, rgba(7, 55, 47, 0.9), rgba(25, 112, 93, 0.5));
+    --session-idle-border: rgba(160, 178, 205, 0.62);
+    --session-idle-glow: rgba(122, 148, 181, 0.24);
+    --session-idle-bg: linear-gradient(140deg, rgba(34, 43, 58, 0.9), rgba(66, 84, 109, 0.48));
+    --session-selected-border: rgba(246, 211, 101, 0.95);
+    --session-selected-glow: rgba(246, 211, 101, 0.34);
+    --session-selected-bg: linear-gradient(140deg, rgba(86, 58, 19, 0.95), rgba(170, 125, 42, 0.54));
 
-  /* ── Layout ── */
-  --sidebar-width: 280px;
-  --activity-strip-width: 36px;
-  /* ── Z-index ── */
-  --z-activity-strip: 50;
-  --z-viewer-overlay: 40;
-  /* ── Git colors ── */
-  --git-ahead: rgba(61, 228, 183, 0.9);
-  --git-modified: rgba(246, 211, 101, 0.8);
-  --git-staged: rgba(61, 228, 183, 0.8);
-  --git-head-bg: rgba(61, 228, 183, 0.12);
-  --git-head-fg: rgba(61, 228, 183, 0.9);
-  --git-head-border: rgba(61, 228, 183, 0.3);
-  --diff-added-bg: rgba(61, 228, 183, 0.15);
-  --selection-bg: rgba(99, 140, 255, 0.25);
+    /* ── Layout ── */
+    --sidebar-width: 280px;
+    --activity-strip-width: 36px;
+    /* ── Z-index ── */
+    --z-activity-strip: 50;
+    --z-viewer-overlay: 40;
+    /* ── Git colors ── */
+    --git-ahead: rgba(61, 228, 183, 0.9);
+    --git-modified: rgba(246, 211, 101, 0.8);
+    --git-staged: rgba(61, 228, 183, 0.8);
+    --git-head-bg: rgba(61, 228, 183, 0.12);
+    --git-head-fg: rgba(61, 228, 183, 0.9);
+    --git-head-border: rgba(61, 228, 183, 0.3);
+    --diff-added-bg: rgba(61, 228, 183, 0.15);
+    --selection-bg: rgba(99, 140, 255, 0.25);
 }
 
 * {
-  box-sizing: border-box;
+    box-sizing: border-box;
 }
 
 html,
 body,
 #root,
 #app {
-  width: 100%;
-  height: 100%;
-  margin: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
 }
 
 body {
-  font-family: "Nunito", "Segoe UI", sans-serif;
-  color: var(--fg-main);
-  background:
-    radial-gradient(circle at top right, rgba(246, 211, 101, 0.18), transparent 42%),
+    font-family: "Nunito", "Segoe UI", sans-serif;
+    color: var(--fg-main);
+    background: radial-gradient(circle at top right, rgba(246, 211, 101, 0.18), transparent 42%),
     radial-gradient(circle at bottom left, rgba(84, 146, 255, 0.18), transparent 38%),
     var(--bg-base);
-  overflow: hidden;
+    overflow: hidden;
 }
 
 button {
-  font: inherit;
+    font: inherit;
 }
 
 .app-root {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
 }
 
 .app-body {
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .sidebar {
-  width: var(--sidebar-width);
-  min-width: 240px;
-  max-width: 340px;
-  border-right: 1px solid var(--line);
-  background: linear-gradient(170deg, rgba(16, 25, 40, 0.96), rgba(11, 19, 33, 0.96));
-  display: flex;
-  flex-direction: column;
-  padding: 18px 14px;
-  gap: 14px;
+    width: var(--sidebar-width);
+    min-width: 240px;
+    max-width: 340px;
+    border-right: 1px solid var(--line);
+    background: linear-gradient(170deg, rgba(16, 25, 40, 0.96), rgba(11, 19, 33, 0.96));
+    display: flex;
+    flex-direction: column;
+    padding: 18px 14px;
+    gap: 14px;
 }
 
 .sidebar-header h1 {
-  margin: 0;
-  font-size: 1.2rem;
-  letter-spacing: 0.04em;
+    margin: 0;
+    font-size: 1.2rem;
+    letter-spacing: 0.04em;
 }
 
 .sidebar-header p {
-  margin: 4px 0 0;
-  color: var(--fg-dim);
-  font-size: 0.82rem;
+    margin: 4px 0 0;
+    color: var(--fg-dim);
+    font-size: 0.82rem;
 }
 
 .sidebar-actions {
-  display: grid;
-  gap: 8px;
+    display: grid;
+    gap: 8px;
 }
 
 .sidebar-actions .primary,
 .sidebar-actions .ghost,
 .agent-teams-actions button,
 .feed-header button {
-  border-radius: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  background: var(--bg-elev);
-  color: var(--fg-main);
-  cursor: pointer;
+    border-radius: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    color: var(--fg-main);
+    cursor: pointer;
 }
 
 .sidebar-actions .primary {
-  border-color: var(--accent);
-  background: linear-gradient(145deg, rgba(246, 211, 101, 0.16), rgba(246, 211, 101, 0.06));
+    border-color: var(--accent);
+    background: linear-gradient(145deg, rgba(246, 211, 101, 0.16), rgba(246, 211, 101, 0.06));
 }
 
 .sidebar-actions .ghost:hover,
 .sidebar-actions .primary:hover,
 .agent-teams-actions button:hover,
 .feed-header button:hover {
-  filter: brightness(1.1);
+    filter: brightness(1.1);
 }
 
 .session-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-  padding-right: 4px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    padding-right: 4px;
 }
 
 .session-row {
-  padding-right: 4px;
-  padding-bottom: 8px;
+    padding-right: 4px;
+    padding-bottom: 8px;
 }
 
 [draggable="true"] {
-  cursor: grab;
+    cursor: grab;
 }
 
 [draggable="true"]:active {
-  cursor: grabbing;
+    cursor: grabbing;
 }
 
 .drop-above {
-  box-shadow: inset 0 2px 0 var(--accent);
+    box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .drop-below {
-  box-shadow: inset 0 -2px 0 var(--accent);
+    box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .session-item {
-  position: relative;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 8px 10px;
-  padding-right: 28px;
-  background: rgba(24, 35, 53, 0.7);
-  color: var(--fg-main);
-  text-align: left;
-  cursor: pointer;
-  transition:
-    background 0.18s ease,
+    position: relative;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 10px;
+    padding-right: 28px;
+    background: rgba(24, 35, 53, 0.7);
+    color: var(--fg-main);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.18s ease,
     border-color 0.18s ease,
     box-shadow 0.18s ease,
     color 0.18s ease;
 }
 
 .session-item.running {
-  border-color: var(--session-running-border);
-  background: var(--session-running-bg);
-  box-shadow:
-    inset 3px 0 0 var(--session-running-border),
+    border-color: var(--session-running-border);
+    background: var(--session-running-bg);
+    box-shadow: inset 3px 0 0 var(--session-running-border),
     0 0 0 1px rgba(37, 77, 66, 0.24);
 }
 
 .session-item.running:hover {
-  box-shadow:
-    inset 3px 0 0 var(--session-running-border),
+    box-shadow: inset 3px 0 0 var(--session-running-border),
     0 0 0 1px rgba(37, 77, 66, 0.24),
     0 6px 18px -10px var(--session-running-glow);
 }
 
 .session-item.idle {
-  border-color: var(--session-idle-border);
-  background: var(--session-idle-bg);
-  box-shadow:
-    inset 3px 0 0 var(--session-idle-border),
+    border-color: var(--session-idle-border);
+    background: var(--session-idle-bg);
+    box-shadow: inset 3px 0 0 var(--session-idle-border),
     0 0 0 1px rgba(72, 86, 109, 0.2);
 }
 
 .session-item.idle:hover {
-  box-shadow:
-    inset 3px 0 0 var(--session-idle-border),
+    box-shadow: inset 3px 0 0 var(--session-idle-border),
     0 0 0 1px rgba(72, 86, 109, 0.2),
     0 6px 18px -10px var(--session-idle-glow);
 }
 
 .session-item.selected {
-  border-color: var(--session-selected-border);
-  background: var(--session-selected-bg);
-  box-shadow:
-    inset 3px 0 0 var(--session-selected-border),
+    border-color: var(--session-selected-border);
+    background: var(--session-selected-bg);
+    box-shadow: inset 3px 0 0 var(--session-selected-border),
     0 0 0 1px var(--accent-22),
     0 8px 24px -12px var(--session-selected-glow);
 }
 
 .session-item.selected:hover {
-  filter: brightness(1.06);
+    filter: brightness(1.06);
 }
 
 .session-item.running .session-meta {
-  color: rgba(162, 244, 219, 0.92);
+    color: rgba(162, 244, 219, 0.92);
 }
 
 .session-item.idle .session-meta {
-  color: rgba(208, 219, 238, 0.92);
+    color: rgba(208, 219, 238, 0.92);
 }
 
 .session-item.selected .session-meta {
-  color: rgba(255, 236, 174, 0.96);
+    color: rgba(255, 236, 174, 0.96);
 }
 
 .session-item-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .session-name {
-  display: block;
-  font-size: 0.92rem;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    display: block;
+    font-size: 0.92rem;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .session-state {
-  flex-shrink: 0;
-  font-size: 0.62rem;
-  line-height: 1;
-  padding: 3px 5px;
-  border-radius: 999px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+    flex-shrink: 0;
+    font-size: 0.62rem;
+    line-height: 1;
+    padding: 3px 5px;
+    border-radius: 999px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
 .session-state.running {
-  color: #d8fff3;
-  background: rgba(28, 136, 109, 0.42);
-  border: 1px solid rgba(61, 228, 183, 0.84);
-  font-weight: 700;
+    color: #d8fff3;
+    background: rgba(28, 136, 109, 0.42);
+    border: 1px solid rgba(61, 228, 183, 0.84);
+    font-weight: 700;
 }
 
 .session-state.idle {
-  color: #e2e7f6;
-  background: rgba(91, 108, 136, 0.34);
-  border: 1px solid rgba(173, 192, 220, 0.76);
-  font-weight: 700;
+    color: #e2e7f6;
+    background: rgba(91, 108, 136, 0.34);
+    border: 1px solid rgba(173, 192, 220, 0.76);
+    font-weight: 700;
 }
 
 .session-state.selected {
-  color: #fff3cf;
-  background: rgba(193, 142, 43, 0.42);
-  border: 1px solid rgba(246, 211, 101, 0.94);
-  font-weight: 700;
+    color: #fff3cf;
+    background: rgba(193, 142, 43, 0.42);
+    border: 1px solid rgba(246, 211, 101, 0.94);
+    font-weight: 700;
 }
 
 .session-name-input {
-  font-size: 0.92rem;
-  flex: 1;
-  min-width: 0;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  color: var(--fg-main);
-  padding: 1px 4px;
-  outline: none;
+    font-size: 0.92rem;
+    flex: 1;
+    min-width: 0;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--fg-main);
+    padding: 1px 4px;
+    outline: none;
 }
 
 .session-close {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--fg-dim);
-  font-size: 0.85rem;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
 }
 
 .session-item:hover .session-close {
-  opacity: 1;
+    opacity: 1;
 }
 
 .session-close:hover {
-  background: rgba(255, 80, 80, 0.3);
-  color: #ff6b6b;
+    background: rgba(255, 80, 80, 0.3);
+    color: #ff6b6b;
 }
 
 .session-meta {
-  display: block;
-  margin-top: 2px;
-  color: var(--fg-dim);
-  font-size: 0.74rem;
+    display: block;
+    margin-top: 2px;
+    color: var(--fg-dim);
+    font-size: 0.74rem;
 }
 
 .session-meta:empty {
-  display: none;
+    display: none;
 }
 
 /* ── Session type mark (S/A) ── */
 .session-type-mark {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  font-size: 0.62rem;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: 0.02em;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.02em;
 }
 
 .session-type-mark.session {
-  color: #a8c8f0;
-  background: rgba(70, 110, 180, 0.28);
-  border: 1px solid rgba(100, 150, 220, 0.5);
+    color: #a8c8f0;
+    background: rgba(70, 110, 180, 0.28);
+    border: 1px solid rgba(100, 150, 220, 0.5);
 }
 
 .session-type-mark.agent {
-  color: #a8f0c8;
-  background: rgba(50, 160, 100, 0.28);
-  border: 1px solid rgba(80, 200, 140, 0.5);
+    color: #a8f0c8;
+    background: rgba(50, 160, 100, 0.28);
+    border: 1px solid rgba(80, 200, 140, 0.5);
 }
 
 .main-content {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  margin-right: var(--activity-strip-width);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    margin-right: var(--activity-strip-width);
 }
 
 .session-view,
 .agent-teams-view {
-  flex: 1;
-  min-height: 0;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
 }
 
 .session-empty,
 .feed-empty {
-  width: 100%;
-  height: 100%;
-  border: 1px dashed var(--line);
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  color: var(--fg-dim);
+    width: 100%;
+    height: 100%;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    color: var(--fg-dim);
+}
+
+.session-empty-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.session-empty-message {
+    color: var(--fg-dim);
+    margin: 0;
+}
+
+.session-quick-start-btn {
+    padding: 10px 24px;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    background: var(--accent-06);
+    color: var(--accent);
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.session-quick-start-btn:hover:not(:disabled) {
+    background: var(--accent-22);
+}
+
+.session-quick-start-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.session-quick-start-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.session-quick-start-error {
+    color: var(--danger);
+    font-size: 0.8rem;
+    margin: 0;
+}
+
+.form-input-with-button {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.form-input-with-button .form-input {
+    flex: 1;
 }
 

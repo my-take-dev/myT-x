@@ -8,6 +8,8 @@ export const INITIAL_FORM: FormState = {
   quakeMode: true,
   globalHotkey: "Ctrl+Shift+F12",
   keys: {},
+  viewerShortcuts: {},
+  defaultSessionDir: "",
   wtEnabled: true,
   wtForceCleanup: false,
   wtSetupScripts: [],
@@ -59,6 +61,8 @@ export function formReducer(state: FormState, action: FormAction): FormState {
         quakeMode: cfg.quake_mode ?? true,
         globalHotkey: cfg.global_hotkey || "Ctrl+Shift+F12",
         keys: cfg.keys || {},
+        viewerShortcuts: cfg.viewer_shortcuts ?? {},
+        defaultSessionDir: cfg.default_session_dir || "",
         wtEnabled: wt?.enabled ?? true,
         wtForceCleanup: wt?.force_cleanup ?? false,
         wtSetupScripts: wt?.setup_scripts || [],
@@ -111,6 +115,11 @@ export function formReducer(state: FormState, action: FormAction): FormState {
       }
       return { ...state, claudeEnvEntries: nextClaude };
     }
+    case "UPDATE_VIEWER_SHORTCUT":
+      return {
+        ...state,
+        viewerShortcuts: { ...state.viewerShortcuts, [action.viewId]: action.value },
+      };
     default: {
       const _exhaustive: never = action;
       void _exhaustive;

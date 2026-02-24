@@ -8,6 +8,24 @@ import (
 	"myT-x/internal/tmux"
 )
 
+func (a *App) resolveSessionNameForPane(sessions *tmux.SessionManager, paneID string) string {
+	if sessions == nil {
+		// Input delivery is already complete when this helper is called.
+		// Keep history capture best-effort and avoid surfacing non-fatal lookup errors.
+		slog.Debug("[PANE] failed to access sessions while resolving pane session name", "paneID", paneID, "err", errSessionNotInitialized)
+		return ""
+	}
+	target, err := sessions.ResolveTarget(paneID, -1)
+	if err != nil {
+		slog.Debug("[PANE] failed to resolve pane session name for input history", "paneID", paneID, "err", err)
+		return ""
+	}
+	if target == nil || target.Window == nil || target.Window.Session == nil {
+		return ""
+	}
+	return strings.TrimSpace(target.Window.Session.Name)
+}
+
 // SplitPane splits one pane. horizontal=true means left/right split.
 // NOTE: Unlike other pane API methods, SplitPane delegates to CommandRouter
 // (not SessionManager directly), so requireSessionsWithPaneID is not used.
@@ -40,6 +58,8 @@ func (a *App) SendInput(paneID string, input string) error {
 		slog.Debug("[PANE] SendInput failed", "paneID", paneID, "err", err)
 		return err
 	}
+	sessionName := a.resolveSessionNameForPane(sessions, paneID)
+	a.recordInput(paneID, input, "keyboard", sessionName)
 	return nil
 }
 
@@ -53,6 +73,8 @@ func (a *App) SendSyncInput(paneID string, input string) error {
 		slog.Debug("[PANE] SendSyncInput failed", "paneID", paneID, "err", err)
 		return err
 	}
+	sessionName := a.resolveSessionNameForPane(sessions, paneID)
+	a.recordInput(paneID, input, "sync-input", sessionName)
 	return nil
 }
 

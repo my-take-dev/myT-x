@@ -1,5 +1,59 @@
 import type {ClaudeEnvEntry, OverrideEntry, PaneEnvEntry} from "./types";
 import {EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK, VALID_EFFORT_LEVELS} from "./constants";
+import {VIEWER_SHORTCUTS} from "../viewer/viewerShortcutDefinitions";
+import {getEffectiveViewerShortcut, hasShortcutModifier, normalizeShortcut} from "../viewer/viewerShortcutUtils";
+
+export function validateViewerShortcuts(
+    viewerShortcuts: Record<string, string>,
+    globalHotkey: string = "",
+): Record<string, string> {
+    const errors: Record<string, string> = {};
+    const ownersByShortcut = new Map<string, string[]>();
+    const normalizedGlobalHotkey = normalizeShortcut(globalHotkey);
+
+    const setShortcutError = (viewId: string, message: string) => {
+        const key = `viewer_shortcut_${viewId}`;
+        if (!errors[key]) {
+            errors[key] = message;
+        }
+    };
+
+    for (const {viewId, defaultShortcut} of VIEWER_SHORTCUTS) {
+        const effectiveShortcut = getEffectiveViewerShortcut(viewerShortcuts[viewId], defaultShortcut);
+        if (!effectiveShortcut) {
+            continue;
+        }
+        if (!hasShortcutModifier(effectiveShortcut)) {
+            setShortcutError(viewId, "修飾キーが必要です");
+            continue;
+        }
+        const normalized = normalizeShortcut(effectiveShortcut);
+        if (!normalized) {
+            continue;
+        }
+        if (normalizedGlobalHotkey !== "" && normalized === normalizedGlobalHotkey) {
+            setShortcutError(viewId, "グローバルホットキーと重複しています");
+            continue;
+        }
+        const owners = ownersByShortcut.get(normalized);
+        if (owners) {
+            owners.push(viewId);
+        } else {
+            ownersByShortcut.set(normalized, [viewId]);
+        }
+    }
+
+    for (const owners of ownersByShortcut.values()) {
+        if (owners.length < 2) {
+            continue;
+        }
+        for (const viewId of owners) {
+            setShortcutError(viewId, "他のビューと重複しています");
+        }
+    }
+
+    return errors;
+}
 
 // SYNC: Must match blockedEnvironmentKeys in internal/tmux/command_router_terminal.go
 // and TestBlockedEnvironmentKeysCountGuard in command_router_terminal_test.go
@@ -24,7 +78,7 @@ export function validateAgentModelSettings(
     const from = agentFrom.trim();
     const to = agentTo.trim();
     if ((from && !to) || (!from && to)) {
-        errors["agent_model"] = "from\u3068to\u306f\u4e21\u65b9\u540c\u6642\u306b\u6307\u5b9a\u304c\u5fc5\u8981\u3067\u3059";
+        errors["agent_model"] = "fromとtoは両方同時に指定が必要です";
     }
 
     overrides.forEach((ov, i) => {
@@ -34,16 +88,16 @@ export function validateAgentModelSettings(
             return;
         }
         if (!name && model) {
-            errors[`override_name_${i}`] = "\u30e2\u30c7\u30eb\u304c\u6307\u5b9a\u3055\u308c\u3066\u3044\u308b\u5834\u5408\u3001\u540d\u524d\u306f\u5fc5\u9808\u3067\u3059";
+            errors[`override_name_${i}`] = "モデルが指定されている場合、名前は必須です";
             return;
         }
         const runeLen = [...name].length;
         if (runeLen < minOverrideNameLen) {
             errors[`override_name_${i}`] =
-                `\u540d\u524d\u306f${minOverrideNameLen}\u6587\u5b57\u4ee5\u4e0a\u5fc5\u8981\u3067\u3059 (\u73fe\u5728: ${runeLen}\u6587\u5b57)`;
+                `名前は${minOverrideNameLen}文字以上必要です (現在: ${runeLen}文字)`;
         }
         if (name && !model) {
-            errors[`override_model_${i}`] = "\u30e2\u30c7\u30eb\u306f\u5fc5\u9808\u3067\u3059";
+            errors[`override_model_${i}`] = "モデルは必須です";
         }
     });
 
@@ -128,7 +182,19 @@ export function validateClaudeEnvSettings(
     return validateEnvEntries(entries, "claude_env");
 }
 
+const ABSOLUTE_SESSION_DIR_PATTERN = /^(?:~(?:[\\/]|$)|%[A-Za-z_][A-Za-z0-9_]*%(?:[\\/]|$)|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?:[\\/]|$)|[A-Za-z]:[\\/]|[\\/]{2})/;
 const ABSOLUTE_OR_DRIVE_PATH_PATTERN = /^(?:[A-Za-z]:|[\\/]{2}|[\\/])/;
+
+export function validateDefaultSessionDir(rawPath: string): Record<string, string> {
+    const path = rawPath.trim();
+    if (path === "") {
+        return {};
+    }
+    if (!ABSOLUTE_SESSION_DIR_PATTERN.test(path)) {
+        return {default_session_dir: "絶対パスを指定してください"};
+    }
+    return {};
+}
 
 export function normalizeRelativePath(path: string): string {
     const segments = path.split("/");

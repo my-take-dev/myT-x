@@ -56,7 +56,7 @@ export type KnownKeyBinding =
     | "kill-pane"
     | "detach-session";
 
-type AppConfigBase = Pick<wailsConfig.Config, "shell" | "prefix" | "keys" | "quake_mode" | "global_hotkey">;
+type AppConfigBase = Pick<wailsConfig.Config, "shell" | "prefix" | "keys" | "quake_mode" | "global_hotkey" | "default_session_dir">;
 
 export type AppConfigClaudeEnv = Pick<wailsConfig.ClaudeEnvConfig, "default_enabled" | "vars">;
 
@@ -66,6 +66,7 @@ export type AppConfig = AppConfigBase & {
     pane_env?: Record<string, string>;
     pane_env_default_enabled?: boolean;
     claude_env?: AppConfigClaudeEnv;
+    viewer_shortcuts?: Record<string, string>;
 };
 
 export type WailsConfigInput = AppConfig;

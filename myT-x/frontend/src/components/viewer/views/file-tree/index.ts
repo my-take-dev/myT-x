@@ -1,11 +1,14 @@
 import { registerView } from "../../viewerRegistry";
+import {mustGetViewerShortcutDef} from "../../viewerShortcutDefinitions";
 import { FileTreeIcon } from "../../icons/FileTreeIcon";
 import { FileTreeView } from "./FileTreeView";
 
+const shortcutDef = mustGetViewerShortcutDef("file-tree");
+
 registerView({
-  id: "file-tree",
+  id: shortcutDef.viewId,
   icon: FileTreeIcon,
-  label: "File Tree",
+  label: shortcutDef.label,
   component: FileTreeView,
-  shortcut: "Ctrl+Shift+E",
+  shortcut: shortcutDef.defaultShortcut,
 });

@@ -36,7 +36,8 @@ type App struct {
 	//
 	// Independent locks: do not assume ordering across these.
 	//   windowMu, outputMu, snapshotRequestMu, snapshotMetricsMu,
-	//   startupWarnMu, activeSessMu, ctxMu, sessionLogMu
+	//   startupWarnMu, activeSessMu, ctxMu, sessionLogMu,
+	//   inputHistoryMu, inputLineBufMu
 	//   tmux.SessionManager.mu, tmux.CommandRouter.mu
 	//
 	// Keep cfgSaveMu/cfgMu isolated from the independent lock set above.
@@ -50,10 +51,13 @@ type App struct {
 	cfg                     config.Config
 	configPath              string
 	workspace               string
-	startupWarnMu           sync.Mutex
-	configLoadWarnings      []string
-	activeSessMu            sync.RWMutex
-	activeSess              string
+	// launchDir is the working directory captured at startup. Read-only after
+	// startup() returns; safe to access without mutex from any goroutine.
+	launchDir          string
+	startupWarnMu      sync.Mutex
+	configLoadWarnings []string
+	activeSessMu       sync.RWMutex
+	activeSess         string
 
 	// Backend services.
 	sessions   *tmux.SessionManager
@@ -106,6 +110,21 @@ type App struct {
 	sessionLogLastEmit time.Time
 	sessionLogSeq      uint64
 
+	// Input history state (captures terminal input from SendInput/SendSyncInput).
+	// Protected by inputHistoryMu (RWMutex: write-lock for append/close, read-lock for get).
+	inputHistoryMu       sync.RWMutex
+	inputHistoryFile     *os.File
+	inputHistoryPath     string
+	inputHistoryEntries  inputHistoryRingBuffer
+	inputHistoryLastEmit time.Time
+	inputHistorySeq      uint64
+
+	// Input line buffering state (separate lock from inputHistoryMu to avoid
+	// holding the history lock during timer management).
+	// Lock ordering: inputLineBufMu is NEVER held while acquiring inputHistoryMu.
+	inputLineBufMu   sync.Mutex
+	inputLineBuffers map[string]*inputLineBuffer
+
 	// Background worker cancellation/waits.
 	idleCancel context.CancelFunc
 	bgWG       sync.WaitGroup
@@ -124,11 +143,13 @@ func NewApp() *App {
 		// paneFeedCh buffer: 4096 items provides ~4 seconds of headroom at
 		// 10 panes x 100 chunks/sec. When full, enqueuePaneStateFeed falls
 		// back to direct Feed() call (see app_pane_feed.go).
-		paneFeedCh:        make(chan paneFeedItem, 4096),
-		snapshotCache:     map[string]tmux.SessionSnapshot{},
-		hotkeys:           hotkeys.NewManager(),
-		paneStates:        panestate.NewManager(512 * 1024),
-		sessionLogEntries: newSessionLogRingBuffer(sessionLogMaxEntries),
+		paneFeedCh:          make(chan paneFeedItem, 4096),
+		snapshotCache:       map[string]tmux.SessionSnapshot{},
+		hotkeys:             hotkeys.NewManager(),
+		paneStates:          panestate.NewManager(512 * 1024),
+		sessionLogEntries:   newSessionLogRingBuffer(sessionLogMaxEntries),
+		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		inputLineBuffers:    map[string]*inputLineBuffer{},
 	}
 }
 
