@@ -21,8 +21,6 @@
 - `new-window` をセッション作成に変更（1セッション=1ウィンドウモデルへ移行・タブUI削除）
 - コードレビュー指摘対応（DevPanel API・セッションログ・フロントエンド品質改善）
 - Diff View サブディレクトリ表示バグ修正（`addedDirs`管理・state更新順序）
-- その他
-　- change-log v0.0.7 review指摘事項修正
 
 ---
 
@@ -35,8 +33,6 @@
 - WebSocket化による高スループットペインデータ転送（pane:dataをWebSocketバイナリストリームに移行）
   - `workerutil` パッケージ新規作成（パニックリカバリ共通ヘルパー）
   - `wsserver` パッケージ新規作成（WebSocketサーバー）
-- その他
-　- change-log v0.0.6 review指摘事項修正
 
 ---
 
@@ -45,8 +41,6 @@
   - 設定画面からClaude Code環境変数を管理
   - セッション作成時のチェックボックスで適用制御（`use_claude_env` / `use_pane_env`）
   - `pane_env` にもデフォルトON/OFFチェック追加
-- その他
-　- change-log v0.0.5 review指摘事項修正
 
 ---
 
@@ -56,8 +50,6 @@
 - フロントエンド マルチウィンドウ対応（tmux-shim連携ギャップ修正・ウィンドウタブUI追加）
 - Claude-Code-Communication互換対応（`select-pane -T`フラグ・`attach-session`コマンド追加）
 - コードレビュー指摘対応（フォントサイズ競合・SearchBar再オープン時クエリ残存・バッファ定数化など）
-- その他
-　- change-log v0.0.4 review指摘事項修正
 
 ---
 
@@ -66,8 +58,6 @@
 - パフォーマンス改善調査レポート & 実装計画
 - ペイン分割時の作業ディレクトリ修正
 - IME変換障害 調査結果 & 修正計画
-- その他
-　- change-log v0.0.3 review指摘事項修正
 
 ---
 
@@ -76,8 +66,6 @@
 - gitworktreeの不要な情報のクリーンアップを追加
   - 実態が削除済みなのに、UIから選択可能な状態の解消
 - アプリケーション起動時にコマンドプロンプト画面が2連続で画面表示される状態を修正
-- その他
-　- change-log v0.0.2 指摘事項修正
 
 ---
 
