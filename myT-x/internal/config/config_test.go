@@ -216,6 +216,18 @@ func TestIsZeroConfig(t *testing.T) {
 				cfg.DefaultSessionDir = defaultSessionDir
 			},
 		},
+		{
+			name: "mcp servers set",
+			mutate: func(cfg *Config) {
+				cfg.MCPServers = []MCPServerConfig{{ID: "test"}}
+			},
+		},
+		{
+			name: "mcp servers non-nil empty",
+			mutate: func(cfg *Config) {
+				cfg.MCPServers = []MCPServerConfig{}
+			},
+		},
 	}
 
 	for _, tt := range cases {
@@ -1311,8 +1323,8 @@ func TestAllowedShellListIsSorted(t *testing.T) {
 }
 
 func TestConfigStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeFor[Config]().NumField(); got != 13 {
-		t.Fatalf("Config field count = %d, want 13; update isZeroConfig tests for new fields", got)
+	if got := reflect.TypeFor[Config]().NumField(); got != 14 {
+		t.Fatalf("Config field count = %d, want 14; update isZeroConfig tests for new fields", got)
 	}
 	if got := reflect.TypeFor[WorktreeConfig]().NumField(); got != 5 {
 		t.Fatalf("WorktreeConfig field count = %d, want 5 (enabled, force_cleanup, setup_scripts, copy_files, copy_dirs)", got)
@@ -2353,6 +2365,225 @@ func TestSaveRoundTripViewerShortcuts(t *testing.T) {
 	}
 }
 
+func TestCloneMCPServers(t *testing.T) {
+	t.Run("nil MCPServers cloned as nil", func(t *testing.T) {
+		src := DefaultConfig()
+		dst := Clone(src)
+		if dst.MCPServers != nil {
+			t.Errorf("MCPServers = %v, want nil", dst.MCPServers)
+		}
+	})
+
+	t.Run("empty MCPServers cloned as empty", func(t *testing.T) {
+		src := DefaultConfig()
+		src.MCPServers = []MCPServerConfig{}
+		dst := Clone(src)
+		if dst.MCPServers == nil {
+			t.Fatal("MCPServers = nil, want non-nil empty slice")
+		}
+		if len(dst.MCPServers) != 0 {
+			t.Fatalf("MCPServers length = %d, want 0", len(dst.MCPServers))
+		}
+	})
+
+	t.Run("MCPServers deep copied", func(t *testing.T) {
+		src := DefaultConfig()
+		src.MCPServers = []MCPServerConfig{
+			{
+				ID:          "mem-server",
+				Name:        "Memory Server",
+				Description: "Persistent memory",
+				Command:     "npx",
+				Args:        []string{"-y", "@anthropic/memory-server"},
+				Env:         map[string]string{"MEM_DIR": "/tmp/mem"},
+				Enabled:     true,
+				UsageSample: "remember this",
+				ConfigParams: []MCPServerConfigParam{
+					{
+						Key:          "mode",
+						Label:        "Mode",
+						DefaultValue: "strict",
+						Description:  "Execution mode",
+					},
+				},
+			},
+			{
+				ID:      "simple-server",
+				Name:    "Simple",
+				Command: "simple-mcp",
+			},
+		}
+		dst := Clone(src)
+		if !reflect.DeepEqual(src.MCPServers, dst.MCPServers) {
+			t.Fatal("Clone did not preserve MCPServers content")
+		}
+
+		// Mutate cloned slice element — source must stay unchanged.
+		dst.MCPServers[0].Name = "Changed"
+		if src.MCPServers[0].Name != "Memory Server" {
+			t.Fatalf("source MCPServers[0].Name mutated: %q", src.MCPServers[0].Name)
+		}
+
+		// Mutate cloned Args — source must stay unchanged.
+		dst.MCPServers[0].Args[0] = "changed-arg"
+		if src.MCPServers[0].Args[0] != "-y" {
+			t.Fatalf("source MCPServers[0].Args mutated: %q", src.MCPServers[0].Args[0])
+		}
+
+		// Mutate cloned Env — source must stay unchanged.
+		dst.MCPServers[0].Env["MEM_DIR"] = "/changed"
+		if src.MCPServers[0].Env["MEM_DIR"] != "/tmp/mem" {
+			t.Fatalf("source MCPServers[0].Env mutated: %q", src.MCPServers[0].Env["MEM_DIR"])
+		}
+
+		// Mutate cloned ConfigParams — source must stay unchanged.
+		dst.MCPServers[0].ConfigParams[0].Label = "Changed"
+		if src.MCPServers[0].ConfigParams[0].Label != "Mode" {
+			t.Fatalf("source MCPServers[0].ConfigParams mutated: %q", src.MCPServers[0].ConfigParams[0].Label)
+		}
+
+		// Append to cloned slice — source length must stay unchanged.
+		dst.MCPServers = append(dst.MCPServers, MCPServerConfig{ID: "extra"})
+		if len(src.MCPServers) != 2 {
+			t.Fatalf("source MCPServers length changed: %d", len(src.MCPServers))
+		}
+	})
+
+	t.Run("nil Args and Env preserved", func(t *testing.T) {
+		src := DefaultConfig()
+		src.MCPServers = []MCPServerConfig{
+			{ID: "no-args", Command: "test"},
+		}
+		dst := Clone(src)
+		if dst.MCPServers[0].Args != nil {
+			t.Errorf("Args = %v, want nil", dst.MCPServers[0].Args)
+		}
+		if dst.MCPServers[0].Env != nil {
+			t.Errorf("Env = %v, want nil", dst.MCPServers[0].Env)
+		}
+		if dst.MCPServers[0].ConfigParams != nil {
+			t.Errorf("ConfigParams = %v, want nil", dst.MCPServers[0].ConfigParams)
+		}
+	})
+}
+
+func TestLoadMCPServersYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := []byte(`
+mcp_servers:
+  - id: memory
+    name: Memory Server
+    description: Persistent memory
+    command: npx
+    args:
+      - -y
+      - "@anthropic/memory-server"
+    env:
+      MEM_DIR: /tmp/memory
+      MEM_MODE: strict
+    enabled: true
+    usage_sample: remember this
+    config_params:
+      - key: mode
+        label: Mode
+        default_value: strict
+        description: Execution mode
+  - id: browser
+    name: Browser MCP
+    command: browser-mcp
+`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.MCPServers) != 2 {
+		t.Fatalf("MCPServers length = %d, want 2", len(cfg.MCPServers))
+	}
+
+	first := cfg.MCPServers[0]
+	if first.ID != "memory" || first.Name != "Memory Server" || first.Command != "npx" {
+		t.Fatalf("first MCP server parsed incorrectly: %+v", first)
+	}
+	if !first.Enabled {
+		t.Fatalf("first MCP server Enabled = false, want true")
+	}
+	if len(first.Args) != 2 || first.Args[0] != "-y" || first.Args[1] != "@anthropic/memory-server" {
+		t.Fatalf("first MCP server args = %v, want [-y @anthropic/memory-server]", first.Args)
+	}
+	if first.Env["MEM_DIR"] != "/tmp/memory" || first.Env["MEM_MODE"] != "strict" {
+		t.Fatalf("first MCP server env parsed incorrectly: %+v", first.Env)
+	}
+	if len(first.ConfigParams) != 1 {
+		t.Fatalf("first MCP server ConfigParams length = %d, want 1", len(first.ConfigParams))
+	}
+	if first.ConfigParams[0].Key != "mode" || first.ConfigParams[0].Label != "Mode" {
+		t.Fatalf("first MCP server ConfigParams parsed incorrectly: %+v", first.ConfigParams[0])
+	}
+
+	second := cfg.MCPServers[1]
+	if second.ID != "browser" || second.Name != "Browser MCP" || second.Command != "browser-mcp" {
+		t.Fatalf("second MCP server parsed incorrectly: %+v", second)
+	}
+	if second.Enabled {
+		t.Fatalf("second MCP server Enabled = true, want false default")
+	}
+}
+
+func TestSaveRoundTripMCPServers(t *testing.T) {
+	path := newConfigPathForSaveTest(t, "config.yaml")
+	input := DefaultConfig()
+	input.MCPServers = []MCPServerConfig{
+		{
+			ID:          "memory",
+			Name:        "Memory Server",
+			Description: "Persistent memory",
+			Command:     "npx",
+			Args:        []string{"-y", "@anthropic/memory-server"},
+			Env: map[string]string{
+				"MEM_DIR": "/tmp/memory",
+			},
+			Enabled:     true,
+			UsageSample: "remember this",
+			ConfigParams: []MCPServerConfigParam{
+				{
+					Key:          "mode",
+					Label:        "Mode",
+					DefaultValue: "strict",
+				},
+			},
+		},
+		{
+			ID:      "browser",
+			Name:    "Browser MCP",
+			Command: "browser-mcp",
+			Enabled: false,
+		},
+	}
+
+	if _, err := Save(path, input); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(loaded.MCPServers, input.MCPServers) {
+		t.Fatalf("MCPServers round-trip mismatch\nloaded: %#v\ninput: %#v", loaded.MCPServers, input.MCPServers)
+	}
+}
+
+func TestMCPServerConfigStructFieldCount(t *testing.T) {
+	if got := reflect.TypeFor[MCPServerConfig]().NumField(); got != 9 {
+		t.Fatalf("MCPServerConfig field count = %d, want 9; update Clone for new fields", got)
+	}
+}
+
 func TestValidateDefaultSessionDir(t *testing.T) {
 	absoluteDir := filepath.Clean(filepath.Join(t.TempDir(), "project"))
 	trimmedDir := filepath.Clean(filepath.Join(t.TempDir(), "trimmed"))
@@ -2529,5 +2760,76 @@ func TestValidateDefaultSessionDirTildeExpansionError(t *testing.T) {
 	validateDefaultSessionDir(&cfg)
 	if cfg.DefaultSessionDir != "" {
 		t.Errorf("DefaultSessionDir = %q, want empty on home dir error", cfg.DefaultSessionDir)
+	}
+}
+
+func TestLoadSanitizesMCPServers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := []byte(`
+mcp_servers:
+  - id: "   "
+    name: "Invalid"
+    command: "echo"
+  - id: "memory"
+    name: "  Memory Server  "
+    command: "  npx  "
+    args:
+      - " -y "
+      - "   "
+      - "@anthropic/memory-server"
+    env:
+      "  MEM_DIR  ": " /tmp/memory "
+      "BAD=KEY": "drop"
+      "": "drop"
+    config_params:
+      - key: " mode "
+        label: " Mode "
+        default_value: " strict "
+      - key: "   "
+        label: "NoKey"
+        default_value: "x"
+      - key: "no-label"
+        label: "   "
+        default_value: "x"
+  - id: "memory"
+    name: "Duplicate"
+    command: "npx"
+`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.MCPServers) != 1 {
+		t.Fatalf("MCPServers length = %d, want 1", len(cfg.MCPServers))
+	}
+
+	server := cfg.MCPServers[0]
+	if server.ID != "memory" {
+		t.Fatalf("MCPServers[0].ID = %q, want %q", server.ID, "memory")
+	}
+	if server.Name != "Memory Server" {
+		t.Fatalf("MCPServers[0].Name = %q, want %q", server.Name, "Memory Server")
+	}
+	if server.Command != "npx" {
+		t.Fatalf("MCPServers[0].Command = %q, want %q", server.Command, "npx")
+	}
+	if !reflect.DeepEqual(server.Args, []string{"-y", "@anthropic/memory-server"}) {
+		t.Fatalf("MCPServers[0].Args = %#v, want %#v", server.Args, []string{"-y", "@anthropic/memory-server"})
+	}
+	if server.Env["MEM_DIR"] != "/tmp/memory" {
+		t.Fatalf("MCPServers[0].Env[MEM_DIR] = %q, want %q", server.Env["MEM_DIR"], "/tmp/memory")
+	}
+	if _, exists := server.Env["BAD=KEY"]; exists {
+		t.Fatal("MCPServers[0].Env contains invalid key BAD=KEY")
+	}
+	if len(server.ConfigParams) != 1 {
+		t.Fatalf("MCPServers[0].ConfigParams length = %d, want 1", len(server.ConfigParams))
+	}
+	if server.ConfigParams[0].Key != "mode" || server.ConfigParams[0].Label != "Mode" || server.ConfigParams[0].DefaultValue != "strict" {
+		t.Fatalf("MCPServers[0].ConfigParams[0] = %#v, want trimmed mode/Mode/strict", server.ConfigParams[0])
 	}
 }

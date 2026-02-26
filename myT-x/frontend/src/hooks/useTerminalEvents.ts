@@ -9,6 +9,7 @@ import {api} from "../api";
 import {registerPaneHandler, isConnected as isWsConnected, setReconnectCallback} from "../services/paneDataStream";
 import {useTmuxStore} from "../stores/tmuxStore";
 import {isImeTransitionalEvent} from "../utils/ime";
+import {resolveActivePaneID} from "../utils/session";
 
 interface UseTerminalEventsOptions {
     paneId: string;
@@ -66,11 +67,18 @@ export function useTerminalEvents({
         let rafWriteID: number | null = null;
         let scrollWriteTimer: ReturnType<typeof window.setTimeout> | null = null;
         let copyOnSelectTimer: ReturnType<typeof window.setTimeout> | null = null;
+        let focusRecoverRAFId: number | null = null;
+        let focusRecoverTimer: ReturnType<typeof window.setTimeout> | null = null;
+        // M-06: Skip rendering when page tab is hidden. Backend continues processing
+        // pane output; rendering resumes automatically when the tab becomes visible
+        // and the next pane:data event arrives. See task/速度改善.md.
+        let pageHidden = document.hidden;
         const pendingWrites: string[] = [];
 
         // --- IME composition バッファリング ---
         let isComposing = false;
         let composingOutput: string[] = [];
+        const compositionTextarea = term.textarea ?? null;
 
         const flushComposedOutput = () => {
             if (composingOutput.length === 0) {
@@ -102,19 +110,101 @@ export function useTerminalEvents({
         const onCompositionEnd = () => {
             finishComposition();
         };
-        // compositionend が発火しない異常時（フォーカス喪失等）の安全弁
-        const onBlur = () => {
-            if (isComposing) {
-                finishComposition();
+
+        const isCurrentPaneActive = (): boolean => {
+            const state = useTmuxStore.getState();
+            if (!state.activeSession) {
+                return false;
+            }
+            const activeSessionSnapshot = state.sessions.find((session) => session.name === state.activeSession) ?? null;
+            return resolveActivePaneID(activeSessionSnapshot) === paneId;
+        };
+
+        const clearFocusRecoveryTimers = () => {
+            if (focusRecoverRAFId !== null) {
+                window.cancelAnimationFrame(focusRecoverRAFId);
+                focusRecoverRAFId = null;
+            }
+            if (focusRecoverTimer !== null) {
+                window.clearTimeout(focusRecoverTimer);
+                focusRecoverTimer = null;
             }
         };
 
-        const compositionTextarea = term.textarea ?? null;
+        const shouldRestoreTerminalFocus = (forComposition: boolean): boolean => {
+            if (disposed || pageHidden || !document.hasFocus() || !isCurrentPaneActive()) {
+                return false;
+            }
+            if (forComposition && !isComposing) {
+                return false;
+            }
+            const activeElement = document.activeElement;
+            if (activeElement === compositionTextarea) {
+                return false;
+            }
+            if (activeElement === null || activeElement === document.body) {
+                return true;
+            }
+            const terminalElement = term.element;
+            return terminalElement instanceof HTMLElement && terminalElement.contains(activeElement);
+        };
+
+        const scheduleTerminalFocusRecovery = (reason: "window-focus" | "visibilitychange" | "composition-blur"): void => {
+            clearFocusRecoveryTimers();
+            focusRecoverRAFId = window.requestAnimationFrame(() => {
+                focusRecoverRAFId = null;
+                focusRecoverTimer = window.setTimeout(() => {
+                    focusRecoverTimer = null;
+                    const restoreForComposition = reason === "composition-blur";
+                    if (shouldRestoreTerminalFocus(restoreForComposition)) {
+                        try {
+                            term.focus();
+                        } catch (err) {
+                            if (import.meta.env.DEV) {
+                                console.warn("[DEBUG-terminal] focus recovery failed", err);
+                            }
+                        }
+                        return;
+                    }
+                    if (isComposing && !pageHidden && document.hasFocus()) {
+                        // IME変換中に意図的に他要素へフォーカスが移った場合は、
+                        // stale isComposing ロックを避けるため状態を確定させる。
+                        finishComposition();
+                    }
+                }, 0);
+            });
+        };
+
+        // compositionend が発火しない異常時（フォーカス喪失等）の安全弁。
+        // 即 finish せず、1フレーム後に activeElement を確認してから復元可否を判定する。
+        const onBlur = () => {
+            if (isComposing) {
+                scheduleTerminalFocusRecovery("composition-blur");
+            }
+        };
+
+        const onWindowFocus = () => {
+            if (!isCurrentPaneActive()) {
+                return;
+            }
+            scheduleTerminalFocusRecovery("window-focus");
+        };
+
+        const onVisibilityChange = () => {
+            pageHidden = document.hidden;
+            if (pageHidden || !isCurrentPaneActive()) {
+                return;
+            }
+            scheduleTerminalFocusRecovery("visibilitychange");
+        };
+
         if (compositionTextarea) {
             compositionTextarea.addEventListener("compositionstart", onCompositionStart);
             compositionTextarea.addEventListener("compositionend", onCompositionEnd);
             compositionTextarea.addEventListener("blur", onBlur);
         }
+        window.addEventListener("focus", onWindowFocus);
+        document.addEventListener("visibilitychange", onVisibilityChange);
 
         // --- Copy on Select ---
         const selectionDisposable = term.onSelectionChange(() => {
@@ -226,15 +316,6 @@ export function useTerminalEvents({
             }
         });
 
-        // M-06: Skip rendering when page tab is hidden. Backend continues processing
-        // pane output; rendering resumes automatically when the tab becomes visible
-        // and the next pane:data event arrives. See task/速度改善.md.
-        let pageHidden = document.hidden;
-        const onVisibilityChange = () => {
-            pageHidden = document.hidden;
-        };
-        document.addEventListener("visibilitychange", onVisibilityChange);
-
         // --- バックエンドからの出力を RAF でバッチ書き込み ---
         const flushPendingWrites = () => {
             rafWriteID = null;
@@ -279,8 +360,10 @@ export function useTerminalEvents({
                 }
                 try {
                     term.write(data);
-                } catch (_) {
-                    // terminal may already be disposed
+                } catch (err) {
+                    if (import.meta.env.DEV) {
+                        console.warn("[DEBUG-terminal] hidden write failed (terminal may be disposed)", err);
+                    }
                 }
                 return;
             }
@@ -337,8 +420,10 @@ export function useTerminalEvents({
                 if (flushed.length > 0) {
                     enqueuePendingWrite(flushed);
                 }
-            } catch {
-                // TextDecoder.decode() is not expected to throw, but guard defensively.
+            } catch (err) {
+                if (import.meta.env.DEV) {
+                    console.warn("[DEBUG-terminal] decoder flush failed during reconnect", err);
+                }
             }
             paneTextDecoder = new TextDecoder("utf-8");
             wsActive = false; // I-20: re-enable IPC fallback until WS proves delivery
@@ -407,6 +492,7 @@ export function useTerminalEvents({
             if (copyOnSelectTimer !== null) {
                 window.clearTimeout(copyOnSelectTimer);
             }
+            clearFocusRecoveryTimers();
 
             isComposing = false;
             isComposingRef.current = false;
@@ -419,6 +505,7 @@ export function useTerminalEvents({
                 compositionTextarea.removeEventListener("blur", onBlur);
             }
             termEl?.removeEventListener("contextmenu", handleContextMenu);
+            window.removeEventListener("focus", onWindowFocus);
             document.removeEventListener("visibilitychange", onVisibilityChange);
 
             // S-11: Flush any incomplete multi-byte sequence buffered by the
@@ -427,8 +514,10 @@ export function useTerminalEvents({
             // preventing a memory leak from held buffers.
             try {
                 paneTextDecoder.decode();
-            } catch {
-                // TextDecoder.decode() is not expected to throw, but guard defensively.
+            } catch (err) {
+                if (import.meta.env.DEV) {
+                    console.warn("[DEBUG-terminal] decoder final flush failed", err);
+                }
             }
 
             // Clear the reconnect callback so that paneDataStream does not call into

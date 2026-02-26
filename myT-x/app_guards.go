@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"myT-x/internal/mcp"
 	"myT-x/internal/tmux"
 )
 
@@ -51,6 +52,18 @@ func (a *App) requireSessionsWithPaneID(paneID *string) (*tmux.SessionManager, e
 		return nil, errors.New("pane id is required")
 	}
 	return a.requireSessions()
+}
+
+// errMCPManagerNotInitialized is returned when the MCP manager has not been
+// initialized. This sentinel error enables callers to use errors.Is() for
+// programmatic detection of uninitialized state, consistent with errSessionNotInitialized.
+var errMCPManagerNotInitialized = errors.New("mcp manager is unavailable")
+
+func (a *App) requireMCPManager() (*mcp.Manager, error) {
+	if a.mcpManager == nil {
+		return nil, errMCPManagerNotInitialized
+	}
+	return a.mcpManager, nil
 }
 
 func (a *App) requireSessionsAndRouter() (*tmux.SessionManager, *tmux.CommandRouter, error) {

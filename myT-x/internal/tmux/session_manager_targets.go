@@ -459,7 +459,7 @@ func (m *SessionManager) activeWindowInSessionLocked(session *TmuxSession) *Tmux
 		return activeWindow
 	}
 	if fallback != nil && session.ActiveWindowID != fallback.ID {
-		slog.Info("[DEBUG-SESSION] activeWindowInSessionLocked: auto-repaired stale ActiveWindowID",
+		slog.Debug("[DEBUG-SESSION] activeWindowInSessionLocked: auto-repaired stale ActiveWindowID",
 			"session", session.Name,
 			"staleID", session.ActiveWindowID,
 			"repairedID", fallback.ID,

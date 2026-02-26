@@ -3,6 +3,7 @@
 import {main} from '../models';
 import {tmux} from '../models';
 import {config} from '../models';
+import {mcp} from '../models';
 import {install} from '../models';
 import {git} from '../models';
 
@@ -60,6 +61,8 @@ export function GetInputHistory():Promise<Array<main.InputHistoryEntry>>;
 
 export function GetInputHistoryFilePath():Promise<string>;
 
+export function GetMCPDetail(arg1:string,arg2:string):Promise<mcp.Snapshot>;
+
 export function GetPaneEnv(arg1:string):Promise<Record<string, string>>;
 
 export function GetPaneReplay(arg1:string):Promise<string>;
@@ -85,6 +88,8 @@ export function KillPane(arg1:string):Promise<void>;
 export function KillSession(arg1:string,arg2:boolean):Promise<void>;
 
 export function ListBranches(arg1:string):Promise<Array<string>>;
+
+export function ListMCPServers(arg1:string):Promise<Array<mcp.Snapshot>>;
 
 export function ListSessions():Promise<Array<tmux.SessionSnapshot>>;
 
@@ -115,3 +120,5 @@ export function SetActiveSession(arg1:string):Promise<void>;
 export function SplitPane(arg1:string,arg2:boolean):Promise<string>;
 
 export function SwapPanes(arg1:string,arg2:string):Promise<void>;
+
+export function ToggleMCPServer(arg1:string,arg2:string,arg3:boolean):Promise<void>;

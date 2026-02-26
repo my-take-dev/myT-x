@@ -15,6 +15,7 @@ import (
 	"myT-x/internal/config"
 	gitpkg "myT-x/internal/git"
 	"myT-x/internal/ipc"
+	"myT-x/internal/mcp"
 	"myT-x/internal/terminal"
 	"myT-x/internal/testutil"
 	"myT-x/internal/tmux"
@@ -163,12 +164,17 @@ func TestCreateRenameKillSessionValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("CreateSession returns error when session name is empty", func(t *testing.T) {
+	t.Run("CreateSession sanitizes empty session name to fallback", func(t *testing.T) {
 		app := NewApp()
 		app.sessions = tmux.NewSessionManager()
 		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
-		if _, err := app.CreateSession(t.TempDir(), "   ", CreateSessionOptions{}); err == nil {
-			t.Fatal("CreateSession() expected session name validation error")
+		stubNewSessionCommandSuccess(t, app)
+		snapshot, err := app.CreateSession(t.TempDir(), "   ", CreateSessionOptions{})
+		if err != nil {
+			t.Fatalf("CreateSession() error = %v", err)
+		}
+		if snapshot.Name != "session" {
+			t.Fatalf("CreateSession() session name = %q, want %q (fallback)", snapshot.Name, "session")
 		}
 	})
 
@@ -510,6 +516,53 @@ func TestRenameSessionUpdatesSnapshotAndEmitsSnapshotEvent(t *testing.T) {
 	}
 	if !foundSnapshotEvent {
 		t.Fatalf("RenameSession() events = %v, want snapshot event", events)
+	}
+}
+
+func TestRenameSessionCleansUpMCPStateForOldSessionName(t *testing.T) {
+	registry := mcp.NewRegistry()
+	if err := registry.Register(mcp.Definition{
+		ID:      "memory",
+		Name:    "Memory",
+		Command: "memory-cmd",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.mcpManager = mcp.NewManager(registry, func(string, any) {})
+	if _, _, err := app.sessions.CreateSession("old-name", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := app.mcpManager.SetEnabled("old-name", "memory", true); err != nil {
+		t.Fatalf("SetEnabled() error = %v", err)
+	}
+
+	if err := app.RenameSession("old-name", "new-name"); err != nil {
+		t.Fatalf("RenameSession() error = %v", err)
+	}
+
+	oldSnapshots, err := app.mcpManager.SnapshotForSession("old-name")
+	if err != nil {
+		t.Fatalf("SnapshotForSession(old-name) error = %v", err)
+	}
+	if len(oldSnapshots) != 1 {
+		t.Fatalf("SnapshotForSession(old-name) length = %d, want 1", len(oldSnapshots))
+	}
+	if oldSnapshots[0].Enabled {
+		t.Fatal("old session MCP state still enabled after rename")
+	}
+
+	newSnapshots, err := app.mcpManager.SnapshotForSession("new-name")
+	if err != nil {
+		t.Fatalf("SnapshotForSession(new-name) error = %v", err)
+	}
+	if len(newSnapshots) != 1 {
+		t.Fatalf("SnapshotForSession(new-name) length = %d, want 1", len(newSnapshots))
+	}
+	if newSnapshots[0].Enabled {
+		t.Fatal("new session MCP state should start from default disabled state")
 	}
 }
 
@@ -1234,6 +1287,28 @@ func TestKillSessionClearsActiveSessionWhenTargetIsActive(t *testing.T) {
 	}
 	if got := app.getActiveSessionName(); got != "" {
 		t.Fatalf("active session = %q, want empty after kill", got)
+	}
+}
+
+func TestKillSession_NilMCPManager(t *testing.T) {
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
+	app.mcpManager = nil
+
+	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		if req.Command != "kill-session" {
+			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
+		}
+		return ipc.TmuxResponse{ExitCode: 0}
+	})
+
+	if err := app.KillSession("session-a", false); err != nil {
+		t.Fatalf("KillSession() error with nil mcpManager = %v", err)
 	}
 }
 
@@ -2037,4 +2112,34 @@ func TestValidationIntegration(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestSanitizeSessionName(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "plain name unchanged", input: "my-session", want: "my-session"},
+		{name: "dot replaced", input: "my.session", want: "my-session"},
+		{name: "colon replaced", input: "D:", want: "D"},
+		{name: "multiple dots", input: "a.b.c", want: "a-b-c"},
+		{name: "dot and colon mixed", input: "host:8080.local", want: "host-8080-local"},
+		{name: "consecutive invalid chars collapsed", input: "a.:b", want: "a-b"},
+		{name: "leading dot trimmed", input: ".hidden", want: "hidden"},
+		{name: "trailing dot trimmed", input: "name.", want: "name"},
+		{name: "all invalid returns fallback", input: ".:", want: "quick-session"},
+		{name: "empty returns fallback", input: "", want: "quick-session"},
+		{name: "already clean", input: "clean-name-123", want: "clean-name-123"},
+		{name: "single colon only", input: ":", want: "quick-session"},
+		{name: "single dot only", input: ".", want: "quick-session"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeSessionName(tt.input, "quick-session")
+			if got != tt.want {
+				t.Errorf("sanitizeSessionName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
 }

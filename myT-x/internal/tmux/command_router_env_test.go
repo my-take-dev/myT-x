@@ -3,8 +3,6 @@ package tmux
 import (
 	"reflect"
 	"testing"
-
-	"myT-x/internal/testutil"
 )
 
 // TestUpdateClaudeEnv verifies UpdateClaudeEnv atomically replaces claudeEnv
@@ -372,13 +370,13 @@ func TestCopyBoolPtr(t *testing.T) {
 		},
 		{
 			name:      "true pointer copied",
-			input:     testutil.Ptr(true),
+			input:     new(true),
 			wantNil:   false,
 			wantValue: true,
 		},
 		{
 			name:      "false pointer copied",
-			input:     testutil.Ptr(false),
+			input:     new(false),
 			wantNil:   false,
 			wantValue: false,
 		},
@@ -742,8 +740,8 @@ func TestResolveEnvForPaneCreation(t *testing.T) {
 			sessionID:     1,
 			paneID:        1,
 			createSession: true,
-			useClaudeEnv:  testutil.Ptr(true),
-			usePaneEnv:    testutil.Ptr(true),
+			useClaudeEnv:  new(true),
+			usePaneEnv:    new(true),
 			claudeEnv:     map[string]string{"CLAUDE_KEY": "value"},
 			paneEnv:       map[string]string{"PANE_KEY": "value"},
 			verify: func(t *testing.T, env map[string]string) {
@@ -874,8 +872,8 @@ func TestResolveEnvForPaneCreationSnapshotPath(t *testing.T) {
 		{
 			name: "non-nil snapshot with both flags true: new path used (claude_env + pane_env overwrite)",
 			sessionSnap: &TmuxSession{
-				UseClaudeEnv: testutil.Ptr(true),
-				UsePaneEnv:   testutil.Ptr(true),
+				UseClaudeEnv: new(true),
+				UsePaneEnv:   new(true),
 			},
 			claudeEnv:    map[string]string{"CLAUDE_KEY": "claude_val"},
 			paneEnv:      map[string]string{"PANE_KEY": "pane_val", "CLAUDE_KEY": "pane_overwrite"},
@@ -895,7 +893,7 @@ func TestResolveEnvForPaneCreationSnapshotPath(t *testing.T) {
 		{
 			name: "non-nil snapshot with UseClaudeEnv=true, UsePaneEnv=nil: new path with overwrite (nil defaults to true)",
 			sessionSnap: &TmuxSession{
-				UseClaudeEnv: testutil.Ptr(true),
+				UseClaudeEnv: new(true),
 				UsePaneEnv:   nil, // nil defaults to true -> overwrite mode (both flags true)
 			},
 			claudeEnv:    map[string]string{"CLAUDE_KEY": "claude_val"},
@@ -917,8 +915,8 @@ func TestResolveEnvForPaneCreationSnapshotPath(t *testing.T) {
 		{
 			name: "non-nil snapshot with UseClaudeEnv=false, UsePaneEnv=true: claude_env not applied",
 			sessionSnap: &TmuxSession{
-				UseClaudeEnv: testutil.Ptr(false),
-				UsePaneEnv:   testutil.Ptr(true),
+				UseClaudeEnv: new(false),
+				UsePaneEnv:   new(true),
 			},
 			claudeEnv:    map[string]string{"CLAUDE_KEY": "should_not_appear"},
 			paneEnv:      map[string]string{"PANE_KEY": "pane_val"},
@@ -963,8 +961,8 @@ func TestResolveEnvForPaneCreationSnapshotPath(t *testing.T) {
 			name: "non-nil snapshot skips internal GetSession lookup (session not in manager)",
 			sessionSnap: &TmuxSession{
 				Name:         "external-session",
-				UseClaudeEnv: testutil.Ptr(true),
-				UsePaneEnv:   testutil.Ptr(false),
+				UseClaudeEnv: new(true),
+				UsePaneEnv:   new(false),
 			},
 			claudeEnv:    map[string]string{"CLAUDE_KEY": "from_snapshot"},
 			paneEnv:      map[string]string{},
@@ -1027,8 +1025,8 @@ func TestApplySessionEnvFlags(t *testing.T) {
 			useClaudeEnv:  true,
 			usePaneEnv:    true,
 			createSession: true,
-			wantClaudeEnv: testutil.Ptr(true),
-			wantPaneEnv:   testutil.Ptr(true),
+			wantClaudeEnv: new(true),
+			wantPaneEnv:   new(true),
 		},
 		{
 			name:          "both flags off",
@@ -1036,8 +1034,8 @@ func TestApplySessionEnvFlags(t *testing.T) {
 			useClaudeEnv:  false,
 			usePaneEnv:    false,
 			createSession: true,
-			wantClaudeEnv: testutil.Ptr(false),
-			wantPaneEnv:   testutil.Ptr(false),
+			wantClaudeEnv: new(false),
+			wantPaneEnv:   new(false),
 		},
 		{
 			name:          "session not found: errors returned but production logs and continues",

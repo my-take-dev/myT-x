@@ -107,7 +107,7 @@ func (r *CommandRouter) attachTerminal(pane *TmuxPane, workDir string, env map[s
 				t.ReadLoop(func(chunk []byte) {
 					defer func() {
 						if recoverRouterPanic("pane-read-loop-callback", recover()) {
-							slog.Warn("[DEBUG-PANIC] pane output callback panic recovered; continuing read loop",
+							slog.Error("[ERROR-PANIC] pane output callback panic recovered; continuing read loop",
 								"paneId", paneID,
 							)
 						}
@@ -128,7 +128,7 @@ func (r *CommandRouter) attachTerminal(pane *TmuxPane, workDir string, env map[s
 				)
 				return
 			}
-			slog.Warn("[DEBUG-PANIC] restarting pane read loop after panic",
+			slog.Warn("[WARN-PANIC] restarting pane read loop after panic",
 				"paneId", paneID,
 				"restartDelay", restartDelay,
 			)

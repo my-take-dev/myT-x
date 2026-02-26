@@ -70,7 +70,7 @@ func (r *CommandRouter) splitWindowResolved(target *TmuxPane, direction SplitDir
 	layoutSnapshot, layoutErr := r.sessions.paneLayoutSnapshot(newPane.ID)
 	if layoutErr != nil {
 		if _, _, rollbackErr := r.sessions.KillPane(newPane.IDString()); rollbackErr != nil {
-			slog.Warn("[DEBUG-SPLIT] failed to rollback pane after layout snapshot error",
+			slog.Warn("[WARN-SPLIT] failed to rollback pane after layout snapshot error",
 				"paneId", newPane.IDString(), "layoutErr", layoutErr, "rollbackErr", rollbackErr)
 			return nil, layoutErr
 		}
@@ -97,7 +97,7 @@ func (r *CommandRouter) splitWindowResolved(target *TmuxPane, direction SplitDir
 
 	if attachErr := r.attachPaneTerminal(newPane, workDir, env, nil); attachErr != nil {
 		if _, _, rollbackErr := r.sessions.KillPane(newPane.IDString()); rollbackErr != nil {
-			slog.Warn("[DEBUG-SPLIT] failed to rollback pane after attachTerminal error",
+			slog.Warn("[WARN-SPLIT] failed to rollback pane after attachTerminal error",
 				"paneId", newPane.IDString(), "attachErr", attachErr, "rollbackErr", rollbackErr)
 			return nil, attachErr
 		}

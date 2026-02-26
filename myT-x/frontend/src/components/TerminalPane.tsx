@@ -1,4 +1,4 @@
-import {memo, useEffect, useRef, useState} from "react";
+import {memo, type MouseEvent as ReactMouseEvent, useEffect, useRef, useState} from "react";
 import type {FitAddon} from "@xterm/addon-fit";
 import type {SearchAddon} from "@xterm/addon-search";
 import type {Terminal} from "@xterm/xterm";
@@ -139,6 +139,24 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
         fontSizeRef,
     });
 
+    const preventTerminalFocusSteal = (event: ReactMouseEvent<HTMLElement>): void => {
+        event.preventDefault();
+        event.stopPropagation();
+    };
+
+    const handleToolbarMouseDown = (event: ReactMouseEvent<HTMLDivElement>): void => {
+        const target = event.target;
+        if (
+            target instanceof HTMLInputElement
+            || target instanceof HTMLTextAreaElement
+            || (target instanceof HTMLElement && target.isContentEditable)
+        ) {
+            event.stopPropagation();
+            return;
+        }
+        preventTerminalFocusSteal(event);
+    };
+
     return (
         <div
             className={`terminal-pane ${props.active ? "active" : ""}`}
@@ -166,7 +184,7 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
             <div
                 className="terminal-toolbar"
                 draggable={false}
-                onMouseDown={(event) => event.stopPropagation()}
+                onMouseDown={handleToolbarMouseDown}
             >
                 <div className="terminal-toolbar-pane">
                     <span className="terminal-toolbar-id">{props.paneId}</span>
@@ -210,6 +228,7 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                         draggable={false}
                         title="左右分割 (Prefix: %)"
                         aria-label={`Split pane ${props.paneId} left-right`}
+                        onMouseDown={preventTerminalFocusSteal}
                         onClick={(event) => {
                             event.stopPropagation();
                             props.onFocus(props.paneId);
@@ -229,6 +248,7 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                         draggable={false}
                         title="上下分割 (Prefix: &quot;)"
                         aria-label={`Split pane ${props.paneId} top-bottom`}
+                        onMouseDown={preventTerminalFocusSteal}
                         onClick={(event) => {
                             event.stopPropagation();
                             props.onFocus(props.paneId);
@@ -248,6 +268,7 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                         draggable={false}
                         title="ペインを閉じる (Prefix: x)"
                         aria-label={`Close pane ${props.paneId}`}
+                        onMouseDown={preventTerminalFocusSteal}
                         onClick={(event) => {
                             event.stopPropagation();
                             setPendingPaneCloseConfirm(true);
@@ -276,7 +297,11 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                         type="button"
                         className="scroll-to-bottom-btn"
                         title="最下部にスクロール"
-                        onClick={() => terminalRef.current?.scrollToBottom()}
+                        onMouseDown={preventTerminalFocusSteal}
+                        onClick={() => {
+                            terminalRef.current?.scrollToBottom();
+                            terminalRef.current?.focus();
+                        }}
                     >
                         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor"
                              strokeWidth="1.8">

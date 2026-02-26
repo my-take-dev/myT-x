@@ -43,7 +43,7 @@ func EncodePaneData(paneID string, data []byte) ([]byte, error) {
 		// Warn (not Debug) because truncation changes the pane ID used for
 		// routing, risking data delivery to the wrong pane if two IDs share
 		// the same 255-byte prefix.
-		slog.Warn("[DEBUG-WS] paneID truncated — collision risk: different panes may receive each other's data",
+		slog.Warn("[WARN-WS] paneID truncated — collision risk: different panes may receive each other's data",
 			"originalLen", len(id), "truncatedTo", maxPaneIDLen, "paneID", id[:maxPaneIDLen])
 		id = id[:maxPaneIDLen]
 	}

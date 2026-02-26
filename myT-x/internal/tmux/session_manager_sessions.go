@@ -40,7 +40,7 @@ func (m *SessionManager) Close() {
 		}
 	}
 	if len(closeErrs) > 0 {
-		slog.Warn("[DEBUG-SESSION] SessionManager.Close terminal close errors", "error", errors.Join(closeErrs...))
+		slog.Warn("[WARN-SESSION] SessionManager.Close terminal close errors", "error", errors.Join(closeErrs...))
 	}
 }
 
@@ -193,7 +193,7 @@ func (m *SessionManager) RemoveSession(name string) (*TmuxSession, error) {
 		}
 	}
 	if len(closeErrs) > 0 {
-		slog.Warn("[DEBUG-SESSION] RemoveSession terminal close errors",
+		slog.Warn("[WARN-SESSION] RemoveSession terminal close errors",
 			"session", sessionCopy.Name,
 			"error", errors.Join(closeErrs...),
 		)

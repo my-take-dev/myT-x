@@ -4,6 +4,7 @@ import {api} from "../api";
 import {connect as connectPaneStream, disconnect as disconnectPaneStream} from "../services/paneDataStream";
 import {useErrorLogStore} from "../stores/errorLogStore";
 import {useInputHistoryStore} from "../stores/inputHistoryStore";
+import {useMCPStore} from "../stores/mcpStore";
 import {useNotificationStore} from "../stores/notificationStore";
 import {useTmuxStore} from "../stores/tmuxStore";
 import type {AppConfig, ParsedConfigUpdatedEvent, SessionSnapshot, SessionSnapshotDelta} from "../types/tmux";
@@ -15,6 +16,7 @@ const ERROR_LOG_DEBOUNCE_MS = 80;
 const ERROR_LOG_FETCH_RETRY_DELAY_MS = 250;
 const INPUT_HISTORY_DEBOUNCE_MS = 80;
 const INPUT_HISTORY_FETCH_RETRY_DELAY_MS = 250;
+const MCP_STATE_REFRESH_DEBOUNCE_MS = 80;
 
 // ---------------------------------------------------------------------------
 // Backend event payload type map (I-37: eliminates any-typed handler)
@@ -35,6 +37,8 @@ interface BackendEventMap {
     "tmux:snapshot-delta": Partial<SessionSnapshotDelta>;
     "tmux:active-session": { name?: string };
     "tmux:session-detached": { name?: string };
+    "tmux:session-destroyed": { name?: string };
+    "tmux:session-renamed": { oldName?: string; newName?: string };
     "tmux:shim-installed": { installed_path?: string };
     "config:updated": ParsedConfigUpdatedEvent;
     "worktree:setup-complete": { sessionName?: string; success?: boolean; error?: string };
@@ -48,6 +52,10 @@ interface BackendEventMap {
     "app:session-log-updated": null;
     // Ping-only event for input history — same pattern as session-log-updated.
     "app:input-history-updated": null;
+    // MCP state change — ping event triggering session-wide or per-item refresh.
+    "mcp:state-changed": { session_name?: string; mcp_id?: string };
+    // MCP manager lifecycle event emitted by backend on shutdown/close.
+    "mcp:manager-closed": null;
 }
 
 function isAppConfigPayload(payload: unknown): payload is AppConfig {
@@ -320,6 +328,42 @@ export function useBackendSync() {
             if (name !== "") {
                 setActiveSession(name);
             }
+        });
+
+        onEvent("tmux:session-destroyed", (payload) => {
+            const event = asObject<{ name?: unknown }>(payload);
+            if (!event) {
+                if (import.meta.env.DEV) {
+                    console.warn("[SYNC] tmux:session-destroyed: invalid payload", payload);
+                }
+                return;
+            }
+            const name = typeof event.name === "string" ? event.name.trim() : "";
+            if (name === "") {
+                if (import.meta.env.DEV) {
+                    console.warn("[SYNC] tmux:session-destroyed: empty session name", payload);
+                }
+                return;
+            }
+            useMCPStore.getState().clearSession(name);
+        });
+
+        onEvent("tmux:session-renamed", (payload) => {
+            const event = asObject<{ oldName?: unknown; newName?: unknown }>(payload);
+            if (!event) {
+                if (import.meta.env.DEV) {
+                    console.warn("[SYNC] tmux:session-renamed: invalid payload", payload);
+                }
+                return;
+            }
+            const oldName = typeof event.oldName === "string" ? event.oldName.trim() : "";
+            if (oldName === "") {
+                if (import.meta.env.DEV) {
+                    console.warn("[SYNC] tmux:session-renamed: empty oldName", payload);
+                }
+                return;
+            }
+            useMCPStore.getState().clearSession(oldName);
         });
 
         onEvent("tmux:shim-installed", (payload) => {
@@ -600,6 +644,120 @@ export function useBackendSync() {
 
         fetchInputHistory();
 
+        // --- MCP state change: ping + fetch pattern ---
+        const mcpDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+        const mcpFetchSeq = new Map<string, number>();
+
+        const scheduleMCPRefresh = (sessionName: string, mcpID: string | null) => {
+            if (!isMountedRef.current) {
+                return;
+            }
+            const normalizedMcpID = mcpID?.trim() ?? "";
+            const key = normalizedMcpID === "" ? sessionName : `${sessionName}:${normalizedMcpID}`;
+            const prevTimer = mcpDebounceTimers.get(key);
+            if (prevTimer != null) {
+                clearTimeout(prevTimer);
+            }
+            const timer = setTimeout(() => {
+                mcpDebounceTimers.delete(key);
+                const seq = (mcpFetchSeq.get(key) ?? 0) + 1;
+                mcpFetchSeq.set(key, seq);
+
+                const store = useMCPStore.getState();
+                if (normalizedMcpID === "") {
+                    void api.ListMCPServers(sessionName)
+                        .then((result) => {
+                            if (!isMountedRef.current) {
+                                return;
+                            }
+                            if ((mcpFetchSeq.get(key) ?? 0) !== seq) {
+                                return;
+                            }
+                            store.setSnapshots(sessionName, result ?? []);
+                            store.setSessionError(sessionName, null);
+                        })
+                        .catch((err: unknown) => {
+                            if (!isMountedRef.current) {
+                                return;
+                            }
+                            if ((mcpFetchSeq.get(key) ?? 0) !== seq) {
+                                return;
+                            }
+                            const message = err instanceof Error ? err.message : String(err);
+                            store.setSessionError(sessionName, message);
+                            notifyWarn(`MCP state refresh failed (${sessionName}): ${message}`);
+                            logFrontendEventSafe("warn", `MCP state refresh failed (${sessionName}): ${message}`, "frontend/mcp");
+                            if (import.meta.env.DEV) {
+                                console.warn("[SYNC] ListMCPServers failed:", err);
+                            }
+                        });
+                    return;
+                }
+
+                void api.GetMCPDetail(sessionName, normalizedMcpID)
+                    .then((detail) => {
+                        if (!isMountedRef.current) {
+                            return;
+                        }
+                        if ((mcpFetchSeq.get(key) ?? 0) !== seq) {
+                            return;
+                        }
+                        store.upsertSnapshot(sessionName, detail);
+                        store.setSessionError(sessionName, null);
+                    })
+                    .catch((err: unknown) => {
+                        if (!isMountedRef.current) {
+                            return;
+                        }
+                        if ((mcpFetchSeq.get(key) ?? 0) !== seq) {
+                            return;
+                        }
+                        const message = err instanceof Error ? err.message : String(err);
+                        store.setSessionError(sessionName, message);
+                        notifyWarn(`MCP detail refresh failed (${sessionName}/${normalizedMcpID}): ${message}`);
+                        logFrontendEventSafe(
+                            "warn",
+                            `MCP detail refresh failed (${sessionName}/${normalizedMcpID}): ${message}`,
+                            "frontend/mcp",
+                        );
+                        if (import.meta.env.DEV) {
+                            console.warn("[SYNC] GetMCPDetail failed:", err);
+                        }
+                    });
+            }, MCP_STATE_REFRESH_DEBOUNCE_MS);
+            mcpDebounceTimers.set(key, timer);
+        };
+
+        onEvent("mcp:state-changed", (payload) => {
+            if (!isMountedRef.current) return;
+            const event = asObject<{ session_name?: unknown; mcp_id?: unknown }>(payload);
+            if (!event) {
+                if (import.meta.env.DEV) {
+                    console.warn("[SYNC] mcp:state-changed: invalid payload", payload);
+                }
+                return;
+            }
+            const sessionName = typeof event.session_name === "string" ? event.session_name.trim() : "";
+            if (sessionName === "") {
+                if (import.meta.env.DEV) {
+                    console.warn("[SYNC] mcp:state-changed: empty session_name", payload);
+                }
+                return;
+            }
+            const mcpID = typeof event.mcp_id === "string" ? event.mcp_id.trim() : "";
+            scheduleMCPRefresh(sessionName, mcpID === "" ? null : mcpID);
+        });
+
+        onEvent("mcp:manager-closed", () => {
+            if (!isMountedRef.current) return;
+            for (const timer of mcpDebounceTimers.values()) {
+                clearTimeout(timer);
+            }
+            mcpDebounceTimers.clear();
+            mcpFetchSeq.clear();
+            useMCPStore.getState().clearAllSessions();
+        });
+
         return () => {
             isMountedRef.current = false;
             disconnectPaneStream(); // WebSocket切断 + タイマークリア (#96)
@@ -620,6 +778,11 @@ export function useBackendSync() {
                 clearTimeout(inputHistoryRetryTimer);
                 inputHistoryRetryTimer = null;
             }
+            for (const timer of mcpDebounceTimers.values()) {
+                clearTimeout(timer);
+            }
+            mcpDebounceTimers.clear();
+            mcpFetchSeq.clear();
             for (let i = cleanupFns.length - 1; i >= 0; i -= 1) {
                 try {
                     cleanupFns[i]?.();

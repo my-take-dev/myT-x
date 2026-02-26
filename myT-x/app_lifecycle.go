@@ -13,6 +13,7 @@ import (
 	"myT-x/internal/config"
 	"myT-x/internal/install"
 	"myT-x/internal/ipc"
+	"myT-x/internal/mcp"
 	"myT-x/internal/sessionlog"
 	"myT-x/internal/tmux"
 	"myT-x/internal/workerutil"
@@ -184,6 +185,16 @@ func (a *App) startup(ctx context.Context) {
 		HostPID:      os.Getpid(),
 		PaneEnv:      cfg.PaneEnv,
 		ClaudeEnv:    claudeEnvVars,
+		OnSessionDestroyed: func(sessionName string) {
+			if a.mcpManager != nil {
+				a.mcpManager.CleanupSession(sessionName)
+			}
+		},
+		OnSessionRenamed: func(oldName, _ string) {
+			if a.mcpManager != nil {
+				a.mcpManager.CleanupSession(oldName)
+			}
+		},
 	}
 	slog.Debug("[CONFIG] agent model mapping is handled by tmux-shim")
 	a.router = tmux.NewCommandRouter(
@@ -191,6 +202,15 @@ func (a *App) startup(ctx context.Context) {
 		tmux.EventEmitterFunc(a.emitBackendEvent),
 		routerOpts,
 	)
+	// MCP registry and manager initialization.
+	a.mcpRegistry = mcp.NewRegistry()
+	for _, loadErr := range a.mcpRegistry.LoadFromConfig(mcpServerConfigsToDefinitions(cfg.MCPServers)) {
+		warnMsg := fmt.Sprintf("Skipped MCP server config entry: %v", loadErr)
+		a.addPendingConfigLoadWarning(warnMsg)
+		runtimeLogger.Warningf(ctx, "%s", warnMsg)
+	}
+	a.mcpManager = mcp.NewManager(a.mcpRegistry, a.emitBackendEvent)
+
 	a.pipeServer = newPipeServerFn(a.router.PipeName(), a.router)
 	if err := a.pipeServer.Start(); err != nil {
 		runtimeLogger.Errorf(ctx, "pipe server failed: %v", err)
@@ -347,6 +367,10 @@ func (a *App) shutdown(_ context.Context) {
 		if err := a.wsHub.Stop(); err != nil {
 			runtimeLogger.Warningf(logCtx, "websocket server stop failed: %v", err)
 		}
+	}
+	if a.mcpManager != nil {
+		// Shutdown path: avoid runtime-dependent frontend lifecycle emissions.
+		a.mcpManager.CloseWithoutEvent()
 	}
 	if a.sessions != nil {
 		a.sessions.Close()

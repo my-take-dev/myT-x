@@ -69,7 +69,7 @@ func (a *App) SaveConfig(cfg config.Config) error {
 func (a *App) applyRuntimePaneEnvUpdate(event configUpdatedEvent) {
 	router, guardErr := a.requireRouter()
 	if guardErr != nil {
-		slog.Warn("[DEBUG-CONFIG] skipped PaneEnv update: router unavailable", "error", guardErr)
+		slog.Warn("[WARN-CONFIG] skipped PaneEnv update: router unavailable", "error", guardErr)
 		return
 	}
 
@@ -92,7 +92,7 @@ func (a *App) applyRuntimePaneEnvUpdate(event configUpdatedEvent) {
 func (a *App) applyRuntimeClaudeEnvUpdate(event configUpdatedEvent) {
 	router, guardErr := a.requireRouter()
 	if guardErr != nil {
-		slog.Warn("[DEBUG-CONFIG] skipped ClaudeEnv update: router unavailable", "error", guardErr)
+		slog.Warn("[WARN-CONFIG] skipped ClaudeEnv update: router unavailable", "error", guardErr)
 		return
 	}
 

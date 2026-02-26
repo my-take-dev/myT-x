@@ -42,6 +42,12 @@ type RouterOptions struct {
 	ShimAvailable bool              // true when tmux CLI shim is installed on PATH
 	PaneEnv       map[string]string // default env vars; protected by paneEnvMu, updated via UpdatePaneEnv()
 	ClaudeEnv     map[string]string // Claude Code env vars; protected by claudeEnvMu
+	// OnSessionDestroyed is called after kill-session succeeds.
+	// It runs outside of SessionManager locks.
+	OnSessionDestroyed func(sessionName string)
+	// OnSessionRenamed is called after rename-session succeeds.
+	// It runs outside of SessionManager locks.
+	OnSessionRenamed func(oldName, newName string)
 }
 
 // CommandRouter dispatches tmux-compatible commands.

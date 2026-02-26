@@ -229,7 +229,7 @@ func (m *SessionManager) WriteToPanesInWindow(paneID string, data string) error 
 				firstErr = wErr
 			} else {
 				// I-27: Log subsequent write errors so they are not silently lost.
-				slog.Warn("[DEBUG-PANE] WriteToPanesInWindow: subsequent pane write error",
+				slog.Warn("[WARN-PANE] WriteToPanesInWindow: subsequent pane write error",
 					"paneId", t.id,
 					"error", wErr,
 				)

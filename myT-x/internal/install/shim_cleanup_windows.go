@@ -72,14 +72,14 @@ func removeLegacyPathEntry(legacyDir string) bool {
 			slog.Debug("[DEBUG-SHIM] legacy cleanup: registry key does not exist, nothing to clean")
 			return false
 		}
-		slog.Warn("[DEBUG-SHIM] legacy cleanup: failed to open registry key", "error", err)
+		slog.Warn("[WARN-SHIM] legacy cleanup: failed to open registry key", "error", err)
 		return false
 	}
 	defer key.Close()
 
 	regValue, regValueType, err := readUserPathFromRegistryKeyWithType(key)
 	if err != nil {
-		slog.Warn("[DEBUG-SHIM] legacy cleanup: failed to read PATH", "error", err)
+		slog.Warn("[WARN-SHIM] legacy cleanup: failed to read PATH", "error", err)
 		return false
 	}
 
@@ -91,12 +91,12 @@ func removeLegacyPathEntry(legacyDir string) bool {
 
 	targetValueType := selectPathRegistryValueType(regValueType, newPath)
 	if err := setPathRegistryValue(key, newPath, targetValueType); err != nil {
-		slog.Warn("[DEBUG-SHIM] legacy cleanup: failed to write PATH", "error", err)
+		slog.Warn("[WARN-SHIM] legacy cleanup: failed to write PATH", "error", err)
 		return false
 	}
 
 	if err := broadcastEnvironmentSettingChange(); err != nil {
-		slog.Warn("[DEBUG-SHIM] legacy cleanup: broadcast failed", "error", err)
+		slog.Warn("[WARN-SHIM] legacy cleanup: broadcast failed", "error", err)
 	}
 	return true
 }
@@ -194,14 +194,14 @@ func cleanupStalePathEntries() {
 			slog.Debug("[DEBUG-SHIM] stale cleanup: registry key does not exist, nothing to clean")
 			return
 		}
-		slog.Warn("[DEBUG-SHIM] stale cleanup: failed to open registry key", "error", err)
+		slog.Warn("[WARN-SHIM] stale cleanup: failed to open registry key", "error", err)
 		return
 	}
 	defer key.Close()
 
 	regValue, regValueType, err := readUserPathFromRegistryKeyWithType(key)
 	if err != nil {
-		slog.Warn("[DEBUG-SHIM] stale cleanup: failed to read PATH", "error", err)
+		slog.Warn("[WARN-SHIM] stale cleanup: failed to read PATH", "error", err)
 		return
 	}
 
@@ -212,12 +212,12 @@ func cleanupStalePathEntries() {
 	}
 	targetValueType := selectPathRegistryValueType(regValueType, newPath)
 	if err := setPathRegistryValue(key, newPath, targetValueType); err != nil {
-		slog.Warn("[DEBUG-SHIM] stale cleanup: failed to write PATH", "error", err)
+		slog.Warn("[WARN-SHIM] stale cleanup: failed to write PATH", "error", err)
 		return
 	}
 
 	if err := broadcastEnvironmentSettingChange(); err != nil {
-		slog.Warn("[DEBUG-SHIM] stale cleanup: broadcast failed", "error", err)
+		slog.Warn("[WARN-SHIM] stale cleanup: broadcast failed", "error", err)
 	}
 	slog.Info("[shim] removed stale PATH entries", "count", removedCount)
 }
@@ -263,7 +263,7 @@ func removeProcessPathEntry(dir string) bool {
 
 	newPath := filterPathEntries(currentPath, dir)
 	if err := os.Setenv("PATH", newPath); err != nil {
-		slog.Warn("[DEBUG-SHIM] failed to update process PATH for legacy removal", "error", err)
+		slog.Warn("[WARN-SHIM] failed to update process PATH for legacy removal", "error", err)
 		return false
 	}
 	return true

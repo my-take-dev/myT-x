@@ -1,6 +1,7 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FixedSizeList, type ListChildComponentProps } from "react-window";
 import type { FlatNode } from "./fileTreeTypes";
+import { FileTreeContextMenu } from "./FileTreeContextMenu";
 import { TreeNodeRow } from "./TreeNodeRow";
 
 interface FileTreeSidebarProps {
@@ -15,6 +16,13 @@ interface RowData {
   selectedPath: string | null;
   onToggleDir: (path: string) => void;
   onSelectFile: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, node: FlatNode) => void;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  node: FlatNode;
 }
 
 const ROW_HEIGHT = 28;
@@ -28,6 +36,7 @@ const Row = memo(function Row({ index, style, data }: ListChildComponentProps<Ro
       isSelected={data.selectedPath === node.path}
       onToggleDir={data.onToggleDir}
       onSelectFile={data.onSelectFile}
+      onContextMenu={data.onContextMenu}
     />
   );
 });
@@ -35,6 +44,7 @@ const Row = memo(function Row({ index, style, data }: ListChildComponentProps<Ro
 export function FileTreeSidebar({ flatNodes, selectedPath, onToggleDir, onSelectFile }: FileTreeSidebarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(400);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   // Track container height with ResizeObserver for react-window.
   useEffect(() => {
@@ -49,12 +59,21 @@ export function FileTreeSidebar({ flatNodes, selectedPath, onToggleDir, onSelect
     return () => ro.disconnect();
   }, []);
 
+  const handleContextMenu = useCallback((e: React.MouseEvent, node: FlatNode) => {
+    setContextMenu({ x: e.clientX, y: e.clientY, node });
+  }, []);
+
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
   const itemData = useMemo<RowData>(() => ({
     flatNodes,
     selectedPath,
     onToggleDir,
     onSelectFile,
-  }), [flatNodes, selectedPath, onToggleDir, onSelectFile]);
+    onContextMenu: handleContextMenu,
+  }), [flatNodes, selectedPath, onToggleDir, onSelectFile, handleContextMenu]);
 
   return (
     <div className="file-tree-sidebar" ref={containerRef}>
@@ -68,6 +87,14 @@ export function FileTreeSidebar({ flatNodes, selectedPath, onToggleDir, onSelect
       >
         {Row}
       </FixedSizeList>
+      {contextMenu && (
+        <FileTreeContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          node={contextMenu.node}
+          onClose={handleCloseContextMenu}
+        />
+      )}
     </div>
   );
 }

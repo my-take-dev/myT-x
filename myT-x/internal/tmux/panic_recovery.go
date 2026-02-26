@@ -13,7 +13,7 @@ const (
 
 func recoverRouterPanic(worker string, recovered any) bool {
 	if recovered != nil {
-		slog.Error("[DEBUG-PANIC] router goroutine recovered from panic",
+		slog.Error("[ERROR-PANIC] router goroutine recovered from panic",
 			"worker", worker,
 			"panic", recovered,
 			"stack", string(debug.Stack()),

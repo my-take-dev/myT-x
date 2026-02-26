@@ -43,6 +43,7 @@ import {
     GetConfig,
     GetConfigAndFlushWarnings,
     GetInputHistory,
+    GetMCPDetail as GetMCPDetailRaw,
     GetInputHistoryFilePath,
     GetSessionErrorLog,
     GetSessionLogFilePath,
@@ -56,6 +57,7 @@ import {
     KillPane,
     KillSession,
     ListBranches,
+    ListMCPServers as ListMCPServersRaw,
     ListSessions,
     ListWorktreesByRepo,
     PickSessionDirectory,
@@ -70,8 +72,26 @@ import {
     SetActiveSession,
     SplitPane,
     SwapPanes,
+    ToggleMCPServer,
 } from "../wailsjs/go/main/App";
+import type {MCPSnapshot} from "./types/mcp";
+import {normalizeMCPSnapshot, normalizeMCPSnapshots} from "./types/mcp";
 import type {ValidationRules} from "./types/tmux";
+
+async function ListMCPServers(sessionName: string): Promise<MCPSnapshot[]> {
+    const result = await ListMCPServersRaw(sessionName);
+    return normalizeMCPSnapshots(result);
+}
+
+async function GetMCPDetail(sessionName: string, mcpID: string): Promise<MCPSnapshot> {
+    // Used for targeted refresh paths (per-MCP updates on backend events).
+    const result = await GetMCPDetailRaw(sessionName, mcpID);
+    const normalized = normalizeMCPSnapshot(result);
+    if (!normalized) {
+        throw new Error("GetMCPDetail returned an invalid MCP payload");
+    }
+    return normalized;
+}
 
 export const api = {
     ApplyLayoutPreset,
@@ -80,10 +100,12 @@ export const api = {
     GetClaudeEnvVarDescriptions,
     GetConfig,
     GetConfigAndFlushWarnings,
+    GetMCPDetail,
     // GetValidationRules のみ型キャストが必要（Wails 自動生成型が ValidationRules と異なるため）。
     GetValidationRules: () => GetValidationRulesWails() as Promise<ValidationRules>,
     GetSessionEnv,
     IsAgentTeamsAvailable,
+    ListMCPServers,
     ListSessions,
     PickSessionDirectory,
     QuickStartSession,
@@ -130,4 +152,5 @@ export const api = {
     GetSessionErrorLog,
     GetSessionLogFilePath,
     LogFrontendEvent,
+    ToggleMCPServer,
 };

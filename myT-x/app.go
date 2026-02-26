@@ -11,6 +11,7 @@ import (
 	"myT-x/internal/config"
 	"myT-x/internal/hotkeys"
 	"myT-x/internal/ipc"
+	"myT-x/internal/mcp"
 	"myT-x/internal/panestate"
 	"myT-x/internal/terminal"
 	"myT-x/internal/tmux"
@@ -65,6 +66,13 @@ type App struct {
 	pipeServer *ipc.PipeServer
 	hotkeys    *hotkeys.Manager
 	paneStates *panestate.Manager
+
+	// MCP process management.
+	// Independent locks: mcp.Registry.mu and mcp.Manager.mu are independent of
+	// each other and of all other App-level locks.
+	// mcpRegistry is retained for startup diagnostics and future config reloads.
+	mcpRegistry *mcp.Registry
+	mcpManager  *mcp.Manager
 
 	// Window visibility state.
 	windowMu       sync.Mutex

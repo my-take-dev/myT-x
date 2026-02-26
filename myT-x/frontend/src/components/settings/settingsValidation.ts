@@ -182,7 +182,13 @@ export function validateClaudeEnvSettings(
     return validateEnvEntries(entries, "claude_env");
 }
 
-const ABSOLUTE_SESSION_DIR_PATTERN = /^(?:~(?:[\\/]|$)|%[A-Za-z_][A-Za-z0-9_]*%(?:[\\/]|$)|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?:[\\/]|$)|[A-Za-z]:[\\/]|[\\/]{2})/;
+// NOTE: This pattern intentionally accepts POSIX root "/" in addition to
+// Windows drive paths (C:\) and UNC paths (\\). The Go backend
+// (config.validateDefaultSessionDir) expands ~ and env vars then checks
+// filepath.IsAbs, which rejects bare "/" on Windows. The frontend accepts
+// it here to avoid confusing "not absolute" errors for WSL-style paths;
+// the backend serves as the authoritative gate.
+const ABSOLUTE_SESSION_DIR_PATTERN = /^(?:~(?:[\\/]|$)|%[A-Za-z_][A-Za-z0-9_]*%(?:[\\/]|$)|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?:[\\/]|$)|[A-Za-z]:[\\/]|[\\/]{2}|\/)/;
 const ABSOLUTE_OR_DRIVE_PATH_PATTERN = /^(?:[A-Za-z]:|[\\/]{2}|[\\/])/;
 
 export function validateDefaultSessionDir(rawPath: string): Record<string, string> {

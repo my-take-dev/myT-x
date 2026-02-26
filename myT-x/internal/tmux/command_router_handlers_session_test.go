@@ -238,6 +238,62 @@ func TestHandleKillSession(t *testing.T) {
 	}
 }
 
+func TestHandleKillSessionCallsOnSessionDestroyed(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	if _, _, err := sessions.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	var calledSession string
+	router := NewCommandRouter(sessions, &captureEmitter{}, RouterOptions{
+		ShimAvailable: true,
+		OnSessionDestroyed: func(sessionName string) {
+			calledSession = sessionName
+		},
+	})
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "kill-session",
+		Flags:   map[string]any{"-t": "demo"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	if calledSession != "demo" {
+		t.Fatalf("OnSessionDestroyed called with %q, want %q", calledSession, "demo")
+	}
+}
+
+func TestHandleRenameSessionCallsOnSessionRenamed(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	if _, _, err := sessions.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	calledOld := ""
+	calledNew := ""
+	router := NewCommandRouter(sessions, &captureEmitter{}, RouterOptions{
+		ShimAvailable: true,
+		OnSessionRenamed: func(oldName, newName string) {
+			calledOld = oldName
+			calledNew = newName
+		},
+	})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "rename-session",
+		Flags:   map[string]any{"-t": "demo"},
+		Args:    []string{"renamed"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	if calledOld != "demo" || calledNew != "renamed" {
+		t.Fatalf("OnSessionRenamed called with (%q, %q), want (%q, %q)", calledOld, calledNew, "demo", "renamed")
+	}
+}
+
 func TestHandleRenameSession(t *testing.T) {
 	tests := []struct {
 		name         string
