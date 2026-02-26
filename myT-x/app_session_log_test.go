@@ -583,7 +583,7 @@ func TestCleanupOldSessionLogs_DeletesMalformedBeforeCanonical(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	oldestCanonical := ""
 	currentPath := ""
-	for i := 0; i < sessionLogMaxFiles; i++ {
+	for i := range sessionLogMaxFiles {
 		ts := base.Add(time.Duration(i) * time.Second).Format("20060102-150405")
 		name := fmt.Sprintf("session-%s-%d.jsonl", ts, 4000+i)
 		fullPath := filepath.Join(logDir, name)

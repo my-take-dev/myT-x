@@ -91,7 +91,7 @@ func (opts RecoveryOptions) applyDefaults() RecoveryOptions {
 	// or misconfigured one of them. Correct by promoting MaxBackoff to
 	// InitialBackoff so the backoff sequence is always non-decreasing.
 	if opts.MaxBackoff < opts.InitialBackoff {
-		slog.Warn("[DEBUG-PANIC] MaxBackoff < InitialBackoff is contradictory, using InitialBackoff as MaxBackoff",
+		slog.Warn("[WARN-PANIC] MaxBackoff < InitialBackoff is contradictory, using InitialBackoff as MaxBackoff",
 			"initialBackoff", opts.InitialBackoff,
 			"maxBackoff", opts.MaxBackoff,
 		)
@@ -146,7 +146,7 @@ func runRecoveryLoop(
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					slog.Error("[DEBUG-PANIC] background goroutine recovered from panic",
+					slog.Error("[ERROR-PANIC] background goroutine recovered from panic",
 						"worker", name,
 						"panic", r,
 						"stack", string(debug.Stack()),
@@ -168,13 +168,13 @@ func runRecoveryLoop(
 		// be nil, so emitting events or accessing app state would cause secondary
 		// panics. The panic is still logged above via slog.Error for diagnostics.
 		if opts.IsShutdown != nil && opts.IsShutdown() {
-			slog.Info("[DEBUG-PANIC] worker shutdown detected, stopping restart",
+			slog.Debug("[DEBUG-PANIC] worker shutdown detected, stopping restart",
 				"worker", name,
 			)
 			return
 		}
 
-		slog.Warn("[DEBUG-PANIC] restarting worker after panic",
+		slog.Warn("[WARN-PANIC] restarting worker after panic",
 			"worker", name,
 			"restartDelay", restartDelay,
 			"attempt", attempt+1,
@@ -206,7 +206,7 @@ func runRecoveryLoop(
 	}
 
 	// All retry attempts exhausted.
-	slog.Error("[DEBUG-PANIC] worker exceeded max retries, giving up",
+	slog.Error("[ERROR-PANIC] worker exceeded max retries, giving up",
 		"worker", name,
 		"maxRetries", opts.MaxRetries,
 	)

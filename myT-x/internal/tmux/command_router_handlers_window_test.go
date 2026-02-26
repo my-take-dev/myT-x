@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"myT-x/internal/ipc"
-	"myT-x/internal/testutil"
 )
 
 func TestHandleActivateWindow(t *testing.T) {
@@ -595,7 +594,7 @@ func TestHandleNewWindow(t *testing.T) {
 			wantExitCode:     0,
 			wantNewSession:   true,
 			wantEventName:    "tmux:session-created",
-			wantUseClaudeEnv: testutil.Ptr(true),
+			wantUseClaudeEnv: new(true),
 		},
 		{
 			name: "inherits UsePaneEnv from parent",
@@ -611,7 +610,7 @@ func TestHandleNewWindow(t *testing.T) {
 			wantExitCode:   0,
 			wantNewSession: true,
 			wantEventName:  "tmux:session-created",
-			wantUsePaneEnv: testutil.Ptr(false),
+			wantUsePaneEnv: new(false),
 		},
 		{
 			name: "-d flag does not change active pane",

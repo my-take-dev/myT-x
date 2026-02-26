@@ -48,3 +48,13 @@ websocket_port: 0
 #   error-log: "Ctrl+Shift+L"
 #   diff: "Ctrl+Shift+D"
 #   input-history: "Ctrl+Shift+H"
+# mcp_servers: MCP (Model Context Protocol) サーバーの設定
+# 各エントリはセッションごとにオン・オフ可能なMCPサーバーを定義します
+# mcp_servers:
+#   - id: "memory"
+#     name: "MCP Memory Server"
+#     description: "プロジェクト横断の知識・文脈を長期記憶するメモリサーバー"
+#     command: "myT-x.exe"
+#     args: ["mcp-memory"]
+#     enabled: true
+#     usage_sample: "remember this"

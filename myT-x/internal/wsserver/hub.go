@@ -161,11 +161,11 @@ func (h *Hub) Start(ctx context.Context) error {
 
 	go func() {
 		if serveErr := h.server.Serve(ln); serveErr != nil && serveErr != http.ErrServerClosed {
-			slog.Error("[DEBUG-WS] server error", "error", serveErr)
+			slog.Error("[ERROR-WS] server error", "error", serveErr)
 		}
 	}()
 
-	slog.Info("[DEBUG-WS] server started", "url", h.url)
+	slog.Debug("[DEBUG-WS] server started", "url", h.url)
 	return nil
 }
 
@@ -196,7 +196,7 @@ func (h *Hub) Stop() error {
 			}
 		}
 
-		slog.Info("[DEBUG-WS] server stopped")
+		slog.Debug("[DEBUG-WS] server stopped")
 	})
 	return stopErr
 }
@@ -248,7 +248,7 @@ func (h *Hub) closeConn(conn *websocket.Conn, reason string) {
 // Returns false if the deadline could not be set (connection was closed).
 func (h *Hub) setWriteDeadlineOrClose(conn *websocket.Conn, d time.Duration) bool {
 	if err := conn.SetWriteDeadline(time.Now().Add(d)); err != nil {
-		slog.Warn("[DEBUG-WS] SetWriteDeadline failed, closing connection", "error", err)
+		slog.Warn("[WARN-WS] SetWriteDeadline failed, closing connection", "error", err)
 		h.clearIfCurrent(conn)
 		// Close outside mu to prevent deadlock (#54).
 		h.closeConn(conn, "SetWriteDeadline failure")
@@ -307,7 +307,7 @@ func (h *Hub) BroadcastPaneData(paneID string, data []byte) {
 
 	frame, encErr := EncodePaneData(paneID, data)
 	if encErr != nil {
-		slog.Warn("[DEBUG-WS] failed to encode pane data", "error", encErr, "paneID", paneID)
+		slog.Warn("[WARN-WS] failed to encode pane data", "error", encErr, "paneID", paneID)
 		return
 	}
 
@@ -321,7 +321,7 @@ func (h *Hub) BroadcastPaneData(paneID string, data []byte) {
 	h.writeMu.Unlock()
 
 	if err != nil {
-		slog.Warn("[DEBUG-WS] write failed, closing connection", "paneId", paneID, "error", err)
+		slog.Warn("[WARN-WS] write failed, closing connection", "paneId", paneID, "error", err)
 		h.clearIfCurrent(conn)
 		// Close outside mu lock to prevent deadlock (#54).
 		h.closeConn(conn, "write error in BroadcastPaneData")
@@ -334,7 +334,7 @@ func (h *Hub) BroadcastPaneData(paneID string, data []byte) {
 func (h *Hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		slog.Warn("[DEBUG-WS] upgrade failed", "error", err)
+		slog.Warn("[WARN-WS] upgrade failed", "error", err)
 		return
 	}
 
@@ -344,7 +344,7 @@ func (h *Hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	// I-13: Configure read deadline and pong handler for dead connection detection.
 	// The read deadline is extended on every pong received from the client.
 	if err := conn.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
-		slog.Warn("[DEBUG-WS] SetReadDeadline failed on new connection", "error", err)
+		slog.Warn("[WARN-WS] SetReadDeadline failed on new connection", "error", err)
 		h.closeConn(conn, "initial SetReadDeadline failure")
 		return
 	}
@@ -365,7 +365,7 @@ func (h *Hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		h.closeConn(oldConn, "replaced by new connection")
 	}
 
-	slog.Info("[DEBUG-WS] client connected", "remoteAddr", conn.RemoteAddr())
+	slog.Debug("[DEBUG-WS] client connected", "remoteAddr", conn.RemoteAddr())
 
 	// Start ping sender goroutine for dead connection detection (I-13).
 	pingDone := make(chan struct{})
@@ -375,7 +375,7 @@ func (h *Hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		// Panic recovery for connection handler (#60).
 		if rec := recover(); rec != nil {
-			slog.Error("[DEBUG-PANIC] wsserver handleWS recovered",
+			slog.Error("[ERROR-PANIC] wsserver handleWS recovered",
 				"panic", rec,
 				"stack", string(debug.Stack()), // S-20: include stack trace
 			)
@@ -390,14 +390,14 @@ func (h *Hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		// was already closed by BroadcastPaneData or Stop. gorilla/websocket's
 		// Close is safe to call on already-closed connections (S-5).
 		h.closeConn(conn, "read pump exit")
-		slog.Info("[DEBUG-WS] client disconnected")
+		slog.Debug("[DEBUG-WS] client disconnected")
 	}()
 
 	for {
 		msgType, msg, readErr := conn.ReadMessage()
 		if readErr != nil {
 			if websocket.IsUnexpectedCloseError(readErr, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				slog.Warn("[DEBUG-WS] read error", "error", readErr)
+				slog.Warn("[WARN-WS] read error", "error", readErr)
 			}
 			return
 		}
@@ -423,7 +423,7 @@ func (h *Hub) pingLoop(conn *websocket.Conn, done <-chan struct{}) {
 		// On panic, clean up the connection so it doesn't remain open without
 		// pings, which would prevent dead connection detection.
 		if rec := recover(); rec != nil {
-			slog.Error("[DEBUG-PANIC] wsserver pingLoop recovered",
+			slog.Error("[ERROR-PANIC] wsserver pingLoop recovered",
 				"panic", rec,
 				"stack", string(debug.Stack()),
 			)

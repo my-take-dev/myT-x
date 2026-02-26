@@ -16,7 +16,7 @@ import (
 // requiring exponential backoff retry, use workerutil.RunWithPanicRecovery.
 func recoverBackgroundPanic(worker string, recovered any) bool {
 	if recovered != nil {
-		slog.Error("[DEBUG-PANIC] background goroutine recovered from panic",
+		slog.Error("[ERROR-PANIC] background goroutine recovered from panic",
 			"worker", worker,
 			"panic", recovered,
 			"stack", string(debug.Stack()),

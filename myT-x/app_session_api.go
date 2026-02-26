@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	gitpkg "myT-x/internal/git"
@@ -110,8 +111,30 @@ func (a *App) QuickStartSession() (tmux.SessionSnapshot, error) {
 	if sessionName == "" || sessionName == "." || sessionName == string(os.PathSeparator) || (len(sessionName) == 2 && sessionName[1] == ':') {
 		sessionName = "quick-session"
 	}
+	sessionName = sanitizeSessionName(sessionName, "quick-session")
 
 	return a.CreateSession(dir, sessionName, CreateSessionOptions{})
+}
+
+// sanitizeSessionNameRegex collapses runs of characters that are invalid in
+// tmux session names (dots, colons) into a single hyphen.
+// Compiled at package level to avoid re-compilation per call.
+var sanitizeSessionNameRegex = regexp.MustCompile(`[.:]+`)
+
+// consecutiveHyphenRegex collapses runs of multiple hyphens into one.
+var consecutiveHyphenRegex = regexp.MustCompile(`-{2,}`)
+
+// sanitizeSessionName replaces characters that are invalid in tmux session
+// names with hyphens. tmux rejects names containing '.' and ':'.
+// fallback is returned when the sanitized name is empty.
+func sanitizeSessionName(name, fallback string) string {
+	sanitized := sanitizeSessionNameRegex.ReplaceAllString(name, "-")
+	sanitized = consecutiveHyphenRegex.ReplaceAllString(sanitized, "-")
+	sanitized = strings.Trim(sanitized, "-")
+	if sanitized == "" {
+		return fallback
+	}
+	return sanitized
 }
 
 // CreateSession creates a new session rooted at path.
@@ -130,6 +153,7 @@ func (a *App) CreateSession(rootPath string, sessionName string, opts CreateSess
 		return tmux.SessionSnapshot{}, errors.New("root path is required")
 	}
 	sessionName = strings.TrimSpace(sessionName)
+	sessionName = sanitizeSessionName(sessionName, "session")
 	if sessionName == "" {
 		return tmux.SessionSnapshot{}, errors.New("session name is required")
 	}
@@ -186,6 +210,7 @@ func (a *App) RenameSession(oldName, newName string) error {
 		return errors.New("old session name is required")
 	}
 	newName = strings.TrimSpace(newName)
+	newName = sanitizeSessionName(newName, "session")
 	if newName == "" {
 		return errors.New("new session name is required")
 	}
@@ -195,6 +220,9 @@ func (a *App) RenameSession(oldName, newName string) error {
 	}
 	if err := sessions.RenameSession(oldName, newName); err != nil {
 		return err
+	}
+	if a.mcpManager != nil {
+		a.mcpManager.CleanupSession(oldName)
 	}
 	if a.getActiveSessionName() == oldName {
 		a.setActiveSessionName(newName)
@@ -249,6 +277,10 @@ func (a *App) KillSession(sessionName string, deleteWorktree bool) error {
 
 	if a.getActiveSessionName() == sessionName {
 		a.setActiveSessionName("")
+	}
+	// Release MCP instance state for the destroyed session.
+	if a.mcpManager != nil {
+		a.mcpManager.CleanupSession(sessionName)
 	}
 	a.requestSnapshot(true)
 

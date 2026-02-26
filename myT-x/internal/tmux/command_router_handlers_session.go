@@ -30,7 +30,7 @@ func (r *CommandRouter) handleNewSession(req ipc.TmuxRequest) ipc.TmuxResponse {
 	}
 	rollbackSession := func(stage string, originalErr error) ipc.TmuxResponse {
 		if _, rmErr := r.sessions.RemoveSession(session.Name); rmErr != nil {
-			slog.Warn("[DEBUG-SESSION] failed to remove session during rollback",
+			slog.Warn("[WARN-SESSION] failed to remove session during rollback",
 				"session", session.Name, "stage", stage, "originalErr", originalErr, "removeErr", rmErr)
 			return errResp(originalErr)
 		}
@@ -117,6 +117,9 @@ func (r *CommandRouter) handleKillSession(req ipc.TmuxRequest) ipc.TmuxResponse 
 	r.emitter.Emit("tmux:session-destroyed", map[string]any{
 		"name": session.Name,
 	})
+	if r.opts.OnSessionDestroyed != nil {
+		r.opts.OnSessionDestroyed(session.Name)
+	}
 	return okResp("")
 }
 
@@ -152,6 +155,9 @@ func (r *CommandRouter) handleRenameSession(req ipc.TmuxRequest) ipc.TmuxRespons
 		"oldName": oldName,
 		"newName": newName,
 	})
+	if r.opts.OnSessionRenamed != nil {
+		r.opts.OnSessionRenamed(oldName, newName)
+	}
 	return okResp("")
 }
 

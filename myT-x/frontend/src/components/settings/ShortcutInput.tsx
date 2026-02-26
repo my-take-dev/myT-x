@@ -59,18 +59,25 @@ export function ShortcutInput({id, value, onChange, placeholder, disabled, ariaL
     };
 
     return (
-        <input
-            id={id}
-            className={`form-input shortcut-input ${capturing ? "capturing" : ""}`}
-            value={capturing ? "" : value}
-            placeholder={capturing ? "キーを押してください..." : placeholder}
-            data-escape-close-disabled={capturing ? "true" : undefined}
-            onFocus={() => !disabled && setCapturing(true)}
-            onBlur={() => setCapturing(false)}
-            onKeyDown={capturing ? handleKeyDown : undefined}
-            readOnly
-            disabled={disabled}
-            aria-label={ariaLabel || placeholder || "Shortcut input"}
-        />
+        <div className="shortcut-input-wrapper">
+            <input
+                id={id}
+                className={`form-input shortcut-input ${capturing ? "capturing" : ""}`}
+                value={capturing ? "" : value}
+                placeholder={capturing ? "キーを押してください..." : placeholder}
+                data-escape-close-disabled={capturing ? "true" : undefined}
+                onFocus={() => !disabled && setCapturing(true)}
+                onBlur={() => setCapturing(false)}
+                onKeyDown={capturing ? handleKeyDown : undefined}
+                readOnly
+                disabled={disabled}
+                aria-label={ariaLabel || placeholder || "Shortcut input"}
+            />
+            {!disabled && (
+                <span className="shortcut-input-hint">
+                    修飾キー（Ctrl/Shift/Alt）+ キー、またはファンクションキー
+                </span>
+            )}
+        </div>
     );
 }

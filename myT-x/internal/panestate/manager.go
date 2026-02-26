@@ -140,7 +140,7 @@ func NewManager(maxReplayBytes int) *Manager {
 func (m *Manager) EnsurePane(paneID string, cols int, rows int) {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
-		slog.Warn("[DEBUG-PANESTATE] EnsurePane called with empty paneID, ignoring")
+		slog.Warn("[WARN-PANESTATE] EnsurePane called with empty paneID, ignoring")
 		return
 	}
 	cols, rows = sanitizeSize(cols, rows)
@@ -194,7 +194,7 @@ func (m *Manager) Feed(paneID string, chunk []byte) {
 func (m *Manager) FeedTrimmed(paneID string, chunk []byte) {
 	if paneID == "" || len(chunk) == 0 {
 		if paneID == "" && len(chunk) > 0 {
-			slog.Warn("[DEBUG-PANESTATE] Feed called with empty paneID, ignoring")
+			slog.Warn("[WARN-PANESTATE] Feed called with empty paneID, ignoring")
 		}
 		return
 	}
@@ -213,7 +213,7 @@ func (m *Manager) FeedTrimmed(paneID string, chunk []byte) {
 		m.mu.Lock()
 		state = m.states[paneID]
 		if state == nil {
-			slog.Warn("[DEBUG-PANESTATE] Feed auto-creating pane with default size",
+			slog.Warn("[WARN-PANESTATE] Feed auto-creating pane with default size",
 				"paneID", paneID, "cols", defaultCols, "rows", defaultRows)
 			state = &paneState{
 				terminal: newTerminalState(defaultCols, defaultRows),

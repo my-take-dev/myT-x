@@ -8,9 +8,10 @@ interface TreeNodeRowProps {
   isSelected: boolean;
   onToggleDir: (path: string) => void;
   onSelectFile: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, node: FlatNode) => void;
 }
 
-export function TreeNodeRow({ node, style, isSelected, onToggleDir, onSelectFile }: TreeNodeRowProps) {
+export function TreeNodeRow({ node, style, isSelected, onToggleDir, onSelectFile, onContextMenu }: TreeNodeRowProps) {
   const handleClick = () => {
     if (node.isDir) {
       onToggleDir(node.path);
@@ -19,11 +20,17 @@ export function TreeNodeRow({ node, style, isSelected, onToggleDir, onSelectFile
     }
   };
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    onContextMenu(e, node);
+  };
+
   return (
     <div
       className={`tree-node-row${isSelected ? " selected" : ""}`}
       style={{ ...style, paddingLeft: `${8 + node.depth * 16}px` }}
       onClick={handleClick}
+      onContextMenu={handleContextMenu}
     >
       {/* Expand/collapse arrow for directories */}
       <span className={`tree-node-arrow${node.isExpanded ? " expanded" : ""}`}>

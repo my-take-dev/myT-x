@@ -77,6 +77,7 @@ func (a *App) CreateSessionWithWorktree(
 
 	repoPath = strings.TrimSpace(repoPath)
 	sessionName = strings.TrimSpace(sessionName)
+	sessionName = sanitizeSessionName(sessionName, "worktree-session")
 	opts.BranchName = strings.TrimSpace(opts.BranchName)
 	opts.BaseBranch = strings.TrimSpace(opts.BaseBranch)
 	if sessionName == "" {
@@ -1334,6 +1335,7 @@ func (a *App) CreateSessionWithExistingWorktree(
 
 	repoPath = strings.TrimSpace(repoPath)
 	sessionName = strings.TrimSpace(sessionName)
+	sessionName = sanitizeSessionName(sessionName, "worktree-session")
 	worktreePath = strings.TrimSpace(worktreePath)
 	if sessionName == "" {
 		return tmux.SessionSnapshot{}, errors.New("session name is required")

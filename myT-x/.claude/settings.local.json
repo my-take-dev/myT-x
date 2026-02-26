@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__goland__list_directory_tree",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(npx tsc:*)",
+      "mcp__goland__get_file_text_by_path",
+      "mcp__goland__replace_text_in_file"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "goland"
+  ]
+}

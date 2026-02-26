@@ -26,6 +26,7 @@
     --danger-40: rgba(255, 107, 107, 0.4);
     --warning: rgb(246, 173, 85);
     --warning-10: rgba(246, 173, 85, 0.1);
+    --toggle-knob: #ffffff;
     --session-running-border: rgba(61, 228, 183, 0.66);
     --session-running-glow: rgba(55, 193, 157, 0.3);
     --session-running-bg: linear-gradient(140deg, rgba(7, 55, 47, 0.9), rgba(25, 112, 93, 0.5));
@@ -42,6 +43,7 @@
     /* ── Z-index ── */
     --z-activity-strip: 50;
     --z-viewer-overlay: 40;
+    --z-context-menu: 100;
     /* ── Git colors ── */
     --git-ahead: rgba(61, 228, 183, 0.9);
     --git-modified: rgba(246, 211, 101, 0.8);
@@ -447,3 +449,77 @@ button {
     flex: 1;
 }
 
+/* ── ErrorBoundary ── */
+.error-boundary-fallback {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 32px 24px;
+    height: 100%;
+    text-align: center;
+    background: var(--bg-panel);
+}
+
+.error-boundary-title {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--danger);
+    font-weight: 600;
+}
+
+.error-boundary-message {
+    margin: 0;
+    padding: 10px 14px;
+    max-width: 480px;
+    max-height: 120px;
+    overflow: auto;
+    background: var(--bg-elev);
+    border: 1px solid var(--danger-20);
+    border-radius: 6px;
+    color: var(--fg-dim);
+    font-size: 0.8rem;
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.error-boundary-exhaust {
+    margin: 0;
+    color: var(--warning);
+    font-size: 0.85rem;
+}
+
+.error-boundary-retry {
+    padding: 8px 20px;
+    border: 1px solid var(--danger-20);
+    border-radius: 8px;
+    background: var(--danger-08);
+    color: var(--danger);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.error-boundary-retry:hover {
+    background: var(--danger-20);
+}
+
+.error-boundary-retry:focus-visible {
+    outline: 2px solid var(--danger);
+    outline-offset: 2px;
+}
+
+/* ── ShortcutInput hint ── */
+.shortcut-input-wrapper {
+    display: inline-flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.shortcut-input-hint {
+    font-size: 0.72rem;
+    color: var(--fg-dim);
+    margin-top: 2px;
+}

@@ -21,20 +21,20 @@ func main() {
 	// Two simultaneous instances corrupt WebView2 browser process IME state.
 	mutexLock, err := singleinstance.TryLock(singleinstance.DefaultMutexName())
 	if errors.Is(err, singleinstance.ErrAlreadyRunning) {
-		slog.Info("[DEBUG-SINGLE] another instance is already running, signaling activation")
+		slog.Debug("[DEBUG-SINGLE] another instance is already running, signaling activation")
 		if _, sendErr := ipc.Send("", ipc.TmuxRequest{Command: "activate-window"}); sendErr != nil {
-			slog.Warn("[DEBUG-SINGLE] failed to signal existing instance", "error", sendErr)
+			slog.Warn("[WARN-SINGLE] failed to signal existing instance", "error", sendErr)
 		}
 		return
 	}
 	if err != nil {
 		// Mutex creation failed for unexpected reason. Continue startup defensively.
-		slog.Warn("[DEBUG-SINGLE] mutex creation failed, proceeding without single-instance guard", "error", err)
+		slog.Warn("[WARN-SINGLE] mutex creation failed, proceeding without single-instance guard", "error", err)
 	}
 	if mutexLock != nil {
 		defer func() {
 			if releaseErr := mutexLock.Release(); releaseErr != nil {
-				slog.Warn("[DEBUG-SINGLE] mutex release failed", "error", releaseErr)
+				slog.Warn("[WARN-SINGLE] mutex release failed", "error", releaseErr)
 			}
 		}()
 	}
@@ -42,7 +42,7 @@ func main() {
 	app := NewApp()
 
 	err = wails.Run(&options.App{
-		Title:     "myT-x v0.0.8",
+		Title:     "myT-x v0.0.9",
 		Width:     1440,
 		Height:    900,
 		MinWidth:  980,
@@ -62,6 +62,6 @@ func main() {
 	})
 
 	if err != nil {
-		slog.Error("[DEBUG-SINGLE] wails run failed", "error", err)
+		slog.Error("[ERROR-SINGLE] wails run failed", "error", err)
 	}
 }

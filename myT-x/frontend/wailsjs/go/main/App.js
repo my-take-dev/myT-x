@@ -110,6 +110,10 @@ export function GetInputHistoryFilePath() {
   return window['go']['main']['App']['GetInputHistoryFilePath']();
 }
 
+export function GetMCPDetail(arg1, arg2) {
+  return window['go']['main']['App']['GetMCPDetail'](arg1, arg2);
+}
+
 export function GetPaneEnv(arg1) {
   return window['go']['main']['App']['GetPaneEnv'](arg1);
 }
@@ -160,6 +164,10 @@ export function KillSession(arg1, arg2) {
 
 export function ListBranches(arg1) {
   return window['go']['main']['App']['ListBranches'](arg1);
+}
+
+export function ListMCPServers(arg1) {
+  return window['go']['main']['App']['ListMCPServers'](arg1);
 }
 
 export function ListSessions() {
@@ -220,4 +228,8 @@ export function SplitPane(arg1, arg2) {
 
 export function SwapPanes(arg1, arg2) {
   return window['go']['main']['App']['SwapPanes'](arg1, arg2);
+}
+
+export function ToggleMCPServer(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ToggleMCPServer'](arg1, arg2, arg3);
 }

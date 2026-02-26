@@ -101,6 +101,31 @@ type Config struct {
 	// DefaultSessionDir is the directory used by Quick Start Session.
 	// Empty string means "use the application launch directory".
 	DefaultSessionDir string `yaml:"default_session_dir,omitempty" json:"default_session_dir,omitempty"`
+	// MCPServers defines built-in MCP server configurations.
+	// Each entry describes an MCP that can be toggled per session.
+	MCPServers []MCPServerConfig `yaml:"mcp_servers,omitempty" json:"mcp_servers,omitempty"`
+}
+
+// MCPServerConfig describes a single MCP server entry in the config file.
+type MCPServerConfig struct {
+	ID           string                 `yaml:"id" json:"id"`
+	Name         string                 `yaml:"name" json:"name"`
+	Description  string                 `yaml:"description,omitempty" json:"description,omitempty"`
+	Command      string                 `yaml:"command" json:"command"`
+	Args         []string               `yaml:"args,omitempty" json:"args,omitempty"`
+	Env          map[string]string      `yaml:"env,omitempty" json:"env,omitempty"`
+	Enabled      bool                   `yaml:"enabled" json:"enabled"`
+	UsageSample  string                 `yaml:"usage_sample,omitempty" json:"usage_sample,omitempty"`
+	ConfigParams []MCPServerConfigParam `yaml:"config_params,omitempty" json:"config_params,omitempty"`
+}
+
+// MCPServerConfigParam describes a user-configurable parameter for an MCP
+// server definition.
+type MCPServerConfigParam struct {
+	Key          string `yaml:"key" json:"key"`
+	Label        string `yaml:"label" json:"label"`
+	DefaultValue string `yaml:"default_value" json:"default_value"`
+	Description  string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 // AgentModel holds from-to model name mapping for Agent Teams.
@@ -191,7 +216,7 @@ func DefaultPath() string {
 		home, err := userHomeDirFn()
 		if err != nil {
 			// Keep config path resolvable even in restricted environments.
-			slog.Warn("[DEBUG-CONFIG] using temp dir as config path fallback", "error", err)
+			slog.Warn("[WARN-CONFIG] using temp dir as config path fallback", "error", err)
 			recordDefaultPathWarning(
 				"Config path fallback: failed to resolve LOCALAPPDATA/APPDATA/home directory. Using temp directory; settings persistence may be limited.",
 			)
@@ -223,14 +248,14 @@ func Load(path string) (Config, error) {
 		return cfg, nil
 	}
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		slog.Warn("[DEBUG-CONFIG] failed to parse config, using defaults", "path", path, "error", err)
+		slog.Warn("[WARN-CONFIG] failed to parse config, using defaults", "path", path, "error", err)
 		return DefaultConfig(), err
 	}
 
 	rawMap, metadataErr := parseRawConfigMetadata(raw)
 	defaultWorktreeEnabled := DefaultConfig().Worktree.Enabled
 	if metadataErr != nil {
-		slog.Warn("[DEBUG-CONFIG] failed to parse config metadata", "error", metadataErr)
+		slog.Warn("[WARN-CONFIG] failed to parse config metadata", "error", metadataErr)
 	} else {
 		// Warn about deprecated fields that are silently ignored by yaml.Unmarshal.
 		warnDeprecatedFields(rawMap)
@@ -239,7 +264,7 @@ func Load(path string) (Config, error) {
 	if resolveErr != nil {
 		// Keep already-parsed cfg.Worktree.Enabled to avoid silently overwriting
 		// explicit user values when helper probing is unavailable.
-		slog.Warn("[DEBUG-CONFIG] failed to resolve worktree.enabled metadata, preserving parsed value", "error", resolveErr)
+		slog.Warn("[WARN-CONFIG] failed to resolve worktree.enabled metadata, preserving parsed value", "error", resolveErr)
 	} else if !hasWorktreeEnabled {
 		cfg.Worktree.Enabled = defaultWorktreeEnabled
 	}
@@ -319,6 +344,23 @@ func Clone(src Config) Config {
 		maps.Copy(dst.ViewerShortcuts, src.ViewerShortcuts)
 	}
 
+	if src.MCPServers != nil {
+		dst.MCPServers = make([]MCPServerConfig, len(src.MCPServers))
+		for i, s := range src.MCPServers {
+			dst.MCPServers[i] = s
+			if s.Args != nil {
+				dst.MCPServers[i].Args = cloneStringSlice(s.Args)
+			}
+			if s.Env != nil {
+				dst.MCPServers[i].Env = make(map[string]string, len(s.Env))
+				maps.Copy(dst.MCPServers[i].Env, s.Env)
+			}
+			if s.ConfigParams != nil {
+				dst.MCPServers[i].ConfigParams = cloneMCPServerConfigParams(s.ConfigParams)
+			}
+		}
+	}
+
 	return dst
 }
 
@@ -336,6 +378,15 @@ func cloneAgentModelOverrides(src []AgentModelOverride) []AgentModelOverride {
 		return nil
 	}
 	dst := make([]AgentModelOverride, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func cloneMCPServerConfigParams(src []MCPServerConfigParam) []MCPServerConfigParam {
+	if src == nil {
+		return nil
+	}
+	dst := make([]MCPServerConfigParam, len(src))
 	copy(dst, src)
 	return dst
 }
@@ -359,7 +410,7 @@ func Save(path string, cfg Config) (Config, error) {
 	if err := atomicWrite(normalizedPath, raw); err != nil {
 		return cfg, err
 	}
-	slog.Info("[DEBUG-CONFIG] config saved", "path", path)
+	slog.Debug("[DEBUG-CONFIG] config saved", "path", path)
 	return cfg, nil
 }
 
@@ -382,12 +433,12 @@ func atomicWrite(path string, data []byte) (err error) {
 	defer func() {
 		if tmpFile != nil {
 			if closeErr := tmpFile.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
-				slog.Warn("[DEBUG-CONFIG] failed to close temp file", "path", tmpPath, "error", closeErr)
+				slog.Warn("[WARN-CONFIG] failed to close temp file", "path", tmpPath, "error", closeErr)
 			}
 		}
 		if err != nil {
 			if removeErr := os.Remove(tmpPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				slog.Warn("[DEBUG-CONFIG] failed to remove temp file", "path", tmpPath, "error", removeErr)
+				slog.Warn("[WARN-CONFIG] failed to remove temp file", "path", tmpPath, "error", removeErr)
 			}
 		}
 	}()
@@ -470,6 +521,7 @@ func applyDefaultsAndValidate(cfg *Config) error {
 		*cfg = defaults
 		sanitizePaneEnv(cfg)
 		sanitizeClaudeEnv(cfg)
+		sanitizeMCPServers(cfg)
 		return normalizeAndValidateAgentModel(cfg.AgentModel)
 	}
 
@@ -503,6 +555,7 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	validateWebSocketPort(cfg)
 	sanitizePaneEnv(cfg)
 	sanitizeClaudeEnv(cfg)
+	sanitizeMCPServers(cfg)
 	validateDefaultSessionDir(cfg)
 	return nil
 }
@@ -542,7 +595,7 @@ func normalizeAndValidateAgentModel(am *AgentModel) error {
 // must not prevent startup.
 func validateWebSocketPort(cfg *Config) {
 	if cfg.WebSocketPort < 0 || cfg.WebSocketPort > maxValidPort {
-		slog.Warn("[DEBUG-CONFIG] websocket_port out of valid range (0-65535), falling back to 0 (auto-assign)",
+		slog.Warn("[WARN-CONFIG] websocket_port out of valid range (0-65535), falling back to 0 (auto-assign)",
 			"configured", cfg.WebSocketPort, "max", maxValidPort)
 		cfg.WebSocketPort = 0
 	}
@@ -561,7 +614,7 @@ func validateDefaultSessionDir(cfg *Config) {
 	if strings.HasPrefix(dir, "~") {
 		home, err := userHomeDirFn()
 		if err != nil {
-			slog.Warn("[DEBUG-CONFIG] default_session_dir: failed to expand ~, ignoring",
+			slog.Warn("[WARN-CONFIG] default_session_dir: failed to expand ~, ignoring",
 				"path", dir, "error", err)
 			cfg.DefaultSessionDir = ""
 			return
@@ -572,7 +625,7 @@ func validateDefaultSessionDir(cfg *Config) {
 	dir = expandDefaultSessionDirEnv(dir)
 	dir = filepath.Clean(dir)
 	if !filepath.IsAbs(dir) {
-		slog.Warn("[DEBUG-CONFIG] default_session_dir is not an absolute path, ignoring", "path", dir)
+		slog.Warn("[WARN-CONFIG] default_session_dir is not an absolute path, ignoring", "path", dir)
 		cfg.DefaultSessionDir = ""
 		return
 	}
@@ -660,6 +713,84 @@ func sanitizeClaudeEnv(cfg *Config) {
 	cfg.ClaudeEnv.Vars = sanitizeEnvMap(cfg.ClaudeEnv.Vars, "claude_env")
 }
 
+// sanitizeMCPServers validates and normalizes mcp_servers entries in place.
+// Invalid entries are skipped with warning logs to keep config loading non-fatal.
+func sanitizeMCPServers(cfg *Config) {
+	if len(cfg.MCPServers) == 0 {
+		return
+	}
+	seen := make(map[string]struct{}, len(cfg.MCPServers))
+	filtered := make([]MCPServerConfig, 0, len(cfg.MCPServers))
+	for i := range cfg.MCPServers {
+		server := cfg.MCPServers[i]
+		server.ID = strings.TrimSpace(server.ID)
+		server.Name = strings.TrimSpace(server.Name)
+		server.Description = strings.TrimSpace(server.Description)
+		server.Command = strings.TrimSpace(server.Command)
+		server.UsageSample = strings.TrimSpace(server.UsageSample)
+
+		if server.ID == "" {
+			slog.Warn("[WARN-CONFIG] mcp_servers entry has empty id, skipping", "index", i)
+			continue
+		}
+		if server.Name == "" {
+			slog.Warn("[WARN-CONFIG] mcp_servers entry has empty name, skipping", "id", server.ID)
+			continue
+		}
+		if server.Command == "" {
+			slog.Warn("[WARN-CONFIG] mcp_servers entry has empty command, skipping", "id", server.ID)
+			continue
+		}
+		if _, exists := seen[server.ID]; exists {
+			slog.Warn("[WARN-CONFIG] mcp_servers entry has duplicate id, skipping", "id", server.ID, "index", i)
+			continue
+		}
+		seen[server.ID] = struct{}{}
+
+		if len(server.Args) > 0 {
+			trimmedArgs := make([]string, 0, len(server.Args))
+			for argIdx, arg := range server.Args {
+				arg = strings.TrimSpace(arg)
+				if arg == "" {
+					slog.Warn("[WARN-CONFIG] mcp_servers entry has empty args item, skipping", "id", server.ID, "argIndex", argIdx)
+					continue
+				}
+				trimmedArgs = append(trimmedArgs, arg)
+			}
+			server.Args = trimmedArgs
+		}
+		server.Env = sanitizeEnvMap(server.Env, fmt.Sprintf("mcp_servers[%d].env", i))
+		server.ConfigParams = sanitizeMCPServerConfigParams(server.ConfigParams, server.ID)
+
+		filtered = append(filtered, server)
+	}
+	cfg.MCPServers = filtered
+}
+
+func sanitizeMCPServerConfigParams(params []MCPServerConfigParam, mcpID string) []MCPServerConfigParam {
+	if len(params) == 0 {
+		return nil
+	}
+	filtered := make([]MCPServerConfigParam, 0, len(params))
+	for i := range params {
+		param := params[i]
+		param.Key = strings.TrimSpace(param.Key)
+		param.Label = strings.TrimSpace(param.Label)
+		param.DefaultValue = strings.TrimSpace(param.DefaultValue)
+		param.Description = strings.TrimSpace(param.Description)
+		if param.Key == "" {
+			slog.Warn("[WARN-CONFIG] mcp_servers entry has config_params item with empty key, skipping", "id", mcpID, "index", i)
+			continue
+		}
+		if param.Label == "" {
+			slog.Warn("[WARN-CONFIG] mcp_servers entry has config_params item with empty label, skipping", "id", mcpID, "index", i)
+			continue
+		}
+		filtered = append(filtered, param)
+	}
+	return filtered
+}
+
 // sanitizeEnvMap validates and cleans environment variable entries.
 // It removes entries with empty keys, null bytes in keys, '=' in keys,
 // and strips null bytes from values. Values are trimmed but allowed to be empty
@@ -689,33 +820,33 @@ func sanitizeEnvMap(entries map[string]string, logPrefix string) map[string]stri
 			continue
 		}
 		if strings.ContainsRune(k, '\x00') {
-			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": dropped entry with null byte in key", "key", k)
+			slog.Warn("[WARN-CONFIG] "+logPrefix+": dropped entry with null byte in key", "key", k)
 			continue
 		}
 		// Windows environment variable keys cannot contain '='.
 		if strings.ContainsRune(k, '=') {
-			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": dropped entry with '=' in key", "key", k)
+			slog.Warn("[WARN-CONFIG] "+logPrefix+": dropped entry with '=' in key", "key", k)
 			continue
 		}
 		// Early warning for blocked system keys (actual enforcement is downstream).
 		if _, blocked := warnOnlyBlockedKeys[strings.ToUpper(k)]; blocked {
-			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": blocked system key will be rejected at process creation", "key", k)
+			slog.Warn("[WARN-CONFIG] "+logPrefix+": blocked system key will be rejected at process creation", "key", k)
 		}
 		origLen := len(v)
 		v = strings.ReplaceAll(v, "\x00", "")
 		if len(v) != origLen {
-			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": stripped null bytes from value", "key", k)
+			slog.Warn("[WARN-CONFIG] "+logPrefix+": stripped null bytes from value", "key", k)
 		}
 		v = strings.TrimSpace(v)
 		// Case-insensitive duplicate detection (Windows env vars are case-insensitive).
 		upperK := strings.ToUpper(k)
 		if firstKey, exists := seen[upperK]; exists {
-			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": duplicate key (case-insensitive), keeping first", "key", k, "kept", firstKey)
+			slog.Warn("[WARN-CONFIG] "+logPrefix+": duplicate key (case-insensitive), keeping first", "key", k, "kept", firstKey)
 			continue // first-wins
 		}
 		// Early warning for excessively long values (downstream enforces hard limit).
 		if len(v) > maxCustomEnvValueBytes {
-			slog.Warn("[DEBUG-CONFIG] "+logPrefix+": value exceeds recommended limit", "key", k, "bytes", len(v), "limit", maxCustomEnvValueBytes)
+			slog.Warn("[WARN-CONFIG] "+logPrefix+": value exceeds recommended limit", "key", k, "bytes", len(v), "limit", maxCustomEnvValueBytes)
 		}
 		seen[upperK] = k
 		cleaned[k] = v
@@ -808,7 +939,7 @@ func warnDeprecatedFields(rawMap map[string]any) {
 		return
 	}
 	if _, has := wt["auto_cleanup"]; has {
-		slog.Warn("[DEBUG-CONFIG] deprecated field ignored: worktree.auto_cleanup is no longer used")
+		slog.Warn("[WARN-CONFIG] deprecated field ignored: worktree.auto_cleanup is no longer used")
 	}
 }
 

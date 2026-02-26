@@ -2515,21 +2515,24 @@ func TestCreateSessionWithWorktreeValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error when session name is empty", func(t *testing.T) {
+	t.Run("sanitizes empty session name to fallback", func(t *testing.T) {
 		repoPath := testutil.CreateTempGitRepo(t)
 		app := NewApp()
 		app.sessions = tmux.NewSessionManager()
 		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
-		app.setConfigSnapshot(config.DefaultConfig())
+		cfg := config.DefaultConfig()
+		cfg.Worktree.Enabled = true
+		app.setConfigSnapshot(cfg)
+		stubNewSessionCommandSuccess(t, app)
 
-		_, err := app.CreateSessionWithWorktree(repoPath, "   ", WorktreeSessionOptions{
+		snapshot, err := app.CreateSessionWithWorktree(repoPath, "   ", WorktreeSessionOptions{
 			BranchName: "feature/test",
 		})
-		if err == nil {
-			t.Fatal("CreateSessionWithWorktree() expected session-name validation error")
+		if err != nil {
+			t.Fatalf("CreateSessionWithWorktree() error = %v", err)
 		}
-		if !strings.Contains(err.Error(), "session name is required") {
-			t.Fatalf("error = %v, want session-name validation message", err)
+		if snapshot.Name != "worktree-session" {
+			t.Fatalf("CreateSessionWithWorktree() session name = %q, want %q (fallback)", snapshot.Name, "worktree-session")
 		}
 	})
 
@@ -2646,19 +2649,22 @@ func TestCreateSessionWithExistingWorktreeValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error when session name is empty", func(t *testing.T) {
+	t.Run("sanitizes empty session name to fallback", func(t *testing.T) {
 		repoPath := testutil.CreateTempGitRepo(t)
 		app := NewApp()
 		app.sessions = tmux.NewSessionManager()
 		app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
-		app.setConfigSnapshot(config.DefaultConfig())
+		cfg := config.DefaultConfig()
+		cfg.Worktree.Enabled = true
+		app.setConfigSnapshot(cfg)
+		stubNewSessionCommandSuccess(t, app)
 
-		_, err := app.CreateSessionWithExistingWorktree(repoPath, "   ", repoPath, CreateSessionOptions{})
-		if err == nil {
-			t.Fatal("CreateSessionWithExistingWorktree() expected session-name validation error")
+		snapshot, err := app.CreateSessionWithExistingWorktree(repoPath, "   ", repoPath, CreateSessionOptions{})
+		if err != nil {
+			t.Fatalf("CreateSessionWithExistingWorktree() error = %v", err)
 		}
-		if !strings.Contains(err.Error(), "session name is required") {
-			t.Fatalf("error = %v, want session-name validation message", err)
+		if snapshot.Name != "worktree-session" {
+			t.Fatalf("CreateSessionWithExistingWorktree() session name = %q, want %q (fallback)", snapshot.Name, "worktree-session")
 		}
 	})
 

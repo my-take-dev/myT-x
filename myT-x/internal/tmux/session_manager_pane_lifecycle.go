@@ -189,7 +189,7 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 				orphan.Terminal = nil
 			}
 			delete(m.panes, pid)
-			slog.Warn("[DEBUG-PANE] KillPane: cleaned up orphaned pane during session deletion",
+			slog.Warn("[WARN-PANE] KillPane: cleaned up orphaned pane during session deletion",
 				"paneId", orphan.IDString(),
 				"session", result.sessionName,
 			)
@@ -224,7 +224,7 @@ func (m *SessionManager) KillPane(paneID string) (sessionName string, removedSes
 	// Close terminals outside lock to avoid blocking other SessionManager operations.
 	for _, ct := range result.closeTargets {
 		if closeErr := ct.Close(); closeErr != nil {
-			slog.Warn("[DEBUG-PANE] KillPane terminal close failed",
+			slog.Warn("[WARN-PANE] KillPane terminal close failed",
 				"paneId", fmt.Sprintf("%%%d", id),
 				"session", result.sessionName,
 				"error", closeErr,
@@ -232,7 +232,7 @@ func (m *SessionManager) KillPane(paneID string) (sessionName string, removedSes
 		}
 	}
 	if !result.removedFromWindow {
-		slog.Warn("[DEBUG-PANE] KillPane removed pane from map but not from any window",
+		slog.Warn("[WARN-PANE] KillPane removed pane from map but not from any window",
 			"paneId", fmt.Sprintf("%%%d", id),
 			"session", result.sessionName,
 		)

@@ -44,7 +44,7 @@ func Start(cfg Config) (*Terminal, error) {
 			return &Terminal{pty: cpty}, nil
 		}
 		// ConPTY was available but failed to start; log for debugging and fall through to pipe mode.
-		slog.Warn("[DEBUG-TERMINAL] ConPTY start failed, falling back to pipe mode", "error", err)
+		slog.Warn("[WARN-TERMINAL] ConPTY start failed, falling back to pipe mode", "error", err)
 	}
 
 	return startPipeMode(cfg)
