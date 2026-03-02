@@ -1,5 +1,6 @@
-import { getRegisteredViews } from "./viewerRegistry";
-import { useViewerStore } from "./viewerStore";
+import {ErrorBoundary} from "../ErrorBoundary";
+import {getRegisteredViews} from "./viewerRegistry";
+import {useViewerStore} from "./viewerStore";
 
 export function ViewOverlay() {
   const activeViewId = useViewerStore((s) => s.activeViewId);
@@ -18,7 +19,9 @@ export function ViewOverlay() {
 
   return (
     <div className="viewer-overlay">
-      <ViewComponent />
+      <ErrorBoundary key={activeView.id}>
+        <ViewComponent />
+      </ErrorBoundary>
     </div>
   );
 }

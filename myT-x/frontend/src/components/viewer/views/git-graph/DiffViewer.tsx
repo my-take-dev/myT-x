@@ -1,133 +1,83 @@
-import { useMemo, useState } from "react";
+import {memo, useMemo, useRef, useState} from "react";
+import {computeHunkGaps, diffHeaderToFilePath, parseDiffFiles, type ParsedDiffFile} from "../../../../utils/diffParser";
+import {toErrorMessage} from "../../../../utils/errorUtils";
+import {DiffHunkSection} from "../shared/DiffHunkSection";
+
+/** Collapse all diff sections when file count exceeds this threshold to reduce initial render cost. */
+export const DIFF_COLLAPSE_THRESHOLD = 10;
 
 interface DiffViewerProps {
-  diff: string;
+    diff: string;
 }
 
-interface DiffFile {
-  header: string;
-  hunks: DiffHunk[];
-}
+const DiffFileSection = memo(function DiffFileSection({
+                                                          file,
+                                                          initialCollapsed
+                                                      }: {
+    file: ParsedDiffFile;
+    initialCollapsed: boolean;
+}) {
+    const prevInitialCollapsedRef = useRef(initialCollapsed);
+    const [collapsed, setCollapsed] = useState(initialCollapsed);
 
-interface DiffHunk {
-  header: string;
-  lines: DiffLine[];
-}
-
-interface DiffLine {
-  type: "context" | "added" | "removed" | "hunk-header";
-  content: string;
-  oldLineNum?: number;
-  newLineNum?: number;
-}
-
-function parseDiff(raw: string): DiffFile[] {
-  const files: DiffFile[] = [];
-  const lines = raw.split("\n");
-  let currentFile: DiffFile | null = null;
-  let currentHunk: DiffHunk | null = null;
-  let oldLine = 0;
-  let newLine = 0;
-
-  for (const line of lines) {
-    if (line.startsWith("diff --git")) {
-      currentFile = { header: line, hunks: [] };
-      files.push(currentFile);
-      currentHunk = null;
-      continue;
+    // Adjust collapsed during render when initialCollapsed changes (e.g., file count
+    // crosses DIFF_COLLAPSE_THRESHOLD). React batches the setState into the current
+    // render cycle, avoiding the double-render that useEffect would cause.
+    // This intentionally overrides any manual toggle — when the parent changes
+    // initialCollapsed, the new value takes precedence.
+    if (prevInitialCollapsedRef.current !== initialCollapsed) {
+        prevInitialCollapsedRef.current = initialCollapsed;
+        setCollapsed(initialCollapsed);
     }
 
-    if (!currentFile) continue;
+    const filePath = diffHeaderToFilePath(file.header);
+    const gaps = useMemo(() => computeHunkGaps(file.hunks), [file.hunks]);
 
-    // Skip diff metadata lines.
-    if (line.startsWith("index ") || line.startsWith("---") || line.startsWith("+++") ||
-        line.startsWith("new file") || line.startsWith("deleted file") ||
-        line.startsWith("similarity") || line.startsWith("rename")) {
-      continue;
-    }
-
-    // Hunk header.
-    if (line.startsWith("@@")) {
-      const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (!match) continue;
-      oldLine = parseInt(match[1], 10);
-      newLine = parseInt(match[2], 10);
-      currentHunk = { header: line, lines: [] };
-      currentFile.hunks.push(currentHunk);
-      continue;
-    }
-
-    if (!currentHunk) continue;
-
-    if (line.startsWith("+")) {
-      currentHunk.lines.push({
-        type: "added",
-        content: line.substring(1),
-        newLineNum: newLine++,
-      });
-    } else if (line.startsWith("-")) {
-      currentHunk.lines.push({
-        type: "removed",
-        content: line.substring(1),
-        oldLineNum: oldLine++,
-      });
-    } else {
-      // Context line (or empty).
-      currentHunk.lines.push({
-        type: "context",
-        content: line.startsWith(" ") ? line.substring(1) : line,
-        oldLineNum: oldLine++,
-        newLineNum: newLine++,
-      });
-    }
-  }
-
-  return files;
-}
-
-function DiffFileSection({ file }: { file: DiffFile }) {
-  const [collapsed, setCollapsed] = useState(false);
-
-  // Extract file path from header.
-  const filePath = file.header.replace(/^diff --git a\/(.+?) b\/.+$/, "$1");
-
-  return (
-    <div>
-      <div className="diff-file-header" onClick={() => setCollapsed(!collapsed)}>
-        <span>{collapsed ? "\u25B6" : "\u25BC"} {filePath}</span>
-      </div>
-      {!collapsed && file.hunks.map((hunk, hi) => (
-        <div key={hi}>
-          <div className="diff-hunk-header">{hunk.header}</div>
-          {hunk.lines.map((line, li) => (
-            <div key={li} className={`diff-line ${line.type}`}>
-              <span className="diff-line-number">
-                {line.oldLineNum ?? ""}
-              </span>
-              <span className="diff-line-number">
-                {line.newLineNum ?? ""}
-              </span>
-              <span className="diff-line-content">{line.content}</span>
-            </div>
-          ))}
+    return (
+        <div>
+            <button type="button" className="diff-file-header" onClick={() => setCollapsed(!collapsed)}
+                    aria-expanded={!collapsed}>
+                <span className="diff-file-toggle">{collapsed ? "\u25B6" : "\u25BC"}</span>
+                <span>{filePath}</span>
+            </button>
+            {!collapsed && file.hunks.map((hunk, hi) => (
+                <DiffHunkSection key={`${hunk.header}:${hi}`} hunk={hunk} gap={gaps.get(hi)}/>
+            ))}
         </div>
-      ))}
-    </div>
-  );
-}
+    );
+});
 
-export function DiffViewer({ diff }: DiffViewerProps) {
-  const files = useMemo(() => parseDiff(diff), [diff]);
+export function DiffViewer({diff}: DiffViewerProps) {
+    const {files, parseError} = useMemo<{ files: ParsedDiffFile[]; parseError: string | null }>(() => {
+        try {
+            return {files: parseDiffFiles(diff), parseError: null};
+        } catch (err: unknown) {
+            console.error("[diff-viewer] parseDiffFiles failed:", err);
+            return {files: [], parseError: toErrorMessage(err, "Failed to parse diff.")};
+        }
+    }, [diff]);
 
-  if (files.length === 0) {
-    return <div className="viewer-message">No diff available</div>;
-  }
+    if (parseError) {
+        return <div className="viewer-message">{parseError}</div>;
+    }
 
-  return (
-    <div className="diff-viewer">
-      {files.map((file, i) => (
-        <DiffFileSection key={i} file={file} />
-      ))}
-    </div>
-  );
+    if (files.length === 0) {
+        return <div className="viewer-message">No diff available</div>;
+    }
+
+    return (
+        <div className="diff-viewer">
+            {/* NOTE: file.header is null only when the diff starts with a @@ hunk line
+                without a preceding "diff --git" header (e.g., standalone hunk input).
+                The index-based fallback key is acceptable here because the list is not
+                reordered — it's rendered once per commit selection. */}
+            {files.map((file, index) => (
+                <DiffFileSection
+                    key={file.header ?? `unnamed-${index}`}
+                    file={file}
+                    initialCollapsed={files.length > DIFF_COLLAPSE_THRESHOLD}
+                />
+            ))}
+        </div>
+    );
 }

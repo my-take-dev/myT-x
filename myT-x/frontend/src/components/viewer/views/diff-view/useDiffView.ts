@@ -1,7 +1,28 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {api} from "../../../../api";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
+import {toErrorMessage} from "../../../../utils/errorUtils";
 import type {DiffTreeNode, WorkingDiffFile, WorkingDiffResult} from "./diffViewTypes";
+
+function createDiffDirNode(name: string, path: string, depth: number, isExpanded: boolean): DiffTreeNode {
+    return {
+        name,
+        path,
+        isDir: true,
+        depth,
+        isExpanded,
+    };
+}
+
+function createDiffFileNode(file: WorkingDiffFile, name: string, depth: number): DiffTreeNode {
+    return {
+        name,
+        path: file.path,
+        isDir: false,
+        depth,
+        file,
+    };
+}
 
 function buildDiffTree(files: WorkingDiffFile[], expandedDirs: Set<string>): DiffTreeNode[] {
     const sortedFiles = [...files].sort((a, b) => a.path.localeCompare(b.path));
@@ -24,25 +45,12 @@ function buildDiffTree(files: WorkingDiffFile[], expandedDirs: Set<string>): Dif
             }
 
             addedDirs.add(dirPath);
-            nodes.push({
-                name: parts[i - 1],
-                path: dirPath,
-                isDir: true,
-                depth: i - 1,
-                isExpanded: expandedDirs.has(dirPath),
-            });
+            nodes.push(createDiffDirNode(parts[i - 1], dirPath, i - 1, expandedDirs.has(dirPath)));
         }
 
         const parentDir = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
         if (parentDir === "" || expandedDirs.has(parentDir)) {
-            nodes.push({
-                name: parts[parts.length - 1],
-                path: file.path,
-                isDir: false,
-                depth: parts.length - 1,
-                isExpanded: false,
-                file,
-            });
+            nodes.push(createDiffFileNode(file, parts[parts.length - 1], parts.length - 1));
         }
     }
 
@@ -60,7 +68,20 @@ function collectDirectorySet(files: WorkingDiffFile[]): Set<string> {
     return allDirs;
 }
 
-export function useDiffView() {
+export interface UseDiffViewResult {
+    readonly flatNodes: readonly DiffTreeNode[];
+    readonly selectedPath: string | null;
+    readonly selectedFile: WorkingDiffFile | null;
+    readonly diffResult: WorkingDiffResult | null;
+    readonly isLoading: boolean;
+    readonly error: string | null;
+    readonly toggleDir: (path: string) => void;
+    readonly selectFile: (path: string) => void;
+    readonly loadDiff: (sessionName?: string) => void;
+    readonly activeSession: string | null;
+}
+
+export function useDiffView(): UseDiffViewResult {
     const activeSession = useTmuxStore((s) => s.activeSession);
 
     const [diffResult, setDiffResult] = useState<WorkingDiffResult | null>(null);
@@ -69,10 +90,9 @@ export function useDiffView() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const mountedRef = useRef(false);
+    const mountedRef = useRef(true);
     const sessionRef = useRef<string | null>(activeSession);
     const requestIDRef = useRef(0);
-    const lastAutoLoadedSessionRef = useRef<string | null>(null);
 
     useEffect(() => {
         sessionRef.current = activeSession;
@@ -136,30 +156,32 @@ export function useDiffView() {
                 }
 
                 setDiffResult(result);
-                setIsLoading(false);
             })
             .catch((err: unknown) => {
                 if (!mountedRef.current || requestIDRef.current !== requestID) {
                     return;
                 }
-                if (import.meta.env.DEV) {
-                    console.warn("[DEBUG-viewer] DevPanelWorkingDiff failed", err);
+                console.error("[viewer/diff] DevPanelWorkingDiff failed", {
+                    session: targetSession,
+                    err,
+                });
+                setDiffResult(null);
+                setExpandedDirs(new Set());
+                setSelectedPath(null);
+                setError(toErrorMessage(err, "Failed to load diff."));
+            })
+            .finally(() => {
+                if (!mountedRef.current || requestIDRef.current !== requestID) {
+                    return;
                 }
-                setError(String(err));
                 setIsLoading(false);
             });
     }, []);
 
-    // Load once per active-session change.
+    // Load diff when active session changes.
+    // Strict Mode double-effect is harmless: requestIDRef invalidates the first stale response.
     useEffect(() => {
-        if (!activeSession) {
-            lastAutoLoadedSessionRef.current = null;
-            return;
-        }
-        if (lastAutoLoadedSessionRef.current === activeSession) {
-            return;
-        }
-        lastAutoLoadedSessionRef.current = activeSession;
+        if (!activeSession) return;
         loadDiff(activeSession);
     }, [activeSession, loadDiff]);
 

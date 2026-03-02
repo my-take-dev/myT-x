@@ -1,5 +1,6 @@
 import {useEffect, useLayoutEffect, useRef, useState} from "react";
-import {ClipboardSetText} from "../../../../../wailsjs/runtime/runtime";
+import {writeClipboardText} from "../../../../utils/clipboardUtils";
+import {notifyClipboardFailure} from "../../../../utils/notifyUtils";
 import type {FlatNode} from "./fileTreeTypes";
 
 interface FileTreeContextMenuProps {
@@ -103,10 +104,13 @@ export function FileTreeContextMenu({x, y, node, onClose}: FileTreeContextMenuPr
         items[nextIndex].focus();
     };
 
-    const handleCopyPath = () => {
-        ClipboardSetText(node.path).catch((err: unknown) =>
-            console.warn("[FileTreeContextMenu] clipboard write failed", err),
-        );
+    const handleCopyPath = async () => {
+        try {
+            await writeClipboardText(node.path);
+        } catch (err: unknown) {
+            notifyClipboardFailure();
+            console.warn("[file-tree-context-menu] clipboard write failed", err);
+        }
         onClose();
     };
 
@@ -120,9 +124,12 @@ export function FileTreeContextMenu({x, y, node, onClose}: FileTreeContextMenuPr
             onKeyDown={handleKeyDown}
         >
             <button
+                type="button"
                 className="file-tree-context-menu-item"
                 role="menuitem"
-                onClick={handleCopyPath}
+                onClick={() => {
+                    void handleCopyPath();
+                }}
             >
                 パスのコピー
             </button>

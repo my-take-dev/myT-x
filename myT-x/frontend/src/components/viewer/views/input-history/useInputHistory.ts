@@ -1,12 +1,9 @@
 import {useCallback, useEffect, useRef} from "react";
-import {ClipboardSetText} from "../../../../../wailsjs/runtime/runtime";
+import {writeClipboardText} from "../../../../utils/clipboardUtils";
+import {notifyClipboardFailure} from "../../../../utils/notifyUtils";
+import {formatTimestamp} from "../../../../utils/timestampUtils";
 import {useInputHistoryStore} from "../../../../stores/inputHistoryStore";
 import type {InputHistoryEntry} from "../../../../stores/inputHistoryStore";
-
-function formatTimestamp(ts: string): string {
-    if (ts.length !== 14) return ts;
-    return `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)} ${ts.slice(8, 10)}:${ts.slice(10, 12)}:${ts.slice(12, 14)}`;
-}
 
 /**
  * formatInputForDisplay converts residual control characters to human-readable
@@ -15,7 +12,7 @@ function formatTimestamp(ts: string): string {
  * CSI/OSC escape sequences are stripped by the backend (processInputString)
  * before storage, so only a minimal set of control characters can appear here.
  */
-function formatInputForDisplay(input: string): string {
+export function formatInputForDisplay(input: string): string {
     return input.replace(/[\x00-\x1f\x7f]/g, (ch) => {
         const code = ch.charCodeAt(0);
         if (code === 0x7f) {
@@ -37,11 +34,13 @@ export function useInputHistory() {
     const registerBodyElement = useCallback((el: HTMLDivElement | null) => {
         bodyRef.current = el;
     }, []);
+    // Derive a scalar dependency so the auto-scroll effect doesn't re-fire when
+    // entry objects change but no new entries are appended.
+    // When entries is cleared (e.g., session switch), latestEntrySeq transitions
+    // to undefined, which does trigger React's dependency check.
+    const latestEntrySeq = entries.length > 0 ? entries[entries.length - 1].seq : undefined;
 
     // Auto-scroll to bottom when new entries arrive or on initial mount.
-    // registerBodyElement is omitted from deps: it is a stable useCallback(fn,[]) reference
-    // and its inclusion would mask the real dependency (entries.length).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
         const el = bodyRef.current;
         if (!el) return;
@@ -49,24 +48,30 @@ export function useInputHistory() {
         if (isNearBottom) {
             el.scrollTop = el.scrollHeight;
         }
-    }, [entries.length]);
+    }, [latestEntrySeq]);
 
-    const copyAll = useCallback(() => {
-        if (entries.length === 0) return;
+    const copyAll = useCallback(async (): Promise<boolean> => {
+        if (entries.length === 0) return false;
         const text = entries.map(formatEntryForCopy).join("\n");
-        void ClipboardSetText(text).catch((err: unknown) => {
-            if (import.meta.env.DEV) {
-                console.warn("[input-history] clipboard write failed", err);
-            }
-        });
+        try {
+            await writeClipboardText(text);
+            return true;
+        } catch (err: unknown) {
+            notifyClipboardFailure();
+            console.warn("[input-history] clipboard write failed", err);
+            return false;
+        }
     }, [entries]);
 
-    const copyEntry = useCallback((entry: InputHistoryEntry) => {
-        void ClipboardSetText(formatEntryForCopy(entry)).catch((err: unknown) => {
-            if (import.meta.env.DEV) {
-                console.warn("[input-history] clipboard write failed", err);
-            }
-        });
+    const copyEntry = useCallback(async (entry: InputHistoryEntry): Promise<boolean> => {
+        try {
+            await writeClipboardText(formatEntryForCopy(entry));
+            return true;
+        } catch (err: unknown) {
+            notifyClipboardFailure();
+            console.warn("[input-history] clipboard write failed", err);
+            return false;
+        }
     }, []);
 
     return {
@@ -76,7 +81,6 @@ export function useInputHistory() {
         copyAll,
         copyEntry,
         registerBodyElement,
-        formatTimestamp,
         formatInputForDisplay,
     };
 }

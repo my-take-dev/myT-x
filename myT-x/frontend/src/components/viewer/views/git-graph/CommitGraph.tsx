@@ -1,90 +1,93 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { FixedSizeList, type ListChildComponentProps } from "react-window";
-import type { GitGraphCommit, LaneAssignment } from "./gitGraphTypes";
-import { CommitRow } from "./CommitRow";
+import {forwardRef, memo, useMemo, useRef, type HTMLAttributes} from "react";
+import {FixedSizeList, type ListChildComponentProps} from "react-window";
+import {useContainerHeight} from "../../../../hooks/useContainerHeight";
+import type {GitGraphCommit, LaneAssignment} from "./gitGraphTypes";
+import {CommitRow} from "./CommitRow";
+import {MAX_LOG_COUNT} from "./useGitGraph";
 
 interface CommitGraphProps {
-  commits: GitGraphCommit[];
-  laneAssignments: LaneAssignment[];
-  selectedCommit: GitGraphCommit | null;
-  onSelectCommit: (commit: GitGraphCommit) => void;
-  logCount: number;
-  onLoadMore: () => void;
+    commits: readonly GitGraphCommit[];
+    laneAssignments: readonly LaneAssignment[];
+    selectedCommit: GitGraphCommit | null;
+    onSelectCommit: (commit: GitGraphCommit) => void;
+    logCount: number;
+    onLoadMore: () => void;
 }
 
 interface RowData {
-  commits: GitGraphCommit[];
-  laneAssignments: LaneAssignment[];
-  selectedHash: string | null;
-  onSelectCommit: (commit: GitGraphCommit) => void;
+    commits: readonly GitGraphCommit[];
+    laneAssignments: readonly LaneAssignment[];
+    selectedHash: string | null;
+    onSelectCommit: (commit: GitGraphCommit) => void;
 }
 
 const ROW_HEIGHT = 32;
 
-const Row = memo(function Row({ index, style, data }: ListChildComponentProps<RowData>) {
-  const commit = data.commits[index];
-  const laneAssignment = data.laneAssignments[index];
-  return (
-    <CommitRow
-      commit={commit}
-      laneAssignment={laneAssignment}
-      style={style}
-      isSelected={data.selectedHash === commit.full_hash}
-      onSelect={data.onSelectCommit}
-    />
-  );
+/** Outer container for FixedSizeList providing list semantics for accessibility. */
+const CommitListOuter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
+    function CommitListOuter(props, ref) {
+        return <div {...props} ref={ref} role="list" aria-label="Commit history"/>;
+    },
+);
+
+const Row = memo(function Row({index, style, data}: ListChildComponentProps<RowData>) {
+    const commit = data.commits[index];
+    const laneAssignment = data.laneAssignments[index];
+    if (!commit || !laneAssignment) return null;
+    return (
+        <CommitRow
+            commit={commit}
+            laneAssignment={laneAssignment}
+            style={style}
+            isSelected={data.selectedHash === commit.full_hash}
+            onSelect={data.onSelectCommit}
+        />
+    );
 });
 
 export function CommitGraph({
-  commits,
-  laneAssignments,
-  selectedCommit,
-  onSelectCommit,
-  logCount,
-  onLoadMore,
-}: CommitGraphProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState(400);
+                                commits,
+                                laneAssignments,
+                                selectedCommit,
+                                onSelectCommit,
+                                logCount,
+                                onLoadMore,
+                            }: CommitGraphProps) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const height = useContainerHeight(containerRef);
 
-  // Track container height with ResizeObserver for react-window.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setHeight(entry.contentRect.height);
-      }
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    const itemData = useMemo<RowData>(() => ({
+        commits,
+        laneAssignments,
+        selectedHash: selectedCommit?.full_hash ?? null,
+        onSelectCommit,
+    }), [commits, laneAssignments, selectedCommit, onSelectCommit]);
 
-  const itemData = useMemo<RowData>(() => ({
-    commits,
-    laneAssignments,
-    selectedHash: selectedCommit?.full_hash ?? null,
-    onSelectCommit,
-  }), [commits, laneAssignments, selectedCommit, onSelectCommit]);
+    // commits.length can temporarily exceed logCount when filters change and old rows remain visible
+    // until the next fetch settles. Using >= keeps the "Load more" action available in that state.
+    const canLoadMore = commits.length > 0 && commits.length >= logCount && logCount < MAX_LOG_COUNT;
 
-  const canLoadMore = commits.length >= logCount && logCount < 1000;
-
-  return (
-    <div className="git-graph-commits" ref={containerRef}>
-      <FixedSizeList
-        height={height}
-        itemCount={commits.length}
-        itemSize={ROW_HEIGHT}
-        width="100%"
-        itemData={itemData}
-        overscanCount={10}
-      >
-        {Row}
-      </FixedSizeList>
-      {canLoadMore && (
-        <div className="git-load-more">
-          <button onClick={onLoadMore}>Load more commits...</button>
+    return (
+        <div className="git-graph-commits" ref={containerRef}>
+            {/* NOTE: height starts at 0 until ResizeObserver reports; guard prevents empty FixedSizeList render. */}
+            {height > 0 && (
+                <FixedSizeList
+                    height={height}
+                    itemCount={commits.length}
+                    itemSize={ROW_HEIGHT}
+                    width="100%"
+                    itemData={itemData}
+                    overscanCount={10}
+                    outerElementType={CommitListOuter}
+                >
+                    {Row}
+                </FixedSizeList>
+            )}
+            {canLoadMore && (
+                <div className="git-load-more">
+                    <button type="button" onClick={onLoadMore}>Load more commits...</button>
+                </div>
+            )}
         </div>
-      )}
-    </div>
-  );
+    );
 }

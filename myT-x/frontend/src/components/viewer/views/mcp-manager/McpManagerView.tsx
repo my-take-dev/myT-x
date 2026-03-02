@@ -1,4 +1,5 @@
 import {useViewerStore} from "../../viewerStore";
+import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {McpDetailPanel} from "./McpDetailPanel";
 import {McpListSidebar} from "./McpListSidebar";
 import {useMcpManager} from "./useMcpManager";
@@ -8,37 +9,35 @@ export function McpManagerView() {
     const {mcpList, selectedMCP, isLoading, error, toggleMCP, togglingIds, selectMCP, activeSession, retryLoad, dismissError} =
         useMcpManager();
 
-    const header = (
-        <div className="viewer-header">
-            <h2 className="viewer-header-title">MCP Manager</h2>
-            <div className="viewer-header-spacer"/>
-            <button type="button" className="viewer-header-btn" onClick={closeView} title="Close">
-                {"\u2715"}
-            </button>
-        </div>
-    );
-
     if (!activeSession) {
         return (
-            <div className="mcp-manager-view">
-                {header}
-                <div className="viewer-message">No active session</div>
-            </div>
+            <ViewerPanelShell
+                className="mcp-manager-view"
+                title="MCP Manager"
+                onClose={closeView}
+                // Intentionally no refresh action in this state:
+                // retryLoad requires an active session and would be a no-op.
+                message="No active session"
+            />
         );
     }
 
     return (
-        <div className="mcp-manager-view">
-            {header}
+        <ViewerPanelShell
+            className="mcp-manager-view"
+            title="MCP Manager"
+            onClose={closeView}
+            onRefresh={retryLoad}
+        >
             <div className="mcp-manager-body">
                 {error && (
                     <div className="mcp-manager-error-banner">
                         <span className="mcp-manager-error-text">{error}</span>
                         <div className="mcp-manager-error-actions">
-                            <button type="button" className="viewer-header-btn" onClick={retryLoad} title="Retry">
+                            <button type="button" className="viewer-header-btn" onClick={retryLoad} title="Retry" aria-label="Retry">
                                 Retry
                             </button>
-                            <button type="button" className="viewer-header-btn" onClick={dismissError} title="Dismiss">
+                            <button type="button" className="viewer-header-btn" onClick={dismissError} title="Dismiss" aria-label="Dismiss">
                                 Dismiss
                             </button>
                         </div>
@@ -59,6 +58,6 @@ export function McpManagerView() {
                     </>
                 )}
             </div>
-        </div>
+        </ViewerPanelShell>
     );
 }
