@@ -1,4 +1,5 @@
 import {useViewerStore} from "../../viewerStore";
+import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {DiffContentViewer} from "./DiffContentViewer";
 import {DiffFileSidebar} from "./DiffFileSidebar";
 import {useDiffView} from "./useDiffView";
@@ -17,44 +18,42 @@ export function DiffView() {
         loadDiff,
         activeSession,
     } = useDiffView();
+    const fileCount = diffResult?.files?.length ?? 0;
+    const totalAdded = diffResult?.total_added ?? 0;
+    const totalDeleted = diffResult?.total_deleted ?? 0;
 
     if (!activeSession) {
         return (
-            <div className="diff-view">
-                <div className="viewer-header">
-                    <h2 className="viewer-header-title">Diff</h2>
-                    <div className="viewer-header-spacer"/>
-                    <button className="viewer-header-btn" onClick={closeView} title="Close">{"\u2715"}</button>
-                </div>
-                <div className="viewer-message">No active session</div>
-            </div>
+            <ViewerPanelShell
+                className="diff-view"
+                title="Diff"
+                onClose={closeView}
+                message="No active session"
+            />
         );
     }
 
     if (error) {
         return (
-            <div className="diff-view">
-                <div className="viewer-header">
-                    <h2 className="viewer-header-title">Diff</h2>
-                    <div className="viewer-header-spacer"/>
-                    <button className="viewer-header-btn" onClick={() => loadDiff()}
-                            title="Refresh">{"\u21BB"}</button>
-                    <button className="viewer-header-btn" onClick={closeView} title="Close">{"\u2715"}</button>
-                </div>
-                <div className="viewer-message">{error}</div>
-            </div>
+            <ViewerPanelShell
+                className="diff-view"
+                title="Diff"
+                onClose={closeView}
+                onRefresh={loadDiff}
+                message={error}
+            />
         );
     }
 
-    const fileCount = diffResult?.files?.length ?? 0;
-    const totalAdded = diffResult?.total_added ?? 0;
-    const totalDeleted = diffResult?.total_deleted ?? 0;
-
     return (
-        <div className="diff-view">
-            <div className="viewer-header">
-                <h2 className="viewer-header-title">Diff</h2>
-                {fileCount > 0 && (
+        <ViewerPanelShell
+            className="diff-view"
+            title="Diff"
+            onClose={closeView}
+            onRefresh={loadDiff}
+            headerChildren={(
+                <>
+                    {fileCount > 0 && (
                     <>
                         <span className="diff-header-stats">
                             <span className="diff-tree-additions">+{totalAdded}</span>
@@ -64,18 +63,16 @@ export function DiffView() {
                             Files Changed: {fileCount}
                         </span>
                     </>
-                )}
-                {diffResult?.truncated && (
-                    <span className="diff-header-truncated">
-                        (truncated)
-                    </span>
-                )}
-                <div className="viewer-header-spacer"/>
-                <button className="viewer-header-btn" onClick={() => loadDiff()}
-                        title="Refresh">{"\u21BB"}</button>
-                <button className="viewer-header-btn" onClick={closeView} title="Close">{"\u2715"}</button>
-            </div>
-            <div className="file-tree-body">
+                    )}
+                    {diffResult?.truncated && (
+                        <span className="diff-header-truncated">
+                            (truncated)
+                        </span>
+                    )}
+                </>
+            )}
+        >
+            <div className="diff-view-body">
                 {isLoading ? (
                     <div className="viewer-message">Loading diff...</div>
                 ) : fileCount === 0 ? (
@@ -88,12 +85,12 @@ export function DiffView() {
                             onToggleDir={toggleDir}
                             onSelectFile={selectFile}
                         />
-                        <div className="file-tree-content">
+                        <div className="diff-view-content">
                             <DiffContentViewer file={selectedFile}/>
                         </div>
                     </>
                 )}
             </div>
-        </div>
+        </ViewerPanelShell>
     );
 }

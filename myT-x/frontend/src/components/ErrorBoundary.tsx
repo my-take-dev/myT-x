@@ -1,5 +1,7 @@
 import React from "react";
 import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
+import {sliceByCodePoints} from "../utils/codePointUtils";
+import {splitLines} from "../utils/textLines";
 
 interface ErrorBoundaryProps {
     children: React.ReactNode;
@@ -38,13 +40,19 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
         // Clip component stack to avoid oversized log entries.
         // The Go-side LogFrontendEvent enforces its own rune-count cap independently.
         const stack =
-            typeof info.componentStack === "string" ? info.componentStack.trim().slice(0, 300) : "";
-        const firstNonEmptyLine = stack !== "" ? stack.split("\n").find((line) => line.trim() !== "") ?? "" : "";
+            typeof info.componentStack === "string"
+                ? sliceByCodePoints(info.componentStack.trim(), 0, 300)
+                : "";
+        // splitLines: codebase-wide utility for consistent LF/CRLF handling.
+        const firstNonEmptyLine = stack !== "" ? splitLines(stack).find((line) => line.trim() !== "") ?? "" : "";
         const rawSource = firstNonEmptyLine !== "" ? `frontend/react ${firstNonEmptyLine}` : "frontend/react";
-        // Use Array.from for Unicode-safe rune-level slice (avoid splitting surrogate pairs).
-        const source = Array.from(rawSource).slice(0, 200).join("");
+        // Use sliceByCodePoints for Unicode-safe rune-level slice (avoid splitting surrogate pairs).
+        const source = sliceByCodePoints(rawSource, 0, 200);
 
         logFrontendEventSafe("error", message, source);
+        if (this.state.retryCount >= ErrorBoundary.MAX_RETRIES) {
+            logFrontendEventSafe("warn", "ErrorBoundary retry limit reached", source);
+        }
     }
 
     private handleReset = (): void => {
@@ -61,7 +69,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
         }
         const reachedRetryLimit = this.state.retryCount >= ErrorBoundary.MAX_RETRIES;
         return (
-            <div className="error-boundary-fallback">
+            <div className="error-boundary-fallback" role="alert">
                 <p className="error-boundary-title">予期しないエラーが発生しました。</p>
                 {this.state.message && (
                     <pre className="error-boundary-message">{this.state.message}</pre>
@@ -69,12 +77,12 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                 {reachedRetryLimit ? (
                     <>
                         <p className="error-boundary-exhaust">再試行の上限に達しました。アプリケーションを再読み込みしてください。</p>
-                        <button className="error-boundary-retry" onClick={() => window.location.reload()}>
+                        <button type="button" className="error-boundary-retry" onClick={() => window.location.reload()}>
                             再読み込み
                         </button>
                     </>
                 ) : (
-                    <button className="error-boundary-retry" onClick={this.handleReset}>
+                    <button type="button" className="error-boundary-retry" onClick={this.handleReset}>
                         再試行
                     </button>
                 )}

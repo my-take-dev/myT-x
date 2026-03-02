@@ -42,7 +42,7 @@ func main() {
 	app := NewApp()
 
 	err = wails.Run(&options.App{
-		Title:     "myT-x v0.0.9",
+		Title:     "myT-x v0.0.10",
 		Width:     1440,
 		Height:    900,
 		MinWidth:  980,

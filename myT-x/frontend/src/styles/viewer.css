@@ -140,7 +140,8 @@
     height: 100%;
 }
 
-.file-tree-body {
+.file-tree-body,
+.diff-view-body {
     display: flex;
     flex: 1;
     min-height: 0;
@@ -154,7 +155,18 @@
     overflow: hidden;
 }
 
-.file-tree-content {
+/* Reserve scrollbar gutter space to prevent width oscillation when
+   content toggles between scrollable and non-scrollable states.
+   Without this, scrollbar appearance shifts the content area width,
+   triggering a ResizeObserver → height recalculation → jitter loop. */
+.file-tree-sidebar > [role="tree"],
+.git-graph-commits > [role="list"] {
+    scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+}
+
+.file-tree-content,
+.diff-view-content {
     flex: 1;
     min-width: 0;
     display: flex;
@@ -297,6 +309,17 @@
     font-size: 0.72rem;
 }
 
+.file-content-highlight-warning,
+.file-content-copy-warning {
+    min-width: 0;
+    max-width: 40%;
+    color: var(--warning);
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* Copy path button in file content header */
 .file-content-copy-path {
     width: 24px;
@@ -326,11 +349,29 @@
     flex: 1;
     overflow: auto;
     padding: 8px 0;
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
     font-size: 0.78rem;
     line-height: 1.5;
     user-select: text;
     cursor: text;
+}
+
+.file-content-body-virtualized {
+    padding: 0;
+    overflow: hidden;
+}
+
+.file-content-list {
+    /* TECH DEBT: !important override for react-window v1.x inline style.
+       react-window sets `overflow: visible` via inline style, which breaks scroll
+       containment. !important is the only way to override an inline style in CSS.
+       This does NOT block state-change classes — no other rule competes for overflow
+       on this element.
+       Resolution path: inject a custom outerElementType wrapper (see FileTreeSidebar's
+       TreeOuter pattern / outerElementType) to avoid !important, at the cost of an extra component.
+       Re-evaluate when upgrading to react-window v2+ or switching to @tanstack/virtual. */
+    overflow: auto !important;
+    overscroll-behavior: contain;
 }
 
 .file-content-body:focus {
@@ -370,20 +411,22 @@
     user-select: text;
 }
 
-.file-content-empty {
+.file-content-empty,
+.file-content-binary,
+.file-tree-dir-error {
     display: grid;
     place-items: center;
     height: 100%;
-    color: var(--fg-dim);
     font-size: 0.85rem;
 }
 
+.file-content-empty,
 .file-content-binary {
-    display: grid;
-    place-items: center;
-    height: 100%;
     color: var(--fg-dim);
-    font-size: 0.85rem;
+}
+
+.file-tree-dir-error {
+    color: var(--color-danger, #e06c75);
 }
 
 /* ── Git Graph View ── */
@@ -391,6 +434,14 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+}
+
+.git-graph-branches-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.78rem;
+    color: var(--fg-dim);
 }
 
 .git-graph-body {
@@ -488,7 +539,7 @@
     width: 64px;
     flex-shrink: 0;
     color: var(--accent);
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
     font-size: 0.75rem;
     padding: 0 8px;
 }
@@ -555,7 +606,7 @@
 
 .git-detail-hash {
     color: var(--accent);
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
     font-size: 0.78rem;
 }
 
@@ -573,7 +624,7 @@
 
 /* Diff viewer */
 .diff-viewer {
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
     font-size: 0.75rem;
     line-height: 1.5;
 }
@@ -581,18 +632,38 @@
 .diff-file-header {
     display: flex;
     align-items: center;
+    width: 100%;
     padding: 4px 12px;
     background: var(--bg-elev);
     border-top: 1px solid var(--line);
+    border-right: none;
+    border-bottom: none;
+    border-left: none;
     color: var(--fg-main);
     font-weight: 600;
     font-size: 0.78rem;
     cursor: pointer;
     user-select: none;
+    text-align: left;
+}
+
+.diff-file-toggle {
+    display: inline-block;
+    width: 1em;
+    margin-right: 4px;
+    font-size: 0.65em;
+    text-align: center;
+    /* Prevent layout shift between ▶ and ▼ glyphs */
+    flex-shrink: 0;
 }
 
 .diff-file-header:hover {
     background: var(--accent-06);
+}
+
+.diff-file-header:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
 }
 
 .diff-hunk-header {
@@ -646,6 +717,8 @@
 
 .git-branch-select:focus {
     border-color: var(--accent);
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
 }
 
 /* Load more button */
@@ -689,11 +762,28 @@
     height: 100%;
 }
 
+.input-history-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
 .error-log-body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    user-select: text;
+    cursor: text;
+}
+
+.input-history-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    font-family: var(--font-mono);
     font-size: 0.78rem;
     line-height: 1.5;
     user-select: text;
@@ -704,7 +794,16 @@
     outline: none;
 }
 
+.input-history-body:focus {
+    outline: none;
+}
+
 .error-log-body ::selection {
+    background: var(--selection-bg);
+    color: inherit;
+}
+
+.input-history-body ::selection {
     background: var(--selection-bg);
     color: inherit;
 }
@@ -719,11 +818,32 @@
     transition: background 0.1s;
 }
 
+.input-history-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
 .error-log-entry:hover {
     background: var(--accent-04);
 }
 
+.input-history-entry:hover {
+    background: var(--accent-04);
+}
+
 .error-log-ts {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    width: 140px;
+}
+
+.input-history-ts {
     flex-shrink: 0;
     color: var(--fg-dim);
     font-size: 0.72rem;
@@ -739,6 +859,18 @@
     text-transform: uppercase;
     min-width: 40px;
     text-align: center;
+}
+
+.input-history-pane {
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    min-width: 40px;
+    text-align: center;
+    background: var(--accent-06);
+    color: var(--accent);
 }
 
 .error-log-level.error {
@@ -758,6 +890,13 @@
     word-break: break-word;
 }
 
+.input-history-msg {
+    flex: 1;
+    min-width: 0;
+    color: var(--fg-main);
+    word-break: break-word;
+}
+
 .error-log-source {
     flex-shrink: 0;
     color: var(--fg-dim);
@@ -765,7 +904,22 @@
     opacity: 0.7;
 }
 
+.input-history-source {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 0.68rem;
+    opacity: 0.7;
+}
+
 .error-log-empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+}
+
+.input-history-empty {
     display: grid;
     place-items: center;
     height: 100%;
@@ -782,7 +936,7 @@
 
 .diff-header-stats {
     font-size: 0.82rem;
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
     white-space: nowrap;
 }
 
@@ -800,7 +954,7 @@
 .diff-tree-stats {
     flex-shrink: 0;
     font-size: 0.72rem;
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
     margin-left: 8px;
     white-space: nowrap;
 }
@@ -837,7 +991,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--fg-main);
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
 }
 
 .diff-content-body {
@@ -882,7 +1036,6 @@
 .diff-expand-bar:hover {
     background: var(--surface-3, var(--accent-10));
     color: var(--fg-main);
-    cursor: pointer;
 }
 
 /* ── MCP Manager View ── */
@@ -1108,7 +1261,7 @@
     background: var(--bg-elev);
     border-radius: 6px;
     padding: 12px;
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
     font-size: 0.78rem;
     overflow-x: auto;
     color: var(--fg-main);
@@ -1135,7 +1288,7 @@
 
 .mcp-config-param-value {
     color: var(--accent);
-    font-family: "Consolas", "Monaco", monospace;
+    font-family: var(--font-mono);
     font-size: 0.78rem;
 }
 
@@ -1154,4 +1307,238 @@
     font-size: 0.85rem;
     border: 1px dashed var(--line);
     border-radius: 6px;
+}
+
+/* ── Markdown Preview Toggle Button ── */
+.file-content-toggle-preview {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: color 0.15s, background 0.15s;
+}
+
+.file-content-toggle-preview:hover {
+    color: var(--fg-main);
+    background: var(--accent-06);
+}
+
+.file-content-toggle-preview:active {
+    background: var(--accent-10);
+}
+
+.file-content-toggle-preview.active {
+    color: var(--accent);
+}
+
+/* ── Markdown Preview Body ── */
+.md-preview-body {
+    padding: 16px 24px;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 0.85rem;
+    line-height: 1.7;
+    color: var(--fg-main);
+    overflow-wrap: break-word;
+    word-break: break-word;
+}
+
+/* Headings */
+.md-preview-body h1,
+.md-preview-body h2,
+.md-preview-body h3,
+.md-preview-body h4,
+.md-preview-body h5,
+.md-preview-body h6 {
+    color: var(--fg-main);
+    margin: 1.2em 0 0.6em;
+    line-height: 1.3;
+    font-weight: 600;
+}
+
+.md-preview-body h1 {
+    font-size: 1.5rem;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid var(--line);
+}
+
+.md-preview-body h2 {
+    font-size: 1.25rem;
+    padding-bottom: 0.2em;
+    border-bottom: 1px solid var(--line);
+}
+
+.md-preview-body h3 {
+    font-size: 1.1rem;
+}
+
+.md-preview-body h4 {
+    font-size: 0.95rem;
+}
+
+.md-preview-body h5 {
+    font-size: 0.88rem;
+    color: var(--fg-dim);
+}
+
+.md-preview-body h6 {
+    font-size: 0.82rem;
+    color: var(--fg-dim);
+}
+
+/* Paragraphs */
+.md-preview-body p {
+    margin: 0.8em 0;
+}
+
+/* Links */
+.md-preview-body a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.md-preview-body a:hover {
+    text-decoration: underline;
+}
+
+.md-preview-body .md-preview-unsafe-link {
+    color: var(--fg-dim);
+    text-decoration: line-through;
+}
+
+.md-preview-body .md-preview-disabled-link {
+    color: var(--fg-dim);
+    cursor: not-allowed;
+    text-decoration: none;
+    border-bottom: 1px dashed var(--fg-dim);
+}
+
+.md-preview-body .md-preview-unsafe-img {
+    display: inline-block;
+    color: var(--fg-dim);
+    border: 1px dashed var(--line);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.75rem;
+}
+
+/* Lists */
+.md-preview-body ul,
+.md-preview-body ol {
+    margin: 0.6em 0;
+    padding-left: 1.8em;
+}
+
+.md-preview-body li {
+    margin: 0.3em 0;
+}
+
+.md-preview-body li > p {
+    margin: 0.2em 0;
+}
+
+/* Task lists (GFM) */
+.md-preview-body input[type="checkbox"] {
+    margin-right: 0.4em;
+    accent-color: var(--accent);
+}
+
+/* Blockquotes */
+.md-preview-body blockquote {
+    margin: 0.8em 0;
+    padding: 0.4em 1em;
+    border-left: 3px solid var(--accent-25);
+    background: var(--accent-04);
+    color: var(--fg-dim);
+}
+
+.md-preview-body blockquote p {
+    margin: 0.3em 0;
+}
+
+/* Inline code */
+.md-preview-body :not(pre) > code {
+    background: var(--bg-elev);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+    color: var(--accent);
+}
+
+/* Code blocks (fenced) */
+.md-preview-body .md-preview-code-block {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 0.8em 0;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.md-preview-body .md-preview-code-block code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    color: var(--fg-main);
+    font-size: inherit;
+    white-space: pre;
+}
+
+/* Tables (GFM) */
+.md-preview-body table {
+    border-collapse: collapse;
+    margin: 0.8em 0;
+    width: 100%;
+    font-size: 0.82rem;
+}
+
+.md-preview-body th,
+.md-preview-body td {
+    border: 1px solid var(--line);
+    padding: 6px 12px;
+    text-align: left;
+}
+
+.md-preview-body th {
+    background: var(--bg-panel);
+    font-weight: 600;
+    color: var(--fg-main);
+}
+
+.md-preview-body tr:nth-child(even) {
+    background: var(--accent-04);
+}
+
+/* Horizontal rule */
+.md-preview-body hr {
+    border: none;
+    border-top: 1px solid var(--line);
+    margin: 1.5em 0;
+}
+
+/* Images */
+.md-preview-body img {
+    max-width: 100%;
+    border-radius: 6px;
+}
+
+/* Strikethrough (GFM) */
+.md-preview-body del {
+    color: var(--fg-dim);
+}
+
+/* Selection in preview */
+.md-preview-body ::selection {
+    background: var(--selection-bg);
+    color: inherit;
 }

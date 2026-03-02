@@ -1,13 +1,9 @@
 import {useCallback, useEffect, useRef} from "react";
-import {ClipboardSetText} from "../../../../../wailsjs/runtime/runtime";
+import {writeClipboardText} from "../../../../utils/clipboardUtils";
+import {notifyClipboardFailure} from "../../../../utils/notifyUtils";
+import {formatTimestamp} from "../../../../utils/timestampUtils";
 import {useErrorLogStore} from "../../../../stores/errorLogStore";
 import type {ErrorLogEntry} from "../../../../stores/errorLogStore";
-
-function formatTimestamp(ts: string): string {
-    if (ts.length !== 14) return ts;
-    // "20260221120000" -> "2026-02-21 12:00:00"
-    return `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)} ${ts.slice(8, 10)}:${ts.slice(10, 12)}:${ts.slice(12, 14)}`;
-}
 
 function formatEntryForCopy(entry: ErrorLogEntry): string {
     return `${formatTimestamp(entry.ts)}: ${entry.level}, ${entry.msg}${entry.source ? ` [${entry.source}]` : ""}`;
@@ -21,6 +17,7 @@ export function useErrorLog() {
     const registerBodyElement = useCallback((el: HTMLDivElement | null) => {
         bodyRef.current = el;
     }, []);
+    const latestEntrySeq = entries.length > 0 ? entries[entries.length - 1]?.seq : undefined;
 
     // Auto-scroll to bottom when new entries arrive.
     useEffect(() => {
@@ -31,24 +28,30 @@ export function useErrorLog() {
         if (isNearBottom) {
             el.scrollTop = el.scrollHeight;
         }
-    }, [entries.length, registerBodyElement]);
+    }, [latestEntrySeq]);
 
-    const copyAll = useCallback(() => {
-        if (entries.length === 0) return;
+    const copyAll = useCallback(async (): Promise<boolean> => {
+        if (entries.length === 0) return false;
         const text = entries.map(formatEntryForCopy).join("\n");
-        void ClipboardSetText(text).catch((err: unknown) => {
-            if (import.meta.env.DEV) {
-                console.warn("[error-log] clipboard write failed", err);
-            }
-        });
+        try {
+            await writeClipboardText(text);
+            return true;
+        } catch (err: unknown) {
+            notifyClipboardFailure();
+            console.warn("[error-log] clipboard write failed", err);
+            return false;
+        }
     }, [entries]);
 
-    const copyEntry = useCallback((entry: ErrorLogEntry) => {
-        void ClipboardSetText(formatEntryForCopy(entry)).catch((err: unknown) => {
-            if (import.meta.env.DEV) {
-                console.warn("[error-log] clipboard write failed", err);
-            }
-        });
+    const copyEntry = useCallback(async (entry: ErrorLogEntry): Promise<boolean> => {
+        try {
+            await writeClipboardText(formatEntryForCopy(entry));
+            return true;
+        } catch (err: unknown) {
+            notifyClipboardFailure();
+            console.warn("[error-log] clipboard write failed", err);
+            return false;
+        }
     }, []);
 
     return {
@@ -58,6 +61,5 @@ export function useErrorLog() {
         copyAll,
         copyEntry,
         registerBodyElement,
-        formatTimestamp,
     };
 }

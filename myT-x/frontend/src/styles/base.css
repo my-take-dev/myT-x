@@ -24,7 +24,7 @@
     --danger-08: rgba(255, 107, 107, 0.08);
     --danger-20: rgba(255, 107, 107, 0.2);
     --danger-40: rgba(255, 107, 107, 0.4);
-    --warning: rgb(246, 173, 85);
+    --warning: #f6ad55;
     --warning-10: rgba(246, 173, 85, 0.1);
     --toggle-knob: #ffffff;
     --session-running-border: rgba(61, 228, 183, 0.66);
@@ -44,6 +44,7 @@
     --z-activity-strip: 50;
     --z-viewer-overlay: 40;
     --z-context-menu: 100;
+    --z-modal: 1000;
     /* ── Git colors ── */
     --git-ahead: rgba(61, 228, 183, 0.9);
     --git-modified: rgba(246, 211, 101, 0.8);
@@ -53,6 +54,10 @@
     --git-head-border: rgba(61, 228, 183, 0.3);
     --diff-added-bg: rgba(61, 228, 183, 0.15);
     --selection-bg: rgba(99, 140, 255, 0.25);
+    /* ── Typography ── */
+    /* Monospace font stack: Consolas (Windows primary), generic fallback.
+       Windows-only application — no web font loading required. Monaco omitted (macOS-only, unused). */
+    --font-mono: "Consolas", monospace;
 }
 
 * {
@@ -338,6 +343,13 @@ button {
 
 .session-meta:empty {
     display: none;
+}
+
+.session-promote-btn {
+    margin-left: 4px;
+    padding: 1px 6px;
+    font-size: 0.62rem;
+    border-radius: 6px;
 }
 
 /* ── Session type mark (S/A) ── */
