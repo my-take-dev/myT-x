@@ -20,6 +20,7 @@ import {codePointLength} from "../../../../utils/codePointUtils";
 import {notifyClipboardFailure} from "../../../../utils/notifyUtils";
 import {extractSelectedText, type SelectionSpan} from "../../../../utils/selectionUtils";
 import {isMarkdownLang, pathToShikiLang} from "../../../../utils/shikiHighlighter";
+import {makeScrollStableOuter} from "../shared/TreeOuter";
 import {CopyPathButton} from "../shared/CopyPathButton";
 import type {FileContentResult} from "./fileTreeTypes";
 import {MarkdownPreview} from "./MarkdownPreview";
@@ -59,6 +60,17 @@ const MIN_BODY_VIEWPORT_ROWS = 12;
  * cache instead of triggering new DOM probe measurements each time.
  */
 const TYPOGRAPHY_SIGNATURE_ERROR = "typography-signature-error";
+
+/**
+ * Module-level factory call — must not be inside a render function (see makeScrollStableOuter).
+ * overflowX: "scroll" keeps the horizontal scrollbar always present so viewport height
+ * does not oscillate when near-bottom rows have wider content than current rows.
+ */
+const FileContentListOuter = makeScrollStableOuter({
+    role: "list",
+    ariaLabel: "File content",
+    overflowX: "scroll",
+});
 
 function handleClipboardError(err: unknown): void {
     notifyClipboardFailure();
@@ -302,7 +314,12 @@ export function FileContentViewer({content, isLoading}: FileContentViewerProps) 
     const previewBodyRef = useRef<HTMLDivElement>(null);
     const listBodyRef = useRef<HTMLDivElement>(null);
     // 12 rows keeps the viewer usable before the first ResizeObserver callback.
-    const bodyHeight = useContainerHeight(listBodyRef, FILE_CONTENT_ROW_HEIGHT_FALLBACK * MIN_BODY_VIEWPORT_ROWS);
+    // noiseThresholdPx: 1 suppresses ±1px RO churn that causes scroll jitter.
+    const bodyHeight = useContainerHeight(
+        listBodyRef,
+        FILE_CONTENT_ROW_HEIGHT_FALLBACK * MIN_BODY_VIEWPORT_ROWS,
+        {noiseThresholdPx: 1},
+    );
     const copySelectionNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const selectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const rowHeightCacheRef = useRef<{ signature: string; value: number } | null>(null);
@@ -752,6 +769,7 @@ export function FileContentViewer({content, isLoading}: FileContentViewerProps) 
                         itemSize={rowHeight}
                         width="100%"
                         itemData={rowData}
+                        outerElementType={FileContentListOuter}
                         // Dynamically computed: viewport rows + OVERSCAN_BUFFER.
                         // Virtual scroll unmounts rows outside the viewport + overscan window.
                         // Selection anchors (start/end nodes) must remain in the DOM for copy to work;

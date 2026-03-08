@@ -21,7 +21,7 @@ func newTestManager(t *testing.T, defs ...MCPDefinition) (*Manager, *eventCollec
 		}
 	}
 	ec := &eventCollector{}
-	mgr := NewManager(reg, ec.emit)
+	mgr := NewManager(ManagerConfig{Registry: reg, EmitFn: ec.emit})
 	return mgr, ec
 }
 
@@ -592,7 +592,7 @@ func TestManager_SessionIsolation(t *testing.T) {
 
 func TestNewManager_NilRegistry(t *testing.T) {
 	// Should not panic — uses empty registry.
-	mgr := NewManager(nil, func(string, any) {})
+	mgr := NewManager(ManagerConfig{EmitFn: func(string, any) {}})
 	snapshots, err := mgr.SnapshotForSession("session-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -609,7 +609,7 @@ func TestNewManager_NilEmitFn(t *testing.T) {
 	}
 
 	// Should not panic — uses no-op emitter.
-	mgr := NewManager(reg, nil)
+	mgr := NewManager(ManagerConfig{Registry: reg})
 	if err := mgr.SetEnabled("session-1", "memory", true); err != nil {
 		t.Fatalf("SetEnabled failed: %v", err)
 	}
@@ -624,8 +624,8 @@ func TestStructFieldCounts(t *testing.T) {
 		{"MCPDefinition", reflect.TypeFor[MCPDefinition]().NumField(), 9},
 		{"MCPConfigParam", reflect.TypeFor[MCPConfigParam]().NumField(), 4},
 		{"MCPInstanceState", reflect.TypeFor[MCPInstanceState]().NumField(), 5},
-		{"MCPSnapshot", reflect.TypeFor[MCPSnapshot]().NumField(), 8},
-		{"instance", reflect.TypeFor[instance]().NumField(), 3},
+		{"MCPSnapshot", reflect.TypeFor[MCPSnapshot]().NumField(), 11},
+		{"instance", reflect.TypeFor[instance]().NumField(), 5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

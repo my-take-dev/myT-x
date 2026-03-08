@@ -71,8 +71,9 @@ type App struct {
 	// Independent locks: mcp.Registry.mu and mcp.Manager.mu are independent of
 	// each other and of all other App-level locks.
 	// mcpRegistry is retained for startup diagnostics and future config reloads.
-	mcpRegistry *mcp.Registry
-	mcpManager  *mcp.Manager
+	mcpRegistry      *mcp.Registry
+	mcpManager       *mcp.Manager
+	mcpBridgeCommand string
 
 	// Window visibility state.
 	windowMu       sync.Mutex

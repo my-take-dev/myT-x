@@ -992,3 +992,102 @@ func containsInAnyLine(lines []string, sub string) bool {
 	}
 	return false
 }
+
+func TestHandleListWindowsFilter(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// Create two sessions via router to test -a with filter.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "demo", "-n": "main", "-x": 120, "-y": 40},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session demo failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "other", "-n": "secondary", "-x": 120, "-y": 40},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session other failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	tests := []struct {
+		name         string
+		flags        map[string]any
+		wantExitCode int
+		wantContains []string
+		wantExcludes []string
+		wantLines    int
+	}{
+		{
+			name:         "filter by window name match",
+			flags:        map[string]any{"-t": "demo", "-f": "#{==:#{window_name},main}", "-F": "#{window_name}"},
+			wantExitCode: 0,
+			wantContains: []string{"main"},
+			wantLines:    1,
+		},
+		{
+			name:         "filter by window name mismatch empties output",
+			flags:        map[string]any{"-t": "demo", "-f": "#{==:#{window_name},nonexistent}", "-F": "#{window_name}"},
+			wantExitCode: 0,
+			wantLines:    0,
+		},
+		{
+			name:         "filter active window",
+			flags:        map[string]any{"-t": "demo", "-f": "#{window_active}", "-F": "#{window_name}"},
+			wantExitCode: 0,
+			wantContains: []string{"main"},
+			wantLines:    1,
+		},
+		{
+			name:         "-a with filter selects matching session window only",
+			flags:        map[string]any{"-a": true, "-f": "#{==:#{session_name},demo}", "-F": "#{session_name}:#{window_name}"},
+			wantExitCode: 0,
+			wantContains: []string{"demo:main"},
+			wantExcludes: []string{"other:"},
+			wantLines:    1,
+		},
+		{
+			name:         "-a without filter lists all windows",
+			flags:        map[string]any{"-a": true, "-F": "#{session_name}:#{window_name}"},
+			wantExitCode: 0,
+			wantContains: []string{"demo:main", "other:secondary"},
+			wantLines:    2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := router.Execute(ipc.TmuxRequest{
+				Command: "list-windows",
+				Flags:   tt.flags,
+			})
+			if resp.ExitCode != tt.wantExitCode {
+				t.Fatalf("exit code = %d, want %d, stderr = %q", resp.ExitCode, tt.wantExitCode, resp.Stderr)
+			}
+
+			output := strings.TrimRight(resp.Stdout, "\n")
+			var lines []string
+			if output != "" {
+				lines = strings.Split(output, "\n")
+			}
+			if len(lines) != tt.wantLines {
+				t.Fatalf("lines = %d, want %d, stdout = %q", len(lines), tt.wantLines, resp.Stdout)
+			}
+			for _, s := range tt.wantContains {
+				if !strings.Contains(resp.Stdout, s) {
+					t.Fatalf("stdout %q does not contain %q", resp.Stdout, s)
+				}
+			}
+			for _, s := range tt.wantExcludes {
+				if strings.Contains(resp.Stdout, s) {
+					t.Fatalf("stdout %q should not contain %q", resp.Stdout, s)
+				}
+			}
+		})
+	}
+}

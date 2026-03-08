@@ -184,6 +184,15 @@ func (r *CommandRouter) handleSendKeys(req ipc.TmuxRequest) ipc.TmuxResponse {
 	if err != nil {
 		return errResp(err)
 	}
+	// -M: mouse passthrough. myT-x uses xterm.js for mouse handling;
+	// -M is accepted but has no backend effect (log-only no-op).
+	// Checked before Terminal nil check because -M doesn't need a terminal.
+	if mustBool(req.Flags["-M"]) {
+		slog.Debug("[DEBUG-SENDKEYS] -M flag: mouse passthrough is no-op in myT-x",
+			"targetPane", target.IDString())
+		return okResp("")
+	}
+
 	// NOTE: target.Terminal is a live-pointer read after lock release. This is safe in
 	// practice because Terminal is set once during pane creation (attachPaneTerminal)
 	// and cleared only when the pane is killed. A concurrent kill between ResolveTarget
@@ -191,6 +200,15 @@ func (r *CommandRouter) handleSendKeys(req ipc.TmuxRequest) ipc.TmuxResponse {
 	if target.Terminal == nil {
 		return errResp(fmt.Errorf("pane has no terminal: %s", target.IDString()))
 	}
+
+	// -X: copy-mode command dispatch.
+	// myT-x uses xterm.js and does not implement full copy-mode. Known commands
+	// (e.g. "cancel") are mapped to key sequences; unknown commands are silently
+	// ignored per shim spec (never block on transform failure).
+	if mustBool(req.Flags["-X"]) {
+		return r.handleSendKeysCopyMode(target, req.Args)
+	}
+
 	payload := TranslateSendKeys(req.Args)
 
 	slog.Debug("[DEBUG-SENDKEYS] writing to pane",
@@ -206,9 +224,113 @@ func (r *CommandRouter) handleSendKeys(req ipc.TmuxRequest) ipc.TmuxResponse {
 		)
 		return okResp("")
 	}
-	if _, err := target.Terminal.Write(payload); err != nil {
+	// Determine send mode based on flags.
+	flagN := mustBool(req.Flags["-N"])
+	flagW := mustBool(req.Flags["-W"])
+	var mode string
+	switch {
+	case flagN:
+		mode = "crlf"
+	case flagW:
+		mode = "typewriter"
+	default:
+		mode = "default"
+	}
+	slog.Debug("[DEBUG-SENDKEYS] mode selection",
+		"flagN", flagN,
+		"flagW", flagW,
+		"mode", mode,
+		"payloadHex", fmt.Sprintf("%x", payload),
+	)
+
+	switch mode {
+	case "crlf":
+		// -N: CRLF mode. Transforms trailing \r to \r\n then writes via typewriter
+		// mode. Addresses ConPTY on Windows where the input pipe may require CRLF
+		// to generate a proper Enter keypress for interactive TUIs (e.g. Copilot CLI).
+		if err := writeSendKeysPayloadCRLF(target.Terminal, payload); err != nil {
+			return errResp(err)
+		}
+	case "typewriter":
+		// -W: typewriter mode. Writes payload one byte at a time with micro-delays
+		// to prevent burst-mode input issues in interactive TUIs.
+		if err := writeSendKeysPayloadTypewriter(target.Terminal, payload); err != nil {
+			return errResp(err)
+		}
+	default:
+		if err := writeSendKeysPayload(target.Terminal, payload); err != nil {
+			return errResp(err)
+		}
+	}
+	return okResp("")
+}
+
+// handleSendKeysCopyMode dispatches a copy-mode command (-X flag).
+// Only args[0] is used as the command name; additional arguments are ignored.
+// An empty args slice is silently ignored and returns success.
+// Known commands are translated to key sequences via copyModeCommandTable.
+// Unknown commands are logged and silently succeed (shim spec: no error on unknown).
+func (r *CommandRouter) handleSendKeysCopyMode(target *TmuxPane, args []string) ipc.TmuxResponse {
+	if len(args) == 0 {
+		slog.Debug("[DEBUG-SENDKEYS] -X with no command, ignoring")
+		return okResp("")
+	}
+	command := args[0]
+	payload, ok := TranslateCopyModeCommand(command)
+	if !ok {
+		slog.Debug("[DEBUG-SENDKEYS] unknown copy-mode command, ignoring",
+			"command", command,
+			"targetPane", target.IDString(),
+		)
+		return okResp("")
+	}
+
+	slog.Debug("[DEBUG-SENDKEYS] copy-mode command translated",
+		"command", command,
+		"targetPane", target.IDString(),
+		"payloadLen", len(payload),
+	)
+	if err := writeSendKeysPayload(target.Terminal, payload); err != nil {
 		return errResp(err)
 	}
+	return okResp("")
+}
+
+// handleCopyMode enters or exits copy mode on a target pane.
+// myT-x uses xterm.js for scrollback; this handler emits frontend events
+// for UI coordination. Unimplemented flags (-u, -e) are accepted silently.
+func (r *CommandRouter) handleCopyMode(req ipc.TmuxRequest) ipc.TmuxResponse {
+	target, err := r.resolveTargetFromRequest(req)
+	if err != nil {
+		return errResp(err)
+	}
+
+	quit := mustBool(req.Flags["-q"])
+	eventName := "tmux:copy-mode-enter"
+	if quit {
+		eventName = "tmux:copy-mode-exit"
+	}
+
+	paneCtx, ctxErr := r.sessions.GetPaneContextSnapshot(target.ID)
+	sessionName := ""
+	if ctxErr != nil {
+		slog.Warn("[WARN-COPYMODE] failed to get pane context snapshot",
+			"paneId", target.IDString(), "error", ctxErr)
+	} else {
+		sessionName = paneCtx.SessionName
+	}
+
+	slog.Debug("[DEBUG-COPYMODE] handleCopyMode",
+		"targetPane", target.IDString(),
+		"quit", quit,
+		"event", eventName,
+		"ctxErr", ctxErr,
+	)
+
+	r.emitter.Emit(eventName, map[string]any{
+		"sessionName": sessionName,
+		"paneId":      target.IDString(),
+	})
 	return okResp("")
 }
 
@@ -467,9 +589,37 @@ func hasResizePaneDirectionFlag(req ipc.TmuxRequest) bool {
 
 func (r *CommandRouter) handleListPanes(req ipc.TmuxRequest) ipc.TmuxResponse {
 	target := mustString(req.Flags["-t"])
+	allSessions := mustBool(req.Flags["-a"])
 	allInSession := mustBool(req.Flags["-s"])
 	format := mustString(req.Flags["-F"])
+	filter := mustString(req.Flags["-f"])
 	callerPaneID := ParseCallerPane(req.CallerPane)
+
+	// -a: list panes across all sessions (highest precedence).
+	// Pattern follows handleListWindows: ListSessions returns deep clones with
+	// intact Window->Session back-references, enabling format variable expansion
+	// for session_name etc. outside lock scope.
+	if allSessions {
+		sessions := r.sessions.ListSessions()
+		lines := make([]string, 0)
+		for _, session := range sessions {
+			for _, window := range session.Windows {
+				if window == nil {
+					continue
+				}
+				for _, pane := range window.Panes {
+					if pane == nil {
+						continue
+					}
+					if !evaluateFilter(filter, pane) {
+						continue
+					}
+					lines = append(lines, formatPaneLine(pane, format))
+				}
+			}
+		}
+		return okResp(joinLines(lines))
+	}
 
 	panes, err := r.sessions.ListPanesByWindowTarget(target, callerPaneID, allInSession)
 	if err != nil {
@@ -480,9 +630,20 @@ func (r *CommandRouter) handleListPanes(req ipc.TmuxRequest) ipc.TmuxResponse {
 	// pane-by-pane within each window) from the collection loop in
 	// ListPanesByWindowTarget. No re-sorting is needed; value-copied panes
 	// have Window=nil, making the original multi-level sort impossible.
+	//
+	// NOTE: Value-copied panes have Window=nil, so filter expressions that
+	// reference session/window variables will see empty/zero values.
+	// This is a known limitation of the non-(-a) path.
+	if filter != "" {
+		slog.Warn("[WARN-LISTPANES] filter on non-(-a) path: session/window variables are unavailable (Window=nil in value copies); filter may exclude all items",
+			"filter", filter, "target", target, "paneCount", len(panes))
+	}
 
 	lines := make([]string, 0, len(panes))
 	for i := range panes {
+		if !evaluateFilter(filter, &panes[i]) {
+			continue
+		}
 		lines = append(lines, formatPaneLine(&panes[i], format))
 	}
 	return okResp(joinLines(lines))

@@ -62,6 +62,48 @@ describe("normalizeMCPSnapshot", () => {
         });
         expect(snapshot?.status).toBe("stopped");
     });
+
+    it("normalizes bridge recommendation fields", () => {
+        const snapshot = normalizeMCPSnapshot({
+            id: "bridge-id",
+            name: "Bridge MCP",
+            description: "desc",
+            enabled: true,
+            status: "running",
+            bridge_command: "C:\\Program Files\\myT-x\\myT-x.exe",
+            bridge_args: ["mcp", "", 1, "stdio", "  ", "--session", "session-a"],
+        });
+
+        expect(snapshot).toEqual({
+            id: "bridge-id",
+            name: "Bridge MCP",
+            description: "desc",
+            enabled: true,
+            status: "running",
+            bridge_command: "C:\\Program Files\\myT-x\\myT-x.exe",
+            bridge_args: ["mcp", "stdio", "--session", "session-a"],
+        });
+    });
+
+    it("omits empty bridge recommendation fields", () => {
+        const snapshot = normalizeMCPSnapshot({
+            id: "bridge-id",
+            name: "Bridge MCP",
+            description: "",
+            enabled: false,
+            status: "stopped",
+            bridge_command: "   ",
+            bridge_args: ["", "   "],
+        });
+
+        expect(snapshot).toEqual({
+            id: "bridge-id",
+            name: "Bridge MCP",
+            description: "",
+            enabled: false,
+            status: "stopped",
+        });
+    });
 });
 
 describe("normalizeMCPSnapshots", () => {

@@ -21,6 +21,7 @@ import {
     validateWorktreeCopyPathSettings,
 } from "./settings/settingsValidation";
 import type {WailsConfigInput} from "../types/tmux";
+import {serializeViewerSidebarMode} from "../utils/viewerSidebarMode";
 import {normalizeShortcut} from "./viewer/viewerShortcutUtils";
 
 interface SettingsModalProps {
@@ -295,6 +296,7 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
                     vars: Object.keys(claudeEnvVars).length > 0 ? claudeEnvVars : undefined,
                 }
                 : undefined,
+            viewer_sidebar_mode: serializeViewerSidebarMode(s.viewerSidebarMode),
             default_session_dir: s.defaultSessionDir.trim() || undefined,
             viewer_shortcuts: (() => {
                 const filtered = Object.fromEntries(

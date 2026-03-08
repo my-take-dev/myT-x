@@ -182,6 +182,10 @@ export function LogFrontendEvent(arg1, arg2, arg3) {
   return window['go']['main']['App']['LogFrontendEvent'](arg1, arg2, arg3);
 }
 
+export function OpenDirectoryInExplorer(arg1) {
+  return window['go']['main']['App']['OpenDirectoryInExplorer'](arg1);
+}
+
 export function PickSessionDirectory() {
   return window['go']['main']['App']['PickSessionDirectory']();
 }
@@ -204,6 +208,10 @@ export function RenameSession(arg1, arg2) {
 
 export function ResizePane(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResizePane'](arg1, arg2, arg3);
+}
+
+export function ResolveMCPStdio(arg1, arg2) {
+  return window['go']['main']['App']['ResolveMCPStdio'](arg1, arg2);
 }
 
 export function SaveConfig(arg1) {
@@ -232,4 +240,8 @@ export function SwapPanes(arg1, arg2) {
 
 export function ToggleMCPServer(arg1, arg2, arg3) {
   return window['go']['main']['App']['ToggleMCPServer'](arg1, arg2, arg3);
+}
+
+export function ToggleViewerSidebarMode() {
+  return window['go']['main']['App']['ToggleViewerSidebarMode']();
 }

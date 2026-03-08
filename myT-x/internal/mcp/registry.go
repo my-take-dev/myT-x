@@ -3,6 +3,7 @@ package mcp
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -105,9 +106,7 @@ func cloneDefinition(def Definition) Definition {
 	}
 	if def.DefaultEnv != nil {
 		cloned.DefaultEnv = make(map[string]string, len(def.DefaultEnv))
-		for k, v := range def.DefaultEnv {
-			cloned.DefaultEnv[k] = v
-		}
+		maps.Copy(cloned.DefaultEnv, def.DefaultEnv)
 	}
 	cloned.ConfigParams = cloneConfigParams(def.ConfigParams)
 	return cloned

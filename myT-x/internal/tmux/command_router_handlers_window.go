@@ -114,6 +114,7 @@ func parseStableWindowIDTarget(target string) (sessionName string, windowID int,
 
 func (r *CommandRouter) handleListWindows(req ipc.TmuxRequest) ipc.TmuxResponse {
 	format := mustString(req.Flags["-F"])
+	filter := mustString(req.Flags["-f"])
 	allSessions := mustBool(req.Flags["-a"])
 	target := strings.TrimSpace(mustString(req.Flags["-t"]))
 
@@ -152,6 +153,35 @@ func (r *CommandRouter) handleListWindows(req ipc.TmuxRequest) ipc.TmuxResponse 
 		for _, window := range session.Windows {
 			if window == nil {
 				continue
+			}
+			// For filter evaluation, use the active pane of the window as context.
+			// ListSessions/GetSession return deep clones with intact back-references.
+			if filter != "" {
+				// Use the same pane selection as formatWindowLine: active pane first,
+				// then first non-nil pane as fallback.
+				var filterPane *TmuxPane
+				if window.ActivePN >= 0 && window.ActivePN < len(window.Panes) {
+					filterPane = window.Panes[window.ActivePN]
+				}
+				if filterPane == nil {
+					for _, p := range window.Panes {
+						if p != nil {
+							filterPane = p
+							break
+						}
+					}
+				}
+				// If no non-nil pane exists, filter variables cannot be expanded.
+				// Include the window (pass-through) rather than silently excluding it.
+				if filterPane == nil {
+					slog.Debug("[DEBUG-LISTWINDOWS] no non-nil pane in window, skipping filter evaluation",
+						"windowID", window.ID, "windowName", window.Name)
+					lines = append(lines, formatWindowLine(window, format))
+					continue
+				}
+				if !evaluateFilter(filter, filterPane) {
+					continue
+				}
 			}
 			lines = append(lines, formatWindowLine(window, format))
 		}

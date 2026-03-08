@@ -36,6 +36,15 @@ func stubExecuteRouterRequest(t *testing.T, fn func(*tmux.CommandRouter, ipc.Tmu
 	executeRouterRequestFn = fn
 }
 
+// stubOpenExplorer replaces openExplorerFn with fn for the duration of
+// the test and restores the original via t.Cleanup.
+func stubOpenExplorer(t *testing.T, fn func(string) error) {
+	t.Helper()
+	orig := openExplorerFn
+	t.Cleanup(func() { openExplorerFn = orig })
+	openExplorerFn = fn
+}
+
 func stubNewSessionCommandSuccess(t *testing.T, app *App) {
 	t.Helper()
 	stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
@@ -83,8 +92,8 @@ func TestApplySessionEnvFlagsSetsSessionFlags(t *testing.T) {
 			name:             "both flags true",
 			useClaudeEnv:     true,
 			usePaneEnv:       true,
-			wantUseClaudeEnv: testutil.Ptr(true),
-			wantUsePaneEnv:   testutil.Ptr(true),
+			wantUseClaudeEnv: new(true),
+			wantUsePaneEnv:   new(true),
 		},
 		{
 			name:             "both flags false",
@@ -97,7 +106,7 @@ func TestApplySessionEnvFlagsSetsSessionFlags(t *testing.T) {
 			name:             "only useClaudeEnv",
 			useClaudeEnv:     true,
 			usePaneEnv:       false,
-			wantUseClaudeEnv: testutil.Ptr(true),
+			wantUseClaudeEnv: new(true),
 			wantUsePaneEnv:   nil,
 		},
 		{
@@ -105,7 +114,7 @@ func TestApplySessionEnvFlagsSetsSessionFlags(t *testing.T) {
 			useClaudeEnv:     false,
 			usePaneEnv:       true,
 			wantUseClaudeEnv: nil,
-			wantUsePaneEnv:   testutil.Ptr(true),
+			wantUsePaneEnv:   new(true),
 		},
 	}
 
@@ -376,7 +385,7 @@ func TestCreateSessionEnvFlags(t *testing.T) {
 			name:             "useClaudeEnv=true, usePaneEnv=false",
 			useClaudeEnv:     true,
 			usePaneEnv:       false,
-			wantUseClaudeEnv: testutil.Ptr(true),
+			wantUseClaudeEnv: new(true),
 			wantUsePaneEnv:   nil, // false -> Set not called -> remains nil
 		},
 		{
@@ -384,14 +393,14 @@ func TestCreateSessionEnvFlags(t *testing.T) {
 			useClaudeEnv:     false,
 			usePaneEnv:       true,
 			wantUseClaudeEnv: nil, // false -> Set not called -> remains nil
-			wantUsePaneEnv:   testutil.Ptr(true),
+			wantUsePaneEnv:   new(true),
 		},
 		{
 			name:             "useClaudeEnv=true, usePaneEnv=true",
 			useClaudeEnv:     true,
 			usePaneEnv:       true,
-			wantUseClaudeEnv: testutil.Ptr(true),
-			wantUsePaneEnv:   testutil.Ptr(true),
+			wantUseClaudeEnv: new(true),
+			wantUsePaneEnv:   new(true),
 		},
 		{
 			name:             "useClaudeEnv=false, usePaneEnv=false",
@@ -531,7 +540,7 @@ func TestRenameSessionCleansUpMCPStateForOldSessionName(t *testing.T) {
 
 	app := NewApp()
 	app.sessions = tmux.NewSessionManager()
-	app.mcpManager = mcp.NewManager(registry, func(string, any) {})
+	app.mcpManager = mcp.NewManager(mcp.ManagerConfig{Registry: registry, EmitFn: func(string, any) {}})
 	if _, _, err := app.sessions.CreateSession("old-name", "0", 120, 40); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
@@ -988,6 +997,159 @@ func TestCheckDirectoryConflictMixedSessions(t *testing.T) {
 	if got := app.CheckDirectoryConflict(`C:\Projects\beta`); got != "" {
 		t.Errorf("expected no conflict, got %q", got)
 	}
+}
+
+func TestResolveSessionDirectory(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot tmux.SessionSnapshot
+		want     string
+	}{
+		{
+			name: "normal session uses RootPath",
+			snapshot: tmux.SessionSnapshot{
+				RootPath: `C:\Projects\myapp`,
+			},
+			want: `C:\Projects\myapp`,
+		},
+		{
+			name: "worktree session prefers Worktree.Path",
+			snapshot: tmux.SessionSnapshot{
+				RootPath: `C:\Projects\myapp`,
+				Worktree: &tmux.SessionWorktreeInfo{
+					Path:     `C:\Projects\myapp.wt\feature`,
+					RepoPath: `C:\Projects\myapp`,
+				},
+			},
+			want: `C:\Projects\myapp.wt\feature`,
+		},
+		{
+			name: "worktree Path with trailing whitespace is trimmed",
+			snapshot: tmux.SessionSnapshot{
+				RootPath: `C:\Projects\myapp`,
+				Worktree: &tmux.SessionWorktreeInfo{
+					Path:     `C:\Projects\myapp.wt\feature  `,
+					RepoPath: `C:\Projects\myapp`,
+				},
+			},
+			want: `C:\Projects\myapp.wt\feature`,
+		},
+		{
+			name: "worktree with empty Path falls back to RootPath",
+			snapshot: tmux.SessionSnapshot{
+				RootPath: `C:\Projects\myapp`,
+				Worktree: &tmux.SessionWorktreeInfo{
+					Path:     "",
+					RepoPath: `C:\Projects\myapp`,
+				},
+			},
+			want: `C:\Projects\myapp`,
+		},
+		{
+			name: "worktree with whitespace-only Path falls back to RootPath",
+			snapshot: tmux.SessionSnapshot{
+				RootPath: `C:\Projects\myapp`,
+				Worktree: &tmux.SessionWorktreeInfo{
+					Path:     "   ",
+					RepoPath: `C:\Projects\myapp`,
+				},
+			},
+			want: `C:\Projects\myapp`,
+		},
+		{
+			name:     "empty RootPath and no worktree returns empty",
+			snapshot: tmux.SessionSnapshot{},
+			want:     "",
+		},
+		{
+			name: "whitespace-only RootPath returns empty",
+			snapshot: tmux.SessionSnapshot{
+				RootPath: "   ",
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveSessionDirectory(tt.snapshot)
+			if got != tt.want {
+				t.Errorf("resolveSessionDirectory() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOpenDirectoryInExplorer(t *testing.T) {
+	t.Run("returns error when session name is empty", func(t *testing.T) {
+		app := NewApp()
+		if err := app.OpenDirectoryInExplorer("   "); err == nil {
+			t.Fatal("expected validation error for empty session name")
+		}
+	})
+
+	t.Run("returns error when session manager is unavailable", func(t *testing.T) {
+		app := NewApp()
+		if err := app.OpenDirectoryInExplorer("session-a"); err == nil {
+			t.Fatal("expected session manager availability error")
+		}
+	})
+
+	t.Run("returns error when session not found", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		if err := app.OpenDirectoryInExplorer("nonexistent"); err == nil {
+			t.Fatal("expected session not found error")
+		}
+	})
+
+	t.Run("returns error when RootPath is empty", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		if _, _, err := app.sessions.CreateSession("empty-path", "0", 120, 40); err != nil {
+			t.Fatalf("CreateSession() error = %v", err)
+		}
+		// RootPath is not set -> resolveSessionDirectory returns ""
+		if err := app.OpenDirectoryInExplorer("empty-path"); err == nil {
+			t.Fatal("expected no-directory error")
+		}
+	})
+
+	t.Run("succeeds for session with RootPath", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		if _, _, err := app.sessions.CreateSession("valid", "0", 120, 40); err != nil {
+			t.Fatalf("CreateSession() error = %v", err)
+		}
+		if err := app.sessions.SetRootPath("valid", `C:\Projects\myapp`); err != nil {
+			t.Fatalf("SetRootPath() error = %v", err)
+		}
+		stubOpenExplorer(t, func(_ string) error { return nil })
+		if err := app.OpenDirectoryInExplorer("valid"); err != nil {
+			t.Fatalf("OpenDirectoryInExplorer() error = %v", err)
+		}
+	})
+
+	t.Run("succeeds for worktree session", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		if _, _, err := app.sessions.CreateSession("wt-session", "0", 120, 40); err != nil {
+			t.Fatalf("CreateSession() error = %v", err)
+		}
+		if err := app.sessions.SetRootPath("wt-session", `C:\Projects\myapp`); err != nil {
+			t.Fatalf("SetRootPath() error = %v", err)
+		}
+		if err := app.sessions.SetWorktreeInfo("wt-session", &tmux.SessionWorktreeInfo{
+			Path:     `C:\Projects\myapp.wt\feature`,
+			RepoPath: `C:\Projects\myapp`,
+		}); err != nil {
+			t.Fatalf("SetWorktreeInfo() error = %v", err)
+		}
+		stubOpenExplorer(t, func(_ string) error { return nil })
+		if err := app.OpenDirectoryInExplorer("wt-session"); err != nil {
+			t.Fatalf("OpenDirectoryInExplorer() error = %v", err)
+		}
+	})
 }
 
 func TestCheckDirectoryConflict(t *testing.T) {

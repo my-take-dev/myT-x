@@ -1,15 +1,22 @@
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {McpDetailPanel} from "./McpDetailPanel";
-import {McpListSidebar} from "./McpListSidebar";
 import {useMcpManager} from "./useMcpManager";
 
 export function McpManagerView() {
     const closeView = useViewerStore((s) => s.closeView);
-    const {mcpList, selectedMCP, isLoading, error, toggleMCP, togglingIds, selectMCP, activeSession, retryLoad, dismissError} =
-        useMcpManager();
+    const {
+        lspMcpList,
+        representativeMCP,
+        aggregateStatus,
+        isLoading,
+        error,
+        activeSession,
+        retryLoad,
+        dismissError,
+    } = useMcpManager();
 
-    if (!activeSession) {
+    if (activeSession == null) {
         return (
             <ViewerPanelShell
                 className="mcp-manager-view"
@@ -17,7 +24,7 @@ export function McpManagerView() {
                 onClose={closeView}
                 // Intentionally no refresh action in this state:
                 // retryLoad requires an active session and would be a no-op.
-                message="No active session"
+                message="アクティブなセッションがありません"
             />
         );
     }
@@ -44,17 +51,30 @@ export function McpManagerView() {
                     </div>
                 )}
                 {isLoading ? (
-                    <div className="viewer-message">Loading MCP servers...</div>
+                    <div className="viewer-message">LSP-MCPプロファイルを読み込み中...</div>
+                ) : lspMcpList.length === 0 || aggregateStatus == null ? (
+                    // aggregateStatus is currently null only when the list is empty,
+                    // but the hook contract still models it as nullable.
+                    <div className="viewer-message">
+                        {error ? "このセッションのLSP-MCPプロファイルを読み込めませんでした。" : "このセッションで利用可能なLSP-MCPプロファイルはありません。"}
+                    </div>
                 ) : (
                     <>
-                        <McpListSidebar
-                            items={mcpList}
-                            selectedId={selectedMCP?.id ?? null}
-                            onSelect={selectMCP}
-                            onToggle={toggleMCP}
-                            togglingIds={togglingIds}
+                        <aside className="mcp-list-sidebar" aria-label="MCP categories">
+                            <ul className="mcp-category-list">
+                                <li className="mcp-category-item mcp-category-item-selected">
+                                    <span className={`mcp-status-dot ${aggregateStatus}`} title={aggregateStatus}/>
+                                    <span className="mcp-list-name">LSP-MCP</span>
+                                    <span className="mcp-category-count">{lspMcpList.length}</span>
+                                </li>
+                            </ul>
+                        </aside>
+                        <McpDetailPanel
+                            representativeMCP={representativeMCP}
+                            activeSession={activeSession}
+                            aggregateStatus={aggregateStatus}
+                            totalLspCount={lspMcpList.length}
                         />
-                        <McpDetailPanel mcp={selectedMCP}/>
                     </>
                 )}
             </div>

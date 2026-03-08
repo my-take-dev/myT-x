@@ -6,6 +6,7 @@ import {config} from '../models';
 import {mcp} from '../models';
 import {install} from '../models';
 import {git} from '../models';
+import {ipc} from '../models';
 
 export function ApplyLayoutPreset(arg1:string,arg2:string):Promise<void>;
 
@@ -97,6 +98,8 @@ export function ListWorktreesByRepo(arg1:string):Promise<Array<git.WorktreeInfo>
 
 export function LogFrontendEvent(arg1:string,arg2:string,arg3:string):Promise<void>;
 
+export function OpenDirectoryInExplorer(arg1:string):Promise<void>;
+
 export function PickSessionDirectory():Promise<string>;
 
 export function PromoteWorktreeToBranch(arg1:string,arg2:string):Promise<void>;
@@ -108,6 +111,8 @@ export function RenamePane(arg1:string,arg2:string):Promise<void>;
 export function RenameSession(arg1:string,arg2:string):Promise<void>;
 
 export function ResizePane(arg1:string,arg2:number,arg3:number):Promise<void>;
+
+export function ResolveMCPStdio(arg1:string,arg2:string):Promise<ipc.MCPStdioResolvePayload>;
 
 export function SaveConfig(arg1:config.Config):Promise<void>;
 
@@ -122,3 +127,5 @@ export function SplitPane(arg1:string,arg2:boolean):Promise<string>;
 export function SwapPanes(arg1:string,arg2:string):Promise<void>;
 
 export function ToggleMCPServer(arg1:string,arg2:string,arg3:boolean):Promise<void>;
+
+export function ToggleViewerSidebarMode():Promise<void>;

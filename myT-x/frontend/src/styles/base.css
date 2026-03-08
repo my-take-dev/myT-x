@@ -159,7 +159,16 @@ button {
     padding-right: 4px;
 }
 
+/* Scroll stabilization properties (overscroll-behavior: none, overflow-anchor: none,
+   scrollbar-gutter: stable) are applied via inline styles by makeScrollStableOuter
+   (TreeOuter.tsx) to override react-window's default inline overflow.
+   CSS cannot reliably override inline styles, so these are NOT duplicated here.
+   overscroll-behavior: none is safe — this is a Windows-only desktop app with no
+   touch/mobile considerations. */
+
 .session-row {
+    box-sizing: border-box;
+    min-width: 0;
     padding-right: 4px;
     padding-bottom: 8px;
 }
@@ -185,7 +194,8 @@ button {
     border: 1px solid var(--line);
     border-radius: 10px;
     padding: 8px 10px;
-    padding-right: 28px;
+    /* session-close (right:4px + width:20px = 24px) + session-explorer (right:28px + width:20px = 48px) + 4px margin */
+    padding-right: 52px;
     background: rgba(24, 35, 53, 0.7);
     color: var(--fg-main);
     text-align: left;
@@ -305,17 +315,17 @@ button {
     outline: none;
 }
 
+/* ── Session action buttons (shared base) ── */
+.session-explorer,
 .session-close {
     position: absolute;
     top: 4px;
-    right: 4px;
     width: 20px;
     height: 20px;
     border: none;
     border-radius: 4px;
     background: transparent;
     color: var(--fg-dim);
-    font-size: 0.85rem;
     line-height: 1;
     cursor: pointer;
     display: flex;
@@ -325,8 +335,26 @@ button {
     transition: opacity 0.15s, background 0.15s;
 }
 
+.session-item:hover .session-explorer,
 .session-item:hover .session-close {
     opacity: 1;
+}
+
+/* ── Session explorer button (differences only) ── */
+.session-explorer {
+    right: 28px;
+    font-size: 0.75rem;
+}
+
+.session-explorer:hover {
+    background: var(--accent-22);
+    color: var(--accent);
+}
+
+/* ── Session close button (differences only) ── */
+.session-close {
+    right: 4px;
+    font-size: 0.85rem;
 }
 
 .session-close:hover {

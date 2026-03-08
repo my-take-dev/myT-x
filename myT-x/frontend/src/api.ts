@@ -71,8 +71,9 @@ import {
     SendSyncInput,
     SetActiveSession,
     SplitPane,
+    ToggleViewerSidebarMode,
     SwapPanes,
-    ToggleMCPServer,
+    OpenDirectoryInExplorer,
 } from "../wailsjs/go/main/App";
 import type {MCPSnapshot} from "./types/mcp";
 import {normalizeMCPSnapshot, normalizeMCPSnapshots} from "./types/mcp";
@@ -132,6 +133,7 @@ export const api = {
     RenameSession,
     SaveConfig,
     SwapPanes,
+    ToggleViewerSidebarMode,
     BuildStatusLine,
     IsGitRepository,
     InstallTmuxShim,
@@ -152,5 +154,5 @@ export const api = {
     GetSessionErrorLog,
     GetSessionLogFilePath,
     LogFrontendEvent,
-    ToggleMCPServer,
+    OpenDirectoryInExplorer,
 };

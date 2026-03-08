@@ -14,15 +14,23 @@ type ParsedCommand struct {
 	CleanArgs []string          // PowerShell-compatible command to execute
 }
 
+// sendKeysSpecialArgs lists named key literals that should be excluded from
+// bash→PowerShell command translation in TranslateSendKeysArgs.
+// All keys are lowercase; lookup is case-insensitive via isSendKeysSpecialArg.
+//
+// SYNC: This set must stay in sync with sendKeysTable in internal/tmux/key_table.go.
+// When adding a new entry to sendKeysTable, add the corresponding key here too.
 var sendKeysSpecialArgs = map[string]struct{}{
-	"Enter":  {},
-	"C-c":    {},
-	"C-d":    {},
-	"C-z":    {},
-	"Escape": {},
-	"Space":  {},
-	"Tab":    {},
-	"BSpace": {},
+	"enter":   {},
+	"kpenter": {},
+	"c-c":     {},
+	"c-d":     {},
+	"c-z":     {},
+	"c-[":     {},
+	"escape":  {},
+	"space":   {},
+	"tab":     {},
+	"bspace":  {},
 }
 
 // ParseUnixCommand translates bash-style command args to Windows PowerShell-compatible args.
@@ -244,7 +252,7 @@ func TranslateSendKeysArgs(args []string) []string {
 
 	cmdIdx := -1
 	for i, arg := range args {
-		if _, isSpecial := sendKeysSpecialArgs[arg]; isSpecial {
+		if isSendKeysSpecialArg(arg) {
 			continue
 		}
 		if strings.Contains(arg, "&&") || containsEnvAssignment(arg) {
@@ -272,6 +280,20 @@ func TranslateSendKeysArgs(args []string) []string {
 	)
 
 	return out
+}
+
+// isSendKeysSpecialArg returns true if arg is a named key literal (e.g. "Enter",
+// "C-c") that should be excluded from bash→PowerShell command translation.
+// These tokens are passed through to TranslateSendKeys for byte-level resolution.
+// The check is case-insensitive and trims whitespace.
+//
+// NOTE: This map must stay in sync with sendKeysTable in internal/tmux/key_table.go.
+// NOTE: The normalization logic (strings.ToLower + strings.TrimSpace) mirrors
+// normalizeSendKeyToken in internal/tmux/key_table.go. Changes to one must be
+// reflected in the other.
+func isSendKeysSpecialArg(arg string) bool {
+	_, ok := sendKeysSpecialArgs[strings.ToLower(strings.TrimSpace(arg))]
+	return ok
 }
 
 // translateBashToPowerShell converts:

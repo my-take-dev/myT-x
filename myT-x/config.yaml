@@ -48,6 +48,9 @@ websocket_port: 0
 #   error-log: "Ctrl+Shift+L"
 #   diff: "Ctrl+Shift+D"
 #   input-history: "Ctrl+Shift+H"
+# viewer_sidebar_mode: right viewer sidebar layout mode
+# overlay = full-screen overlay (default), docked = right-side panel
+# viewer_sidebar_mode: overlay
 # mcp_servers: MCP (Model Context Protocol) サーバーの設定
 # 各エントリはセッションごとにオン・オフ可能なMCPサーバーを定義します
 # mcp_servers:

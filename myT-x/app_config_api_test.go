@@ -175,6 +175,99 @@ func TestSaveConfigKeepsPreviousStateOnValidationError(t *testing.T) {
 	}
 }
 
+func TestToggleViewerSidebarModePreservesLatestConfigAndEmitsUpdate(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.configPath = newConfigPathForAPITest(t, "config.yaml")
+
+	initial := config.DefaultConfig()
+	initial.Shell = "cmd.exe"
+	initial.GlobalHotkey = "Ctrl+Alt+Y"
+	initial.ViewerSidebarMode = config.DefaultConfig().ViewerSidebarMode
+	app.setConfigSnapshot(initial)
+
+	var payloads []configUpdatedEvent
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
+		if name != "config:updated" || len(data) == 0 {
+			return
+		}
+		payload, ok := data[0].(configUpdatedEvent)
+		if !ok {
+			t.Fatalf("unexpected payload type: %T", data[0])
+		}
+		payloads = append(payloads, payload)
+	}
+
+	if err := app.ToggleViewerSidebarMode(); err != nil {
+		t.Fatalf("ToggleViewerSidebarMode() first error = %v", err)
+	}
+	afterFirst := app.GetConfig()
+	if afterFirst.ViewerSidebarMode != "docked" {
+		t.Fatalf("ViewerSidebarMode after first toggle = %q, want %q", afterFirst.ViewerSidebarMode, "docked")
+	}
+	if afterFirst.Shell != initial.Shell {
+		t.Fatalf("Shell after first toggle = %q, want %q", afterFirst.Shell, initial.Shell)
+	}
+	if afterFirst.GlobalHotkey != initial.GlobalHotkey {
+		t.Fatalf("GlobalHotkey after first toggle = %q, want %q", afterFirst.GlobalHotkey, initial.GlobalHotkey)
+	}
+
+	if err := app.ToggleViewerSidebarMode(); err != nil {
+		t.Fatalf("ToggleViewerSidebarMode() second error = %v", err)
+	}
+	afterSecond := app.GetConfig()
+	if afterSecond.ViewerSidebarMode != config.DefaultConfig().ViewerSidebarMode {
+		t.Fatalf(
+			"ViewerSidebarMode after second toggle = %q, want %q",
+			afterSecond.ViewerSidebarMode,
+			config.DefaultConfig().ViewerSidebarMode,
+		)
+	}
+	if afterSecond.Shell != initial.Shell {
+		t.Fatalf("Shell after second toggle = %q, want %q", afterSecond.Shell, initial.Shell)
+	}
+	if afterSecond.GlobalHotkey != initial.GlobalHotkey {
+		t.Fatalf("GlobalHotkey after second toggle = %q, want %q", afterSecond.GlobalHotkey, initial.GlobalHotkey)
+	}
+
+	if len(payloads) != 2 {
+		t.Fatalf("config:updated payload count = %d, want 2", len(payloads))
+	}
+	if payloads[0].Config.ViewerSidebarMode != "docked" {
+		t.Fatalf("first payload ViewerSidebarMode = %q, want %q", payloads[0].Config.ViewerSidebarMode, "docked")
+	}
+	if payloads[1].Config.ViewerSidebarMode != config.DefaultConfig().ViewerSidebarMode {
+		t.Fatalf(
+			"second payload ViewerSidebarMode = %q, want %q",
+			payloads[1].Config.ViewerSidebarMode,
+			config.DefaultConfig().ViewerSidebarMode,
+		)
+	}
+	if payloads[0].Version != 1 || payloads[1].Version != 2 {
+		t.Fatalf("payload versions = [%d %d], want [1 2]", payloads[0].Version, payloads[1].Version)
+	}
+
+	loaded, err := config.Load(app.configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.ViewerSidebarMode != config.DefaultConfig().ViewerSidebarMode {
+		t.Fatalf(
+			"persisted ViewerSidebarMode = %q, want %q",
+			loaded.ViewerSidebarMode,
+			config.DefaultConfig().ViewerSidebarMode,
+		)
+	}
+	if loaded.Shell != initial.Shell {
+		t.Fatalf("persisted Shell = %q, want %q", loaded.Shell, initial.Shell)
+	}
+}
+
 func TestSessionAPIsEmitEventsThroughRuntimeEventsEmitFn(t *testing.T) {
 	origEmit := runtimeEventsEmitFn
 	origInstall := ensureShimInstalledFn

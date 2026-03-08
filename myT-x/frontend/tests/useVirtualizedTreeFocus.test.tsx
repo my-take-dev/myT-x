@@ -22,10 +22,10 @@ interface ExposedHook {
 }
 
 function HookProbe({
-    flatNodes,
-    selectedPath,
-    onExpose,
-}: {
+                       flatNodes,
+                       selectedPath,
+                       onExpose,
+                   }: {
     flatNodes: readonly TestNode[];
     selectedPath: string | null;
     onExpose: (value: ExposedHook) => void;
@@ -117,6 +117,19 @@ describe("useVirtualizedTreeFocus", () => {
         expect(lastCall).toEqual({index: nodes.length - 1, align: "smart"});
     });
 
+    it("does not scroll when focus target resolves to current index", () => {
+        renderProbe(nodes, null);
+        expect(latest?.focusedIndex).toBe(0);
+        expect(latest?.scrollCalls.length).toBe(0);
+
+        act(() => {
+            latest?.focusIndex(-999); // clamps to 0 (already focused)
+        });
+
+        expect(latest?.focusedIndex).toBe(0);
+        expect(latest?.scrollCalls.length).toBe(0);
+    });
+
     it("clamps stale focusedIndex when node list shrinks and selectedPath is missing", () => {
         renderProbe(nodes, null);
         act(() => {
@@ -126,6 +139,37 @@ describe("useVirtualizedTreeFocus", () => {
 
         renderProbe([nodes[0]], null);
         expect(latest?.focusedIndex).toBe(0);
+    });
+
+    it("does not scroll when upper-clamped focus target matches current index", () => {
+        renderProbe(nodes, null);
+
+        // Move to last index
+        act(() => {
+            latest?.focusIndex(999);
+        });
+        expect(latest?.focusedIndex).toBe(nodes.length - 1);
+        const callsAfterFirst = latest?.scrollCalls.length ?? 0;
+
+        // Same clamped target again - should not scroll
+        act(() => {
+            latest?.focusIndex(999);
+        });
+        expect(latest?.focusedIndex).toBe(nodes.length - 1);
+        expect(latest?.scrollCalls.length).toBe(callsAfterFirst);
+    });
+
+    it("does not scroll when focusIndex is called with exact current index", () => {
+        renderProbe(nodes, null);
+        expect(latest?.focusedIndex).toBe(0);
+        expect(latest?.scrollCalls.length).toBe(0);
+
+        // Direct match (not via clamp) — should not scroll
+        act(() => {
+            latest?.focusIndex(0);
+        });
+        expect(latest?.focusedIndex).toBe(0);
+        expect(latest?.scrollCalls.length).toBe(0);
     });
 
     it("finds the nearest parent directory index", () => {

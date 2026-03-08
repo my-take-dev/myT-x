@@ -96,9 +96,13 @@ func (r *CommandRouter) handleNewSession(req ipc.TmuxRequest) ipc.TmuxResponse {
 
 func (r *CommandRouter) handleListSessions(req ipc.TmuxRequest) ipc.TmuxResponse {
 	format := mustString(req.Flags["-F"])
+	filter := mustString(req.Flags["-f"])
 	sessions := r.sessions.ListSessions()
 	lines := make([]string, 0, len(sessions))
 	for _, session := range sessions {
+		if !evaluateFilterForSession(filter, session) {
+			continue
+		}
 		lines = append(lines, formatSessionLine(session, format))
 	}
 	return okResp(joinLines(lines))

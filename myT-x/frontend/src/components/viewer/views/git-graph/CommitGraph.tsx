@@ -1,6 +1,7 @@
-import {forwardRef, memo, useMemo, useRef, type HTMLAttributes} from "react";
+import {memo, useMemo, useRef} from "react";
 import {FixedSizeList, type ListChildComponentProps} from "react-window";
 import {useContainerHeight} from "../../../../hooks/useContainerHeight";
+import {makeScrollStableOuter} from "../shared/TreeOuter";
 import type {GitGraphCommit, LaneAssignment} from "./gitGraphTypes";
 import {CommitRow} from "./CommitRow";
 import {MAX_LOG_COUNT} from "./useGitGraph";
@@ -23,12 +24,8 @@ interface RowData {
 
 const ROW_HEIGHT = 32;
 
-/** Outer container for FixedSizeList providing list semantics for accessibility. */
-const CommitListOuter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-    function CommitListOuter(props, ref) {
-        return <div {...props} ref={ref} role="list" aria-label="Commit history"/>;
-    },
-);
+/** Module-level factory call — must not be inside a render function (see makeScrollStableOuter). */
+const CommitListOuter = makeScrollStableOuter({role: "list", ariaLabel: "Commit history"});
 
 const Row = memo(function Row({index, style, data}: ListChildComponentProps<RowData>) {
     const commit = data.commits[index];
@@ -54,7 +51,8 @@ export function CommitGraph({
                                 onLoadMore,
                             }: CommitGraphProps) {
     const containerRef = useRef<HTMLDivElement>(null);
-    const height = useContainerHeight(containerRef);
+    // noiseThresholdPx: 1 suppresses ±1px ResizeObserver churn that causes scroll jitter.
+    const height = useContainerHeight(containerRef, ROW_HEIGHT, {noiseThresholdPx: 1});
 
     const itemData = useMemo<RowData>(() => ({
         commits,

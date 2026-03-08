@@ -38,6 +38,7 @@
 // BOTH this file AND wailsjs/go/models.ts must be updated together.
 
 import type {config as wailsConfig} from "../../wailsjs/go/models";
+import type {ViewerSidebarMode} from "../utils/viewerSidebarMode";
 
 export type AppConfigWorktree = Pick<
     wailsConfig.WorktreeConfig,
@@ -56,7 +57,10 @@ export type KnownKeyBinding =
     | "kill-pane"
     | "detach-session";
 
-type AppConfigBase = Pick<wailsConfig.Config, "shell" | "prefix" | "keys" | "quake_mode" | "global_hotkey" | "default_session_dir">;
+type AppConfigBase = Pick<
+    wailsConfig.Config,
+    "shell" | "prefix" | "keys" | "quake_mode" | "global_hotkey" | "viewer_sidebar_mode" | "default_session_dir"
+>;
 
 export type AppConfigClaudeEnv = Pick<wailsConfig.ClaudeEnvConfig, "default_enabled" | "vars">;
 
@@ -69,7 +73,9 @@ export type AppConfig = AppConfigBase & {
     viewer_shortcuts?: Record<string, string>;
 };
 
-export type WailsConfigInput = AppConfig;
+export type WailsConfigInput = Omit<AppConfig, "viewer_sidebar_mode"> & {
+    viewer_sidebar_mode?: ViewerSidebarMode;
+};
 
 export interface ParsedConfigUpdatedEvent {
     config: AppConfig;

@@ -1,12 +1,38 @@
 package tmux
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestTranslateSendKeys(t *testing.T) {
 	got := TranslateSendKeys([]string{"echo", "Space", "ok", "Enter"})
 	want := []byte("echo ok\r")
 	if string(got) != string(want) {
 		t.Fatalf("TranslateSendKeys() = %q, want %q", string(got), string(want))
+	}
+}
+
+func TestTranslateSendKeysEnterAliasesCaseInsensitive(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "Enter mixed case", key: "Enter"},
+		{name: "enter lowercase", key: "enter"},
+		{name: "ENTER uppercase", key: "ENTER"},
+		{name: "KPEnter mixed case", key: "KPEnter"},
+		{name: "kpenter lowercase", key: "kpenter"},
+		{name: "KPENTER uppercase", key: "KPENTER"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TranslateSendKeys([]string{tt.key})
+			want := []byte{'\r'}
+			if string(got) != string(want) {
+				t.Fatalf("TranslateSendKeys([%q]) = %q, want %q", tt.key, got, want)
+			}
+		})
 	}
 }
 
@@ -82,6 +108,7 @@ func TestParseControlKey(t *testing.T) {
 		// Valid uppercase
 		{name: "C-A uppercase", arg: "C-A", wantByte: 0x01, wantOK: true},
 		{name: "C-M uppercase", arg: "C-M", wantByte: 0x0D, wantOK: true},
+		{name: "c-m lowercase prefix", arg: "c-m", wantByte: 0x0D, wantOK: true},
 		{name: "C-@ special", arg: "C-@", wantByte: 0x00, wantOK: true},
 		{name: "C-backslash special", arg: "C-\\", wantByte: 0x1c, wantOK: true},
 		{name: "C-right-bracket special", arg: "C-]", wantByte: 0x1d, wantOK: true},
@@ -121,12 +148,16 @@ func TestTranslateSendKeysEmptyInput(t *testing.T) {
 
 func TestTranslateSendKeysAllSpecialKeys(t *testing.T) {
 	// Exhaustive test for every key in sendKeysTable.
+	// Keys use their canonical display casing (e.g. "Enter", "KPEnter") rather than
+	// the all-lowercase table keys, verifying that normalizeSendKeyToken correctly
+	// resolves case-insensitive input to the table entry.
 	tests := []struct {
 		name string
 		key  string
 		want []byte
 	}{
 		{name: "Enter", key: "Enter", want: []byte{'\r'}},
+		{name: "KPEnter", key: "KPEnter", want: []byte{'\r'}},
 		{name: "C-c", key: "C-c", want: []byte{0x03}},
 		{name: "C-d", key: "C-d", want: []byte{0x04}},
 		{name: "C-z", key: "C-z", want: []byte{0x1a}},
@@ -283,6 +314,90 @@ func TestTranslateSendKeysUnknownKeyPassedThrough(t *testing.T) {
 	}
 }
 
+func TestTranslateSendKeysLowercaseControlKeyIntegration(t *testing.T) {
+	// TC-3: verify normalizeSendKeyToken → table miss → parseControlKey integration
+	// for lowercase control key tokens not in sendKeysTable.
+	tests := []struct {
+		name string
+		arg  string
+		want []byte
+	}{
+		{name: "c-m (lowercase) via parseControlKey", arg: "c-m", want: []byte{0x0D}},
+		{name: "c-a (lowercase) via parseControlKey", arg: "c-a", want: []byte{0x01}},
+		{name: "c-l (lowercase) via parseControlKey", arg: "c-l", want: []byte{0x0C}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TranslateSendKeys([]string{tt.arg})
+			if string(got) != string(tt.want) {
+				t.Fatalf("TranslateSendKeys([%q]) = %q (0x%02X), want %q (0x%02X)",
+					tt.arg, got, got, tt.want, tt.want)
+			}
+		})
+	}
+}
+
+func TestTranslateSendKeysNormalizesBeforeParseControlKey(t *testing.T) {
+	// C-1 regression: parseControlKey must receive the normalized (trimmed+lowered) arg.
+	// Before the fix, " C-m" would fail parseControlKey (len=4) and be passed through as raw bytes.
+	tests := []struct {
+		name string
+		arg  string
+		want []byte
+	}{
+		{name: "leading space C-m", arg: " C-m", want: []byte{0x0D}},
+		{name: "trailing space C-a", arg: "C-a ", want: []byte{0x01}},
+		{name: "both spaces C-l", arg: " C-l ", want: []byte{0x0C}},
+		{name: "uppercase with space C-M", arg: " C-M ", want: []byte{0x0D}},
+		{name: "space around table key C-c", arg: " C-c ", want: []byte{0x03}},
+		{name: "space around Enter", arg: " Enter ", want: []byte{'\r'}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TranslateSendKeys([]string{tt.arg})
+			if string(got) != string(tt.want) {
+				t.Fatalf("TranslateSendKeys([%q]) = %q (0x%02X), want %q (0x%02X)",
+					tt.arg, got, got, tt.want, tt.want)
+			}
+		})
+	}
+}
+
+func TestTranslateSendKeysAllKeysCaseInsensitive(t *testing.T) {
+	// Verify normalizeSendKeyToken handles case variants for all non-Enter/KPEnter keys.
+	// Enter/KPEnter are covered by TestTranslateSendKeysEnterAliasesCaseInsensitive.
+	tests := []struct {
+		name string
+		key  string
+		want []byte
+	}{
+		{name: "Space mixed case", key: "Space", want: []byte{' '}},
+		{name: "space lowercase", key: "space", want: []byte{' '}},
+		{name: "SPACE uppercase", key: "SPACE", want: []byte{' '}},
+		{name: "Tab mixed case", key: "Tab", want: []byte{'\t'}},
+		{name: "tab lowercase", key: "tab", want: []byte{'\t'}},
+		{name: "TAB uppercase", key: "TAB", want: []byte{'\t'}},
+		{name: "Escape mixed case", key: "Escape", want: []byte{0x1b}},
+		{name: "escape lowercase", key: "escape", want: []byte{0x1b}},
+		{name: "ESCAPE uppercase", key: "ESCAPE", want: []byte{0x1b}},
+		{name: "BSpace mixed case", key: "BSpace", want: []byte{0x7f}},
+		{name: "bspace lowercase", key: "bspace", want: []byte{0x7f}},
+		{name: "BSPACE uppercase", key: "BSPACE", want: []byte{0x7f}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TranslateSendKeys([]string{tt.key})
+			if string(got) != string(tt.want) {
+				t.Fatalf("TranslateSendKeys([%q]) = %q (0x%02X), want %q (0x%02X)",
+					tt.key, got, got, tt.want, tt.want)
+			}
+		})
+	}
+}
+
 func TestTranslateSendKeysComplexSequences(t *testing.T) {
 	tests := []struct {
 		name string
@@ -321,6 +436,116 @@ func TestTranslateSendKeysComplexSequences(t *testing.T) {
 			got := TranslateSendKeys(tt.args)
 			if string(got) != string(tt.want) {
 				t.Fatalf("TranslateSendKeys(%v) = %q, want %q", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCopyModeCommandTableAllEntries(t *testing.T) {
+	// T-4: Exhaustive byte-level verification for every entry in copyModeCommandTable.
+	tests := []struct {
+		name    string
+		command string
+		want    []byte
+	}{
+		{name: "cancel", command: "cancel", want: []byte{0x1b}},
+		{name: "page-up", command: "page-up", want: []byte{0x1b, '[', '5', '~'}},
+		{name: "halfpage-up", command: "halfpage-up", want: []byte{0x1b, '[', '5', '~'}},
+		{name: "page-down", command: "page-down", want: []byte{0x1b, '[', '6', '~'}},
+		{name: "halfpage-down", command: "halfpage-down", want: []byte{0x1b, '[', '6', '~'}},
+		{name: "cursor-up", command: "cursor-up", want: []byte{0x1b, '[', 'A'}},
+		{name: "cursor-down", command: "cursor-down", want: []byte{0x1b, '[', 'B'}},
+		{name: "cursor-right", command: "cursor-right", want: []byte{0x1b, '[', 'C'}},
+		{name: "cursor-left", command: "cursor-left", want: []byte{0x1b, '[', 'D'}},
+		{name: "start-of-line", command: "start-of-line", want: []byte{0x1b, '[', 'H'}},
+		{name: "end-of-line", command: "end-of-line", want: []byte{0x1b, '[', 'F'}},
+		{name: "history-top", command: "history-top", want: []byte{0x1b, '[', '1', ';', '5', 'H'}},
+		{name: "history-bottom", command: "history-bottom", want: []byte{0x1b, '[', '1', ';', '5', 'F'}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := TranslateCopyModeCommand(tt.command)
+			if !ok {
+				t.Fatalf("TranslateCopyModeCommand(%q) returned false", tt.command)
+			}
+			if string(got) != string(tt.want) {
+				t.Fatalf("TranslateCopyModeCommand(%q) = %v, want %v", tt.command, got, tt.want)
+			}
+		})
+	}
+
+	// Verify we tested all entries in the table.
+	if len(tests) != len(copyModeCommandTable) {
+		t.Fatalf("test count = %d, copyModeCommandTable size = %d; add missing entries", len(tests), len(copyModeCommandTable))
+	}
+}
+
+func TestTranslateCopyModeCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    []byte
+		wantOK  bool
+	}{
+		{
+			name:    "cancel returns Escape",
+			command: "cancel",
+			want:    []byte{0x1b},
+			wantOK:  true,
+		},
+		{
+			name:    "Cancel is case-insensitive",
+			command: "Cancel",
+			want:    []byte{0x1b},
+			wantOK:  true,
+		},
+		{
+			name:    "CANCEL uppercase",
+			command: "CANCEL",
+			want:    []byte{0x1b},
+			wantOK:  true,
+		},
+		{
+			name:    "cancel with whitespace is trimmed",
+			command: "  cancel  ",
+			want:    []byte{0x1b},
+			wantOK:  true,
+		},
+		{
+			name:    "page-up returns Page Up sequence",
+			command: "page-up",
+			want:    []byte{0x1b, '[', '5', '~'},
+			wantOK:  true,
+		},
+		{
+			name:    "cursor-up returns Up arrow",
+			command: "cursor-up",
+			want:    []byte{0x1b, '[', 'A'},
+			wantOK:  true,
+		},
+		{
+			name:    "unknown command returns false",
+			command: "select-word",
+			want:    nil,
+			wantOK:  false,
+		},
+		{
+			name:    "empty command returns false",
+			command: "",
+			want:    nil,
+			wantOK:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := TranslateCopyModeCommand(tt.command)
+			if ok != tt.wantOK {
+				t.Fatalf("TranslateCopyModeCommand(%q) ok = %v, want %v", tt.command, ok, tt.wantOK)
+			}
+			if string(got) != string(tt.want) {
+				t.Fatalf("TranslateCopyModeCommand(%q) = %q, want %q", tt.command, got, tt.want)
 			}
 		})
 	}

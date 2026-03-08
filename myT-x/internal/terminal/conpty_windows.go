@@ -321,8 +321,41 @@ func (c *ConPty) Write(p []byte) (int, error) {
 	if cmdIn == nil {
 		return 0, errors.New("Write called on closed pseudo console (nil handle)")
 	}
+	slog.Debug("[DEBUG-CONPTY-WRITE]",
+		"len", len(p),
+		"hex", fmt.Sprintf("%x", p),
+		"ascii", sanitizeForLog(p),
+	)
 	n, err := cmdIn.Write(p)
 	return n, normalizeConPtyPipeError("Write", err)
+}
+
+// sanitizeForLog converts bytes to a human-readable string, replacing control
+// characters with descriptive labels like <CR>, <LF>, <ESC>.
+func sanitizeForLog(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var b []byte
+	for _, ch := range data {
+		switch ch {
+		case '\r':
+			b = append(b, []byte("<CR>")...)
+		case '\n':
+			b = append(b, []byte("<LF>")...)
+		case 0x1b:
+			b = append(b, []byte("<ESC>")...)
+		case '\t':
+			b = append(b, []byte("<TAB>")...)
+		default:
+			if ch >= 0x20 && ch < 0x7f {
+				b = append(b, ch)
+			} else {
+				b = append(b, fmt.Appendf(nil, "<0x%02x>", ch)...)
+			}
+		}
+	}
+	return string(b)
 }
 
 // Resize changes the pseudo console dimensions.

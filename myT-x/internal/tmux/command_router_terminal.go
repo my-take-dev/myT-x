@@ -51,7 +51,20 @@ func (r *CommandRouter) attachPaneTerminal(pane *TmuxPane, workDir string, env m
 	return r.attachTerminalFn(pane, workDir, env, source)
 }
 
+func replacePaneOutputHistory(pane *TmuxPane, capacity int) *PaneOutputHistory {
+	if pane == nil {
+		return nil
+	}
+	releasePaneOutputHistory(pane)
+	history := NewPaneOutputHistory(capacity)
+	pane.OutputHistory = history
+	return history
+}
+
 func (r *CommandRouter) attachTerminal(pane *TmuxPane, workDir string, env map[string]string, source *TmuxPane) error {
+	if pane == nil {
+		return fmt.Errorf("pane is required")
+	}
 	shell := r.opts.DefaultShell
 	if shell == "" {
 		shell = "powershell.exe"
@@ -92,6 +105,8 @@ func (r *CommandRouter) attachTerminal(pane *TmuxPane, workDir string, env map[s
 		return bindErr
 	}
 
+	history := replacePaneOutputHistory(pane, defaultPaneOutputHistoryCapacity)
+
 	paneID := pane.IDString()
 	slog.Info("[terminal] attachTerminal: starting ReadLoop", "paneId", paneID, "shell", shell)
 	go func() {
@@ -112,6 +127,7 @@ func (r *CommandRouter) attachTerminal(pane *TmuxPane, workDir string, env map[s
 							)
 						}
 					}()
+					history.Write(chunk)
 					slog.Debug("[terminal] ReadLoop output", "paneId", paneID, "chunkLen", len(chunk))
 					r.emitter.Emit("tmux:pane-output", PaneOutputEvent{
 						PaneID: paneID,

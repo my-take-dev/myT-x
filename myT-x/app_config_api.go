@@ -55,13 +55,28 @@ func (a *App) SaveConfig(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	a.emitConfigUpdatedEvent(event)
+	return nil
+}
+
+// ToggleViewerSidebarMode flips the persisted viewer sidebar mode using the
+// latest in-memory config snapshot under cfgSaveMu to avoid stale overwrite.
+func (a *App) ToggleViewerSidebarMode() error {
+	event, err := a.toggleViewerSidebarModeWithLock()
+	if err != nil {
+		return err
+	}
+	a.emitConfigUpdatedEvent(event)
+	return nil
+}
+
+func (a *App) emitConfigUpdatedEvent(event configUpdatedEvent) {
 	a.applyRuntimePaneEnvUpdate(event)
 	a.applyRuntimeClaudeEnvUpdate(event)
 	// Event emission intentionally happens outside cfgSaveMu.
 	// Concurrent saves are ordered by Version, and frontend consumers must
 	// treat the highest version as authoritative.
 	a.emitRuntimeEvent("config:updated", event)
-	return nil
 }
 
 // applyRuntimePaneEnvUpdate updates router pane_env defaults while preventing
@@ -117,6 +132,25 @@ func (a *App) saveConfigWithLock(cfg config.Config) (configUpdatedEvent, error) 
 	a.cfgSaveMu.Lock()
 	defer a.cfgSaveMu.Unlock()
 
+	return a.saveConfigLocked(cfg)
+}
+
+func (a *App) toggleViewerSidebarModeWithLock() (configUpdatedEvent, error) {
+	a.cfgSaveMu.Lock()
+	defer a.cfgSaveMu.Unlock()
+
+	current := a.getConfigSnapshot()
+	if strings.TrimSpace(current.ViewerSidebarMode) == "docked" {
+		current.ViewerSidebarMode = config.DefaultConfig().ViewerSidebarMode
+	} else {
+		current.ViewerSidebarMode = "docked"
+	}
+	return a.saveConfigLocked(current)
+}
+
+// saveConfigLocked persists cfg and updates the in-memory snapshot.
+// REQUIRES: a.cfgSaveMu must be held by the caller.
+func (a *App) saveConfigLocked(cfg config.Config) (configUpdatedEvent, error) {
 	normalized, err := config.Save(a.configPath, cfg)
 	if err != nil {
 		return configUpdatedEvent{}, err

@@ -68,6 +68,11 @@ func applyNewProcessTransform(req *ipc.TmuxRequest) bool {
 }
 
 func applySendKeysTransform(req *ipc.TmuxRequest) bool {
+	// -X (copy-mode command): args are tmux internal commands, not shell input.
+	// Skip shell transform to preserve them as-is.
+	if v, ok := req.Flags["-X"].(bool); ok && v {
+		return false
+	}
 	translated := shellparser.TranslateSendKeysArgs(req.Args)
 	if slices.Equal(req.Args, translated) {
 		return false

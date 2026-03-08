@@ -3,9 +3,19 @@ package mcp
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 )
+
+// ManagerConfig holds configuration for creating a Manager.
+type ManagerConfig struct {
+	Registry *Registry
+	EmitFn   func(string, any)
+	// ResolveWorkDir returns the working directory for the given session.
+	// Used by startInstance to populate lspmcp.Config.RootDir.
+	ResolveWorkDir func(sessionName string) (string, error)
+}
 
 // Manager manages MCP instances across all sessions.
 // Each session has independent MCP state.
@@ -25,36 +35,48 @@ type Manager struct {
 	mu       sync.RWMutex
 	registry *Registry
 	// sessions maps session name -> (mcp_id -> *instance).
-	sessions map[string]map[string]*instance
-	emitFn   func(name string, payload any)
-	emitMu   sync.Mutex
-	closed   bool
+	sessions       map[string]map[string]*instance
+	emitFn         func(name string, payload any)
+	emitMu         sync.Mutex
+	closed         bool
+	resolveWorkDir func(string) (string, error)
 }
 
 // instance holds the per-session, per-MCP runtime state.
 type instance struct {
 	mu     sync.RWMutex
 	state  InstanceState
-	cancel func() // nil when stopped; set when process lifecycle is wired.
+	cancel func() // nil when stopped; calling it stops the running pipe server.
+	pipe   *MCPPipeServer
+	// generation is incremented each time SetEnabled changes state. It prevents
+	// stale startInstance goroutines from clobbering a newer enable/disable cycle.
+	generation uint64
 }
 
-// NewManager creates a Manager with the given registry and event emission callback.
-// The emitFn is called outside of locks to emit state-change events to the frontend.
-func NewManager(registry *Registry, emitFn func(string, any)) *Manager {
+// NewManager creates a Manager with the given config.
+// The EmitFn is called outside of locks to emit state-change events to the frontend.
+func NewManager(cfg ManagerConfig) *Manager {
+	registry := cfg.Registry
 	if registry == nil {
 		slog.Warn("[WARN-MCP] NewManager called with nil registry, using empty registry")
 		registry = NewRegistry()
 	}
+	emitFn := cfg.EmitFn
 	if emitFn == nil {
-		// NOTE: Defensive fallback — should not happen in production.
-		// Using a no-op emitter prevents nil pointer panics.
 		slog.Warn("[WARN-MCP] NewManager called with nil emitFn, events will be dropped")
 		emitFn = func(string, any) {}
 	}
+	resolveWorkDir := cfg.ResolveWorkDir
+	if resolveWorkDir == nil {
+		resolveWorkDir = func(string) (string, error) {
+			return ".", nil
+		}
+	}
 	return &Manager{
-		registry: registry,
-		sessions: make(map[string]map[string]*instance),
-		emitFn:   emitFn,
+		registry:       registry,
+		sessions:       make(map[string]map[string]*instance),
+		emitFn:         emitFn,
+		resolveWorkDir: resolveWorkDir,
 	}
 }
 
@@ -83,9 +105,7 @@ func (m *Manager) SnapshotForSession(sessionName string) ([]MCPSnapshot, error) 
 			return nil, nil
 		}
 		copied := make(map[string]*instance, len(sessionInstances))
-		for id, inst := range sessionInstances {
-			copied[id] = inst
-		}
+		maps.Copy(copied, sessionInstances)
 		return copied, nil
 	}()
 	if err != nil {
@@ -100,6 +120,9 @@ func (m *Manager) SnapshotForSession(sessionName string) ([]MCPSnapshot, error) 
 			snap.Enabled = inst.state.Enabled
 			snap.Status = inst.state.Status
 			snap.Error = inst.state.Error
+			if inst.pipe != nil {
+				snap.PipePath = inst.pipe.PipeName()
+			}
 			inst.mu.RUnlock()
 		}
 		snapshots = append(snapshots, snap)
@@ -128,7 +151,10 @@ func (m *Manager) SetEnabled(sessionName, mcpID string, enabled bool) error {
 	var (
 		cancelFn     func()
 		stateChanged bool
+		startNeeded  bool
 		operationErr error
+		inst         *instance
+		startGen     uint64
 	)
 	func() {
 		m.mu.Lock()
@@ -145,7 +171,7 @@ func (m *Manager) SetEnabled(sessionName, mcpID string, enabled bool) error {
 			sessionInstances = make(map[string]*instance)
 			m.sessions[sessionName] = sessionInstances
 		}
-		inst := sessionInstances[mcpID]
+		inst = sessionInstances[mcpID]
 		if inst == nil {
 			if enabled == def.DefaultEnabled {
 				return
@@ -168,20 +194,22 @@ func (m *Manager) SetEnabled(sessionName, mcpID string, enabled bool) error {
 		}
 
 		stateChanged = true
+		inst.generation++
 		inst.state.Enabled = enabled
 		if enabled {
-			// NOTE: Actual process start will be implemented in a future step.
-			// For now, just mark the status as "stopped" (process not yet managed).
-			inst.state.Status = StatusStopped
+			inst.state.Status = StatusStarting
 			inst.state.Error = ""
+			startNeeded = true
+			startGen = inst.generation
 			return
 		}
 
-		// Stop the MCP process if it's running.
+		// Stop the MCP pipe server if it's running.
 		if inst.cancel != nil {
 			cancelFn = inst.cancel
 			inst.cancel = nil
 		}
+		inst.pipe = nil
 		inst.state.Status = StatusStopped
 		inst.state.Error = ""
 	}()
@@ -190,18 +218,87 @@ func (m *Manager) SetEnabled(sessionName, mcpID string, enabled bool) error {
 	}
 
 	if cancelFn != nil {
-		// Fire-and-forget stop signal: caller does not wait for process teardown.
 		cancelFn()
 	}
 	if !stateChanged {
 		return nil
 	}
 
-	// Emit state change event OUTSIDE locks (#37, #41).
 	slog.Debug("[DEBUG-MCP] SetEnabled", "session", sessionName, "mcp", mcpID, "enabled", enabled)
 	m.emitStateChanged(sessionName, mcpID)
 
+	if startNeeded {
+		go m.startInstance(sessionName, mcpID, inst, def, startGen)
+	}
+
 	return nil
+}
+
+// startInstance starts an MCPPipeServer for the given instance in the background.
+// It resolves the session working directory, builds the pipe name, and transitions
+// the instance status to Running or Error.
+//
+// The gen parameter is the generation counter at the time SetEnabled was called.
+// If the instance's generation has changed by the time the pipe is ready, this
+// goroutine is stale (a newer enable/disable cycle has taken over) and must
+// stop the pipe and return without modifying the instance.
+func (m *Manager) startInstance(sessionName, mcpID string, inst *instance, def Definition, gen uint64) {
+	rootDir, err := m.resolveWorkDir(sessionName)
+	if err != nil {
+		slog.Warn("[DEBUG-MCP] failed to resolve work dir for instance start",
+			"session", sessionName, "mcp", mcpID, "error", err)
+		inst.mu.Lock()
+		if inst.generation != gen {
+			inst.mu.Unlock()
+			return
+		}
+		inst.state.Status = StatusError
+		inst.state.Error = fmt.Sprintf("failed to resolve work dir: %v", err)
+		inst.mu.Unlock()
+		m.emitStateChanged(sessionName, mcpID)
+		return
+	}
+
+	pipeName := BuildMCPPipeName(sessionName, mcpID)
+	pipe := NewMCPPipeServer(MCPPipeConfig{
+		PipeName:   pipeName,
+		LSPCommand: def.Command,
+		LSPArgs:    append([]string(nil), def.Args...),
+		RootDir:    rootDir,
+	})
+
+	if err := pipe.Start(); err != nil {
+		slog.Warn("[DEBUG-MCP] failed to start pipe server",
+			"session", sessionName, "mcp", mcpID, "pipe", pipeName, "error", err)
+		inst.mu.Lock()
+		if inst.generation != gen {
+			inst.mu.Unlock()
+			return
+		}
+		inst.state.Status = StatusError
+		inst.state.Error = fmt.Sprintf("failed to start pipe: %v", err)
+		inst.mu.Unlock()
+		m.emitStateChanged(sessionName, mcpID)
+		return
+	}
+
+	inst.mu.Lock()
+	// Check that the instance generation hasn't changed (could have been
+	// toggled off/on again while we were starting).
+	if inst.generation != gen {
+		inst.mu.Unlock()
+		pipe.Stop()
+		return
+	}
+	inst.state.Status = StatusRunning
+	inst.state.Error = ""
+	inst.pipe = pipe
+	inst.cancel = func() { pipe.Stop() }
+	inst.mu.Unlock()
+
+	slog.Debug("[DEBUG-MCP] instance started",
+		"session", sessionName, "mcp", mcpID, "pipe", pipeName)
+	m.emitStateChanged(sessionName, mcpID)
 }
 
 // GetDetail returns the full detail for one MCP in a session.
@@ -242,6 +339,9 @@ func (m *Manager) GetDetail(sessionName, mcpID string) (MCPSnapshot, error) {
 		snap.Enabled = inst.state.Enabled
 		snap.Status = inst.state.Status
 		snap.Error = inst.state.Error
+		if inst.pipe != nil {
+			snap.PipePath = inst.pipe.PipeName()
+		}
 		inst.mu.RUnlock()
 	}
 
@@ -280,17 +380,15 @@ func (m *Manager) CleanupSession(sessionName string) {
 			cancelFn = inst.cancel
 			inst.cancel = nil
 		}
+		inst.pipe = nil
 		inst.state.Status = StatusStopped
 		inst.state.Error = ""
 		inst.mu.Unlock()
 		if cancelFn != nil {
-			// Fire-and-forget cleanup; we intentionally do not block for teardown.
 			cancelFn()
 		}
 	}
 
-	// No frontend event is emitted here: session removal itself is driven by tmux
-	// lifecycle events, and MCP state for the removed session is no longer visible.
 	slog.Debug("[DEBUG-MCP] CleanupSession", "session", sessionName)
 }
 
@@ -324,6 +422,7 @@ func (m *Manager) close(emitLifecycleEvent bool) {
 				cancelFn = inst.cancel
 				inst.cancel = nil
 			}
+			inst.pipe = nil
 			inst.state.Status = StatusStopped
 			inst.state.Error = ""
 			inst.mu.Unlock()

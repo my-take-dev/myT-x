@@ -599,3 +599,62 @@ func (a *App) findSessionByRootPath(dir string) string {
 func (a *App) CheckDirectoryConflict(dir string) string {
 	return a.findSessionByRootPath(strings.TrimSpace(dir))
 }
+
+// openExplorerFn is the function used to launch the file explorer.
+// Replaced in tests to avoid launching explorer.exe.
+var openExplorerFn = openExplorer
+
+// OpenDirectoryInExplorer opens the session's working directory in Windows Explorer.
+// If the session has a worktree, Worktree.Path is used; otherwise RootPath is used.
+func (a *App) OpenDirectoryInExplorer(sessionName string) error {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return errors.New("session name is required")
+	}
+	sessions, err := a.requireSessions()
+	if err != nil {
+		return err
+	}
+
+	snapshots := sessions.Snapshot()
+	var found *tmux.SessionSnapshot
+	for i := range snapshots {
+		if snapshots[i].Name == sessionName {
+			found = &snapshots[i]
+			break
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("session not found: %s", sessionName)
+	}
+
+	targetPath := resolveSessionDirectory(*found)
+	if targetPath == "" {
+		return fmt.Errorf("no directory associated with session: %s", sessionName)
+	}
+
+	// Copy locals for goroutine closure to prevent future data-race risk
+	// if this function is later modified to reassign these variables.
+	pathCopy := targetPath
+	nameCopy := sessionName
+	go func() {
+		if err := openExplorerFn(pathCopy); err != nil {
+			slog.Warn("[WARN-EXPLORER] failed to open explorer",
+				"path", pathCopy, "session", nameCopy, "error", err)
+		}
+	}()
+	return nil
+}
+
+// resolveSessionDirectory returns the effective working directory for the session.
+// Worktree path takes priority over RootPath.
+// Both paths are TrimSpace'd symmetrically to avoid passing whitespace-padded
+// paths to explorer.exe or other consumers.
+func resolveSessionDirectory(s tmux.SessionSnapshot) string {
+	if s.Worktree != nil {
+		if p := strings.TrimSpace(s.Worktree.Path); p != "" {
+			return p
+		}
+	}
+	return strings.TrimSpace(s.RootPath)
+}

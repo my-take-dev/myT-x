@@ -903,6 +903,94 @@ func TestHandleSetEnvironmentBlockedKeyFiltering(t *testing.T) {
 	}
 }
 
+func TestHandleListSessionsFilter(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	router := NewCommandRouter(sessions, nil, RouterOptions{ShimAvailable: true})
+
+	// Create two sessions.
+	if _, _, err := sessions.CreateSession("demo", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession(demo) error: %v", err)
+	}
+	if _, _, err := sessions.CreateSession("other", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession(other) error: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		filter       string
+		format       string
+		wantContains []string
+		wantExcludes []string
+		wantLines    int
+	}{
+		{
+			name:         "equality filter matches one",
+			filter:       "#{==:#{session_name},demo}",
+			format:       "#{session_name}",
+			wantContains: []string{"demo"},
+			wantExcludes: []string{"other"},
+			wantLines:    1,
+		},
+		{
+			name:         "inequality filter excludes one",
+			filter:       "#{!=:#{session_name},demo}",
+			format:       "#{session_name}",
+			wantContains: []string{"other"},
+			wantExcludes: []string{"demo"},
+			wantLines:    1,
+		},
+		{
+			name:         "truthy variable includes all",
+			filter:       "#{session_name}",
+			format:       "#{session_name}",
+			wantContains: []string{"demo", "other"},
+			wantLines:    2,
+		},
+		{
+			name:      "literal zero excludes all",
+			filter:    "0",
+			format:    "#{session_name}",
+			wantLines: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flags := map[string]any{"-f": tt.filter}
+			if tt.format != "" {
+				flags["-F"] = tt.format
+			}
+			resp := router.Execute(ipc.TmuxRequest{
+				Command: "list-sessions",
+				Flags:   flags,
+			})
+			if resp.ExitCode != 0 {
+				t.Fatalf("exit code = %d, stderr = %q", resp.ExitCode, resp.Stderr)
+			}
+
+			output := strings.TrimRight(resp.Stdout, "\n")
+			var lines []string
+			if output != "" {
+				lines = strings.Split(output, "\n")
+			}
+			if len(lines) != tt.wantLines {
+				t.Fatalf("lines = %d, want %d, stdout = %q", len(lines), tt.wantLines, resp.Stdout)
+			}
+			for _, s := range tt.wantContains {
+				if !strings.Contains(resp.Stdout, s) {
+					t.Fatalf("stdout %q does not contain %q", resp.Stdout, s)
+				}
+			}
+			for _, s := range tt.wantExcludes {
+				if strings.Contains(resp.Stdout, s) {
+					t.Fatalf("stdout %q should not contain %q", resp.Stdout, s)
+				}
+			}
+		})
+	}
+}
+
 // TestBuildPaneEnvForSessionBlockedKeyFiltering verifies that buildPaneEnvForSession
 // filters blocked system keys arriving via inheritedEnv (Layer 2) and shimEnv (Layer 4).
 //
