@@ -160,6 +160,7 @@ export namespace config {
 	    claude_env?: ClaudeEnvConfig;
 	    websocket_port: number;
 	    viewer_shortcuts?: Record<string, string>;
+	    viewer_sidebar_mode?: string;
 	    default_session_dir?: string;
 	    mcp_servers?: MCPServerConfig[];
 	
@@ -181,6 +182,7 @@ export namespace config {
 	        this.claude_env = this.convertValues(source["claude_env"], ClaudeEnvConfig);
 	        this.websocket_port = source["websocket_port"];
 	        this.viewer_shortcuts = source["viewer_shortcuts"];
+	        this.viewer_sidebar_mode = source["viewer_sidebar_mode"];
 	        this.default_session_dir = source["default_session_dir"];
 	        this.mcp_servers = this.convertValues(source["mcp_servers"], MCPServerConfig);
 	    }
@@ -249,6 +251,27 @@ export namespace install {
 	        this.path_updated = source["path_updated"];
 	        this.restart_needed = source["restart_needed"];
 	        this.message = source["message"];
+	    }
+	}
+
+}
+
+export namespace ipc {
+	
+	export class MCPStdioResolvePayload {
+	    session_name: string;
+	    mcp_id: string;
+	    pipe_path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MCPStdioResolvePayload(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session_name = source["session_name"];
+	        this.mcp_id = source["mcp_id"];
+	        this.pipe_path = source["pipe_path"];
 	    }
 	}
 
@@ -544,6 +567,9 @@ export namespace mcp {
 	    error?: string;
 	    usage_sample?: string;
 	    config_params?: ConfigParam[];
+	    pipe_path?: string;
+	    bridge_command?: string;
+	    bridge_args?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Snapshot(source);
@@ -559,6 +585,9 @@ export namespace mcp {
 	        this.error = source["error"];
 	        this.usage_sample = source["usage_sample"];
 	        this.config_params = this.convertValues(source["config_params"], ConfigParam);
+	        this.pipe_path = source["pipe_path"];
+	        this.bridge_command = source["bridge_command"];
+	        this.bridge_args = source["bridge_args"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

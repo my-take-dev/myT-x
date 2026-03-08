@@ -87,16 +87,17 @@ type TmuxWindow struct {
 
 // TmuxPane models a tmux-like pane.
 type TmuxPane struct {
-	ID       int                `json:"id"`
-	idString string             `json:"-"`
-	Index    int                `json:"index"`
-	Terminal *terminal.Terminal `json:"-"`
-	Title    string             `json:"title,omitempty"`
-	Active   bool               `json:"active"`
-	Width    int                `json:"width"`
-	Height   int                `json:"height"`
-	Env      map[string]string  `json:"env,omitempty"`
-	Window   *TmuxWindow        `json:"-"`
+	ID            int                `json:"id"`
+	idString      string             `json:"-"`
+	Index         int                `json:"index"`
+	Terminal      *terminal.Terminal `json:"-"`
+	Title         string             `json:"title,omitempty"`
+	Active        bool               `json:"active"`
+	Width         int                `json:"width"`
+	Height        int                `json:"height"`
+	Env           map[string]string  `json:"env,omitempty"`
+	OutputHistory *PaneOutputHistory `json:"-"`
+	Window        *TmuxWindow        `json:"-"`
 }
 
 func (p *TmuxPane) IDString() string {

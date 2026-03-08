@@ -3,13 +3,10 @@ package tmux
 import (
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
-
-var formatVarPattern = regexp.MustCompile(`#\{([^}]+)\}`)
 
 const (
 	defaultSessionListFormat = "#{session_name}: #{session_windows} windows (created #{session_created_human})"
@@ -80,17 +77,139 @@ func firstPaneInSession(session *TmuxSession) *TmuxPane {
 // requirement. See session_manager_windows.go for the "Locked"/"RLocked"
 // suffix convention used by SessionManager methods that operate under lock.
 //
-// NOTE (S-46): Nested #{...} placeholders (e.g. "#{window_#{idx}}") are NOT
-// supported. The regex-based expansion performs a single pass; nested braces
-// will produce an empty string for the unrecognised inner variable name.
+// NOTE (S-46): Nested #{...} placeholders are supported via manual brace-matching
+// parser (expandFormatNested). This enables comparison operators like
+// #{==:#{session_name},value} where inner #{var} references are expanded
+// before the comparison is evaluated.
 func expandFormat(format string, pane *TmuxPane) string {
-	return formatVarPattern.ReplaceAllStringFunc(format, func(match string) string {
-		parts := formatVarPattern.FindStringSubmatch(match)
-		if len(parts) != 2 {
-			return ""
+	return expandFormatNested(format, pane)
+}
+
+// expandFormatNested expands #{...} placeholders with support for nested braces.
+// Unlike regex-based expansion, this parser correctly handles nested #{...} inside
+// comparison operators like #{==:#{session_name},demo}.
+func expandFormatNested(format string, pane *TmuxPane) string {
+	var out strings.Builder
+	out.Grow(len(format))
+	i := 0
+	for i < len(format) {
+		// Look for "#{" start marker.
+		if i+1 < len(format) && format[i] == '#' && format[i+1] == '{' {
+			// Find the matching closing brace, respecting nesting.
+			inner, end := extractNestedBraces(format, i+2)
+			if end < 0 {
+				// No matching close brace; emit the rest as-is.
+				slog.Debug("[DEBUG-FORMAT] expandFormatNested: unclosed brace in format",
+					"snippet", format[i:])
+				out.WriteString(format[i:])
+				break
+			}
+			out.WriteString(resolveFormatExpr(inner, pane))
+			i = end + 1 // skip past the closing '}'
+		} else {
+			out.WriteByte(format[i])
+			i++
 		}
-		return lookupFormatVariable(parts[1], pane)
-	})
+	}
+	return out.String()
+}
+
+// extractNestedBraces extracts the content between braces starting at position start,
+// respecting nested #{...} pairs. Returns (inner content, index of closing brace).
+// Returns ("", -1) if no matching closing brace is found.
+func extractNestedBraces(s string, start int) (string, int) {
+	depth := 1
+	i := start
+	for i < len(s) {
+		if i+1 < len(s) && s[i] == '#' && s[i+1] == '{' {
+			depth++
+			i += 2
+			continue
+		}
+		if s[i] == '}' {
+			depth--
+			if depth == 0 {
+				return s[start:i], i
+			}
+		}
+		i++
+	}
+	return "", -1
+}
+
+// resolveFormatExpr resolves a single format expression (the content inside #{...}).
+// Handles comparison operators (==, !=) and plain variable names.
+func resolveFormatExpr(expr string, pane *TmuxPane) string {
+	// Handle comparison operators: ==:lhs,rhs and !=:lhs,rhs
+	if result, ok := evaluateComparisonExpr(expr, pane); ok {
+		return result
+	}
+	return lookupFormatVariable(expr, pane)
+}
+
+// evaluateComparisonExpr handles ==:a,b and !=:a,b comparison expressions.
+// Both operands are expanded for nested #{var} references before comparison.
+// Returns ("1"/"0", true) if the expression is a comparison, or ("", false) otherwise.
+func evaluateComparisonExpr(expr string, pane *TmuxPane) (string, bool) {
+	var op string
+	var rest string
+	if strings.HasPrefix(expr, "==:") {
+		op = "=="
+		rest = expr[3:]
+	} else if strings.HasPrefix(expr, "!=:") {
+		op = "!="
+		rest = expr[3:]
+	} else {
+		return "", false
+	}
+
+	// Split on first comma to get lhs,rhs.
+	commaIdx := findTopLevelComma(rest)
+	if commaIdx < 0 {
+		slog.Debug("[DEBUG-FORMAT] malformed comparison expr: missing comma", "op", op, "expr", expr)
+		return "", false
+	}
+	lhs := rest[:commaIdx]
+	rhs := rest[commaIdx+1:]
+
+	// Expand nested #{var} references in both operands.
+	lhs = expandFormat(lhs, pane)
+	rhs = expandFormat(rhs, pane)
+
+	switch op {
+	case "==":
+		if lhs == rhs {
+			return "1", true
+		}
+		return "0", true
+	case "!=":
+		if lhs != rhs {
+			return "1", true
+		}
+		return "0", true
+	default:
+		return "", false
+	}
+}
+
+// findTopLevelComma finds the first comma that is not inside nested #{...}.
+func findTopLevelComma(s string) int {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		if i+1 < len(s) && s[i] == '#' && s[i+1] == '{' {
+			depth++
+			i++ // skip '{'
+			continue
+		}
+		if s[i] == '}' && depth > 0 {
+			depth--
+			continue
+		}
+		if s[i] == ',' && depth == 0 {
+			return i
+		}
+	}
+	return -1
 }
 
 func lookupFormatVariable(name string, pane *TmuxPane) string {
@@ -134,6 +253,8 @@ func lookupFormatVariable(name string, pane *TmuxPane) string {
 			return " (active)"
 		}
 		return ""
+	case "pane_title":
+		return pane.Title
 	case "window_index":
 		// COMPATIBILITY DEVIATION (I-13): tmux's #{window_index} returns a
 		// 0-based sequential position that shifts when windows are reordered
@@ -266,6 +387,148 @@ func findPaneInSession(session *TmuxSession, paneID int) *TmuxPane {
 		}
 	}
 	return nil
+}
+
+// evaluateFilter evaluates a tmux filter expression against a pane context.
+// An empty or whitespace-only filter always returns true (include all items).
+// The filter string is expanded via expandFormat, then checked for truthiness.
+// A result of "" or "0" means the item is excluded (returns false).
+// Unknown variables expand to "" which evaluates as false (item excluded).
+func evaluateFilter(filter string, pane *TmuxPane) bool {
+	if strings.TrimSpace(filter) == "" {
+		return true
+	}
+	result := expandFormat(filter, pane)
+	if result == "" || result == "0" {
+		slog.Debug("[DEBUG-FILTER] pane excluded by filter",
+			"filter", filter, "expanded", result)
+		return false
+	}
+	return true
+}
+
+// evaluateFilterForSession evaluates a filter expression using session-level
+// variables. An empty or whitespace-only filter always returns true (include all items).
+// The active pane of the active window is used as context for variable expansion,
+// matching tmux's behavior for list-sessions filtering.
+func evaluateFilterForSession(filter string, session *TmuxSession) bool {
+	if strings.TrimSpace(filter) == "" {
+		return true
+	}
+	pane := firstPaneInSession(session)
+	result := expandFormat(filter, pane)
+	return result != "" && result != "0"
+}
+
+// defaultBufferListFormat is the default format for list-buffers output.
+const defaultBufferListFormat = "#{buffer_name}: #{buffer_size} bytes: \"#{buffer_sample}\""
+
+// formatBufferLine formats a paste buffer for list-buffers output.
+// Uses expandBufferFormat which supports nested #{...} and comparison operators.
+func formatBufferLine(buf *PasteBuffer, customFormat string) string {
+	format := strings.TrimSpace(customFormat)
+	if format == "" {
+		format = defaultBufferListFormat
+	}
+	return expandBufferFormat(format, buf)
+}
+
+// expandBufferFormat expands #{...} placeholders for buffer variables.
+// Uses expandFormatNested-style manual brace-matching to correctly handle
+// nested #{...} inside comparison operators like #{==:#{buffer_name},foo}.
+func expandBufferFormat(format string, buf *PasteBuffer) string {
+	var out strings.Builder
+	out.Grow(len(format))
+	i := 0
+	for i < len(format) {
+		if i+1 < len(format) && format[i] == '#' && format[i+1] == '{' {
+			inner, end := extractNestedBraces(format, i+2)
+			if end < 0 {
+				slog.Debug("[DEBUG-FORMAT] expandBufferFormat: unclosed brace in format",
+					"snippet", format[i:])
+				out.WriteString(format[i:])
+				break
+			}
+			out.WriteString(resolveBufferFormatExpr(inner, buf))
+			i = end + 1
+		} else {
+			out.WriteByte(format[i])
+			i++
+		}
+	}
+	return out.String()
+}
+
+// resolveBufferFormatExpr resolves a single format expression for buffer context.
+// Handles comparison operators (==, !=) and plain buffer variable names.
+func resolveBufferFormatExpr(expr string, buf *PasteBuffer) string {
+	// Handle comparison operators: ==:lhs,rhs and !=:lhs,rhs
+	var op string
+	var rest string
+	if strings.HasPrefix(expr, "==:") {
+		op = "=="
+		rest = expr[3:]
+	} else if strings.HasPrefix(expr, "!=:") {
+		op = "!="
+		rest = expr[3:]
+	} else {
+		return lookupBufferVariable(expr, buf)
+	}
+
+	commaIdx := findTopLevelComma(rest)
+	if commaIdx < 0 {
+		slog.Debug("[DEBUG-FORMAT] malformed buffer comparison expr: missing comma", "op", op, "expr", expr)
+		return ""
+	}
+	lhs := expandBufferFormat(rest[:commaIdx], buf)
+	rhs := expandBufferFormat(rest[commaIdx+1:], buf)
+
+	switch op {
+	case "==":
+		if lhs == rhs {
+			return "1"
+		}
+		return "0"
+	case "!=":
+		if lhs != rhs {
+			return "1"
+		}
+		return "0"
+	default:
+		return ""
+	}
+}
+
+func lookupBufferVariable(name string, buf *PasteBuffer) string {
+	if buf == nil {
+		switch name {
+		case "buffer_name":
+			return ""
+		case "buffer_size":
+			return "0"
+		case "buffer_sample":
+			return ""
+		default:
+			return ""
+		}
+	}
+	switch name {
+	case "buffer_name":
+		return buf.Name
+	case "buffer_size":
+		return strconv.Itoa(len(buf.Data))
+	case "buffer_sample":
+		sample := string(buf.Data)
+		if len(sample) > 50 {
+			sample = sample[:50]
+		}
+		// Replace newlines with spaces for single-line display.
+		sample = strings.ReplaceAll(sample, "\n", " ")
+		sample = strings.ReplaceAll(sample, "\r", "")
+		return sample
+	default:
+		return ""
+	}
 }
 
 func joinLines(lines []string) string {

@@ -384,6 +384,47 @@ func TestTranslateSendKeysArgsIntegration(t *testing.T) {
 	}
 }
 
+func TestIsSendKeysSpecialArgCaseInsensitive(t *testing.T) {
+	tests := []struct {
+		name string
+		arg  string
+		want bool
+	}{
+		{name: "Enter mixed case", arg: "Enter", want: true},
+		{name: "enter lowercase", arg: "enter", want: true},
+		{name: "ENTER uppercase", arg: "ENTER", want: true},
+		{name: "KPEnter mixed case", arg: "KPEnter", want: true},
+		{name: "kpenter lowercase", arg: "kpenter", want: true},
+		{name: "KPENTER uppercase", arg: "KPENTER", want: true},
+		{name: "Space mixed case", arg: "Space", want: true},
+		{name: "C-[ mixed case", arg: "C-[", want: true},
+		{name: "c-[ lowercase", arg: "c-[", want: true},
+		// TC-8: uppercase variants for non-Enter keys
+		{name: "SPACE uppercase", arg: "SPACE", want: true},
+		{name: "TAB uppercase", arg: "TAB", want: true},
+		{name: "BSPACE uppercase", arg: "BSPACE", want: true},
+		{name: "ESCAPE uppercase", arg: "ESCAPE", want: true},
+		{name: "C-C uppercase", arg: "C-C", want: true},
+		{name: "C-D uppercase", arg: "C-D", want: true},
+		{name: "C-Z uppercase", arg: "C-Z", want: true},
+		// TC-2: TrimSpace verification
+		{name: "Enter with leading space", arg: " Enter", want: true},
+		{name: "Enter with trailing space", arg: "Enter ", want: true},
+		{name: "Enter with both spaces", arg: " Enter ", want: true},
+		{name: "Space key with spaces", arg: " Space ", want: true},
+		{name: "unknown token", arg: "NotAKey", want: false},
+		{name: "empty token", arg: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSendKeysSpecialArg(tt.arg); got != tt.want {
+				t.Fatalf("isSendKeysSpecialArg(%q) = %v, want %v", tt.arg, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseUnixCommandPublicAPI(t *testing.T) {
 	args := []string{
 		`cd 'C:\workspace' && CLAUDECODE=1 'C:\bin\claude.exe' --resume abc`,

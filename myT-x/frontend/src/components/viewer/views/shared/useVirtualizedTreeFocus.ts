@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import type {RefObject} from "react";
 import type {TreeNavigationNode} from "./treeNavigation";
 import {findParentDirectoryIndex} from "./treeNavigation";
@@ -33,6 +33,12 @@ export function useVirtualizedTreeFocus<T extends TreeFocusNode>(
     readonly findParentIndex: (index: number) => number;
 } {
     const [focusedIndex, setFocusedIndex] = useState(0);
+    // Ref mirrors focusedIndex so focusIndex callback stays referentially stable
+    // across focus changes, preventing O(n) row re-render via areEqual checks.
+    const focusedIndexRef = useRef(focusedIndex);
+    useEffect(() => {
+        focusedIndexRef.current = focusedIndex;
+    }, [focusedIndex]);
 
     const focusIndex = useCallback((index: number) => {
         if (flatNodes.length === 0) {
@@ -40,6 +46,7 @@ export function useVirtualizedTreeFocus<T extends TreeFocusNode>(
             return;
         }
         const clamped = Math.max(0, Math.min(index, flatNodes.length - 1));
+        if (clamped === focusedIndexRef.current) return;
         setFocusedIndex(clamped);
         listRef.current?.scrollToItem(clamped, "smart");
     }, [flatNodes.length, listRef]);

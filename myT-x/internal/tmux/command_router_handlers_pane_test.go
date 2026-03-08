@@ -726,3 +726,488 @@ func TestHandleResizePane(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleSendKeysCopyMode(t *testing.T) {
+	tests := []struct {
+		name         string
+		args         []string
+		wantExitCode int
+	}{
+		{
+			name:         "cancel command succeeds",
+			args:         []string{"cancel"},
+			wantExitCode: 0,
+		},
+		{
+			name:         "Cancel case-insensitive succeeds",
+			args:         []string{"Cancel"},
+			wantExitCode: 0,
+		},
+		{
+			name:         "known command page-up succeeds",
+			args:         []string{"page-up"},
+			wantExitCode: 0,
+		},
+		{
+			name:         "unknown command silently succeeds",
+			args:         []string{"select-word"},
+			wantExitCode: 0,
+		},
+		{
+			name:         "no args silently succeeds",
+			args:         nil,
+			wantExitCode: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			emitter := &captureEmitter{}
+			sessions := NewSessionManager()
+			t.Cleanup(sessions.Close)
+
+			router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+			// Create session via router to attach a real terminal.
+			resp := router.Execute(ipc.TmuxRequest{
+				Command: "new-session",
+				Flags: map[string]any{
+					"-s": "demo",
+					"-x": 80,
+					"-y": 24,
+				},
+			})
+			if resp.ExitCode != 0 {
+				t.Fatalf("new-session failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+			}
+
+			resp = router.Execute(ipc.TmuxRequest{
+				Command: "send-keys",
+				Flags: map[string]any{
+					"-t": "%0",
+					"-X": true,
+				},
+				Args: tt.args,
+			})
+			if resp.ExitCode != tt.wantExitCode {
+				t.Fatalf("ExitCode = %d, want %d, stderr=%q", resp.ExitCode, tt.wantExitCode, resp.Stderr)
+			}
+		})
+	}
+}
+
+func TestHandleListPanesAllSessions(t *testing.T) {
+	emitter := &captureEmitter{}
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// Create two sessions with panes.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags: map[string]any{
+			"-s": "alpha",
+			"-x": 80,
+			"-y": 24,
+		},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session alpha failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags: map[string]any{
+			"-s": "beta",
+			"-x": 80,
+			"-y": 24,
+		},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session beta failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	// list-panes -a should return panes from both sessions.
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "list-panes",
+		Flags: map[string]any{
+			"-a": true,
+		},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes -a failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	lines := strings.Split(strings.TrimRight(resp.Stdout, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("list-panes -a returned %d lines, want at least 2 (one per session)", len(lines))
+	}
+
+	// With custom format, verify session_name is available.
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "list-panes",
+		Flags: map[string]any{
+			"-a": true,
+			"-F": "#{session_name}:#{pane_id}",
+		},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes -a -F failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	output := resp.Stdout
+	if !strings.Contains(output, "alpha:") {
+		t.Fatalf("list-panes -a -F output missing 'alpha:': %q", output)
+	}
+	if !strings.Contains(output, "beta:") {
+		t.Fatalf("list-panes -a -F output missing 'beta:': %q", output)
+	}
+}
+
+func TestHandleSendKeysMousePassthrough(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	session, _, err := sessions.CreateSession("test", "0", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession error: %v", err)
+	}
+	pane := session.Windows[0].Panes[0]
+	pane.Terminal = &terminal.Terminal{}
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "send-keys",
+		Flags: map[string]any{
+			"-t": pane.IDString(),
+			"-M": true,
+		},
+		Args: []string{"some-mouse-event"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("send-keys -M exit code = %d, want 0, stderr = %q", resp.ExitCode, resp.Stderr)
+	}
+	if resp.Stdout != "" {
+		t.Fatalf("send-keys -M stdout = %q, want empty", resp.Stdout)
+	}
+}
+
+// TestHandleSendKeysMousePassthroughNilTerminal verifies that -M succeeds even
+// when the target pane has no Terminal (the whole point of C-1 fix).
+func TestHandleSendKeysMousePassthroughNilTerminal(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	session, _, err := sessions.CreateSession("test", "0", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession error: %v", err)
+	}
+	pane := session.Windows[0].Panes[0]
+	// Explicitly leave Terminal as nil to test the C-1 fix.
+	pane.Terminal = nil
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "send-keys",
+		Flags: map[string]any{
+			"-t": pane.IDString(),
+			"-M": true,
+		},
+		Args: []string{"mouse-data"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("send-keys -M with nil Terminal: exit code = %d, want 0, stderr = %q",
+			resp.ExitCode, resp.Stderr)
+	}
+}
+
+func TestHandleCopyMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		quit      bool
+		wantEvent string
+	}{
+		{
+			name:      "enter copy mode",
+			quit:      false,
+			wantEvent: "tmux:copy-mode-enter",
+		},
+		{
+			name:      "exit copy mode",
+			quit:      true,
+			wantEvent: "tmux:copy-mode-exit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessions := NewSessionManager()
+			t.Cleanup(sessions.Close)
+			emitter := &captureEmitter{}
+			router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+			session, _, err := sessions.CreateSession("test", "0", 120, 40)
+			if err != nil {
+				t.Fatalf("CreateSession error: %v", err)
+			}
+			pane := session.Windows[0].Panes[0]
+
+			flags := map[string]any{"-t": pane.IDString()}
+			if tt.quit {
+				flags["-q"] = true
+			}
+
+			resp := router.Execute(ipc.TmuxRequest{
+				Command: "copy-mode",
+				Flags:   flags,
+			})
+			if resp.ExitCode != 0 {
+				t.Fatalf("copy-mode exit code = %d, want 0, stderr = %q", resp.ExitCode, resp.Stderr)
+			}
+
+			events := emitter.Events()
+			found := false
+			for _, ev := range events {
+				if ev.name == tt.wantEvent {
+					payload := ev.payload.(map[string]any)
+					if payload["paneId"] != pane.IDString() {
+						t.Fatalf("event paneId = %q, want %q", payload["paneId"], pane.IDString())
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected event %q not found in %v", tt.wantEvent, emitter.EventNames())
+			}
+		})
+	}
+}
+
+func TestHandleCopyModeInvalidTarget(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	router := NewCommandRouter(sessions, nil, RouterOptions{})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "copy-mode",
+		Flags:   map[string]any{"-t": "%999"},
+	})
+	if resp.ExitCode != 1 {
+		t.Fatalf("copy-mode with invalid target exit code = %d, want 1", resp.ExitCode)
+	}
+}
+
+func TestHandleListPanesWithFilter(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// Create session with pane.
+	if _, _, err := sessions.CreateSession("test", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession error: %v", err)
+	}
+
+	// Filter that matches active pane (pane_active = "1").
+	resp := router.Execute(ipc.TmuxRequest{
+		Command:    "list-panes",
+		Flags:      map[string]any{"-a": true, "-f": "#{pane_active}"},
+		CallerPane: "%0",
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes -f exit code = %d, stderr = %q", resp.ExitCode, resp.Stderr)
+	}
+	if strings.TrimSpace(resp.Stdout) == "" {
+		t.Fatal("list-panes with active filter should return at least one pane")
+	}
+
+	// Filter that matches nothing (equality check).
+	resp = router.Execute(ipc.TmuxRequest{
+		Command:    "list-panes",
+		Flags:      map[string]any{"-a": true, "-f": "#{==:#{session_name},nonexistent}"},
+		CallerPane: "%0",
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes -f exit code = %d, stderr = %q", resp.ExitCode, resp.Stderr)
+	}
+	if strings.TrimSpace(resp.Stdout) != "" {
+		t.Fatalf("list-panes with nonexistent filter should return empty, got %q", resp.Stdout)
+	}
+}
+
+func TestHandleListPanesFilterWithoutAllFlag(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// Create session via router for proper terminal.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "demo", "-x": 120, "-y": 40},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	// Split to have two panes.
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "split-window",
+		Flags:   map[string]any{"-t": "demo:0", "-h": true},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("split-window failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	tests := []struct {
+		name      string
+		filter    string
+		format    string
+		wantLines int
+	}{
+		{
+			name:      "active pane filter",
+			filter:    "#{pane_active}",
+			format:    "#{pane_id}",
+			wantLines: 1,
+		},
+		{
+			name:      "zero filter excludes all",
+			filter:    "0",
+			format:    "#{pane_id}",
+			wantLines: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := router.Execute(ipc.TmuxRequest{
+				Command:    "list-panes",
+				Flags:      map[string]any{"-t": "demo", "-f": tt.filter, "-F": tt.format},
+				CallerPane: "%0",
+			})
+			if resp.ExitCode != 0 {
+				t.Fatalf("exit code = %d, stderr = %q", resp.ExitCode, resp.Stderr)
+			}
+			output := strings.TrimRight(resp.Stdout, "\n")
+			var lines []string
+			if output != "" {
+				lines = strings.Split(output, "\n")
+			}
+			if len(lines) != tt.wantLines {
+				t.Fatalf("lines = %d, want %d, stdout = %q", len(lines), tt.wantLines, resp.Stdout)
+			}
+		})
+	}
+}
+
+func TestHandleCopyModeEventPayload(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	session, _, err := sessions.CreateSession("test", "0", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession error: %v", err)
+	}
+	pane := session.Windows[0].Panes[0]
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "copy-mode",
+		Flags:   map[string]any{"-t": pane.IDString()},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("copy-mode exit code = %d, stderr = %q", resp.ExitCode, resp.Stderr)
+	}
+
+	events := emitter.Events()
+	found := false
+	for _, ev := range events {
+		if ev.name == "tmux:copy-mode-enter" {
+			payload := ev.payload.(map[string]any)
+			sessionName, ok := payload["sessionName"].(string)
+			if !ok {
+				t.Fatal("sessionName missing from event payload")
+			}
+			if sessionName != "test" {
+				t.Fatalf("sessionName = %q, want %q", sessionName, "test")
+			}
+			paneId, ok := payload["paneId"].(string)
+			if !ok {
+				t.Fatal("paneId missing from event payload")
+			}
+			if paneId != pane.IDString() {
+				t.Fatalf("paneId = %q, want %q", paneId, pane.IDString())
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("tmux:copy-mode-enter event not found")
+	}
+}
+
+func TestHandleListPanesFilterVerifiesPaneIDs(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// Create two sessions.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "alpha", "-x": 80, "-y": 24},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session alpha failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "beta", "-x": 80, "-y": 24},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session beta failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	// list-panes -a -f filtering by session name should include matching pane IDs only.
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "list-panes",
+		Flags:   map[string]any{"-a": true, "-f": "#{==:#{session_name},alpha}", "-F": "#{session_name}:#{pane_id}"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes exit code = %d, stderr = %q", resp.ExitCode, resp.Stderr)
+	}
+	if !strings.Contains(resp.Stdout, "alpha:") {
+		t.Fatalf("stdout should contain 'alpha:' but got %q", resp.Stdout)
+	}
+	if strings.Contains(resp.Stdout, "beta:") {
+		t.Fatalf("stdout should NOT contain 'beta:' but got %q", resp.Stdout)
+	}
+}
+
+func TestHandleListPanesAllSessionsEmpty(t *testing.T) {
+	emitter := &captureEmitter{}
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// list-panes -a with no sessions should return empty.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "list-panes",
+		Flags: map[string]any{
+			"-a": true,
+		},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	if strings.TrimSpace(resp.Stdout) != "" {
+		t.Fatalf("Stdout = %q, want empty", resp.Stdout)
+	}
+}

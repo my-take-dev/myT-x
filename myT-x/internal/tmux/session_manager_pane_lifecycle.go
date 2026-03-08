@@ -110,6 +110,7 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 		result.closeTargets = append(result.closeTargets, pane.Terminal)
 		pane.Terminal = nil
 	}
+	releasePaneOutputHistory(pane)
 	delete(m.panes, id)
 
 	nextWindows := make([]*TmuxWindow, 0, len(session.Windows))
@@ -180,17 +181,28 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 		// terminals from any remaining panes that are still tracked in
 		// m.panes for this session. In normal flow the killed pane was
 		// the only one, but this protects against data inconsistency.
+		orphanedPanes := make([]struct {
+			id   int
+			pane *TmuxPane
+		}, 0)
 		for pid, orphan := range m.panes {
 			if orphan == nil || orphan.Window == nil || orphan.Window.Session != session {
 				continue
 			}
-			if orphan.Terminal != nil {
-				result.closeTargets = append(result.closeTargets, orphan.Terminal)
-				orphan.Terminal = nil
+			orphanedPanes = append(orphanedPanes, struct {
+				id   int
+				pane *TmuxPane
+			}{id: pid, pane: orphan})
+		}
+		for _, orphaned := range orphanedPanes {
+			if orphaned.pane.Terminal != nil {
+				result.closeTargets = append(result.closeTargets, orphaned.pane.Terminal)
+				orphaned.pane.Terminal = nil
 			}
-			delete(m.panes, pid)
+			releasePaneOutputHistory(orphaned.pane)
+			delete(m.panes, orphaned.id)
 			slog.Warn("[WARN-PANE] KillPane: cleaned up orphaned pane during session deletion",
-				"paneId", orphan.IDString(),
+				"paneId", orphaned.pane.IDString(),
 				"session", result.sessionName,
 			)
 		}

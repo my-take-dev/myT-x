@@ -211,6 +211,12 @@ func TestIsZeroConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "viewer sidebar mode set",
+			mutate: func(cfg *Config) {
+				cfg.ViewerSidebarMode = "docked"
+			},
+		},
+		{
 			name: "default session dir set",
 			mutate: func(cfg *Config) {
 				cfg.DefaultSessionDir = defaultSessionDir
@@ -561,6 +567,9 @@ func TestDefaultConfigWorktreeDefaults(t *testing.T) {
 	}
 	if cfg.Worktree.CopyDirs == nil || len(cfg.Worktree.CopyDirs) != 0 {
 		t.Errorf("Worktree.CopyDirs: want non-nil empty slice, got %v", cfg.Worktree.CopyDirs)
+	}
+	if cfg.ViewerSidebarMode != "overlay" {
+		t.Errorf("ViewerSidebarMode default = %q, want %q", cfg.ViewerSidebarMode, "overlay")
 	}
 }
 
@@ -1042,6 +1051,36 @@ func TestSave(t *testing.T) {
 		}
 	})
 
+	t.Run("fills viewer sidebar default for non-zero partial config", func(t *testing.T) {
+		path := newConfigPathForSaveTest(t, "config.yaml")
+		normalized, err := Save(path, Config{Shell: "cmd.exe"})
+		if err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+		if normalized.Shell != "cmd.exe" {
+			t.Fatalf("normalized.Shell = %q, want %q", normalized.Shell, "cmd.exe")
+		}
+		if normalized.ViewerSidebarMode != DefaultConfig().ViewerSidebarMode {
+			t.Fatalf(
+				"normalized.ViewerSidebarMode = %q, want %q",
+				normalized.ViewerSidebarMode,
+				DefaultConfig().ViewerSidebarMode,
+			)
+		}
+
+		loaded, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if loaded.ViewerSidebarMode != DefaultConfig().ViewerSidebarMode {
+			t.Fatalf(
+				"loaded.ViewerSidebarMode = %q, want %q",
+				loaded.ViewerSidebarMode,
+				DefaultConfig().ViewerSidebarMode,
+			)
+		}
+	})
+
 	t.Run("rejects invalid shell", func(t *testing.T) {
 		path := newConfigPathForSaveTest(t, "config.yaml")
 		cfg := DefaultConfig()
@@ -1323,8 +1362,8 @@ func TestAllowedShellListIsSorted(t *testing.T) {
 }
 
 func TestConfigStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeFor[Config]().NumField(); got != 14 {
-		t.Fatalf("Config field count = %d, want 14; update isZeroConfig tests for new fields", got)
+	if got := reflect.TypeFor[Config]().NumField(); got != 15 {
+		t.Fatalf("Config field count = %d, want 15; update isZeroConfig tests for new fields", got)
 	}
 	if got := reflect.TypeFor[WorktreeConfig]().NumField(); got != 5 {
 		t.Fatalf("WorktreeConfig field count = %d, want 5 (enabled, force_cleanup, setup_scripts, copy_files, copy_dirs)", got)
@@ -2320,6 +2359,90 @@ func TestLoadViewerShortcuts(t *testing.T) {
 				t.Errorf("ViewerShortcuts = %v, want %v", cfg.ViewerShortcuts, tt.wantMap)
 			}
 		})
+	}
+}
+
+func TestLoadViewerSidebarMode(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "viewer_sidebar_mode omitted keeps default overlay behavior",
+			yaml: "shell: powershell.exe\n",
+			want: "overlay",
+		},
+		{
+			name: "viewer_sidebar_mode overlay accepted",
+			yaml: "viewer_sidebar_mode: overlay\n",
+			want: "overlay",
+		},
+		{
+			name: "viewer_sidebar_mode docked accepted",
+			yaml: "viewer_sidebar_mode: docked\n",
+			want: "docked",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.ViewerSidebarMode != tt.want {
+				t.Errorf("ViewerSidebarMode = %q, want %q", cfg.ViewerSidebarMode, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadViewerSidebarModeInvalidFallsBackAndWarns(t *testing.T) {
+	originalLogger := slog.Default()
+	t.Cleanup(func() {
+		slog.SetDefault(originalLogger)
+	})
+
+	var logBuf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("viewer_sidebar_mode: floating\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ViewerSidebarMode != "overlay" {
+		t.Fatalf("ViewerSidebarMode = %q, want overlay fallback", cfg.ViewerSidebarMode)
+	}
+	if !strings.Contains(logBuf.String(), "viewer_sidebar_mode is invalid") {
+		t.Fatalf("log output = %q, want invalid viewer_sidebar_mode warning", logBuf.String())
+	}
+}
+
+func TestSaveRoundTripViewerSidebarMode(t *testing.T) {
+	path := newConfigPathForSaveTest(t, "config.yaml")
+	cfg := DefaultConfig()
+	cfg.ViewerSidebarMode = "docked"
+
+	if _, err := Save(path, cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.ViewerSidebarMode != cfg.ViewerSidebarMode {
+		t.Errorf("ViewerSidebarMode round-trip: got %q, want %q", loaded.ViewerSidebarMode, cfg.ViewerSidebarMode)
 	}
 }
 

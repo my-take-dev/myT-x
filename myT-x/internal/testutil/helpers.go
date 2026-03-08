@@ -12,4 +12,6 @@ package testutil
 //
 //	v := <arg>
 //	return &v
-func Ptr[T any](v T) *T { return &v }
+//
+//go:fix inline
+func Ptr[T any](v T) *T { return new(v) }

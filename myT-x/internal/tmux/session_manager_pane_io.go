@@ -134,8 +134,8 @@ func (m *SessionManager) ListPanesByWindowTarget(target string, callerPaneID int
 }
 
 // copyPaneSlice creates value copies of panes, skipping nil entries.
-// Terminal and Window are explicitly nil-ified in the copies to prevent
-// callers from accessing internal state outside of lock scope.
+// Terminal, OutputHistory, and Window are explicitly nil-ified in the copies to
+// prevent callers from accessing internal state outside of lock scope.
 func copyPaneSlice(panes []*TmuxPane) []TmuxPane {
 	out := make([]TmuxPane, 0, len(panes))
 	for _, pane := range panes {
@@ -145,6 +145,7 @@ func copyPaneSlice(panes []*TmuxPane) []TmuxPane {
 		copied := *pane
 		copied.Env = copyEnvMap(pane.Env)
 		copied.Terminal = nil
+		copied.OutputHistory = nil
 		copied.Window = nil
 		out = append(out, copied)
 	}

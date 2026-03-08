@@ -24,6 +24,12 @@ export interface MCPSnapshot {
     error?: string;
     usage_sample?: string;
     config_params?: MCPConfigParam[];
+    /** Named Pipe path when running. Empty when the MCP instance is not running. */
+    pipe_path?: string;
+    /** Bridge executable path or fallback name for stdio clients (for example "C:\\Program Files\\myT-x\\myT-x.exe"). */
+    bridge_command?: string;
+    /** Bridge arguments for stdio clients. */
+    bridge_args?: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -97,6 +103,20 @@ export function normalizeMCPSnapshot(snapshot: unknown): MCPSnapshot | null {
     }
     if (configParams.length > 0) {
         normalized.config_params = configParams;
+    }
+    if (typeof snapshot.pipe_path === "string" && snapshot.pipe_path.trim() !== "") {
+        normalized.pipe_path = snapshot.pipe_path;
+    }
+    if (typeof snapshot.bridge_command === "string" && snapshot.bridge_command.trim() !== "") {
+        normalized.bridge_command = snapshot.bridge_command;
+    }
+    if (Array.isArray(snapshot.bridge_args)) {
+        const bridgeArgs = snapshot.bridge_args.filter(
+            (arg): arg is string => typeof arg === "string" && arg.trim() !== "",
+        );
+        if (bridgeArgs.length > 0) {
+            normalized.bridge_args = bridgeArgs;
+        }
     }
 
     return normalized;

@@ -13,12 +13,13 @@ package tmux
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
-// removeWindowResult holds the result of removeWindowAtIndexLocked.
+// RemoveWindowResult holds the result of removeWindowAtIndexLocked.
 // Fields are documented to make ownership contracts explicit.
-type removeWindowResult struct {
+type RemoveWindowResult struct {
 	// RemovedPanes contains the panes that were removed from the window.
 	// OWNERSHIP CONTRACT: The caller receives exclusive ownership of these panes
 	// and MUST call Terminal.Close() on each non-nil pane to release ConPTY handles.
@@ -40,19 +41,19 @@ type removeWindowResult struct {
 }
 
 // RemoveWindowByID removes a window by stable window ID.
-// Returns removeWindowResult containing removed panes for terminal cleanup, whether the
+// Returns RemoveWindowResult containing removed panes for terminal cleanup, whether the
 // session was removed, and the surviving window ID (-1 if session was removed).
-func (m *SessionManager) RemoveWindowByID(sessionName string, windowID int) (removeWindowResult, error) {
+func (m *SessionManager) RemoveWindowByID(sessionName string, windowID int) (RemoveWindowResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	session, err := m.getSessionByNameLocked(sessionName)
 	if err != nil {
-		return removeWindowResult{SurvivingWindowID: -1}, err
+		return RemoveWindowResult{SurvivingWindowID: -1}, err
 	}
 	windowIdx := findWindowIndexByID(session.Windows, windowID)
 	if windowIdx < 0 {
-		return removeWindowResult{SurvivingWindowID: -1}, fmt.Errorf("window not found in session: %s", sessionName)
+		return RemoveWindowResult{SurvivingWindowID: -1}, fmt.Errorf("window not found in session: %s", sessionName)
 	}
 	return m.removeWindowAtIndexLocked(session, windowIdx)
 }
@@ -100,9 +101,9 @@ func fallbackWindowIDNearIndex(windows []*TmuxWindow, preferredIdx int) (int, bo
 //   - *RLocked = caller must hold m.mu.RLock (read lock)
 //
 // REQUIRES: m.mu must be held by the caller.
-func (m *SessionManager) removeWindowAtIndexLocked(session *TmuxSession, windowIdx int) (removeWindowResult, error) {
+func (m *SessionManager) removeWindowAtIndexLocked(session *TmuxSession, windowIdx int) (RemoveWindowResult, error) {
 	if windowIdx < 0 || windowIdx >= len(session.Windows) {
-		return removeWindowResult{SurvivingWindowID: -1}, fmt.Errorf("window index out of range: %d", windowIdx)
+		return RemoveWindowResult{SurvivingWindowID: -1}, fmt.Errorf("window index out of range: %d", windowIdx)
 	}
 
 	window := session.Windows[windowIdx]
@@ -118,6 +119,10 @@ func (m *SessionManager) removeWindowAtIndexLocked(session *TmuxSession, windowI
 	if window != nil {
 		removedPanes = append(removedPanes, window.Panes...)
 	}
+	removedWindowID := -1
+	if window != nil {
+		removedWindowID = window.ID
+	}
 
 	// Unregister panes from the global pane map.
 	// Terminal is intentionally NOT nil-ified here: the returned removedPanes
@@ -130,7 +135,31 @@ func (m *SessionManager) removeWindowAtIndexLocked(session *TmuxSession, windowI
 		if pane == nil {
 			continue
 		}
+		releasePaneOutputHistory(pane)
 		delete(m.panes, pane.ID)
+	}
+	orphanedPanes := make([]struct {
+		id   int
+		pane *TmuxPane
+	}, 0)
+	for pid, orphan := range m.panes {
+		if orphan == nil || orphan.Window != window {
+			continue
+		}
+		orphanedPanes = append(orphanedPanes, struct {
+			id   int
+			pane *TmuxPane
+		}{id: pid, pane: orphan})
+	}
+	for _, orphaned := range orphanedPanes {
+		releasePaneOutputHistory(orphaned.pane)
+		removedPanes = append(removedPanes, orphaned.pane)
+		delete(m.panes, orphaned.id)
+		slog.Warn("[WARN-WINDOW] RemoveWindowByID: cleaned up orphaned pane during window removal",
+			"paneId", orphaned.pane.IDString(),
+			"session", session.Name,
+			"windowId", removedWindowID,
+		)
 	}
 
 	// Remove window from session's window slice.
@@ -140,7 +169,7 @@ func (m *SessionManager) removeWindowAtIndexLocked(session *TmuxSession, windowI
 	if len(session.Windows) == 0 {
 		delete(m.sessions, session.Name)
 		m.markSessionMapMutationLocked()
-		return removeWindowResult{
+		return RemoveWindowResult{
 			RemovedPanes:      removedPanes,
 			SessionRemoved:    true,
 			SurvivingWindowID: -1,
@@ -159,7 +188,7 @@ func (m *SessionManager) removeWindowAtIndexLocked(session *TmuxSession, windowI
 	}
 
 	m.markTopologyMutationLocked()
-	return removeWindowResult{
+	return RemoveWindowResult{
 		RemovedPanes:      removedPanes,
 		SessionRemoved:    false,
 		SurvivingWindowID: session.ActiveWindowID,

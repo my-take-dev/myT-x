@@ -11,8 +11,6 @@ interface MCPState {
     snapshots: Record<string, MCPSnapshot[]>;
     /** Session-scoped loading and error state. */
     sessionStates: Record<string, SessionLoadState>;
-    /** Currently selected MCP ID in the detail panel. */
-    selectedMCPId: string | null;
 
     /** Replace the full MCP snapshot list for a session. */
     setSnapshots: (sessionName: string, snapshots: MCPSnapshot[]) => void;
@@ -20,14 +18,10 @@ interface MCPState {
     upsertSnapshot: (sessionName: string, snapshot: MCPSnapshot) => void;
     /** Atomically begin a session load (loading=true, error=null). */
     beginSessionLoad: (sessionName: string) => void;
-    /** Partially update a single MCP entry within a session. */
-    updateMCPState: (sessionName: string, mcpId: string, partial: Partial<MCPSnapshot>) => void;
     /** Set loading state for a single session. */
     setSessionLoading: (sessionName: string, loading: boolean) => void;
     /** Set error state for a single session. */
     setSessionError: (sessionName: string, error: string | null) => void;
-    /** Set the selected MCP ID for detail view. */
-    selectMCP: (mcpId: string | null) => void;
     /** Remove all MCP state for a destroyed session. */
     clearSession: (sessionName: string) => void;
     /** Remove all MCP state across all sessions. */
@@ -37,7 +31,6 @@ interface MCPState {
 export const useMCPStore = create<MCPState>((set) => ({
     snapshots: {},
     sessionStates: {},
-    selectedMCPId: null,
 
     setSnapshots: (sessionName, snapshots) =>
         set((state) => ({
@@ -68,15 +61,6 @@ export const useMCPStore = create<MCPState>((set) => ({
             };
         }),
 
-    updateMCPState: (sessionName, mcpId, partial) =>
-        set((state) => {
-            const current = state.snapshots[sessionName] ?? [];
-            const updated = current.map((s) =>
-                s.id === mcpId ? {...s, ...partial} : s,
-            );
-            return {snapshots: {...state.snapshots, [sessionName]: updated}};
-        }),
-
     setSessionLoading: (sessionName, loading) =>
         set((state) => {
             const prev = state.sessionStates[sessionName] ?? {loading: false, error: null};
@@ -99,22 +83,16 @@ export const useMCPStore = create<MCPState>((set) => ({
             };
         }),
 
-    selectMCP: (mcpId) => set({selectedMCPId: mcpId}),
-
     clearSession: (sessionName) =>
         set((state) => {
             const nextSnapshots = {...state.snapshots};
-            const removed = nextSnapshots[sessionName] ?? [];
             delete nextSnapshots[sessionName];
             const nextSessionStates = {...state.sessionStates};
             delete nextSessionStates[sessionName];
 
-            const selectedRemoved = removed.some((m) => m.id === state.selectedMCPId);
-
             return {
                 snapshots: nextSnapshots,
                 sessionStates: nextSessionStates,
-                selectedMCPId: selectedRemoved ? null : state.selectedMCPId,
             };
         }),
 
@@ -122,6 +100,5 @@ export const useMCPStore = create<MCPState>((set) => ({
         set({
             snapshots: {},
             sessionStates: {},
-            selectedMCPId: null,
         }),
 }));

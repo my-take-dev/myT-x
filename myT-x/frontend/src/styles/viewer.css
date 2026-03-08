@@ -45,6 +45,16 @@
     background: var(--accent-10);
 }
 
+.viewer-strip-btn:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.viewer-strip-btn:disabled:hover {
+    color: var(--fg-dim);
+    background: transparent;
+}
+
 .viewer-strip-btn.active::before {
     content: "";
     position: absolute;
@@ -80,10 +90,71 @@
     animation: viewer-slide-in 150ms ease;
 }
 
+/* ── Docked Sidebar Mode ── */
+.app-body--viewer-docked .viewer-overlay {
+    position: static;
+    top: auto;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    z-index: auto;
+    /* viewerDocking.ts clamps dockRatio to 0.3-0.8, and main.go enforces a
+       980px minimum window width. Together with the sidebar and activity strip,
+       both panes stay usable even at the drag extremes. */
+    width: var(--dock-viewer-width, 50%);
+    min-width: min(320px, 40vw);
+    max-width: 80%;
+    flex-shrink: 0;
+    border-left: 1px solid var(--line);
+    animation: viewer-docked-enter 150ms ease;
+    order: 3;
+    margin-right: var(--activity-strip-width);
+    transition: width 150ms ease, min-width 150ms ease;
+}
+
+.app-body--viewer-docked .main-content {
+    order: 1;
+    margin-right: 0;
+    flex: none;
+    width: var(--dock-main-width, 50%);
+    min-width: 0;
+    transition: width 150ms ease;
+}
+
+/* ── Docked Divider (drag handle) ── */
+.docked-divider {
+    order: 2;
+    width: 4px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: rgba(150, 182, 219, 0.25);
+    transition: background 120ms ease;
+}
+.docked-divider:hover {
+    background: rgba(150, 182, 219, 0.5);
+}
+
+/* Disable width transitions during drag for responsive feel */
+.app-body--dragging .main-content,
+.app-body--dragging .viewer-overlay {
+    transition: none !important;
+}
+
 @keyframes viewer-slide-in {
     from {
         opacity: 0;
         transform: translateX(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes viewer-docked-enter {
+    from {
+        opacity: 0;
+        transform: translateX(12px);
     }
     to {
         opacity: 1;
@@ -150,20 +221,18 @@
 .file-tree-sidebar {
     width: var(--sidebar-width);
     min-width: 200px;
+    min-height: 0;
     border-right: 1px solid var(--line);
     background: var(--bg-panel);
     overflow: hidden;
 }
 
-/* Reserve scrollbar gutter space to prevent width oscillation when
-   content toggles between scrollable and non-scrollable states.
-   Without this, scrollbar appearance shifts the content area width,
-   triggering a ResizeObserver → height recalculation → jitter loop. */
-.file-tree-sidebar > [role="tree"],
-.git-graph-commits > [role="list"] {
-    scrollbar-gutter: stable;
-    overscroll-behavior: contain;
-}
+/* Scroll stabilization properties (scrollbar-gutter: stable, overscroll-behavior: none,
+   overflow-anchor: none) are applied via inline styles by makeScrollStableOuter
+   (TreeOuter.tsx) to override react-window's default inline overflow.
+   CSS cannot reliably override inline styles, so these are NOT duplicated here.
+   overscroll-behavior: none is safe — this is a Windows-only desktop app with no
+   touch/mobile considerations (pull-to-refresh etc. are irrelevant). */
 
 .file-tree-content,
 .diff-view-content {
@@ -179,6 +248,8 @@
     display: flex;
     align-items: center;
     padding: 0 8px;
+    box-sizing: border-box;
+    min-width: 0;
     cursor: pointer;
     color: var(--fg-main);
     font-size: 0.82rem;
@@ -361,18 +432,9 @@
     overflow: hidden;
 }
 
-.file-content-list {
-    /* TECH DEBT: !important override for react-window v1.x inline style.
-       react-window sets `overflow: visible` via inline style, which breaks scroll
-       containment. !important is the only way to override an inline style in CSS.
-       This does NOT block state-change classes — no other rule competes for overflow
-       on this element.
-       Resolution path: inject a custom outerElementType wrapper (see FileTreeSidebar's
-       TreeOuter pattern / outerElementType) to avoid !important, at the cost of an extra component.
-       Re-evaluate when upgrading to react-window v2+ or switching to @tanstack/virtual. */
-    overflow: auto !important;
-    overscroll-behavior: contain;
-}
+/* Scroll stabilization for .file-content-list is applied via inline styles
+   by makeScrollStableOuter (TreeOuter.tsx) through FileContentListOuter.
+   CSS cannot reliably override inline styles, so these are NOT duplicated here. */
 
 .file-content-body:focus {
     outline: none;
@@ -514,6 +576,8 @@
 .commit-row {
     display: flex;
     align-items: center;
+    box-sizing: border-box;
+    min-width: 0;
     height: 32px;
     font-size: 0.78rem;
     cursor: pointer;
@@ -1107,6 +1171,36 @@
     background: var(--accent-10);
 }
 
+.mcp-category-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    cursor: default;
+}
+
+.mcp-category-item-selected {
+    background: var(--accent-10);
+}
+
+.mcp-category-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.mcp-category-count {
+    flex-shrink: 0;
+    min-width: 24px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--bg-elev);
+    color: var(--fg-dim);
+    font-size: 0.75rem;
+    text-align: center;
+}
+
 .mcp-list-empty {
     display: grid;
     place-items: center;
@@ -1307,6 +1401,112 @@
     font-size: 0.85rem;
     border: 1px dashed var(--line);
     border-radius: 6px;
+}
+
+/* ── MCP Connection Panel ── */
+.mcp-connection-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+    border: 1px dashed var(--line);
+    border-radius: 6px;
+}
+
+.mcp-connection-hint {
+    color: var(--fg-dim);
+}
+
+.mcp-connection-error {
+    color: var(--danger);
+    font-size: 0.85rem;
+    word-break: break-word;
+    text-align: center;
+    padding: 0 12px;
+}
+
+.mcp-connection-spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: mcp-spin 0.8s linear infinite;
+}
+
+@keyframes mcp-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.mcp-connection-info {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 4px 0;
+}
+
+.mcp-connection-status-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+}
+
+.mcp-connection-label {
+    color: var(--fg);
+    font-weight: 500;
+}
+
+.mcp-connection-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mcp-cli-example-title {
+    margin: 0;
+}
+
+.mcp-pipe-path-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.mcp-pipe-path {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--accent);
+    background: var(--bg-secondary);
+    padding: 4px 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mcp-copy-btn {
+    flex-shrink: 0;
+    padding: 3px 10px;
+    font-size: 0.75rem;
+    color: var(--fg);
+    background: var(--bg-secondary);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.mcp-copy-btn:hover {
+    background: var(--bg-tertiary, var(--line));
 }
 
 /* ── Markdown Preview Toggle Button ── */

@@ -1,44 +1,72 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {useCallback, useEffect, useMemo, useRef} from "react";
 import {api} from "../../../../api";
 import {useMCPStore} from "../../../../stores/mcpStore";
 import {useNotificationStore} from "../../../../stores/notificationStore";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
-import type {MCPSnapshot} from "../../../../types/mcp";
+import type {MCPStatus, MCPSnapshot} from "../../../../types/mcp";
 import {logFrontendEventSafe} from "../../../../utils/logFrontendEventSafe";
 
 interface UseMcpManagerResult {
-    mcpList: MCPSnapshot[];
-    selectedMCP: MCPSnapshot | null;
+    lspMcpList: MCPSnapshot[];
+    representativeMCP: MCPSnapshot | null;
+    aggregateStatus: MCPStatus | null;
     isLoading: boolean;
     error: string | null;
-    toggleMCP: (mcpId: string, enabled: boolean) => void;
-    togglingIds: ReadonlySet<string>;
-    selectMCP: (mcpId: string | null) => void;
     activeSession: string | null;
     retryLoad: () => void;
     dismissError: () => void;
 }
 
+export function normalizeActiveSessionName(sessionName: string | null): string | null {
+    const trimmed = sessionName?.trim() ?? "";
+    return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * Returns true when a snapshot belongs to the LSP-backed MCP group.
+ * Matching is case-insensitive and based on the "lsp-" ID prefix.
+ */
+export function isLspMcp(snapshot: MCPSnapshot): boolean {
+    return snapshot.id.toLowerCase().startsWith("lsp-");
+}
+
+export function selectRepresentativeLspMcp(snapshots: readonly MCPSnapshot[]): MCPSnapshot | null {
+    return snapshots.find((snapshot) => (snapshot.bridge_command?.trim() ?? "") !== "") ?? snapshots[0] ?? null;
+}
+
+/**
+ * Compute aggregate status from LSP-MCP snapshots.
+ * Priority: running > error > starting > stopped.
+ * Precondition: snapshots must be non-empty (caller guards with length check).
+ */
+export function aggregateLspMcpStatus(snapshots: readonly MCPSnapshot[]): MCPStatus {
+    if (snapshots.some((snapshot) => snapshot.status === "running")) {
+        return "running";
+    }
+    if (snapshots.some((snapshot) => snapshot.status === "error")) {
+        return "error";
+    }
+    if (snapshots.some((snapshot) => snapshot.status === "starting")) {
+        return "starting";
+    }
+    return "stopped";
+}
+
 export function useMcpManager(): UseMcpManagerResult {
-    const activeSession = useTmuxStore((s) => s.activeSession);
+    const activeSession = normalizeActiveSessionName(useTmuxStore((s) => s.activeSession));
     const addNotification = useNotificationStore((s) => s.addNotification);
 
     const snapshots = useMCPStore((s) => s.snapshots);
     const sessionStates = useMCPStore((s) => s.sessionStates);
-    const selectedMCPId = useMCPStore((s) => s.selectedMCPId);
 
     const setSnapshots = useMCPStore((s) => s.setSnapshots);
     const beginSessionLoad = useMCPStore((s) => s.beginSessionLoad);
-    const updateMCPState = useMCPStore((s) => s.updateMCPState);
     const setSessionLoading = useMCPStore((s) => s.setSessionLoading);
     const setSessionError = useMCPStore((s) => s.setSessionError);
-    const selectMCP = useMCPStore((s) => s.selectMCP);
 
     const isMountedRef = useRef(true);
     const loadTokenRef = useRef(0);
     const retryInFlightRef = useRef(false);
-    const togglingIdsRef = useRef<Set<string>>(new Set());
-    const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
     const notifyWarn = useCallback(
         (message: string) => {
             addNotification(message, "warn");
@@ -47,30 +75,12 @@ export function useMcpManager(): UseMcpManagerResult {
     );
 
     useEffect(() => {
+        // React StrictMode runs an extra setup+cleanup cycle in development.
+        // Re-arm the mounted flag on setup so async completions are not ignored.
+        isMountedRef.current = true;
         return () => {
             isMountedRef.current = false;
         };
-    }, []);
-
-    const beginToggle = useCallback((mcpId: string): boolean => {
-        if (togglingIdsRef.current.has(mcpId)) {
-            return false;
-        }
-        const next = new Set(togglingIdsRef.current);
-        next.add(mcpId);
-        togglingIdsRef.current = next;
-        setTogglingIds(next);
-        return true;
-    }, []);
-
-    const endToggle = useCallback((mcpId: string) => {
-        if (!togglingIdsRef.current.has(mcpId)) {
-            return;
-        }
-        const next = new Set(togglingIdsRef.current);
-        next.delete(mcpId);
-        togglingIdsRef.current = next;
-        setTogglingIds(next);
     }, []);
 
     const loadSnapshots = useCallback(
@@ -95,10 +105,7 @@ export function useMcpManager(): UseMcpManagerResult {
                     console.warn("[mcp-manager] ListMCPServers failed:", err);
                 }
             } finally {
-                if (!isMountedRef.current) {
-                    return;
-                }
-                if (loadTokenRef.current === token) {
+                if (isMountedRef.current && loadTokenRef.current === token) {
                     setSessionLoading(sessionName, false);
                 }
             }
@@ -108,90 +115,39 @@ export function useMcpManager(): UseMcpManagerResult {
 
     useEffect(() => {
         const token = ++loadTokenRef.current;
-        togglingIdsRef.current = new Set();
-        setTogglingIds(new Set());
-        if (!activeSession) {
-            selectMCP(null);
+        if (activeSession == null) {
             return;
         }
-
         void loadSnapshots(activeSession, token);
-    }, [activeSession, loadSnapshots, selectMCP]);
+    }, [activeSession, loadSnapshots]);
 
-    const mcpList = useMemo(() => {
-        if (!activeSession) {
+    const lspMcpList = useMemo(() => {
+        if (activeSession == null) {
             return [];
         }
-        return snapshots[activeSession] ?? [];
+        // Scope: LSP-MCP only. Non-LSP MCPs are resolved through the CLI path
+        // and are intentionally excluded from this aggregated UI view.
+        return (snapshots[activeSession] ?? []).filter(isLspMcp);
     }, [activeSession, snapshots]);
 
-    useEffect(() => {
-        if (selectedMCPId == null) {
-            return;
-        }
-        if (mcpList.some((m) => m.id === selectedMCPId)) {
-            return;
-        }
-        selectMCP(null);
-    }, [mcpList, selectMCP, selectedMCPId]);
+    const representativeMCP = useMemo(() => selectRepresentativeLspMcp(lspMcpList), [lspMcpList]);
+    const aggregateStatus = useMemo(
+        () => (lspMcpList.length === 0 ? null : aggregateLspMcpStatus(lspMcpList)),
+        [lspMcpList],
+    );
 
-    const selectedMCP = mcpList.find((m) => m.id === selectedMCPId) ?? null;
+    useEffect(() => {
+        if (lspMcpList.length > 0 && (representativeMCP?.bridge_command?.trim() ?? "") === "") {
+            console.warn("[mcp-manager] All LSP-MCP snapshots lack bridge_command");
+        }
+    }, [lspMcpList, representativeMCP]);
 
     const sessionState = activeSession ? sessionStates[activeSession] : undefined;
     const isLoading = sessionState?.loading ?? false;
     const error = sessionState?.error ?? null;
 
-    const toggleMCP = useCallback(
-        (mcpId: string, enabled: boolean) => {
-            if (!activeSession) {
-                return;
-            }
-            if (!beginToggle(mcpId)) {
-                return;
-            }
-            const sessionName = activeSession;
-            const prevEnabled =
-                useMCPStore
-                    .getState()
-                    .snapshots[sessionName]
-                    ?.find((item) => item.id === mcpId)
-                    ?.enabled ?? !enabled;
-
-            updateMCPState(sessionName, mcpId, {enabled});
-
-            void api.ToggleMCPServer(sessionName, mcpId, enabled)
-                .then(() => {
-                    setSessionError(sessionName, null);
-                })
-                .catch((err: unknown) => {
-                    updateMCPState(sessionName, mcpId, {enabled: prevEnabled});
-                    if (!isMountedRef.current) {
-                        return;
-                    }
-                    const message = err instanceof Error ? err.message : String(err);
-                    setSessionError(sessionName, message);
-                    notifyWarn(`Failed to update MCP state (${sessionName}/${mcpId}): ${message}`);
-                    logFrontendEventSafe(
-                        "warn",
-                        `ToggleMCPServer failed (${sessionName}/${mcpId}): ${message}`,
-                        "frontend/mcp",
-                    );
-                    if (import.meta.env.DEV) {
-                        console.warn("[mcp-manager] ToggleMCPServer failed:", err);
-                    }
-                })
-                .finally(() => {
-                    if (!isMountedRef.current) {
-                        return;
-                    }
-                    endToggle(mcpId);
-                });
-        },
-        [activeSession, beginToggle, endToggle, notifyWarn, setSessionError, updateMCPState],
-    );
-
     const retryLoad = useCallback(() => {
-        if (!activeSession) {
+        if (activeSession == null) {
             return;
         }
         if (retryInFlightRef.current) {
@@ -205,20 +161,18 @@ export function useMcpManager(): UseMcpManagerResult {
     }, [activeSession, loadSnapshots]);
 
     const dismissError = useCallback(() => {
-        if (!activeSession) {
+        if (activeSession == null) {
             return;
         }
         setSessionError(activeSession, null);
     }, [activeSession, setSessionError]);
 
     return {
-        mcpList,
-        selectedMCP,
+        lspMcpList,
+        representativeMCP,
+        aggregateStatus,
         isLoading,
         error,
-        toggleMCP,
-        togglingIds,
-        selectMCP,
         activeSession,
         retryLoad,
         dismissError,

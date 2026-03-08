@@ -8,7 +8,8 @@ import {
 import {api} from "../api";
 import {registerPaneHandler, isConnected as isWsConnected, setReconnectCallback} from "../services/paneDataStream";
 import {useTmuxStore} from "../stores/tmuxStore";
-import {isImeTransitionalEvent} from "../utils/ime";
+import {shouldRecoverTerminalFocus, type TerminalFocusRecoveryReason} from "../utils/terminalFocus";
+import {shouldLetXtermHandleImeEvent} from "../utils/terminalIme";
 import {resolveActivePaneID} from "../utils/session";
 
 interface UseTerminalEventsOptions {
@@ -131,32 +132,23 @@ export function useTerminalEvents({
             }
         };
 
-        const shouldRestoreTerminalFocus = (forComposition: boolean): boolean => {
+        const shouldAttemptTerminalFocusRecovery = (reason: TerminalFocusRecoveryReason): boolean => {
             if (disposed || pageHidden || !document.hasFocus() || !isCurrentPaneActive()) {
                 return false;
             }
-            if (forComposition && !isComposing) {
+            if (reason === "composition-blur" && !isComposing) {
                 return false;
             }
-            const activeElement = document.activeElement;
-            if (activeElement === compositionTextarea) {
-                return false;
-            }
-            if (activeElement === null || activeElement === document.body) {
-                return true;
-            }
-            const terminalElement = term.element;
-            return terminalElement instanceof HTMLElement && terminalElement.contains(activeElement);
+            return shouldRecoverTerminalFocus(reason, document.activeElement, term.element ?? null, compositionTextarea);
         };
 
-        const scheduleTerminalFocusRecovery = (reason: "window-focus" | "visibilitychange" | "composition-blur"): void => {
+        const scheduleTerminalFocusRecovery = (reason: TerminalFocusRecoveryReason): void => {
             clearFocusRecoveryTimers();
             focusRecoverRAFId = window.requestAnimationFrame(() => {
                 focusRecoverRAFId = null;
                 focusRecoverTimer = window.setTimeout(() => {
                     focusRecoverTimer = null;
-                    const restoreForComposition = reason === "composition-blur";
-                    if (shouldRestoreTerminalFocus(restoreForComposition)) {
+                    if (shouldAttemptTerminalFocusRecovery(reason)) {
                         try {
                             term.focus();
                         } catch (err) {
@@ -254,10 +246,10 @@ export function useTerminalEvents({
         }
 
         term.attachCustomKeyEventHandler((event) => {
-            // Block keyboard events during IME composition to prevent double input.
-            // return false = suppress xterm key handling, let browser IME handle it.
-            if (isComposing || isImeTransitionalEvent(event)) {
-                return false;
+            // Allow xterm's internal CompositionHelper to handle IME-related events.
+            // xterm's contract here is "true = let xterm process the event".
+            if (shouldLetXtermHandleImeEvent(event, isComposing)) {
+                return true;
             }
             // Only process keydown events for shortcuts; let xterm handle keyup/keypress normally.
             if (event.type !== "keydown") {

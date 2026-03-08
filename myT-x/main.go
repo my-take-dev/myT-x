@@ -4,6 +4,7 @@ import (
 	"embed"
 	"errors"
 	"log/slog"
+	"os"
 
 	"myT-x/internal/ipc"
 	"myT-x/internal/singleinstance"
@@ -17,6 +18,14 @@ import (
 var assets embed.FS
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	if handled, exitCode := runMCPCLIMode(os.Args[1:]); handled {
+		return exitCode
+	}
+
 	// Single-instance check BEFORE any Wails/WebView2 initialization.
 	// Two simultaneous instances corrupt WebView2 browser process IME state.
 	mutexLock, err := singleinstance.TryLock(singleinstance.DefaultMutexName())
@@ -25,7 +34,7 @@ func main() {
 		if _, sendErr := ipc.Send("", ipc.TmuxRequest{Command: "activate-window"}); sendErr != nil {
 			slog.Warn("[WARN-SINGLE] failed to signal existing instance", "error", sendErr)
 		}
-		return
+		return 0
 	}
 	if err != nil {
 		// Mutex creation failed for unexpected reason. Continue startup defensively.
@@ -42,7 +51,7 @@ func main() {
 	app := NewApp()
 
 	err = wails.Run(&options.App{
-		Title:     "myT-x v0.0.10",
+		Title:     "myT-x v0.0.13",
 		Width:     1440,
 		Height:    900,
 		MinWidth:  980,
@@ -63,5 +72,7 @@ func main() {
 
 	if err != nil {
 		slog.Error("[ERROR-SINGLE] wails run failed", "error", err)
+		return 1
 	}
+	return 0
 }

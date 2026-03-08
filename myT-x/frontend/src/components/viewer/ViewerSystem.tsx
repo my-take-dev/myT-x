@@ -12,6 +12,8 @@ import {
 import {useTmuxStore} from "../../stores/tmuxStore";
 import {useNotificationStore} from "../../stores/notificationStore";
 import {isImeTransitionalEvent} from "../../utils/ime";
+import {DockedDivider} from "./DockedDivider";
+import {useIsViewerDocked} from "./useIsViewerDocked";
 
 // Side-effect imports: each view self-registers into the registry.
 //
@@ -51,6 +53,7 @@ export function ViewerSystem() {
     const viewerShortcutsConfig = useTmuxStore((s) => s.config?.viewer_shortcuts ?? null);
 
     const addNotification = useNotificationStore((s) => s.addNotification);
+    const isDocked = useIsViewerDocked();
 
     // Shortcut map: config overrides take priority over registry defaults.
     const {shortcutMap, duplicateWarnings} = useMemo(() => {
@@ -140,6 +143,7 @@ export function ViewerSystem() {
     return (
         <>
             <ActivityStrip/>
+            {isDocked && <DockedDivider/>}
             <ViewOverlay/>
         </>
     );

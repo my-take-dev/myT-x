@@ -217,6 +217,25 @@ func TestParseCommandSendKeysLiteralFlag(t *testing.T) {
 	}
 }
 
+func TestParseCommandSaveBuffer(t *testing.T) {
+	req, err := parseCommand([]string{"save-buffer", "-a", "-b", "clip", "out.txt"})
+	if err != nil {
+		t.Fatalf("parseCommand(save-buffer) error = %v", err)
+	}
+	if req.Command != "save-buffer" {
+		t.Fatalf("command = %q, want %q", req.Command, "save-buffer")
+	}
+	if !asBool(req.Flags["-a"]) {
+		t.Fatalf("-a flag = %v, want true", req.Flags["-a"])
+	}
+	if got := asString(req.Flags["-b"]); got != "clip" {
+		t.Fatalf("-b = %q, want %q", got, "clip")
+	}
+	if !reflect.DeepEqual(req.Args, []string{"out.txt"}) {
+		t.Fatalf("args = %v, want %v", req.Args, []string{"out.txt"})
+	}
+}
+
 func TestValidateCommandSpecConsistency(t *testing.T) {
 	if err := validateCommandSpecConsistency(); err != nil {
 		t.Fatalf("validateCommandSpecConsistency() error = %v", err)

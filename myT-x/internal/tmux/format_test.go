@@ -72,6 +72,7 @@ func TestLookupFormatVariableAllVariables(t *testing.T) {
 		Width:  200,
 		Height: 50,
 		Active: true,
+		Title:  "my-pane",
 		Window: window,
 		Env:    map[string]string{},
 	}
@@ -91,6 +92,7 @@ func TestLookupFormatVariableAllVariables(t *testing.T) {
 		{name: "pane_active when active", variable: "pane_active", want: "1"},
 		{name: "pane_tty", variable: "pane_tty", want: `\\.\conpty\%7`},
 		{name: "pane_active_suffix when active", variable: "pane_active_suffix", want: " (active)"},
+		{name: "pane_title", variable: "pane_title", want: "my-pane"},
 		// --- window variables ---
 		{name: "window_index returns stable window ID", variable: "window_index", want: "5"},
 		{name: "window_name", variable: "window_name", want: "editor"},
@@ -148,6 +150,7 @@ func TestLookupFormatVariableInactivePane(t *testing.T) {
 	}{
 		{name: "pane_active when inactive", variable: "pane_active", want: "0"},
 		{name: "pane_active_suffix when inactive", variable: "pane_active_suffix", want: ""},
+		{name: "pane_title when empty", variable: "pane_title", want: ""},
 	}
 
 	for _, tt := range tests {
@@ -638,6 +641,153 @@ func TestExpandFormatAdjacentPlaceholders(t *testing.T) {
 	}
 }
 
+func TestEvaluateComparisonExpr(t *testing.T) {
+	session := &TmuxSession{ID: 0, Name: "demo", ActiveWindowID: 0, Env: map[string]string{}}
+	window := &TmuxWindow{ID: 0, Name: "main", Session: session, ActivePN: 0}
+	pane := &TmuxPane{ID: 1, Index: 1, Active: true, Width: 80, Height: 24, Window: window, Env: map[string]string{}}
+	window.Panes = []*TmuxPane{pane}
+	session.Windows = []*TmuxWindow{window}
+
+	tests := []struct {
+		name   string
+		format string
+		want   string
+	}{
+		{
+			name:   "equality match",
+			format: "#{==:#{session_name},demo}",
+			want:   "1",
+		},
+		{
+			name:   "equality no match",
+			format: "#{==:#{session_name},other}",
+			want:   "0",
+		},
+		{
+			name:   "inequality match",
+			format: "#{!=:#{session_name},other}",
+			want:   "1",
+		},
+		{
+			name:   "inequality no match",
+			format: "#{!=:#{session_name},demo}",
+			want:   "0",
+		},
+		{
+			name:   "literal comparison",
+			format: "#{==:abc,abc}",
+			want:   "1",
+		},
+		{
+			name:   "literal comparison mismatch",
+			format: "#{==:abc,xyz}",
+			want:   "0",
+		},
+		{
+			name:   "nested variable on both sides",
+			format: "#{==:#{session_name},#{session_name}}",
+			want:   "1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := expandFormat(tt.format, pane)
+			if got != tt.want {
+				t.Fatalf("expandFormat(%q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvaluateFilter(t *testing.T) {
+	session := &TmuxSession{ID: 0, Name: "demo", ActiveWindowID: 0, Env: map[string]string{}}
+	window := &TmuxWindow{ID: 0, Name: "main", Session: session, ActivePN: 0}
+	pane := &TmuxPane{ID: 1, Index: 1, Active: true, Width: 80, Height: 24, Window: window, Env: map[string]string{}}
+	window.Panes = []*TmuxPane{pane}
+	session.Windows = []*TmuxWindow{window}
+
+	tests := []struct {
+		name   string
+		filter string
+		want   bool
+	}{
+		{name: "empty filter includes all", filter: "", want: true},
+		{name: "whitespace filter includes all", filter: "   ", want: true},
+		{name: "truthy variable", filter: "#{pane_active}", want: true},
+		{name: "falsy variable (unknown var expands to empty)", filter: "#{nonexistent_var}", want: false},
+		{name: "equality match includes", filter: "#{==:#{session_name},demo}", want: true},
+		{name: "equality mismatch excludes", filter: "#{==:#{session_name},other}", want: false},
+		{name: "inequality match includes", filter: "#{!=:#{session_name},other}", want: true},
+		{name: "nil pane with empty filter", filter: "", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evaluateFilter(tt.filter, pane)
+			if got != tt.want {
+				t.Fatalf("evaluateFilter(%q) = %v, want %v", tt.filter, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvaluateFilterForSession(t *testing.T) {
+	session := &TmuxSession{ID: 0, Name: "target", ActiveWindowID: 0, Env: map[string]string{}}
+	window := &TmuxWindow{ID: 0, Name: "w0", Session: session, ActivePN: 0}
+	pane := &TmuxPane{ID: 0, Index: 0, Active: true, Window: window, Env: map[string]string{}}
+	window.Panes = []*TmuxPane{pane}
+	session.Windows = []*TmuxWindow{window}
+
+	tests := []struct {
+		name   string
+		filter string
+		want   bool
+	}{
+		{name: "empty filter", filter: "", want: true},
+		{name: "session name match", filter: "#{==:#{session_name},target}", want: true},
+		{name: "session name mismatch", filter: "#{==:#{session_name},other}", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evaluateFilterForSession(tt.filter, session)
+			if got != tt.want {
+				t.Fatalf("evaluateFilterForSession(%q) = %v, want %v", tt.filter, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatBufferLine(t *testing.T) {
+	buf := &PasteBuffer{Name: "buf0", Data: []byte("hello world")}
+
+	tests := []struct {
+		name   string
+		format string
+		want   string
+	}{
+		{
+			name: "default format",
+			want: `buf0: 11 bytes: "hello world"`,
+		},
+		{
+			name:   "custom format",
+			format: "#{buffer_name}=#{buffer_size}",
+			want:   "buf0=11",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatBufferLine(buf, tt.format)
+			if got != tt.want {
+				t.Fatalf("formatBufferLine() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLookupFormatVariableWindowPanesMultiplePanes(t *testing.T) {
 	session := &TmuxSession{ID: 0, Name: "demo", ActiveWindowID: 0, Env: map[string]string{}}
 	window := &TmuxWindow{ID: 0, Name: "main", Session: session, ActivePN: 0}
@@ -652,5 +802,85 @@ func TestLookupFormatVariableWindowPanesMultiplePanes(t *testing.T) {
 	want := fmt.Sprintf("%d", len(panes))
 	if got != want {
 		t.Fatalf("window_panes with %d panes = %q, want %q", len(panes), got, want)
+	}
+}
+
+func TestExpandFormatNestedUnclosedBrace(t *testing.T) {
+	_, _, pane := newTestFixture()
+	tests := []struct {
+		name   string
+		format string
+		want   string
+	}{
+		{name: "unclosed alone", format: "#{unclosed", want: "#{unclosed"},
+		{name: "before unclosed", format: "before #{unclosed more", want: "before #{unclosed more"},
+		{name: "ok then bad", format: "#{session_name} #{bad", want: "claude-swarm #{bad"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := expandFormat(tt.format, pane)
+			if got != tt.want {
+				t.Fatalf("expandFormat(%q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvaluateComparisonExprMalformed(t *testing.T) {
+	_, _, pane := newTestFixture()
+	tests := []struct {
+		name   string
+		format string
+		want   string
+	}{
+		{name: "eq no comma", format: "#{==:nocomma}", want: ""},
+		{name: "eq empty", format: "#{==:}", want: ""},
+		{name: "ne no comma", format: "#{!=:nocomma}", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := expandFormat(tt.format, pane)
+			if got != tt.want {
+				t.Fatalf("expandFormat(%q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExpandBufferFormatNested(t *testing.T) {
+	buf := &PasteBuffer{Name: "test-buf", Data: []byte("hello")}
+	tests := []struct {
+		name   string
+		format string
+		want   string
+	}{
+		{
+			name:   "nested equality match",
+			format: "#{==:#{buffer_name},test-buf}",
+			want:   "1",
+		},
+		{
+			name:   "nested equality mismatch",
+			format: "#{==:#{buffer_name},other}",
+			want:   "0",
+		},
+		{
+			name:   "nested inequality",
+			format: "#{!=:#{buffer_name},other}",
+			want:   "1",
+		},
+		{
+			name:   "unclosed brace",
+			format: "#{buffer_name} #{unclosed",
+			want:   "test-buf #{unclosed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := expandBufferFormat(tt.format, buf)
+			if got != tt.want {
+				t.Fatalf("expandBufferFormat(%q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
 	}
 }

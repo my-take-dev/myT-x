@@ -31,6 +31,14 @@ type TmuxResponse struct {
 	Stderr   string `json:"stderr,omitempty"`
 }
 
+// MCPStdioResolvePayload is the shared JSON payload returned by the
+// "mcp-resolve-stdio" IPC command.
+type MCPStdioResolvePayload struct {
+	SessionName string `json:"session_name"`
+	MCPID       string `json:"mcp_id"`
+	PipePath    string `json:"pipe_path"`
+}
+
 // CommandExecutor handles a tmux request and returns a response.
 type CommandExecutor interface {
 	Execute(req TmuxRequest) TmuxResponse

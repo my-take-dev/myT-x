@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"bytes"
 	"os"
 	"sort"
 	"strings"
@@ -598,5 +599,39 @@ func TestBlockedEnvironmentKeysCountGuard(t *testing.T) {
 			"ACTION REQUIRED: Update this test, TestFrontendBackendBlockedEnvKeysConsistency, "+
 			"frontend BLOCKED_ENV_KEYS, and config.warnOnlyBlockedKeys to match",
 			got, expectedCount, keys)
+	}
+}
+
+func TestReplacePaneOutputHistory_ReleasesExistingHistory(t *testing.T) {
+	existing := NewPaneOutputHistory(32)
+	existing.Write([]byte("old-data"))
+	pane := &TmuxPane{OutputHistory: existing}
+
+	replacement := replacePaneOutputHistory(pane, 64)
+
+	if replacement == nil {
+		t.Fatal("replacement history should not be nil")
+	}
+	if replacement == existing {
+		t.Fatal("replacement history should not reuse the released instance")
+	}
+	if pane.OutputHistory != replacement {
+		t.Fatal("pane OutputHistory was not updated to replacement")
+	}
+	if replacement.capacity != 64 {
+		t.Fatalf("replacement capacity = %d, want 64", replacement.capacity)
+	}
+	if got := existing.Capture(); got != nil {
+		t.Fatalf("released history Capture() = %q, want nil", string(got))
+	}
+	replacement.Write([]byte("new-data"))
+	if got := replacement.Capture(); !bytes.Equal(got, []byte("new-data")) {
+		t.Fatalf("replacement Capture() = %q, want %q", string(got), "new-data")
+	}
+}
+
+func TestReplacePaneOutputHistory_NilPane(t *testing.T) {
+	if history := replacePaneOutputHistory(nil, 64); history != nil {
+		t.Fatal("replacement history should be nil for a nil pane")
 	}
 }

@@ -14,9 +14,25 @@ class MockResizeObserver {
         MockResizeObserver.instances.push(this);
     }
 
-    emit(height: number): void {
+    /**
+     * Emit a resize entry. `clientHeight` defaults to `Math.floor(height)` when
+     * omitted, which simulates the browser's integer clientHeight from a sub-pixel
+     * contentRect. Tests that verify clientHeight behavior should always provide
+     * an explicit `clientHeight` value to avoid relying on this default.
+     */
+    emit(height: number, options?: { readonly clientHeight?: number; readonly target?: Element }): void {
+        const target = options?.target ?? document.createElement("div");
+        if (target instanceof HTMLElement) {
+            Object.defineProperty(target, "clientHeight", {
+                value: options?.clientHeight ?? Math.floor(height),
+                configurable: true,
+            });
+        }
         this.callback([
-            {contentRect: {height} as DOMRectReadOnly} as ResizeObserverEntry,
+            {
+                contentRect: {height} as DOMRectReadOnly,
+                target,
+            } as ResizeObserverEntry,
         ], this as unknown as ResizeObserver);
     }
 
@@ -36,7 +52,11 @@ function flushRafQueue(): void {
     }
 }
 
-function HeightProbe({minHeight = 0}: { minHeight?: number }) {
+function getRenderedHeight(probeContainer: HTMLElement): string | null {
+    return probeContainer.querySelector('[data-testid="height"]')?.textContent ?? null;
+}
+
+function HeightProbe({minHeight = 0}: { readonly minHeight?: number }) {
     const ref = useRef<HTMLDivElement | null>(null);
     const height = useContainerHeight(ref, minHeight);
     return (
@@ -47,7 +67,24 @@ function HeightProbe({minHeight = 0}: { minHeight?: number }) {
     );
 }
 
-function NullRefProbe({minHeight = 0}: { minHeight?: number }) {
+function HeightProbeWithNoiseFilter({
+                                        minHeight = 0,
+                                        noiseThresholdPx = 0,
+                                    }: {
+    readonly minHeight?: number;
+    readonly noiseThresholdPx?: number;
+}) {
+    const ref = useRef<HTMLDivElement | null>(null);
+    const height = useContainerHeight(ref, minHeight, {noiseThresholdPx});
+    return (
+        <div>
+            <div ref={ref}/>
+            <output data-testid="height">{height}</output>
+        </div>
+    );
+}
+
+function NullRefProbe({minHeight = 0}: { readonly minHeight?: number }) {
     const ref = useRef<HTMLDivElement | null>(null);
     const height = useContainerHeight(ref, minHeight);
     return <output data-testid="height">{height}</output>;
@@ -86,7 +123,7 @@ describe("useContainerHeight", () => {
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
     });
 
-    it("updates height from ResizeObserver using floored integer value", () => {
+    it("uses target.clientHeight as the canonical measured value", () => {
         act(() => {
             root.render(<HeightProbe/>);
         });
@@ -95,114 +132,216 @@ describe("useContainerHeight", () => {
         expect(observer).toBeDefined();
 
         act(() => {
-            observer.emit(123.9);
+            observer.emit(123.9, {clientHeight: 124});
             flushRafQueue();
         });
 
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("123");
+        expect(getRenderedHeight(container)).toBe("124");
+    });
+
+    it("falls back to floored contentRect height when target is not an HTMLElement", () => {
+        act(() => {
+            root.render(<HeightProbe/>);
+        });
+
+        const observer = MockResizeObserver.instances[0];
+        const svgTarget = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+
+        act(() => {
+            observer.emit(123.9, {target: svgTarget});
+            flushRafQueue();
+        });
+
+        expect(getRenderedHeight(container)).toBe("123");
     });
 
     it("applies minHeight immediately when minHeight prop changes", () => {
         act(() => {
             root.render(<HeightProbe minHeight={0}/>);
         });
+
         const observer = MockResizeObserver.instances[0];
 
         act(() => {
-            observer.emit(40);
+            observer.emit(40, {clientHeight: 40});
             flushRafQueue();
         });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("40");
+        expect(getRenderedHeight(container)).toBe("40");
 
         act(() => {
             root.render(<HeightProbe minHeight={80}/>);
         });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("80");
+        expect(getRenderedHeight(container)).toBe("80");
     });
 
     it("applies minHeight floor when observed height is smaller", () => {
         act(() => {
             root.render(<HeightProbe minHeight={50}/>);
         });
+
         const observer = MockResizeObserver.instances[0];
 
         act(() => {
-            observer.emit(30);
+            observer.emit(30, {clientHeight: 30});
             flushRafQueue();
         });
 
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("50");
+        expect(getRenderedHeight(container)).toBe("50");
     });
 
-    it("absorbs sub-pixel oscillation within 1px of current value", () => {
+    it("keeps height stable when contentRect jitters but clientHeight is stable", () => {
         act(() => {
             root.render(<HeightProbe/>);
         });
 
         const observer = MockResizeObserver.instances[0];
 
-        // Initial observation at 500px
         act(() => {
-            observer.emit(500);
+            observer.emit(500.4, {clientHeight: 500});
             flushRafQueue();
         });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("500");
+        expect(getRenderedHeight(container)).toBe("500");
 
-        // Second observation at 500.4px (< 1px diff) — should NOT update
         act(() => {
-            observer.emit(500.4);
+            observer.emit(499.2, {clientHeight: 500});
             flushRafQueue();
         });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("500");
+        expect(getRenderedHeight(container)).toBe("500");
+
+        act(() => {
+            observer.emit(500.8, {clientHeight: 500});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
     });
 
-    it("suppresses update when floor diff is within ±1px tolerance", () => {
+    it("tracks real 2px+ changes from clientHeight (default noiseThresholdPx=1)", () => {
         act(() => {
             root.render(<HeightProbe/>);
         });
 
         const observer = MockResizeObserver.instances[0];
 
-        // Initial observation at 500px
         act(() => {
-            observer.emit(500);
+            observer.emit(500.9, {clientHeight: 500});
             flushRafQueue();
         });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("500");
+        expect(getRenderedHeight(container)).toBe("500");
 
-        // Observation at 501.5px → floor=501, |501-500|=1 → within tolerance, suppressed
+        // 1px change is suppressed by default threshold
         act(() => {
-            observer.emit(501.5);
+            observer.emit(499.1, {clientHeight: 499});
             flushRafQueue();
         });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("500");
+        expect(getRenderedHeight(container)).toBe("500");
+
+        // 2px change passes the threshold
+        act(() => {
+            observer.emit(498.1, {clientHeight: 498});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("498");
+
+        act(() => {
+            observer.emit(500.1, {clientHeight: 500});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
     });
 
-    it("always applies initial measurement even from zero", () => {
+    it("tracks every 1px change when noiseThresholdPx is explicitly 0", () => {
+        act(() => {
+            root.render(<HeightProbeWithNoiseFilter noiseThresholdPx={0}/>);
+        });
+
+        const observer = MockResizeObserver.instances[0];
+
+        act(() => {
+            observer.emit(500.9, {clientHeight: 500});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
+
+        act(() => {
+            observer.emit(499.1, {clientHeight: 499});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("499");
+
+        act(() => {
+            observer.emit(500.1, {clientHeight: 500});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
+    });
+
+    it("ignores +/-1px noise when noiseThresholdPx is set to 1", () => {
+        act(() => {
+            root.render(<HeightProbeWithNoiseFilter noiseThresholdPx={1}/>);
+        });
+
+        const observer = MockResizeObserver.instances[0];
+
+        act(() => {
+            observer.emit(500.1, {clientHeight: 500});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
+
+        // TC-1: 1px decrease is also suppressed
+        act(() => {
+            observer.emit(499.1, {clientHeight: 499});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
+
+        // 1px increase is suppressed
+        act(() => {
+            observer.emit(501.9, {clientHeight: 501});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
+
+        // TC-5: exactly threshold+1 (2px) difference updates the value
+        act(() => {
+            observer.emit(502.1, {clientHeight: 502});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("502");
+
+        act(() => {
+            observer.emit(503.2, {clientHeight: 503});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("502");
+
+        // 3px jump updates
+        act(() => {
+            observer.emit(505.2, {clientHeight: 505});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("505");
+    });
+
+    it("applies the first non-zero measurement from initial zero", () => {
         act(() => {
             root.render(<HeightProbe/>);
         });
 
-        // Initial height is 0
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("0");
-
+        expect(getRenderedHeight(container)).toBe("0");
         const observer = MockResizeObserver.instances[0];
 
-        // First observation should always be applied regardless of prev being 0
         act(() => {
-            observer.emit(0.5);
+            observer.emit(0.5, {clientHeight: 0});
             flushRafQueue();
         });
-        // prev is 0, so the guard `prev > 0 && ...` is false → update is applied
-        // Math.floor(0.5) = 0, so height remains 0, but the update itself was applied
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("0");
+        expect(getRenderedHeight(container)).toBe("0");
 
-        // Verify with a non-zero value: first real measurement is always applied
         act(() => {
-            observer.emit(250);
+            observer.emit(1.6, {clientHeight: 1});
             flushRafQueue();
         });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("250");
+        expect(getRenderedHeight(container)).toBe("1");
     });
 
     it("disconnects observer and cancels pending animation frame on unmount", () => {
@@ -211,9 +350,13 @@ describe("useContainerHeight", () => {
         });
         const observer = MockResizeObserver.instances[0];
 
+        // Emit without flushing rAF queue — this leaves a pending rAF that the
+        // cleanup should cancel. Flushing first would settle the rAF, making the
+        // cancelAnimationFrame assertion meaningless.
         act(() => {
-            observer.emit(60);
+            observer.emit(60, {clientHeight: 60});
         });
+        expect(rafQueue.size).toBeGreaterThan(0);
 
         act(() => {
             root.unmount();
@@ -223,179 +366,143 @@ describe("useContainerHeight", () => {
         expect(window.cancelAnimationFrame).toHaveBeenCalled();
     });
 
-    // NullRefProbe never assigns a DOM element to the ref, so useContainerHeight's
-    // useEffect guard (`if (!el) return`) skips ResizeObserver creation entirely.
     it("does not observe when ref target stays null", () => {
         act(() => {
             root.render(<NullRefProbe minHeight={7}/>);
         });
 
-        // No observer instantiated because the ref target is always null.
         expect(MockResizeObserver.instances.length).toBe(0);
-        // Height falls back to minHeight since no observation ever fires.
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("7");
-    });
-
-    it("tracks downward drift within tolerance to prevent container overflow", () => {
-        act(() => {
-            root.render(<HeightProbe/>);
-        });
-        const observer = MockResizeObserver.instances[0];
-
-        act(() => {
-            observer.emit(500);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("500");
-
-        // raw=499.9 → floor=499, |499-500|=1 → within tolerance → min(500,499)=499
-        // The value decreases to prevent FixedSizeList from overflowing the parent
-        // container when the parent shrinks within the tolerance window.
-        act(() => {
-            observer.emit(499.9);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("499");
-    });
-
-    it("suppresses update when floor value equals prev (raw=500.4, prev=500)", () => {
-        act(() => {
-            root.render(<HeightProbe/>);
-        });
-        const observer = MockResizeObserver.instances[0];
-
-        act(() => {
-            observer.emit(500);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("500");
-
-        // raw=500.4 → floor=500 === 500 → suppressed
-        act(() => {
-            observer.emit(500.4);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("500");
-    });
-
-    it("settles at oscillation minimum during N → N-1 → N cycle", () => {
-        act(() => {
-            root.render(<HeightProbe/>);
-        });
-        const observer = MockResizeObserver.instances[0];
-
-        act(() => {
-            observer.emit(500);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("500");
-
-        // 499.2 → floor=499, |499-500|=1 → tolerance → min(500,499)=499
-        act(() => {
-            observer.emit(499.2);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("499");
-
-        // 500.8 → floor=500, |500-499|=1 → tolerance → min(499,500)=499
-        // Value stays at 499 — the lower bound prevents container overflow.
-        act(() => {
-            observer.emit(500.8);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("499");
-
-        // Subsequent downward measurement is also absorbed: min(499,499)=499
-        act(() => {
-            observer.emit(499.5);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("499");
-    });
-
-    it("updates height when change exceeds ±1px tolerance", () => {
-        act(() => {
-            root.render(<HeightProbe/>);
-        });
-        const observer = MockResizeObserver.instances[0];
-
-        act(() => {
-            observer.emit(500);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("500");
-
-        // 510 → floor=510, |510-500|=10 → exceeds tolerance, update applied
-        act(() => {
-            observer.emit(510);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("510");
-
-        // 498 → floor=498, |498-510|=12 → exceeds tolerance, update applied
-        act(() => {
-            observer.emit(498);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("498");
-    });
-
-    it("stabilizes after one downward adjustment then suppresses further oscillation", () => {
-        act(() => {
-            root.render(<HeightProbe/>);
-        });
-        const observer = MockResizeObserver.instances[0];
-
-        // Initial measurement
-        act(() => {
-            observer.emit(400);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("400");
-
-        // First downward: 399.3 → floor=399, min(400,399)=399
-        act(() => {
-            observer.emit(399.3);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("399");
-
-        // Upward bounce: 400.7 → floor=400, min(399,400)=399 — suppressed
-        act(() => {
-            observer.emit(400.7);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("399");
-
-        // Another downward: 399.1 → floor=399, min(399,399)=399 — no change
-        act(() => {
-            observer.emit(399.1);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("399");
-
-        // Genuine resize beyond tolerance: 410 → |410-399|=11 > 1 → update
-        act(() => {
-            observer.emit(410);
-            flushRafQueue();
-        });
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("410");
+        expect(getRenderedHeight(container)).toBe("7");
     });
 
     it("ignores empty ResizeObserver entry arrays", () => {
         act(() => {
             root.render(<HeightProbe/>);
         });
+
         const observer = MockResizeObserver.instances[0];
         expect(observer).toBeDefined();
 
         act(() => {
             observer.emitEntries([]);
-            // The empty-entries guard returns early before scheduling a rAF,
-            // so flushRafQueue is a no-op here — included for structural consistency.
             flushRafQueue();
         });
 
-        expect(container.querySelector('[data-testid="height"]')?.textContent).toBe("0");
+        expect(getRenderedHeight(container)).toBe("0");
+    });
+
+    it("re-observes element after component remounts", () => {
+        act(() => {
+            root.render(<HeightProbe/>);
+        });
+        const firstObserver = MockResizeObserver.instances[0];
+        expect(firstObserver).toBeDefined();
+
+        act(() => {
+            root.unmount();
+        });
+        expect(firstObserver.disconnect).toHaveBeenCalled();
+
+        // Remount into the same container
+        root = createRoot(container);
+        act(() => {
+            root.render(<HeightProbe/>);
+        });
+
+        const secondObserver = MockResizeObserver.instances[MockResizeObserver.instances.length - 1];
+        expect(secondObserver).not.toBe(firstObserver);
+
+        act(() => {
+            secondObserver.emit(300, {clientHeight: 300});
+            flushRafQueue();
+        });
+
+        expect(getRenderedHeight(container)).toBe("300");
+    });
+
+    it("clamps negative noiseThresholdPx to 0 (filter disabled)", () => {
+        act(() => {
+            root.render(<HeightProbeWithNoiseFilter noiseThresholdPx={-1}/>);
+        });
+
+        const observer = MockResizeObserver.instances[0];
+
+        act(() => {
+            observer.emit(500.1, {clientHeight: 500});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
+
+        // With threshold clamped to 0, even 1px change should pass through
+        act(() => {
+            observer.emit(499.1, {clientHeight: 499});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("499");
+    });
+
+    it("floors fractional noiseThresholdPx (0.9 → 0, filter disabled)", () => {
+        act(() => {
+            root.render(<HeightProbeWithNoiseFilter noiseThresholdPx={0.9}/>);
+        });
+
+        const observer = MockResizeObserver.instances[0];
+
+        act(() => {
+            observer.emit(500.1, {clientHeight: 500});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
+
+        // Math.floor(0.9) = 0, so 1px change should pass through
+        act(() => {
+            observer.emit(499.1, {clientHeight: 499});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("499");
+    });
+
+    it("suppresses ±2px noise when noiseThresholdPx is 2", () => {
+        act(() => {
+            root.render(<HeightProbeWithNoiseFilter noiseThresholdPx={2}/>);
+        });
+
+        const observer = MockResizeObserver.instances[0];
+
+        act(() => {
+            observer.emit(500.1, {clientHeight: 500});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
+
+        // 2px change is within threshold — suppressed
+        act(() => {
+            observer.emit(498.1, {clientHeight: 498});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("500");
+
+        // 3px change exceeds threshold — passes
+        act(() => {
+            observer.emit(497.1, {clientHeight: 497});
+            flushRafQueue();
+        });
+        expect(getRenderedHeight(container)).toBe("497");
+    });
+
+    it("falls back to contentRect when clientHeight is 0 (transient CSSOM state)", () => {
+        act(() => {
+            root.render(<HeightProbe minHeight={50}/>);
+        });
+
+        const observer = MockResizeObserver.instances[0];
+
+        // clientHeight=0 but contentRect has real value → should use contentRect floor
+        act(() => {
+            observer.emit(200.7, {clientHeight: 0});
+            flushRafQueue();
+        });
+        // Math.floor(200.7) = 200, and max(minHeight=50, 200) = 200
+        expect(getRenderedHeight(container)).toBe("200");
     });
 });

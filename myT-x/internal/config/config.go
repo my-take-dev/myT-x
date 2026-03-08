@@ -98,6 +98,11 @@ type Config struct {
 	// Example: {"file-tree": "Ctrl+Shift+E", "git-graph": "Ctrl+Shift+G"}
 	// When nil or a key is absent, the frontend uses its compiled-in default shortcut.
 	ViewerShortcuts map[string]string `yaml:"viewer_shortcuts,omitempty" json:"viewer_shortcuts,omitempty"`
+	// ViewerSidebarMode controls how the right viewer sidebar is rendered.
+	// Empty string keeps backward-compatible overlay behavior.
+	// "overlay" is the explicit default value written by DefaultConfig.
+	// "docked" renders the viewer beside the main content.
+	ViewerSidebarMode string `yaml:"viewer_sidebar_mode,omitempty" json:"viewer_sidebar_mode,omitempty"`
 	// DefaultSessionDir is the directory used by Quick Start Session.
 	// Empty string means "use the application launch directory".
 	DefaultSessionDir string `yaml:"default_session_dir,omitempty" json:"default_session_dir,omitempty"`
@@ -199,6 +204,7 @@ func DefaultConfig() Config {
 			CopyFiles:    []string{},
 			CopyDirs:     []string{},
 		},
+		ViewerSidebarMode: "overlay",
 	}
 }
 
@@ -540,6 +546,9 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	if cfg.Keys == nil {
 		cfg.Keys = defaults.Keys
 	}
+	if strings.TrimSpace(cfg.ViewerSidebarMode) == "" {
+		cfg.ViewerSidebarMode = defaults.ViewerSidebarMode
+	}
 	if cfg.Worktree.SetupScripts == nil {
 		cfg.Worktree.SetupScripts = append([]string(nil), defaults.Worktree.SetupScripts...)
 	}
@@ -553,6 +562,7 @@ func applyDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 	validateWebSocketPort(cfg)
+	validateViewerSidebarMode(cfg)
 	sanitizePaneEnv(cfg)
 	sanitizeClaudeEnv(cfg)
 	sanitizeMCPServers(cfg)
@@ -598,6 +608,21 @@ func validateWebSocketPort(cfg *Config) {
 		slog.Warn("[WARN-CONFIG] websocket_port out of valid range (0-65535), falling back to 0 (auto-assign)",
 			"configured", cfg.WebSocketPort, "max", maxValidPort)
 		cfg.WebSocketPort = 0
+	}
+}
+
+// validateViewerSidebarMode normalizes viewer_sidebar_mode in place.
+// Invalid values fall back to the default overlay behavior without failing startup.
+func validateViewerSidebarMode(cfg *Config) {
+	configuredMode := cfg.ViewerSidebarMode
+	mode := strings.TrimSpace(configuredMode)
+	switch mode {
+	case "", "overlay", "docked":
+		cfg.ViewerSidebarMode = mode
+	default:
+		slog.Warn("[WARN-CONFIG] viewer_sidebar_mode is invalid, falling back to overlay",
+			"configured", configuredMode)
+		cfg.ViewerSidebarMode = "overlay"
 	}
 }
 

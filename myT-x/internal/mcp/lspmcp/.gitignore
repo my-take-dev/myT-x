@@ -1,0 +1,4 @@
+.gocache/
+.codex/
+.claude/
+*.exe

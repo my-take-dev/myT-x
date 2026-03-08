@@ -14,6 +14,7 @@ import (
 	"myT-x/internal/install"
 	"myT-x/internal/ipc"
 	"myT-x/internal/mcp"
+	"myT-x/internal/mcp/lspmcp/lsppkg"
 	"myT-x/internal/sessionlog"
 	"myT-x/internal/tmux"
 	"myT-x/internal/workerutil"
@@ -133,6 +134,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.workspace = workspace
 	a.launchDir = workspace
+	a.mcpBridgeCommand = resolveMCPBridgeCommand()
 	a.configPath = config.DefaultPath()
 	for _, message := range config.ConsumeDefaultPathWarnings() {
 		a.addPendingConfigLoadWarning(message)
@@ -195,6 +197,7 @@ func (a *App) startup(ctx context.Context) {
 				a.mcpManager.CleanupSession(oldName)
 			}
 		},
+		ResolveMCPStdio: a.ResolveMCPStdio,
 	}
 	slog.Debug("[CONFIG] agent model mapping is handled by tmux-shim")
 	a.router = tmux.NewCommandRouter(
@@ -209,7 +212,18 @@ func (a *App) startup(ctx context.Context) {
 		a.addPendingConfigLoadWarning(warnMsg)
 		runtimeLogger.Warningf(ctx, "%s", warnMsg)
 	}
-	a.mcpManager = mcp.NewManager(a.mcpRegistry, a.emitBackendEvent)
+	// Register built-in LSP extension definitions.
+	// Config entries take priority because they are loaded first;
+	// Registry.Register rejects duplicate IDs.
+	lspDefs := lspExtensionMetaToDefinitions(lsppkg.AllExtensionMeta())
+	for _, loadErr := range a.mcpRegistry.LoadFromConfig(lspDefs) {
+		slog.Debug("[DEBUG-MCP] skipped LSP extension registration", "error", loadErr)
+	}
+	a.mcpManager = mcp.NewManager(mcp.ManagerConfig{
+		Registry:       a.mcpRegistry,
+		EmitFn:         a.emitBackendEvent,
+		ResolveWorkDir: a.resolveSessionWorkDir,
+	})
 
 	a.pipeServer = newPipeServerFn(a.router.PipeName(), a.router)
 	if err := a.pipeServer.Start(); err != nil {

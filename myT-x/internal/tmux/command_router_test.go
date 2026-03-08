@@ -40,6 +40,16 @@ func TestCommandRouterHandlerMapHasNoDuplicateKeys(t *testing.T) {
 		"new-window",
 		"kill-window",
 		"select-window",
+		"copy-mode",
+		"list-buffers",
+		"set-buffer",
+		"paste-buffer",
+		"load-buffer",
+		"save-buffer",
+		"capture-pane",
+		"run-shell",
+		"if-shell",
+		"mcp-resolve-stdio",
 	}
 
 	if len(router.handlers) != len(expectedCommands) {

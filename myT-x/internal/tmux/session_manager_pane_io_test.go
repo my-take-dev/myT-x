@@ -2,11 +2,21 @@ package tmux
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 
 	"myT-x/internal/terminal"
 )
+
+func TestTmuxCopyFieldCountGuards(t *testing.T) {
+	if got := reflect.TypeFor[TmuxPane]().NumField(); got != 11 {
+		t.Fatalf("TmuxPane field count = %d, want 11. If a field was added, review copyPaneSlice and cloneSessionForRead.", got)
+	}
+	if got := reflect.TypeFor[TmuxWindow]().NumField(); got != 6 {
+		t.Fatalf("TmuxWindow field count = %d, want 6. If a field was added, review cloneSessionForRead.", got)
+	}
+}
 
 // T-4: copyPaneSlice must deep-copy Env maps so callers cannot mutate
 // internal pane state after lock release.
@@ -54,6 +64,33 @@ func TestCopyPaneSliceNilEnv(t *testing.T) {
 	}
 	if copies[0].Env == nil {
 		t.Fatal("copied Env is nil, want non-nil empty map")
+	}
+}
+
+func TestCopyPaneSliceStripsRuntimeFields(t *testing.T) {
+	history := NewPaneOutputHistory(32)
+	history.Write([]byte("runtime-only"))
+	original := &TmuxPane{
+		ID:            3,
+		Index:         0,
+		Env:           map[string]string{"KEY": "value"},
+		Terminal:      &terminal.Terminal{},
+		OutputHistory: history,
+		Window:        &TmuxWindow{ID: 10},
+	}
+
+	copies := copyPaneSlice([]*TmuxPane{original})
+	if len(copies) != 1 {
+		t.Fatalf("copyPaneSlice returned %d panes, want 1", len(copies))
+	}
+	if copies[0].Terminal != nil {
+		t.Fatal("copied Terminal should be nil")
+	}
+	if copies[0].OutputHistory != nil {
+		t.Fatal("copied OutputHistory should be nil")
+	}
+	if copies[0].Window != nil {
+		t.Fatal("copied Window should be nil")
 	}
 }
 

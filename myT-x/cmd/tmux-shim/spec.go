@@ -52,6 +52,10 @@ var commandSpecs = map[string]commandSpec{
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-l": flagBool,
+			"-X": flagBool, // copy-mode command
+			"-M": flagBool, // mouse passthrough (no-op in myT-x)
+			"-W": flagBool, // typewriter mode for interactive TUIs
+			"-N": flagBool, // CRLF mode: \r → \r\n for ConPTY Enter compatibility
 		},
 	},
 	"select-pane": {
@@ -67,6 +71,7 @@ var commandSpecs = map[string]commandSpec{
 	"list-sessions": {
 		flags: map[string]flagKind{
 			"-F": flagString,
+			"-f": flagString, // filter expression
 		},
 	},
 	"kill-session": {
@@ -78,7 +83,9 @@ var commandSpecs = map[string]commandSpec{
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-s": flagBool,
+			"-a": flagBool, // all sessions
 			"-F": flagString,
+			"-f": flagString, // filter expression
 		},
 	},
 	"display-message": {
@@ -133,6 +140,7 @@ var commandSpecs = map[string]commandSpec{
 			"-t": flagString,
 			"-a": flagBool,
 			"-F": flagString,
+			"-f": flagString, // filter expression
 		},
 	},
 	"rename-window": {
@@ -165,6 +173,82 @@ var commandSpecs = map[string]commandSpec{
 			"-t": flagString,
 		},
 	},
+	"copy-mode": {
+		flags: map[string]flagKind{
+			"-t": flagString,
+			"-q": flagBool, // quit copy mode
+			"-u": flagBool, // page up
+			"-e": flagBool, // erase on scroll
+		},
+	},
+	"list-buffers": {
+		flags: map[string]flagKind{
+			"-F": flagString, // output format
+		},
+	},
+	"set-buffer": {
+		flags: map[string]flagKind{
+			"-a": flagBool,   // append to buffer
+			"-b": flagString, // buffer name
+			"-n": flagString, // rename buffer
+		},
+	},
+	"paste-buffer": {
+		flags: map[string]flagKind{
+			"-d": flagBool,   // delete after paste
+			"-b": flagString, // buffer name
+			"-t": flagString, // target pane
+			"-p": flagBool,   // bracket paste mode
+			"-r": flagBool,   // replace newlines with CR
+			"-s": flagString, // separator
+		},
+	},
+	"load-buffer": {
+		flags: map[string]flagKind{
+			"-b": flagString,
+			"-w": flagBool,
+			"-t": flagString,
+		},
+	},
+	"save-buffer": {
+		flags: map[string]flagKind{
+			"-a": flagBool,
+			"-b": flagString,
+		},
+	},
+	"capture-pane": {
+		flags: map[string]flagKind{
+			"-a": flagBool,
+			"-b": flagString,
+			"-C": flagBool,
+			"-e": flagBool,
+			"-E": flagString,
+			"-J": flagBool,
+			"-M": flagBool,
+			"-N": flagBool,
+			"-p": flagBool,
+			"-P": flagBool,
+			"-q": flagBool,
+			"-S": flagString,
+			"-T": flagBool,
+			"-t": flagString,
+		},
+	},
+	"run-shell": {
+		flags: map[string]flagKind{
+			"-b": flagBool,   // background (no wait)
+			"-t": flagString, // target pane (for format context)
+			"-C": flagBool,   // run as tmux commands
+			"-c": flagString, // working directory
+		},
+	},
+	"if-shell": {
+		flags: map[string]flagKind{
+			"-b": flagBool,   // background
+			"-F": flagBool,   // format condition (not shell command)
+			"-t": flagString, // target pane (for format context)
+		},
+	},
 }
 
 var commandOrder = []string{
@@ -188,6 +272,15 @@ var commandOrder = []string{
 	"new-window",
 	"kill-window",
 	"select-window",
+	"copy-mode",
+	"list-buffers",
+	"set-buffer",
+	"paste-buffer",
+	"load-buffer",
+	"save-buffer",
+	"capture-pane",
+	"run-shell",
+	"if-shell",
 }
 
 func validateCommandSpecConsistency() error {

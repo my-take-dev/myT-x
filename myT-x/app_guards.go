@@ -59,11 +59,23 @@ func (a *App) requireSessionsWithPaneID(paneID *string) (*tmux.SessionManager, e
 // programmatic detection of uninitialized state, consistent with errSessionNotInitialized.
 var errMCPManagerNotInitialized = errors.New("mcp manager is unavailable")
 
+// errMCPRegistryNotInitialized is returned when the MCP registry has not been
+// initialized. This sentinel error enables callers to use errors.Is() for
+// programmatic detection of uninitialized state in registry-only code paths.
+var errMCPRegistryNotInitialized = errors.New("mcp registry is unavailable")
+
 func (a *App) requireMCPManager() (*mcp.Manager, error) {
 	if a.mcpManager == nil {
 		return nil, errMCPManagerNotInitialized
 	}
 	return a.mcpManager, nil
+}
+
+func (a *App) requireMCPRegistry() (*mcp.Registry, error) {
+	if a.mcpRegistry == nil {
+		return nil, errMCPRegistryNotInitialized
+	}
+	return a.mcpRegistry, nil
 }
 
 func (a *App) requireSessionsAndRouter() (*tmux.SessionManager, *tmux.CommandRouter, error) {

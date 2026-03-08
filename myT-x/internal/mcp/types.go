@@ -61,6 +61,15 @@ type Snapshot struct {
 	Error        string        `json:"error,omitempty"`
 	UsageSample  string        `json:"usage_sample,omitempty"`
 	ConfigParams []ConfigParam `json:"config_params,omitempty"`
+	// PipePath is the Named Pipe path when the MCP instance is running.
+	// Empty when the MCP instance is not running.
+	PipePath string `json:"pipe_path,omitempty"`
+	// BridgeCommand is the stdio bridge executable path used by CLI clients.
+	// Empty when no bridge launch recommendation is available.
+	BridgeCommand string `json:"bridge_command,omitempty"`
+	// BridgeArgs contains arguments for BridgeCommand when a bridge launch
+	// recommendation is available.
+	BridgeArgs []string `json:"bridge_args,omitempty"`
 }
 
 // Backward-compatible aliases.

@@ -302,11 +302,11 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, workerCount*defsPerWorker)
-	for worker := 0; worker < workerCount; worker++ {
+	for worker := range workerCount {
 		wg.Add(1)
 		go func(worker int) {
 			defer wg.Done()
-			for i := 0; i < defsPerWorker; i++ {
+			for i := range defsPerWorker {
 				id := fmt.Sprintf("mcp-%02d-%02d", worker, i)
 				def := MCPDefinition{ID: id, Name: "Concurrent", Command: "cmd"}
 				if err := r.Register(def); err != nil {

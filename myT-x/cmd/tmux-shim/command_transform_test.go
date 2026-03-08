@@ -342,3 +342,43 @@ func TestApplyNewProcessTransformNoChangeWhenCleanArgs(t *testing.T) {
 		t.Fatalf("args changed unexpectedly: got %v, want [%q]", req.Args, origArg)
 	}
 }
+
+// TestApplySendKeysTransformSkipsWhenXFlag verifies that -X (copy-mode command)
+// flag causes the shell transform to be skipped entirely.
+func TestApplySendKeysTransformSkipsWhenXFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "cancel command preserved",
+			args: []string{"cancel"},
+		},
+		{
+			name: "page-up command preserved",
+			args: []string{"page-up"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origArgs := append([]string(nil), tt.args...)
+			req := ipc.TmuxRequest{
+				Command: "send-keys",
+				Flags: map[string]any{
+					"-t": "%0",
+					"-X": true,
+				},
+				Env:  map[string]string{},
+				Args: tt.args,
+			}
+			changed := applySendKeysTransform(&req)
+			if changed {
+				t.Fatalf("changed = true, want false when -X flag is set")
+			}
+			if !slices.Equal(req.Args, origArgs) {
+				t.Fatalf("args modified: got %v, want %v", req.Args, origArgs)
+			}
+		})
+	}
+}

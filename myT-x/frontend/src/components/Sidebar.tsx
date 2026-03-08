@@ -1,6 +1,7 @@
 import {memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement} from "react";
 import {FixedSizeList, type ListChildComponentProps} from "react-window";
 import {api} from "../api";
+import {makeScrollStableOuter} from "./viewer/views/shared/TreeOuter";
 import {useContainerHeight} from "../hooks/useContainerHeight";
 import {useNotificationStore} from "../stores/notificationStore";
 import {useTmuxStore} from "../stores/tmuxStore";
@@ -73,6 +74,9 @@ function labelForSessionState(state: SessionVisualState): string {
 }
 
 const sessionRowHeight = 80;
+
+/** Module-level factory call — must not be inside a render function (see makeScrollStableOuter). */
+const SessionListOuter = makeScrollStableOuter({role: "list", ariaLabel: "Sessions"});
 
 interface SessionRowData {
     sessions: SessionSnapshot[];
@@ -160,9 +164,10 @@ export function Sidebar(props: SidebarProps) {
     const editValueRef = useRef("");
     const inputRef = useRef<HTMLInputElement>(null);
     const listHostRef = useRef<HTMLDivElement | null>(null);
-    // Ensure at least one session row height is reserved so the list never collapses to zero
-    // when ResizeObserver hasn't reported yet or the container is momentarily empty.
-    const listHeight = useContainerHeight(listHostRef, sessionRowHeight);
+    // Reserve at least one row height as floor so the list never collapses to zero
+    // before ResizeObserver reports. noiseThresholdPx: 1 suppresses ±1px RO churn
+    // that would otherwise cause scroll jitter in the session list.
+    const listHeight = useContainerHeight(listHostRef, sessionRowHeight, {noiseThresholdPx: 1});
     const [showNewSession, setShowNewSession] = useState(false);
     const [killTarget, setKillTarget] = useState<string | null>(null);
     const [promoteTarget, setPromoteTarget] = useState<string | null>(null);
@@ -326,6 +331,23 @@ export function Sidebar(props: SidebarProps) {
                             )}
                         </span>
                     )}
+                    {(session.root_path?.trim() || session.worktree?.path?.trim()) && (
+                        <button
+                            type="button"
+                            className="session-explorer"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                void api.OpenDirectoryInExplorer(session.name).catch((err) => {
+                                    console.warn("[sidebar] OpenDirectoryInExplorer failed", err);
+                                    addNotification(`ディレクトリを開けませんでした: ${session.name}`, "warn");
+                                });
+                            }}
+                            title="エクスプローラーで開く"
+                            aria-label={`Open directory for ${session.name}`}
+                        >
+                            {"\u21D7"}
+                        </button>
+                    )}
                     <button
                         type="button"
                         className="session-close"
@@ -338,7 +360,7 @@ export function Sidebar(props: SidebarProps) {
                 </div>
             );
         },
-        [activateSession, commitRename, handleKillClick, startRename],
+        [activateSession, addNotification, commitRename, handleKillClick, startRename],
     );
 
     const rowData = useMemo<SessionRowData>(
@@ -379,6 +401,7 @@ export function Sidebar(props: SidebarProps) {
                         itemSize={sessionRowHeight}
                         itemData={rowData}
                         overscanCount={6}
+                        outerElementType={SessionListOuter}
                     >
                         {SessionRow}
                     </FixedSizeList>

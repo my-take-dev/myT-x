@@ -176,7 +176,8 @@ const Row = memo(function Row({index, style, data}: ListChildComponentProps<RowD
 export function DiffFileSidebar({flatNodes, selectedPath, onToggleDir, onSelectFile}: DiffFileSidebarProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const listRef = useRef<FixedSizeList<RowData> | null>(null);
-    const height = useContainerHeight(containerRef);
+    // noiseThresholdPx: 1 suppresses ±1px ResizeObserver churn that causes scroll jitter.
+    const height = useContainerHeight(containerRef, ROW_HEIGHT, {noiseThresholdPx: 1});
     const {focusedIndex, focusIndex, findParentIndex} = useVirtualizedTreeFocus(flatNodes, selectedPath, listRef);
 
     const itemData = useMemo<RowData>(() => ({

@@ -9,6 +9,14 @@ import (
 	"strings"
 )
 
+func releasePaneOutputHistory(pane *TmuxPane) {
+	if pane == nil || pane.OutputHistory == nil {
+		return
+	}
+	pane.OutputHistory.Release()
+	pane.OutputHistory = nil
+}
+
 // closeLocked collects all panes under lock and clears internal state.
 // Uses defer to guarantee lock release even on panic.
 func (m *SessionManager) closeLocked() []*TmuxPane {
@@ -17,6 +25,7 @@ func (m *SessionManager) closeLocked() []*TmuxPane {
 
 	panes := make([]*TmuxPane, 0, len(m.panes))
 	for _, pane := range m.panes {
+		releasePaneOutputHistory(pane)
 		panes = append(panes, pane)
 	}
 	m.sessions = map[string]*TmuxSession{}
@@ -167,9 +176,32 @@ func (m *SessionManager) removeSessionLocked(name string) (*TmuxSession, []*Tmux
 			if pane == nil {
 				continue
 			}
+			releasePaneOutputHistory(pane)
 			panes = append(panes, pane)
 			delete(m.panes, pane.ID)
 		}
+	}
+	orphanedPanes := make([]struct {
+		id   int
+		pane *TmuxPane
+	}, 0)
+	for pid, orphan := range m.panes {
+		if orphan == nil || orphan.Window == nil || orphan.Window.Session != session {
+			continue
+		}
+		orphanedPanes = append(orphanedPanes, struct {
+			id   int
+			pane *TmuxPane
+		}{id: pid, pane: orphan})
+	}
+	for _, orphaned := range orphanedPanes {
+		releasePaneOutputHistory(orphaned.pane)
+		panes = append(panes, orphaned.pane)
+		delete(m.panes, orphaned.id)
+		slog.Warn("[WARN-SESSION] RemoveSession: cleaned up orphaned pane during session deletion",
+			"paneId", orphaned.pane.IDString(),
+			"session", sessionName,
+		)
 	}
 	delete(m.sessions, sessionName)
 	m.markSessionMapMutationLocked()
