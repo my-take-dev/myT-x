@@ -177,7 +177,7 @@ func TestMCPPipeServerFieldCount(t *testing.T) {
 
 func TestMCPPipeConfigFieldCount(t *testing.T) {
 	got := reflect.TypeFor[MCPPipeConfig]().NumField()
-	want := 4
+	want := 5
 	if got != want {
 		t.Fatalf("MCPPipeConfig field count = %d, want %d", got, want)
 	}

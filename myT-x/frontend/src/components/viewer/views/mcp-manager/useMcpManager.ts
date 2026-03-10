@@ -8,7 +8,9 @@ import {logFrontendEventSafe} from "../../../../utils/logFrontendEventSafe";
 
 interface UseMcpManagerResult {
     lspMcpList: MCPSnapshot[];
+    orchMcpList: MCPSnapshot[];
     representativeMCP: MCPSnapshot | null;
+    orchRepresentativeMCP: MCPSnapshot | null;
     aggregateStatus: MCPStatus | null;
     isLoading: boolean;
     error: string | null;
@@ -28,6 +30,14 @@ export function normalizeActiveSessionName(sessionName: string | null): string |
  */
 export function isLspMcp(snapshot: MCPSnapshot): boolean {
     return snapshot.id.toLowerCase().startsWith("lsp-");
+}
+
+/**
+ * Returns true when a snapshot belongs to the orchestrator MCP group.
+ * Matching is based on the kind field or the "orch-" ID prefix.
+ */
+export function isOrchMcp(snapshot: MCPSnapshot): boolean {
+    return snapshot.kind === "orchestrator" || snapshot.id.toLowerCase().startsWith("orch-");
 }
 
 export function selectRepresentativeLspMcp(snapshots: readonly MCPSnapshot[]): MCPSnapshot | null {
@@ -125,12 +135,22 @@ export function useMcpManager(): UseMcpManagerResult {
         if (activeSession == null) {
             return [];
         }
-        // Scope: LSP-MCP only. Non-LSP MCPs are resolved through the CLI path
-        // and are intentionally excluded from this aggregated UI view.
         return (snapshots[activeSession] ?? []).filter(isLspMcp);
     }, [activeSession, snapshots]);
 
+    const orchMcpList = useMemo(() => {
+        if (activeSession == null) {
+            return [];
+        }
+        return (snapshots[activeSession] ?? []).filter(isOrchMcp);
+    }, [activeSession, snapshots]);
+
     const representativeMCP = useMemo(() => selectRepresentativeLspMcp(lspMcpList), [lspMcpList]);
+    const orchRepresentativeMCP = useMemo(
+        () => selectRepresentativeLspMcp(orchMcpList),
+        [orchMcpList],
+    );
+
     const aggregateStatus = useMemo(
         () => (lspMcpList.length === 0 ? null : aggregateLspMcpStatus(lspMcpList)),
         [lspMcpList],
@@ -169,7 +189,9 @@ export function useMcpManager(): UseMcpManagerResult {
 
     return {
         lspMcpList,
+        orchMcpList,
         representativeMCP,
+        orchRepresentativeMCP,
         aggregateStatus,
         isLoading,
         error,

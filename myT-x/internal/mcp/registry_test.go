@@ -71,6 +71,14 @@ func TestRegistry_Register(t *testing.T) {
 			wantErr:     []bool{true},
 			errContains: []string{"mcp definition command is required"},
 		},
+		{
+			name: "allow empty command when Kind is set",
+			defs: []MCPDefinition{
+				{ID: "orch-test", Name: "Orchestrator Test", Kind: "orchestrator"},
+			},
+			wantErr:     []bool{false},
+			errContains: []string{""},
+		},
 	}
 
 	for _, tt := range tests {

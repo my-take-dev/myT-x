@@ -1177,7 +1177,12 @@
     gap: 8px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--line);
-    cursor: default;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.mcp-category-item:hover {
+    background: var(--accent-04);
 }
 
 .mcp-category-item-selected {
@@ -1324,6 +1329,19 @@
     font-size: 0.82rem;
     margin: 0 0 12px;
     line-height: 1.4;
+}
+
+.orch-tool-list {
+    margin: 4px 0 12px;
+    padding-left: 20px;
+    color: var(--fg-dim);
+    font-size: 0.82rem;
+    line-height: 1.6;
+}
+
+.orch-tool-list code {
+    color: var(--fg-main);
+    font-size: 0.8rem;
 }
 
 .mcp-detail-error {

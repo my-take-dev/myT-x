@@ -15,6 +15,7 @@ type ManagerConfig struct {
 	// ResolveWorkDir returns the working directory for the given session.
 	// Used by startInstance to populate lspmcp.Config.RootDir.
 	ResolveWorkDir func(sessionName string) (string, error)
+	NewPipeServer  func(MCPPipeConfig) managedPipeServer
 }
 
 // Manager manages MCP instances across all sessions.
@@ -40,6 +41,13 @@ type Manager struct {
 	emitMu         sync.Mutex
 	closed         bool
 	resolveWorkDir func(string) (string, error)
+	newPipeServer  func(MCPPipeConfig) managedPipeServer
+}
+
+type managedPipeServer interface {
+	Start() error
+	Stop()
+	PipeName() string
 }
 
 // instance holds the per-session, per-MCP runtime state.
@@ -47,7 +55,7 @@ type instance struct {
 	mu     sync.RWMutex
 	state  InstanceState
 	cancel func() // nil when stopped; calling it stops the running pipe server.
-	pipe   *MCPPipeServer
+	pipe   managedPipeServer
 	// generation is incremented each time SetEnabled changes state. It prevents
 	// stale startInstance goroutines from clobbering a newer enable/disable cycle.
 	generation uint64
@@ -72,11 +80,18 @@ func NewManager(cfg ManagerConfig) *Manager {
 			return ".", nil
 		}
 	}
+	newPipeServer := cfg.NewPipeServer
+	if newPipeServer == nil {
+		newPipeServer = func(pipeCfg MCPPipeConfig) managedPipeServer {
+			return NewMCPPipeServer(pipeCfg)
+		}
+	}
 	return &Manager{
 		registry:       registry,
 		sessions:       make(map[string]map[string]*instance),
 		emitFn:         emitFn,
 		resolveWorkDir: resolveWorkDir,
+		newPipeServer:  newPipeServer,
 	}
 }
 
@@ -259,13 +274,13 @@ func (m *Manager) startInstance(sessionName, mcpID string, inst *instance, def D
 		return
 	}
 
+	if !instanceGenerationMatches(inst, gen) {
+		return
+	}
+
 	pipeName := BuildMCPPipeName(sessionName, mcpID)
-	pipe := NewMCPPipeServer(MCPPipeConfig{
-		PipeName:   pipeName,
-		LSPCommand: def.Command,
-		LSPArgs:    append([]string(nil), def.Args...),
-		RootDir:    rootDir,
-	})
+	pipeCfg := buildPipeConfig(pipeName, rootDir, def)
+	pipe := m.newPipeServer(pipeCfg)
 
 	if err := pipe.Start(); err != nil {
 		slog.Warn("[DEBUG-MCP] failed to start pipe server",
@@ -374,16 +389,7 @@ func (m *Manager) CleanupSession(sessionName string) {
 
 	// Stop all running instances for this session.
 	for _, inst := range sessionInstances {
-		var cancelFn func()
-		inst.mu.Lock()
-		if inst.cancel != nil {
-			cancelFn = inst.cancel
-			inst.cancel = nil
-		}
-		inst.pipe = nil
-		inst.state.Status = StatusStopped
-		inst.state.Error = ""
-		inst.mu.Unlock()
+		cancelFn := stopInstance(inst, true)
 		if cancelFn != nil {
 			cancelFn()
 		}
@@ -416,16 +422,7 @@ func (m *Manager) close(emitLifecycleEvent bool) {
 
 	for sessionName, sessionInstances := range allSessions {
 		for _, inst := range sessionInstances {
-			var cancelFn func()
-			inst.mu.Lock()
-			if inst.cancel != nil {
-				cancelFn = inst.cancel
-				inst.cancel = nil
-			}
-			inst.pipe = nil
-			inst.state.Status = StatusStopped
-			inst.state.Error = ""
-			inst.mu.Unlock()
+			cancelFn := stopInstance(inst, true)
 			if cancelFn != nil {
 				cancelFn()
 			}
@@ -468,5 +465,30 @@ func defaultSnapshot(def Definition) Snapshot {
 		Status:       StatusStopped,
 		UsageSample:  def.UsageSample,
 		ConfigParams: cloneConfigParams(def.ConfigParams),
+		Kind:         def.Kind,
 	}
+}
+
+func instanceGenerationMatches(inst *instance, gen uint64) bool {
+	inst.mu.RLock()
+	defer inst.mu.RUnlock()
+	return inst.generation == gen
+}
+
+func stopInstance(inst *instance, invalidateGeneration bool) func() {
+	var cancelFn func()
+	inst.mu.Lock()
+	if invalidateGeneration {
+		inst.generation++
+	}
+	if inst.cancel != nil {
+		cancelFn = inst.cancel
+		inst.cancel = nil
+	}
+	inst.pipe = nil
+	inst.state.Enabled = false
+	inst.state.Status = StatusStopped
+	inst.state.Error = ""
+	inst.mu.Unlock()
+	return cancelFn
 }

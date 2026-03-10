@@ -16,6 +16,7 @@ export interface BridgeLaunchRecommendation {
 }
 
 export const lspMcpConfigServerName = "mytx-lsp-mcp";
+export const orchMcpConfigServerName = "mytx-agent-orchestrator";
 export const lspMcpNamePlaceholder = "$LSP_NAME";
 export const lspSessionNamePlaceholder = "$SESSION_NAME";
 
@@ -174,6 +175,33 @@ export function buildCopilotCLIConfigSnippet(serverName: string, command: string
         null,
         2,
     );
+}
+
+export function buildOrchMcpBridgeArgs(sessionName: string | null | undefined): string[] {
+    return [
+        "mcp",
+        "stdio",
+        "--session",
+        normalizeSessionName(sessionName),
+        "--mcp",
+        "agent-orchestrator",
+    ];
+}
+
+export function buildOrchMcpLaunchRecommendation(
+    bridgeCommand: string | null | undefined,
+    sessionName: string | null | undefined,
+): BridgeLaunchRecommendation | null {
+    const command = normalizeBridgeCommand(bridgeCommand);
+    if (command === "") {
+        return null;
+    }
+    const args = buildOrchMcpBridgeArgs(sessionName);
+    return {
+        command,
+        args,
+        commandPreview: buildCommandPreview(command, args),
+    };
 }
 
 export function buildCliExamples(

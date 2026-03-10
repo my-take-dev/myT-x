@@ -1,13 +1,19 @@
+import {useState} from "react";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {McpDetailPanel} from "./McpDetailPanel";
+import {OrchestratorDetailPanel} from "./OrchestratorDetailPanel";
 import {useMcpManager} from "./useMcpManager";
+
+type McpCategory = "lsp" | "orchestrator";
 
 export function McpManagerView() {
     const closeView = useViewerStore((s) => s.closeView);
     const {
         lspMcpList,
+        orchMcpList,
         representativeMCP,
+        orchRepresentativeMCP,
         aggregateStatus,
         isLoading,
         error,
@@ -16,18 +22,22 @@ export function McpManagerView() {
         dismissError,
     } = useMcpManager();
 
+    const [selectedCategory, setSelectedCategory] = useState<McpCategory>(
+        orchMcpList.length > 0 && lspMcpList.length === 0 ? "orchestrator" : "lsp",
+    );
+
     if (activeSession == null) {
         return (
             <ViewerPanelShell
                 className="mcp-manager-view"
                 title="MCP Manager"
                 onClose={closeView}
-                // Intentionally no refresh action in this state:
-                // retryLoad requires an active session and would be a no-op.
                 message="アクティブなセッションがありません"
             />
         );
     }
+
+    const hasContent = lspMcpList.length > 0 || orchMcpList.length > 0;
 
     return (
         <ViewerPanelShell
@@ -51,30 +61,51 @@ export function McpManagerView() {
                     </div>
                 )}
                 {isLoading ? (
-                    <div className="viewer-message">LSP-MCPプロファイルを読み込み中...</div>
-                ) : lspMcpList.length === 0 || aggregateStatus == null ? (
-                    // aggregateStatus is currently null only when the list is empty,
-                    // but the hook contract still models it as nullable.
+                    <div className="viewer-message">MCPプロファイルを読み込み中...</div>
+                ) : !hasContent ? (
                     <div className="viewer-message">
-                        {error ? "このセッションのLSP-MCPプロファイルを読み込めませんでした。" : "このセッションで利用可能なLSP-MCPプロファイルはありません。"}
+                        {error ? "このセッションのMCPプロファイルを読み込めませんでした。" : "このセッションで利用可能なMCPプロファイルはありません。"}
                     </div>
                 ) : (
                     <>
                         <aside className="mcp-list-sidebar" aria-label="MCP categories">
                             <ul className="mcp-category-list">
-                                <li className="mcp-category-item mcp-category-item-selected">
-                                    <span className={`mcp-status-dot ${aggregateStatus}`} title={aggregateStatus}/>
-                                    <span className="mcp-list-name">LSP-MCP</span>
-                                    <span className="mcp-category-count">{lspMcpList.length}</span>
-                                </li>
+                                {lspMcpList.length > 0 && (
+                                    <li
+                                        className={`mcp-category-item${selectedCategory === "lsp" ? " mcp-category-item-selected" : ""}`}
+                                        onClick={() => setSelectedCategory("lsp")}
+                                    >
+                                        {aggregateStatus != null && (
+                                            <span className={`mcp-status-dot ${aggregateStatus}`} title={aggregateStatus}/>
+                                        )}
+                                        <span className="mcp-list-name">LSP-MCP</span>
+                                        <span className="mcp-category-count">{lspMcpList.length}</span>
+                                    </li>
+                                )}
+                                {orchMcpList.length > 0 && (
+                                    <li
+                                        className={`mcp-category-item${selectedCategory === "orchestrator" ? " mcp-category-item-selected" : ""}`}
+                                        onClick={() => setSelectedCategory("orchestrator")}
+                                    >
+                                        <span className="mcp-list-name">Agent Orchestrator</span>
+                                        <span className="mcp-category-count">{orchMcpList.length}</span>
+                                    </li>
+                                )}
                             </ul>
                         </aside>
-                        <McpDetailPanel
-                            representativeMCP={representativeMCP}
-                            activeSession={activeSession}
-                            aggregateStatus={aggregateStatus}
-                            totalLspCount={lspMcpList.length}
-                        />
+                        {selectedCategory === "orchestrator" ? (
+                            <OrchestratorDetailPanel
+                                representativeMCP={orchRepresentativeMCP}
+                                activeSession={activeSession}
+                            />
+                        ) : (
+                            <McpDetailPanel
+                                representativeMCP={representativeMCP}
+                                activeSession={activeSession}
+                                aggregateStatus={aggregateStatus}
+                                totalLspCount={lspMcpList.length}
+                            />
+                        )}
                     </>
                 )}
             </div>

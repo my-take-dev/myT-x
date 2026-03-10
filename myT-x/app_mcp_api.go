@@ -315,11 +315,10 @@ func logResolveMCPStdioFailure(sessionName, mcpName, mcpID string, err error) er
 }
 
 // applyMCPBridgeRecommendation populates bridge launch metadata on a snapshot.
-// Recommendations are provided for every LSP MCP regardless of runtime status
-// because the CLI bridge performs a bounded dial with timeout and can be shown
-// as ready-to-copy guidance even before the MCP reaches running state.
-// Non-LSP MCPs are intentionally excluded because their CLI entrypoints are
-// resolved through ResolveMCPStdio instead of the shared LSP bridge flow.
+// Recommendations are provided for every LSP and orchestrator MCP regardless
+// of runtime status because the CLI bridge performs a bounded dial with timeout
+// and can be shown as ready-to-copy guidance even before the MCP reaches
+// running state.
 func (a *App) applyMCPBridgeRecommendation(sessionName string, snapshot *mcp.MCPSnapshot) {
 	if snapshot == nil {
 		return
@@ -333,6 +332,9 @@ func (a *App) applyMCPBridgeRecommendation(sessionName string, snapshot *mcp.MCP
 		return
 	}
 	mcpName := strings.TrimSpace(lspMCPCLINameFromID(snapshot.ID))
+	if mcpName == "" {
+		mcpName = strings.TrimSpace(orchMCPCLINameFromID(snapshot.ID))
+	}
 	if mcpName == "" {
 		return
 	}
@@ -376,6 +378,9 @@ func (a *App) resolveMCPIDForCLIName(input string) (string, error) {
 		addMCPAlias(aliasToIDs, def.Name, def.ID)
 		if strings.HasPrefix(strings.ToLower(def.ID), "lsp-") {
 			addMCPAlias(aliasToIDs, strings.TrimSpace(def.ID[4:]), def.ID)
+		}
+		if strings.HasPrefix(strings.ToLower(def.ID), "orch-") {
+			addMCPAlias(aliasToIDs, strings.TrimSpace(def.ID[5:]), def.ID)
 		}
 		if cmdAlias := normalizeMCPAliasToken(def.Command); cmdAlias != "" {
 			if _, excluded := genericMCPLaunchers[cmdAlias]; !excluded {
@@ -450,6 +455,22 @@ func normalizeMCPAliasToken(value string) string {
 		base = next
 	}
 	return strings.TrimSpace(base)
+}
+
+// orchMCPCLINameFromID extracts the CLI-facing MCP name from an orchestrator MCP ID.
+// Returns "" for non-orchestrator IDs and invalid IDs such as "orch-".
+// Example: "orch-agent-orchestrator" -> "agent-orchestrator", "lsp-gopls" -> "".
+func orchMCPCLINameFromID(mcpID string) string {
+	trimmed := strings.TrimSpace(mcpID)
+	const prefix = "orch-"
+	if len(trimmed) <= len(prefix) || !strings.EqualFold(trimmed[:len(prefix)], prefix) {
+		return ""
+	}
+	normalized := normalizeMCPAliasToken(trimmed[len(prefix):])
+	if normalized != "" {
+		return normalized
+	}
+	return strings.TrimSpace(trimmed[len(prefix):])
 }
 
 // lspMCPCLINameFromID extracts the CLI-facing MCP name from an LSP MCP ID.

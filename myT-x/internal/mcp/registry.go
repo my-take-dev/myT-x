@@ -35,7 +35,9 @@ func (r *Registry) Register(def Definition) error {
 		return fmt.Errorf("mcp definition name is required (id=%q)", id)
 	}
 	command := strings.TrimSpace(def.Command)
-	if command == "" {
+	// Non-LSP definitions (e.g. orchestrator) use RuntimeFactory instead of
+	// an external command, so Command is allowed to be empty when Kind is set.
+	if command == "" && strings.TrimSpace(def.Kind) == "" {
 		return fmt.Errorf("mcp definition command is required (id=%q)", id)
 	}
 
