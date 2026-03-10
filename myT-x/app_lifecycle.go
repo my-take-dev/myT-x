@@ -219,6 +219,11 @@ func (a *App) startup(ctx context.Context) {
 	for _, loadErr := range a.mcpRegistry.LoadFromConfig(lspDefs) {
 		slog.Debug("[DEBUG-MCP] skipped LSP extension registration", "error", loadErr)
 	}
+	// Register built-in orchestrator MCP definitions.
+	orchDefs := orchestratorMCPDefinitions()
+	for _, loadErr := range a.mcpRegistry.LoadFromConfig(orchDefs) {
+		slog.Debug("[DEBUG-MCP] skipped orchestrator registration", "error", loadErr)
+	}
 	a.mcpManager = mcp.NewManager(mcp.ManagerConfig{
 		Registry:       a.mcpRegistry,
 		EmitFn:         a.emitBackendEvent,

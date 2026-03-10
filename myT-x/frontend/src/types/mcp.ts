@@ -30,6 +30,8 @@ export interface MCPSnapshot {
     bridge_command?: string;
     /** Bridge arguments for stdio clients. */
     bridge_args?: string[];
+    /** MCP kind: "" = LSP (default), "orchestrator" = Agent Orchestrator. */
+    kind?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -117,6 +119,9 @@ export function normalizeMCPSnapshot(snapshot: unknown): MCPSnapshot | null {
         if (bridgeArgs.length > 0) {
             normalized.bridge_args = bridgeArgs;
         }
+    }
+    if (typeof snapshot.kind === "string" && snapshot.kind.trim() !== "") {
+        normalized.kind = snapshot.kind;
     }
 
     return normalized;

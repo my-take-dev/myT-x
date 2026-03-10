@@ -14,6 +14,9 @@ type Definition struct {
 	DefaultEnabled bool              `json:"default_enabled" yaml:"default_enabled"`
 	UsageSample    string            `json:"usage_sample,omitempty" yaml:"usage_sample,omitempty"`
 	ConfigParams   []ConfigParam     `json:"config_params,omitempty" yaml:"config_params,omitempty"`
+	// Kind distinguishes MCP server types for startInstance branching.
+	// "" (empty) = LSP (default), "orchestrator" = Agent Orchestrator.
+	Kind string `json:"kind,omitempty" yaml:"kind,omitempty"`
 }
 
 // ConfigParam describes a single user-configurable parameter for an MCP.
@@ -70,6 +73,9 @@ type Snapshot struct {
 	// BridgeArgs contains arguments for BridgeCommand when a bridge launch
 	// recommendation is available.
 	BridgeArgs []string `json:"bridge_args,omitempty"`
+	// Kind distinguishes MCP server types for frontend category rendering.
+	// "" = LSP (default), "orchestrator" = Agent Orchestrator.
+	Kind string `json:"kind,omitempty"`
 }
 
 // Backward-compatible aliases.

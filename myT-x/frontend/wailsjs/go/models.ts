@@ -570,6 +570,7 @@ export namespace mcp {
 	    pipe_path?: string;
 	    bridge_command?: string;
 	    bridge_args?: string[];
+	    kind?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Snapshot(source);
@@ -588,6 +589,7 @@ export namespace mcp {
 	        this.pipe_path = source["pipe_path"];
 	        this.bridge_command = source["bridge_command"];
 	        this.bridge_args = source["bridge_args"];
+	        this.kind = source["kind"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

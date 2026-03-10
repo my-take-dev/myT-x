@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // newTestManager creates a Manager with a pre-populated registry and a
@@ -69,6 +70,64 @@ func payloadMap(t *testing.T, payload any) map[string]any {
 		t.Fatalf("payload type = %T, want map[string]any", payload)
 	}
 	return data
+}
+
+type fakeManagedPipeServer struct {
+	pipeName     string
+	startEntered chan struct{}
+	startRelease chan struct{}
+
+	startOnce sync.Once
+	mu        sync.Mutex
+	started   bool
+	stopCount int
+}
+
+func (f *fakeManagedPipeServer) Start() error {
+	f.startOnce.Do(func() {
+		close(f.startEntered)
+	})
+	if f.startRelease != nil {
+		<-f.startRelease
+	}
+	f.mu.Lock()
+	f.started = true
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeManagedPipeServer) Stop() {
+	f.mu.Lock()
+	f.stopCount++
+	f.mu.Unlock()
+}
+
+func (f *fakeManagedPipeServer) PipeName() string {
+	return f.pipeName
+}
+
+func (f *fakeManagedPipeServer) snapshot() (started bool, stopCount int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.started, f.stopCount
+}
+
+func mustReceiveWithin(t *testing.T, ch <-chan struct{}, timeout time.Duration, message string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+		t.Fatal(message)
+	}
+}
+
+func mustNotReceiveWithin(t *testing.T, ch <-chan struct{}, timeout time.Duration, message string) {
+	t.Helper()
+	select {
+	case <-ch:
+		t.Fatal(message)
+	case <-time.After(timeout):
+	}
 }
 
 func TestManager_SnapshotForSession(t *testing.T) {
@@ -565,6 +624,143 @@ func TestManager_CloseWithoutEvent(t *testing.T) {
 	}
 }
 
+func TestManager_CloseWithoutEvent_InvalidatesPendingStart(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register(MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	resolveEntered := make(chan struct{})
+	releaseResolve := make(chan struct{})
+	pipe := &fakeManagedPipeServer{
+		pipeName:     `\\.\pipe\test-close-pending-start`,
+		startEntered: make(chan struct{}),
+		startRelease: make(chan struct{}),
+	}
+
+	mgr := NewManager(ManagerConfig{
+		Registry: reg,
+		EmitFn:   func(string, any) {},
+		NewPipeServer: func(MCPPipeConfig) managedPipeServer {
+			return pipe
+		},
+		ResolveWorkDir: func(string) (string, error) {
+			close(resolveEntered)
+			<-releaseResolve
+			return ".", nil
+		},
+	})
+
+	if err := mgr.SetEnabled("session-1", "memory", true); err != nil {
+		t.Fatalf("SetEnabled() error = %v", err)
+	}
+	mustReceiveWithin(t, resolveEntered, time.Second, "ResolveWorkDir was not called")
+
+	mgr.mu.RLock()
+	inst := mgr.sessions["session-1"]["memory"]
+	mgr.mu.RUnlock()
+	if inst == nil {
+		t.Fatal("session instance not found after SetEnabled")
+	}
+
+	mgr.CloseWithoutEvent()
+	close(releaseResolve)
+
+	mustNotReceiveWithin(t, pipe.startEntered, 200*time.Millisecond, "pipe Start should not be called after CloseWithoutEvent")
+
+	inst.mu.RLock()
+	defer inst.mu.RUnlock()
+	if inst.generation != 2 {
+		t.Fatalf("instance generation = %d, want 2 after invalidation", inst.generation)
+	}
+	if inst.cancel != nil {
+		t.Fatal("instance cancel should be nil after CloseWithoutEvent")
+	}
+	if inst.pipe != nil {
+		t.Fatal("instance pipe should be nil after CloseWithoutEvent")
+	}
+	if inst.state.Enabled {
+		t.Fatal("instance should be disabled after CloseWithoutEvent")
+	}
+	if inst.state.Status != StatusStopped {
+		t.Fatalf("instance status = %q, want %q", inst.state.Status, StatusStopped)
+	}
+}
+
+func TestManager_CleanupSession_InvalidatesStartBlockedInPipeStart(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register(MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	pipe := &fakeManagedPipeServer{
+		pipeName:     `\\.\pipe\test-cleanup-pending-start`,
+		startEntered: make(chan struct{}),
+		startRelease: make(chan struct{}),
+	}
+
+	mgr := NewManager(ManagerConfig{
+		Registry: reg,
+		EmitFn:   func(string, any) {},
+		NewPipeServer: func(MCPPipeConfig) managedPipeServer {
+			return pipe
+		},
+		ResolveWorkDir: func(string) (string, error) { return ".", nil },
+	})
+
+	if err := mgr.SetEnabled("session-1", "memory", true); err != nil {
+		t.Fatalf("SetEnabled() error = %v", err)
+	}
+	mustReceiveWithin(t, pipe.startEntered, time.Second, "pipe Start was not called")
+
+	mgr.mu.RLock()
+	inst := mgr.sessions["session-1"]["memory"]
+	mgr.mu.RUnlock()
+	if inst == nil {
+		t.Fatal("session instance not found after SetEnabled")
+	}
+
+	mgr.CleanupSession("session-1")
+	close(pipe.startRelease)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, stopCount := pipe.snapshot()
+		if stopCount == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pipe Stop count = %d, want 1", stopCount)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mgr.mu.RLock()
+	_, stillPresent := mgr.sessions["session-1"]
+	mgr.mu.RUnlock()
+	if stillPresent {
+		t.Fatal("session should be removed after CleanupSession")
+	}
+
+	inst.mu.RLock()
+	defer inst.mu.RUnlock()
+	if inst.generation != 2 {
+		t.Fatalf("instance generation = %d, want 2 after CleanupSession invalidation", inst.generation)
+	}
+	if inst.cancel != nil {
+		t.Fatal("instance cancel should be nil after CleanupSession")
+	}
+	if inst.pipe != nil {
+		t.Fatal("instance pipe should be nil after CleanupSession")
+	}
+	if inst.state.Enabled {
+		t.Fatal("instance should be disabled after CleanupSession")
+	}
+	if inst.state.Status != StatusStopped {
+		t.Fatalf("instance status = %q, want %q", inst.state.Status, StatusStopped)
+	}
+}
+
 func TestManager_SessionIsolation(t *testing.T) {
 	mgr, _ := newTestManager(t, MCPDefinition{ID: "memory", Name: "Memory"})
 
@@ -621,10 +817,10 @@ func TestStructFieldCounts(t *testing.T) {
 		got  int
 		want int
 	}{
-		{"MCPDefinition", reflect.TypeFor[MCPDefinition]().NumField(), 9},
+		{"MCPDefinition", reflect.TypeFor[MCPDefinition]().NumField(), 10},
 		{"MCPConfigParam", reflect.TypeFor[MCPConfigParam]().NumField(), 4},
 		{"MCPInstanceState", reflect.TypeFor[MCPInstanceState]().NumField(), 5},
-		{"MCPSnapshot", reflect.TypeFor[MCPSnapshot]().NumField(), 11},
+		{"MCPSnapshot", reflect.TypeFor[MCPSnapshot]().NumField(), 12},
 		{"instance", reflect.TypeFor[instance]().NumField(), 5},
 	}
 	for _, tt := range tests {

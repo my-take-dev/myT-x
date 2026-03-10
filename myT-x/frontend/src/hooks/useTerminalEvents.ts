@@ -1,15 +1,13 @@
 import {type Dispatch, type MutableRefObject, type SetStateAction, useEffect} from "react";
 import type {Terminal} from "@xterm/xterm";
-import {
-    ClipboardGetText,
-    ClipboardSetText,
-    EventsOn,
-} from "../../wailsjs/runtime/runtime";
+import {ClipboardGetText, EventsOn} from "../../wailsjs/runtime/runtime";
+import {writeClipboardText} from "../utils/clipboardUtils";
 import {api} from "../api";
 import {registerPaneHandler, isConnected as isWsConnected, setReconnectCallback} from "../services/paneDataStream";
 import {useTmuxStore} from "../stores/tmuxStore";
 import {shouldRecoverTerminalFocus, type TerminalFocusRecoveryReason} from "../utils/terminalFocus";
-import {shouldLetXtermHandleImeEvent} from "../utils/terminalIme";
+import {createTerminalImeInputGate, shouldLetXtermHandleImeEvent} from "../utils/terminalIme";
+import {pasteTextSafely} from "../utils/terminalPaste";
 import {resolveActivePaneID} from "../utils/session";
 
 interface UseTerminalEventsOptions {
@@ -80,6 +78,7 @@ export function useTerminalEvents({
         let isComposing = false;
         let composingOutput: string[] = [];
         const compositionTextarea = term.textarea ?? null;
+        const imeInputGate = createTerminalImeInputGate();
 
         const flushComposedOutput = () => {
             if (composingOutput.length === 0) {
@@ -92,24 +91,32 @@ export function useTerminalEvents({
             try {
                 term.write(buffered);
             } catch (err) {
-                if (import.meta.env.DEV) {
-                    console.warn("[DEBUG-terminal] flushComposedOutput failed (terminal may be disposed)", err);
-                }
+                console.warn("[terminal] flushComposedOutput failed (terminal may be disposed)", err);
             }
         };
 
-        const finishComposition = () => {
+        const finishComposition = (commitEnded: boolean, eventData: string = "") => {
             isComposing = false;
             isComposingRef.current = false;
-            flushComposedOutput();
+            try {
+                if (commitEnded) {
+                    imeInputGate.markCompositionEnd(eventData);
+                } else {
+                    imeInputGate.cancelComposition();
+                }
+            } finally {
+                flushComposedOutput();
+            }
         };
 
         const onCompositionStart = () => {
             isComposing = true;
             isComposingRef.current = true;
+            imeInputGate.markCompositionStart();
         };
-        const onCompositionEnd = () => {
-            finishComposition();
+        const onCompositionEnd = (e: Event) => {
+            const compositionEvent = e as CompositionEvent;
+            finishComposition(true, compositionEvent.data ?? "");
         };
 
         const isCurrentPaneActive = (): boolean => {
@@ -161,7 +168,7 @@ export function useTerminalEvents({
                     if (isComposing && !pageHidden && document.hasFocus()) {
                         // IME変換中に意図的に他要素へフォーカスが移った場合は、
                         // stale isComposing ロックを避けるため状態を確定させる。
-                        finishComposition();
+                        finishComposition(false);
                     }
                 }, 0);
             });
@@ -199,20 +206,52 @@ export function useTerminalEvents({
         document.addEventListener("visibilitychange", onVisibilityChange);
 
         // --- Copy on Select ---
+        // Do NOT cancel the timer on deselection (click-away). The selection value
+        // is captured at schedule time and copied after debounce, preventing the
+        // race condition where select → immediate click would lose the copy.
         const selectionDisposable = term.onSelectionChange(() => {
+            const selection = term.getSelection();
+            if (!selection) {
+                return;
+            }
             if (copyOnSelectTimer !== null) window.clearTimeout(copyOnSelectTimer);
             copyOnSelectTimer = window.setTimeout(() => {
                 copyOnSelectTimer = null;
-                const selection = term.getSelection();
-                if (selection) {
-                    void ClipboardSetText(selection).catch((err) => {
-                        if (import.meta.env.DEV) {
-                            console.warn("[DEBUG-copy] clipboard write failed", err);
-                        }
-                    });
-                }
+                if (disposed) return;
+                void writeClipboardText(selection).catch((err) => {
+                    console.warn("[terminal] copy-on-select clipboard write failed", err);
+                });
             }, 100);
         });
+
+        const pasteClipboardText = (source: "keyboard" | "contextmenu") => {
+            if (disposed) return;
+            // When paste occurs during IME composition, cancel the composition
+            // and prioritize the paste. The paste path ultimately triggers onData
+            // (via pasteTextSafely → target.paste()), and composing=true would
+            // cause imeInputGate to suppress it.
+            // NOTE: finishComposition(false) resets our app-level state only.
+            // The browser's native IME session remains until the next
+            // compositionend event, at which point state re-synchronizes.
+            // If a stale compositionend fires after cancel, markCompositionEnd runs
+            // from non-composing state; harmless because the dedupe window simply
+            // expires without matching any payload.
+            if (isComposing) {
+                finishComposition(false);
+            }
+            void ClipboardGetText()
+                .then((text) => {
+                    if (disposed) return;
+                    const pasted = pasteTextSafely(term, text);
+                    if (text.length > 0 && !pasted) {
+                        console.warn("[terminal] paste discarded after normalization", {paneId, source, textLen: text.length});
+                    }
+                })
+                .catch((err) => {
+                    if (disposed) return;
+                    console.warn(`[terminal] clipboard read failed for pane=${paneId} source=${source}`, err);
+                });
+        };
 
         // --- 右クリック: 選択あり->コピー / 選択なし->ペースト ---
         const termEl = term.element;
@@ -221,24 +260,12 @@ export function useTerminalEvents({
             e.stopPropagation();
             const selection = term.getSelection();
             if (selection) {
-                void ClipboardSetText(selection).catch((err) => {
-                    if (import.meta.env.DEV) {
-                        console.warn("[DEBUG-copy] clipboard write failed", err);
-                    }
+                void writeClipboardText(selection).catch((err) => {
+                    console.warn("[terminal] context-menu clipboard write failed", err);
                 });
                 term.clearSelection();
             } else {
-                void ClipboardGetText()
-                    .then((text) => {
-                        if (text) {
-                            term.paste(text);
-                        }
-                    })
-                    .catch((err) => {
-                        if (import.meta.env.DEV) {
-                            console.error("[DEBUG-paste] clipboard read failed", err);
-                        }
-                    });
+                pasteClipboardText("contextmenu");
             }
         };
         if (termEl) {
@@ -257,25 +284,25 @@ export function useTerminalEvents({
             }
 
             // Ctrl+B: tmux prefix mode
-            if (event.ctrlKey && (event.key === "b" || event.key === "B")) {
+            const key = event.key.toLowerCase();
+
+            if (event.ctrlKey && key === "b") {
                 setPrefixMode(true);
                 return false;
             }
 
             // Ctrl+F / Ctrl+Shift+F: 検索バーを開く
-            if (event.ctrlKey && (event.key === "f" || event.key === "F")) {
+            if (event.ctrlKey && key === "f") {
                 setSearchOpen(true);
                 return false;
             }
 
             // Smart Ctrl+C: 選択あり->コピー、選択なし->SIGINT 送信
-            if (event.ctrlKey && (event.key === "c" || event.key === "C")) {
+            if (event.ctrlKey && key === "c") {
                 const selection = term.getSelection();
                 if (selection) {
-                    void ClipboardSetText(selection).catch((err) => {
-                        if (import.meta.env.DEV) {
-                            console.warn("[DEBUG-copy] clipboard write failed", err);
-                        }
+                    void writeClipboardText(selection).catch((err) => {
+                        console.warn("[terminal] ctrl+c clipboard write failed", err);
                     });
                     term.clearSelection();
                     return false;
@@ -284,8 +311,10 @@ export function useTerminalEvents({
             }
 
             // Ctrl+V: クリップボードからペースト（ブラケットペースト対応）
-            if (event.ctrlKey && (event.key === "v" || event.key === "V")) {
-                // Keep native paste event path and only suppress xterm key translation (^V).
+            if (event.ctrlKey && key === "v") {
+                event.preventDefault();
+                event.stopPropagation();
+                pasteClipboardText("keyboard");
                 return false;
             }
             return true;
@@ -293,17 +322,26 @@ export function useTerminalEvents({
 
         // --- キー入力送信 ---
         const inputDisposable = term.onData((input) => {
+            const filteredInput = imeInputGate.filterInput(input);
+            if (filteredInput === null || filteredInput.length === 0) {
+                if (import.meta.env.DEV) {
+                    console.warn("[DEBUG-ime] suppressed onData payload", {paneId, input});
+                }
+                return;
+            }
+            if (import.meta.env.DEV && filteredInput !== input) {
+                console.warn("[DEBUG-ime] rewrote onData payload", {paneId, input, filteredInput});
+            }
             if (syncInputModeRef.current) {
-                void api.SendSyncInput(paneId, input).catch((err) => {
-                    if (import.meta.env.DEV) {
-                        console.warn(`[DEBUG-terminal] sync input failed for pane=${paneId}`, err);
-                    }
+                void api.SendSyncInput(paneId, filteredInput).catch((err) => {
+                    // Always warn — input loss is user-visible and must be diagnosable
+                    // even in production builds (not gated by DEV).
+                    console.warn(`[terminal] sync input failed for pane=${paneId}`, err);
                 });
             } else {
-                void api.SendInput(paneId, input).catch((err) => {
-                    if (import.meta.env.DEV) {
-                        console.warn(`[DEBUG-terminal] input failed for pane=${paneId}`, err);
-                    }
+                void api.SendInput(paneId, filteredInput).catch((err) => {
+                    // (same rationale as SendSyncInput above)
+                    console.warn(`[terminal] input failed for pane=${paneId}`, err);
                 });
             }
         });
@@ -330,9 +368,7 @@ export function useTerminalEvents({
                     term.write(pendingWrites[i]);
                 }
             } catch (err) {
-                if (import.meta.env.DEV) {
-                    console.warn("[DEBUG-terminal] flushPendingWrites failed (terminal may be disposed)", err);
-                }
+                console.warn("[terminal] flushPendingWrites failed (terminal may be disposed)", err);
             }
             pendingWrites.length = 0;
         };
@@ -353,9 +389,7 @@ export function useTerminalEvents({
                 try {
                     term.write(data);
                 } catch (err) {
-                    if (import.meta.env.DEV) {
-                        console.warn("[DEBUG-terminal] hidden write failed (terminal may be disposed)", err);
-                    }
+                    console.warn("[terminal] hidden write failed (terminal may be disposed)", err);
                 }
                 return;
             }
@@ -450,6 +484,8 @@ export function useTerminalEvents({
             }
             if (typeof data === "string") {
                 enqueuePendingWrite(data);
+            } else {
+                console.warn(`[terminal] IPC received non-string data for pane=${paneId}, ignoring`, typeof data);
             }
         });
 
@@ -490,6 +526,7 @@ export function useTerminalEvents({
             isComposingRef.current = false;
             composingOutput.length = 0;
             pendingWrites.length = 0;
+            imeInputGate.dispose();
 
             if (compositionTextarea) {
                 compositionTextarea.removeEventListener("compositionstart", onCompositionStart);

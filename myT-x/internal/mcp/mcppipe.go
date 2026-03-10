@@ -30,11 +30,16 @@ type MCPPipeConfig struct {
 	// PipeName is the full Named Pipe path (e.g. \\.\pipe\myT-x-mcp-...).
 	PipeName string
 	// LSPCommand is the LSP server binary to launch (e.g. "gopls").
+	// Used when RuntimeFactory is nil (legacy LSP path).
 	LSPCommand string
 	// LSPArgs are additional arguments passed to the LSP server.
 	LSPArgs []string
 	// RootDir is the workspace root directory for LSP initialization.
 	RootDir string
+	// RuntimeFactory, when set, is used instead of the default lspmcp.NewRuntime
+	// path. This allows non-LSP runtimes (e.g. agent-orchestrator) to share the
+	// same pipe server infrastructure.
+	RuntimeFactory RuntimeFactory
 }
 
 // MCPPipeServer manages a Named Pipe that accepts MCP client connections.
@@ -156,8 +161,12 @@ func (s *MCPPipeServer) acceptLoop() {
 	}
 }
 
-// handleConnection creates an lspmcp.Runtime for the accepted connection
+// handleConnection creates an MCPRuntime for the accepted connection
 // and serves MCP requests until the connection closes or context is cancelled.
+//
+// When RuntimeFactory is configured, it is used to create the runtime instead
+// of the default lspmcp path. This enables non-LSP runtimes (e.g. orchestrator)
+// to share the pipe server infrastructure.
 func (s *MCPPipeServer) handleConnection(conn net.Conn) {
 	closeConn := newCloseOnce(conn.Close)
 	defer func() {
@@ -178,13 +187,19 @@ func (s *MCPPipeServer) handleConnection(conn net.Conn) {
 		"root", s.cfg.RootDir,
 	)
 
-	runtime, err := lspmcp.NewRuntime(lspmcp.Config{
-		LSPCommand: s.cfg.LSPCommand,
-		LSPArgs:    append([]string(nil), s.cfg.LSPArgs...),
-		RootDir:    s.cfg.RootDir,
-		In:         conn,
-		Out:        conn,
-	})
+	var runtime MCPRuntime
+	var err error
+	if s.cfg.RuntimeFactory != nil {
+		runtime, err = s.cfg.RuntimeFactory(conn, conn)
+	} else {
+		runtime, err = lspmcp.NewRuntime(lspmcp.Config{
+			LSPCommand: s.cfg.LSPCommand,
+			LSPArgs:    append([]string(nil), s.cfg.LSPArgs...),
+			RootDir:    s.cfg.RootDir,
+			In:         conn,
+			Out:        conn,
+		})
+	}
 	if err != nil {
 		slog.Warn("[DEBUG-MCP-PIPE] failed to create runtime",
 			"error", err, "lsp", s.cfg.LSPCommand)
@@ -192,7 +207,7 @@ func (s *MCPPipeServer) handleConnection(conn net.Conn) {
 	}
 
 	if err := runtime.Start(s.ctx); err != nil {
-		slog.Warn("[DEBUG-MCP-PIPE] failed to start LSP process",
+		slog.Warn("[DEBUG-MCP-PIPE] failed to start runtime",
 			"error", err, "lsp", s.cfg.LSPCommand)
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), mcpPipeRuntimeCloseTimeout)
 		if closeErr := runtime.Close(closeCtx); closeErr != nil {
