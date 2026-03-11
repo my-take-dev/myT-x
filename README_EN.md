@@ -56,7 +56,7 @@ make build
 
 ## Orchestration MCP
 
-[Usage details](./orchestrator.md)
+[Usage details](./orchestrator_EN.md)
 
 - You can handle orchestration from this single app.
 - Connection details are available from the MCP management panel in the right sidebar.
