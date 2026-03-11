@@ -13,6 +13,7 @@ export const VIEWER_SHORTCUTS: readonly ViewerShortcutDef[] = [
     {viewId: "diff", label: "Diff", defaultShortcut: "Ctrl+Shift+D"},
     {viewId: "input-history", label: "Input History", defaultShortcut: "Ctrl+Shift+H"},
     {viewId: "mcp-manager", label: "MCP Manager", defaultShortcut: "Ctrl+Shift+M"},
+    {viewId: "pane-scheduler", label: "Schedule", defaultShortcut: "Ctrl+Shift+K"},
 ];
 
 const viewerShortcutByID = new Map<string, ViewerShortcutDef>(

@@ -42,6 +42,14 @@ export function CreateSessionWithWorktree(arg1, arg2, arg3) {
   return window['go']['main']['App']['CreateSessionWithWorktree'](arg1, arg2, arg3);
 }
 
+export function DeleteScheduler(arg1) {
+  return window['go']['main']['App']['DeleteScheduler'](arg1);
+}
+
+export function DeleteSchedulerTemplate(arg1, arg2) {
+  return window['go']['main']['App']['DeleteSchedulerTemplate'](arg1, arg2);
+}
+
 export function DetachSession(arg1) {
   return window['go']['main']['App']['DetachSession'](arg1);
 }
@@ -122,6 +130,10 @@ export function GetPaneReplay(arg1) {
   return window['go']['main']['App']['GetPaneReplay'](arg1);
 }
 
+export function GetSchedulerStatuses() {
+  return window['go']['main']['App']['GetSchedulerStatuses']();
+}
+
 export function GetSessionEnv(arg1) {
   return window['go']['main']['App']['GetSessionEnv'](arg1);
 }
@@ -178,6 +190,10 @@ export function ListWorktreesByRepo(arg1) {
   return window['go']['main']['App']['ListWorktreesByRepo'](arg1);
 }
 
+export function LoadSchedulerTemplates(arg1) {
+  return window['go']['main']['App']['LoadSchedulerTemplates'](arg1);
+}
+
 export function LogFrontendEvent(arg1, arg2, arg3) {
   return window['go']['main']['App']['LogFrontendEvent'](arg1, arg2, arg3);
 }
@@ -214,8 +230,16 @@ export function ResolveMCPStdio(arg1, arg2) {
   return window['go']['main']['App']['ResolveMCPStdio'](arg1, arg2);
 }
 
+export function ResumeScheduler(arg1) {
+  return window['go']['main']['App']['ResumeScheduler'](arg1);
+}
+
 export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
+}
+
+export function SaveSchedulerTemplate(arg1, arg2) {
+  return window['go']['main']['App']['SaveSchedulerTemplate'](arg1, arg2);
 }
 
 export function SendInput(arg1, arg2) {
@@ -232,6 +256,18 @@ export function SetActiveSession(arg1) {
 
 export function SplitPane(arg1, arg2) {
   return window['go']['main']['App']['SplitPane'](arg1, arg2);
+}
+
+export function StartScheduler(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['StartScheduler'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function StopAllSchedulers() {
+  return window['go']['main']['App']['StopAllSchedulers']();
+}
+
+export function StopScheduler(arg1) {
+  return window['go']['main']['App']['StopScheduler'](arg1);
 }
 
 export function SwapPanes(arg1, arg2) {
