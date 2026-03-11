@@ -38,7 +38,7 @@ type App struct {
 	// Independent locks: do not assume ordering across these.
 	//   windowMu, outputMu, snapshotRequestMu, snapshotMetricsMu,
 	//   startupWarnMu, activeSessMu, ctxMu, sessionLogMu,
-	//   inputHistoryMu, inputLineBufMu
+	//   inputHistoryMu, inputLineBufMu, schedulerMu, schedulerTemplateMu
 	//   tmux.SessionManager.mu, tmux.CommandRouter.mu
 	//
 	// Keep cfgSaveMu/cfgMu isolated from the independent lock set above.
@@ -134,6 +134,12 @@ type App struct {
 	inputLineBufMu   sync.Mutex
 	inputLineBuffers map[string]*inputLineBuffer
 
+	// Pane scheduler state (multiple concurrent schedulers).
+	// schedulerMu is independent of all other App-level locks.
+	schedulerMu         sync.Mutex
+	schedulerEntries    map[string]*schedulerEntry // key: UUID
+	schedulerTemplateMu sync.Mutex
+
 	// Background worker cancellation/waits.
 	idleCancel context.CancelFunc
 	bgWG       sync.WaitGroup
@@ -159,6 +165,7 @@ func NewApp() *App {
 		sessionLogEntries:   newSessionLogRingBuffer(sessionLogMaxEntries),
 		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
 		inputLineBuffers:    map[string]*inputLineBuffer{},
+		schedulerEntries:    map[string]*schedulerEntry{},
 	}
 }
 

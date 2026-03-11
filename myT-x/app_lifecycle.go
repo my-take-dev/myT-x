@@ -342,6 +342,8 @@ func (a *App) shutdown(_ context.Context) {
 	a.snapshotRequestDispatched = 0
 	a.snapshotRequestMu.Unlock()
 
+	a.StopAllSchedulers()
+
 	if a.idleCancel != nil {
 		a.idleCancel()
 		a.idleCancel = nil

@@ -403,6 +403,50 @@ export namespace main {
 	        this.session = source["session"];
 	    }
 	}
+	export class SchedulerEntryStatus {
+	    id: string;
+	    title: string;
+	    pane_id: string;
+	    message: string;
+	    interval_minutes: number;
+	    max_count: number;
+	    current_count: number;
+	    running: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SchedulerEntryStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.pane_id = source["pane_id"];
+	        this.message = source["message"];
+	        this.interval_minutes = source["interval_minutes"];
+	        this.max_count = source["max_count"];
+	        this.current_count = source["current_count"];
+	        this.running = source["running"];
+	    }
+	}
+	export class SchedulerTemplate {
+	    title: string;
+	    message: string;
+	    interval_minutes: number;
+	    max_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SchedulerTemplate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.message = source["message"];
+	        this.interval_minutes = source["interval_minutes"];
+	        this.max_count = source["max_count"];
+	    }
+	}
 	export class SessionLogEntry {
 	    seq: number;
 	    ts: string;

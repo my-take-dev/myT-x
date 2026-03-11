@@ -28,6 +28,10 @@ export function CreateSessionWithExistingWorktree(arg1:string,arg2:string,arg3:s
 
 export function CreateSessionWithWorktree(arg1:string,arg2:string,arg3:main.WorktreeSessionOptions):Promise<tmux.SessionSnapshot>;
 
+export function DeleteScheduler(arg1:string):Promise<void>;
+
+export function DeleteSchedulerTemplate(arg1:string,arg2:string):Promise<void>;
+
 export function DetachSession(arg1:string):Promise<void>;
 
 export function DevPanelCommitDiff(arg1:string,arg2:string):Promise<string>;
@@ -68,6 +72,8 @@ export function GetPaneEnv(arg1:string):Promise<Record<string, string>>;
 
 export function GetPaneReplay(arg1:string):Promise<string>;
 
+export function GetSchedulerStatuses():Promise<Array<main.SchedulerEntryStatus>>;
+
 export function GetSessionEnv(arg1:string):Promise<Record<string, string>>;
 
 export function GetSessionErrorLog():Promise<Array<main.SessionLogEntry>>;
@@ -96,6 +102,8 @@ export function ListSessions():Promise<Array<tmux.SessionSnapshot>>;
 
 export function ListWorktreesByRepo(arg1:string):Promise<Array<git.WorktreeInfo>>;
 
+export function LoadSchedulerTemplates(arg1:string):Promise<Array<main.SchedulerTemplate>>;
+
 export function LogFrontendEvent(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function OpenDirectoryInExplorer(arg1:string):Promise<void>;
@@ -114,7 +122,11 @@ export function ResizePane(arg1:string,arg2:number,arg3:number):Promise<void>;
 
 export function ResolveMCPStdio(arg1:string,arg2:string):Promise<ipc.MCPStdioResolvePayload>;
 
+export function ResumeScheduler(arg1:string):Promise<void>;
+
 export function SaveConfig(arg1:config.Config):Promise<void>;
+
+export function SaveSchedulerTemplate(arg1:string,arg2:main.SchedulerTemplate):Promise<void>;
 
 export function SendInput(arg1:string,arg2:string):Promise<void>;
 
@@ -123,6 +135,12 @@ export function SendSyncInput(arg1:string,arg2:string):Promise<void>;
 export function SetActiveSession(arg1:string):Promise<void>;
 
 export function SplitPane(arg1:string,arg2:boolean):Promise<string>;
+
+export function StartScheduler(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<string>;
+
+export function StopAllSchedulers():Promise<void>;
+
+export function StopScheduler(arg1:string):Promise<void>;
 
 export function SwapPanes(arg1:string,arg2:string):Promise<void>;
 
