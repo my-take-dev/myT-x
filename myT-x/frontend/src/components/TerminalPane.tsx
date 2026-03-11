@@ -9,6 +9,7 @@ import {useTerminalSetup} from "../hooks/useTerminalSetup";
 import {useTerminalEvents} from "../hooks/useTerminalEvents";
 import {useTerminalResize} from "../hooks/useTerminalResize";
 import {useTerminalFontSize} from "../hooks/useTerminalFontSize";
+import {useI18n} from "../i18n";
 
 interface TerminalPaneProps {
     paneId: string;
@@ -25,6 +26,7 @@ interface TerminalPaneProps {
 }
 
 function TerminalPaneComponent(props: TerminalPaneProps) {
+    const {language, t} = useI18n();
     const syncInputModeRef = useRef(false);
     const isComposingRef = useRef(false);
     const fontSize = useTmuxStore((s) => s.fontSize);
@@ -191,7 +193,11 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                     <input
                         className="terminal-toolbar-title-input"
                         value={titleDraft}
-                        placeholder="ペイン名"
+                        placeholder={
+                            language === "en"
+                                ? "Pane name"
+                                : t("terminalPane.titleInput.placeholder", "ペイン名")
+                        }
                         disabled={renameBusy}
                         onFocus={() => setTitleEditing(true)}
                         onChange={(event) => setTitleDraft(event.target.value)}
@@ -226,8 +232,16 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                         type="button"
                         className="terminal-toolbar-btn"
                         draggable={false}
-                        title="左右分割 (Prefix: %)"
-                        aria-label={`Split pane ${props.paneId} left-right`}
+                        title={
+                            language === "en"
+                                ? "Split Left/Right (Prefix: %)"
+                                : t("terminalPane.action.splitVertical.title", "左右分割 (Prefix: %)")
+                        }
+                        aria-label={
+                            language === "en"
+                                ? `Split pane ${props.paneId} left-right`
+                                : t("terminalPane.action.splitVertical.aria", "Split pane {paneId} left-right", {paneId: props.paneId})
+                        }
                         onMouseDown={preventTerminalFocusSteal}
                         onClick={(event) => {
                             event.stopPropagation();
@@ -246,8 +260,16 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                         type="button"
                         className="terminal-toolbar-btn"
                         draggable={false}
-                        title="上下分割 (Prefix: &quot;)"
-                        aria-label={`Split pane ${props.paneId} top-bottom`}
+                        title={
+                            language === "en"
+                                ? "Split Top/Bottom (Prefix: quote)"
+                                : t("terminalPane.action.splitHorizontal.title", "上下分割 (Prefix: &quot;)")
+                        }
+                        aria-label={
+                            language === "en"
+                                ? `Split pane ${props.paneId} top-bottom`
+                                : t("terminalPane.action.splitHorizontal.aria", "Split pane {paneId} top-bottom", {paneId: props.paneId})
+                        }
                         onMouseDown={preventTerminalFocusSteal}
                         onClick={(event) => {
                             event.stopPropagation();
@@ -266,8 +288,16 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                         type="button"
                         className="terminal-toolbar-btn terminal-toolbar-btn-danger terminal-toolbar-btn-close"
                         draggable={false}
-                        title="ペインを閉じる (Prefix: x)"
-                        aria-label={`Close pane ${props.paneId}`}
+                        title={
+                            language === "en"
+                                ? "Close Pane (Prefix: x)"
+                                : t("terminalPane.action.close.title", "ペインを閉じる (Prefix: x)")
+                        }
+                        aria-label={
+                            language === "en"
+                                ? `Close pane ${props.paneId}`
+                                : t("terminalPane.action.close.aria", "Close pane {paneId}", {paneId: props.paneId})
+                        }
                         onMouseDown={preventTerminalFocusSteal}
                         onClick={(event) => {
                             event.stopPropagation();
@@ -296,7 +326,11 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                     <button
                         type="button"
                         className="scroll-to-bottom-btn"
-                        title="最下部にスクロール"
+                        title={
+                            language === "en"
+                                ? "Scroll to bottom"
+                                : t("terminalPane.action.scrollToBottom.title", "最下部にスクロール")
+                        }
                         onMouseDown={preventTerminalFocusSteal}
                         onClick={() => {
                             terminalRef.current?.scrollToBottom();
@@ -312,9 +346,23 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
             </div>
             <ConfirmDialog
                 open={pendingPaneCloseConfirm}
-                title="Close pane"
-                message={`Close pane ${props.paneId}?`}
-                actions={[{label: "Close", value: "close", variant: "danger"}]}
+                title={
+                    language === "en"
+                        ? "Close pane"
+                        : t("terminalPane.confirm.closePane.title", "Close pane")
+                }
+                message={
+                    language === "en"
+                        ? `Close pane ${props.paneId}?`
+                        : t("terminalPane.confirm.closePane.message", "Close pane {paneId}?", {paneId: props.paneId})
+                }
+                actions={[
+                    {
+                        label: language === "en" ? "Close" : t("common.action.close", "Close"),
+                        value: "close",
+                        variant: "danger",
+                    },
+                ]}
                 onAction={(value) => {
                     setPendingPaneCloseConfirm(false);
                     if (value !== "close") {

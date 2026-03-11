@@ -1,4 +1,5 @@
 import {isValidElement, memo, type MouseEvent, type ReactNode} from "react";
+import {getLanguage, translate} from "../../../../i18n";
 import {sanitizeCssColor} from "../../../../utils/cssUtils";
 import {notifyLinkOpenFailure} from "../../../../utils/notifyUtils";
 import {sanitizeHref, SCHEME_PATTERN} from "../../../../utils/sanitizeHref";
@@ -14,6 +15,10 @@ interface MarkdownPreviewProps {
 }
 
 const MARKDOWN_REMARK_PLUGINS: PluggableList = [remarkGfm];
+
+function translateViewerText(key: string, jaText: string, enText: string): string {
+    return translate(key, getLanguage() === "ja" ? jaText : enText);
+}
 
 // ── Shiki-highlighted code block for fenced code ──
 
@@ -151,10 +156,18 @@ const markdownComponents: Components = {
         // #111: Provide visual feedback for links that cannot be navigated in the desktop app,
         // instead of silently swallowing the click with no indication.
         const disabledLinkTitle = isInternalNav
-            ? "このリンクはデスクトップアプリ内では開けません (This link cannot be opened in the desktop app)"
+            ? translateViewerText(
+                "viewer.markdown.link.desktopBlocked",
+                "このリンクはデスクトップアプリ内では開けません (This link cannot be opened in the desktop app)",
+                "This link cannot be opened in the desktop app",
+            )
             : isExternal
                 ? undefined
-                : "このリンク形式はプレビュー内では開けません (Unsupported link format in preview)";
+                : translateViewerText(
+                    "viewer.markdown.link.unsupportedFormat",
+                    "このリンク形式はプレビュー内では開けません (Unsupported link format in preview)",
+                    "Unsupported link format in preview",
+                );
 
         const shouldSetHref = isExternal;
 

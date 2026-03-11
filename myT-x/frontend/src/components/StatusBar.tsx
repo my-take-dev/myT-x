@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 import { api } from "../api";
+import {translateStatusLine, useI18n} from "../i18n";
 import { useTmuxStore } from "../stores/tmuxStore";
 
 export function StatusBar() {
+  const {t} = useI18n();
   const [statusLine, setStatusLine] = useState("[セッションなし] | --:--");
   const prefixMode = useTmuxStore((s) => s.prefixMode);
   const syncInputMode = useTmuxStore((s) => s.syncInputMode);
@@ -17,7 +19,7 @@ export function StatusBar() {
       try {
         const line = await api.BuildStatusLine();
         if (mounted) {
-          setStatusLine(line);
+          setStatusLine(translateStatusLine(line));
         }
       } catch (err) {
         console.warn("[status] BuildStatusLine failed", err);
@@ -63,10 +65,10 @@ export function StatusBar() {
 
   return (
     <footer className={`status-bar ${prefixMode ? "prefix" : ""} ${syncInputMode ? "sync" : ""}`}>
-      <span>{statusLine}</span>
+      <span>{translateStatusLine(statusLine)}</span>
       <span style={{ display: "flex", gap: 8 }}>
         {syncInputMode ? <span className="sync-indicator">SYNC</span> : null}
-        {prefixMode ? <span className="prefix-indicator">プレフィックス</span> : null}
+        {prefixMode ? <span className="prefix-indicator">{t("status.prefix", "プレフィックス")}</span> : null}
       </span>
     </footer>
   );

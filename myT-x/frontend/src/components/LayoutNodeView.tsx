@@ -1,189 +1,203 @@
-import { useEffect, useRef, useState } from "react";
-import type { LayoutNode, PaneSnapshot } from "../types/tmux";
-import { TerminalPane } from "./TerminalPane";
+import {useEffect, useRef, useState} from "react";
+import type {LayoutNode, PaneSnapshot} from "../types/tmux";
+import {useI18n} from "../i18n";
+import {TerminalPane} from "./TerminalPane";
 
 export interface LayoutNodeActions {
-  onFocusPane: (paneId: string) => void;
-  onSplitVertical: (paneId: string) => void;
-  onSplitHorizontal: (paneId: string) => void;
-  onToggleZoom: (paneId: string) => void;
-  onKillPane: (paneId: string) => void;
-  onRenamePane: (paneId: string, title: string) => void;
-  onSwapPane: (sourcePaneId: string, targetPaneId: string) => void;
-  onDetachSession: () => void;
+    onFocusPane: (paneId: string) => void;
+    onSplitVertical: (paneId: string) => void;
+    onSplitHorizontal: (paneId: string) => void;
+    onToggleZoom: (paneId: string) => void;
+    onKillPane: (paneId: string) => void;
+    onRenamePane: (paneId: string, title: string) => void;
+    onSwapPane: (sourcePaneId: string, targetPaneId: string) => void;
+    onDetachSession: () => void;
 }
 
 interface LayoutNodeViewProps {
-  node: LayoutNode;
-  paneMap: Map<string, PaneSnapshot>;
-  activePaneId: string | null;
-  nodePath?: string;
-  actions: LayoutNodeActions;
+    node: LayoutNode;
+    paneMap: Map<string, PaneSnapshot>;
+    activePaneId: string | null;
+    nodePath?: string;
+    actions: LayoutNodeActions;
 }
 
 function renderPaneTerminal(
-  pane: PaneSnapshot,
-  active: boolean,
-  actions: LayoutNodeActions,
+    pane: PaneSnapshot,
+    active: boolean,
+    actions: LayoutNodeActions,
 ) {
-  return (
-    <TerminalPane
-      paneId={pane.id}
-      paneTitle={pane.title}
-      active={active}
-      onFocus={actions.onFocusPane}
-      onSplitVertical={actions.onSplitVertical}
-      onSplitHorizontal={actions.onSplitHorizontal}
-      onToggleZoom={actions.onToggleZoom}
-      onKillPane={actions.onKillPane}
-      onRenamePane={actions.onRenamePane}
-      onSwapPane={actions.onSwapPane}
-      onDetach={actions.onDetachSession}
-    />
-  );
+    return (
+        <TerminalPane
+            paneId={pane.id}
+            paneTitle={pane.title}
+            active={active}
+            onFocus={actions.onFocusPane}
+            onSplitVertical={actions.onSplitVertical}
+            onSplitHorizontal={actions.onSplitHorizontal}
+            onToggleZoom={actions.onToggleZoom}
+            onKillPane={actions.onKillPane}
+            onRenamePane={actions.onRenamePane}
+            onSwapPane={actions.onSwapPane}
+            onDetach={actions.onDetachSession}
+        />
+    );
 }
 
 export function LayoutNodeView(props: LayoutNodeViewProps) {
-  const node = props.node;
-  const actions = props.actions;
-  if (node.type === "leaf") {
-    if (typeof node.pane_id !== "number" || !Number.isFinite(node.pane_id)) {
-      return <div className="session-empty">Pane id is missing.</div>;
+    const {language, t} = useI18n();
+    const node = props.node;
+    const actions = props.actions;
+    if (node.type === "leaf") {
+        if (typeof node.pane_id !== "number" || !Number.isFinite(node.pane_id)) {
+            return (
+                <div className="session-empty">
+                    {language === "en"
+                        ? "Pane id is missing."
+                        : t("layout.error.paneIdMissing", "Pane id is missing.")}
+                </div>
+            );
+        }
+        const paneId = `%${node.pane_id}`;
+        const pane = props.paneMap.get(paneId);
+        if (!pane) {
+            return (
+                <div className="session-empty">
+                    {language === "en"
+                        ? `Pane ${paneId} was not found.`
+                        : t("layout.error.paneNotFound", "ペイン {paneId} が見つかりません。", {paneId})}
+                </div>
+            );
+        }
+        return renderPaneTerminal(
+            pane,
+            props.activePaneId === pane.id || pane.active,
+            actions,
+        );
     }
-    const paneId = `%${node.pane_id}`;
-    const pane = props.paneMap.get(paneId);
-    if (!pane) {
-      return <div className="session-empty">ペイン {paneId} が見つかりません。</div>;
-    }
-    return renderPaneTerminal(
-      pane,
-      props.activePaneId === pane.id || pane.active,
-      actions,
-    );
-  }
 
-  return <SplitLayoutNodeView {...props} actions={actions} />;
+    return <SplitLayoutNodeView {...props} actions={actions}/>;
 }
 
 function childNodeKey(node: LayoutNode | undefined, fallbackPath: string): string {
-  if (!node) {
-    return fallbackPath;
-  }
-  if (node.type === "leaf") {
-    return `leaf:${node.pane_id}:${fallbackPath}`;
-  }
-  return `split:${fallbackPath}`;
+    if (!node) {
+        return fallbackPath;
+    }
+    if (node.type === "leaf") {
+        return `leaf:${node.pane_id}:${fallbackPath}`;
+    }
+    return `split:${fallbackPath}`;
 }
 
 function SplitLayoutNodeView(props: LayoutNodeViewProps) {
-  const node = props.node;
-  const actions = props.actions;
+    const node = props.node;
+    const actions = props.actions;
 
-  // [C-1 fix] Hooks must be called before any conditional return (React Rules of Hooks).
-  const [ratio, setRatio] = useState(node.ratio && node.ratio > 0 ? node.ratio : 0.5);
-  const dragCleanupRef = useRef<(() => void) | null>(null);
-  const nodePath = props.nodePath ?? "root";
+    // [C-1 fix] Hooks must be called before any conditional return (React Rules of Hooks).
+    const [ratio, setRatio] = useState(node.ratio && node.ratio > 0 ? node.ratio : 0.5);
+    const dragCleanupRef = useRef<(() => void) | null>(null);
+    const nodePath = props.nodePath ?? "root";
 
-  useEffect(() => {
-    if (node.ratio && node.ratio > 0) {
-      setRatio(node.ratio);
-      return;
+    useEffect(() => {
+        if (node.ratio && node.ratio > 0) {
+            setRatio(node.ratio);
+            return;
+        }
+        setRatio(0.5);
+    }, [node.ratio]);
+
+    // [C-2 fix] Cleanup drag event listeners on unmount to prevent listener leak.
+    useEffect(
+        () => () => {
+            if (dragCleanupRef.current) {
+                dragCleanupRef.current();
+                dragCleanupRef.current = null;
+            }
+        },
+        [],
+    );
+
+    if (node.type !== "split") {
+        return null;
     }
-    setRatio(0.5);
-  }, [node.ratio]);
 
-  // [C-2 fix] Cleanup drag event listeners on unmount to prevent listener leak.
-  useEffect(
-    () => () => {
-      if (dragCleanupRef.current) {
-        dragCleanupRef.current();
-        dragCleanupRef.current = null;
-      }
-    },
-    [],
-  );
+    const direction = node.direction === "vertical" ? "column" : "row";
 
-  if (node.type !== "split") {
-    return null;
-  }
+    const startDrag = (start: MouseEvent, mode: "horizontal" | "vertical") => {
+        const parent = (start.target as HTMLElement)?.parentElement;
+        if (!parent) {
+            return;
+        }
+        const rect = parent.getBoundingClientRect();
+        const startRatio = ratio;
 
-  const direction = node.direction === "vertical" ? "column" : "row";
-
-  const startDrag = (start: MouseEvent, mode: "horizontal" | "vertical") => {
-    const parent = (start.target as HTMLElement)?.parentElement;
-    if (!parent) {
-      return;
-    }
-    const rect = parent.getBoundingClientRect();
-    const startRatio = ratio;
-
-    const onMove = (event: MouseEvent) => {
-      const delta = mode === "horizontal" ? event.clientX - start.clientX : event.clientY - start.clientY;
-      const size = mode === "horizontal" ? rect.width : rect.height;
-      if (size <= 0) {
-        return;
-      }
-      const next = Math.max(0.1, Math.min(0.9, startRatio + delta / size));
-      setRatio(next);
+        const onMove = (event: MouseEvent) => {
+            const delta = mode === "horizontal" ? event.clientX - start.clientX : event.clientY - start.clientY;
+            const size = mode === "horizontal" ? rect.width : rect.height;
+            if (size <= 0) {
+                return;
+            }
+            const next = Math.max(0.1, Math.min(0.9, startRatio + delta / size));
+            setRatio(next);
+        };
+        const cleanup = () => {
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
+        };
+        const onUp = () => {
+            cleanup();
+            if (dragCleanupRef.current === cleanup) {
+                dragCleanupRef.current = null;
+            }
+        };
+        if (dragCleanupRef.current) {
+            dragCleanupRef.current();
+        }
+        dragCleanupRef.current = cleanup;
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
     };
-    const cleanup = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    const onUp = () => {
-      cleanup();
-      if (dragCleanupRef.current === cleanup) {
-        dragCleanupRef.current = null;
-      }
-    };
-    if (dragCleanupRef.current) {
-      dragCleanupRef.current();
-    }
-    dragCleanupRef.current = cleanup;
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
 
-  const childMode = direction === "row" ? "horizontal" : "vertical";
+    const childMode = direction === "row" ? "horizontal" : "vertical";
 
-  return (
-    <div className="layout-split" style={{ flexDirection: direction }}>
-      <div style={{ flex: ratio, minWidth: 0, minHeight: 0 }}>
-        {node.children?.[0] ? (
-          <LayoutNodeView
-            key={childNodeKey(node.children[0], `${nodePath}.0`)}
-            node={node.children[0]}
-            paneMap={props.paneMap}
-            activePaneId={props.activePaneId}
-            actions={actions}
-            nodePath={`${nodePath}.0`}
-          />
-        ) : null}
-      </div>
-      <div
-        className={`pane-divider ${direction === "row" ? "vertical" : "horizontal"}`}
-        onMouseDown={(event) => {
-          event.preventDefault();
-          startDrag(event.nativeEvent, childMode);
-        }}
-        onDoubleClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setRatio(0.5);
-        }}
-      />
-      <div style={{ flex: 1 - ratio, minWidth: 0, minHeight: 0 }}>
-        {node.children?.[1] ? (
-          <LayoutNodeView
-            key={childNodeKey(node.children[1], `${nodePath}.1`)}
-            node={node.children[1]}
-            paneMap={props.paneMap}
-            activePaneId={props.activePaneId}
-            actions={actions}
-            nodePath={`${nodePath}.1`}
-          />
-        ) : null}
-      </div>
-    </div>
-  );
+    return (
+        <div className="layout-split" style={{flexDirection: direction}}>
+            <div style={{flex: ratio, minWidth: 0, minHeight: 0}}>
+                {node.children?.[0] ? (
+                    <LayoutNodeView
+                        key={childNodeKey(node.children[0], `${nodePath}.0`)}
+                        node={node.children[0]}
+                        paneMap={props.paneMap}
+                        activePaneId={props.activePaneId}
+                        actions={actions}
+                        nodePath={`${nodePath}.0`}
+                    />
+                ) : null}
+            </div>
+            <div
+                className={`pane-divider ${direction === "row" ? "vertical" : "horizontal"}`}
+                onMouseDown={(event) => {
+                    event.preventDefault();
+                    startDrag(event.nativeEvent, childMode);
+                }}
+                onDoubleClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setRatio(0.5);
+                }}
+            />
+            <div style={{flex: 1 - ratio, minWidth: 0, minHeight: 0}}>
+                {node.children?.[1] ? (
+                    <LayoutNodeView
+                        key={childNodeKey(node.children[1], `${nodePath}.1`)}
+                        node={node.children[1]}
+                        paneMap={props.paneMap}
+                        activePaneId={props.activePaneId}
+                        actions={actions}
+                        nodePath={`${nodePath}.1`}
+                    />
+                ) : null}
+            </div>
+        </div>
+    );
 }

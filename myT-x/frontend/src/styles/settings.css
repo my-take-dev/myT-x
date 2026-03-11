@@ -3,6 +3,7 @@
   height: 32px;
   min-height: 32px;
   display: flex;
+  justify-content: space-between;
   align-items: center;
   padding: 0 12px;
   background: rgba(10, 15, 24, 0.98);
@@ -12,6 +13,17 @@
 
 .menu-bar-item {
   position: relative;
+}
+
+.menu-bar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.menu-bar-group--end {
+  margin-left: 12px;
 }
 
 .menu-bar-trigger {
@@ -28,6 +40,38 @@
 
 .menu-bar-trigger:hover {
   background: var(--accent-10);
+}
+
+.menu-bar-label {
+  font-size: 0.72rem;
+  color: var(--fg-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.menu-bar-language {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menu-bar-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.menu-bar-segment {
+  padding: 3px 8px;
+}
+
+.menu-bar-segment.active {
+  background: var(--accent-10);
+  color: var(--accent);
 }
 
 /* ── Settings Modal (wider for sidebar layout) ── */

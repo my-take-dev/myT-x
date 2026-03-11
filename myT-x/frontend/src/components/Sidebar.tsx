@@ -6,6 +6,7 @@ import {useContainerHeight} from "../hooks/useContainerHeight";
 import {useNotificationStore} from "../stores/notificationStore";
 import {useTmuxStore} from "../stores/tmuxStore";
 import type {SessionSnapshot} from "../types/tmux";
+import {useI18n} from "../i18n";
 import {KillSessionDialog} from "./KillSessionDialog";
 import {NewSessionModal} from "./NewSessionModal";
 import {PromoteBranchModal} from "./PromoteBranchModal";
@@ -18,6 +19,7 @@ interface SidebarProps {
 type SessionVisualState = "running" | "idle" | "selected";
 
 function SessionBadges({session}: { session: SessionSnapshot }) {
+    const {language, t} = useI18n();
     const worktree = session.worktree;
     if (!worktree) return null;
     const repoPath = worktree.repo_path?.trim() ?? "";
@@ -34,7 +36,14 @@ function SessionBadges({session}: { session: SessionSnapshot }) {
                 </span>
             )}
             {worktree.base_branch && (
-                <span className="worktree-base-branch-badge" title={`分岐元: ${worktree.base_branch}`}>
+                <span
+                    className="worktree-base-branch-badge"
+                    title={`${
+                        language === "en"
+                            ? "Base branch"
+                            : t("sidebar.worktree.baseBranchFrom", "分岐元")
+                    }: ${worktree.base_branch}`}
+                >
                     {worktree.base_branch}
                 </span>
             )}
@@ -43,7 +52,9 @@ function SessionBadges({session}: { session: SessionSnapshot }) {
             )}
             {(worktree.branch_name || worktree.is_detached) && (
                 <span className={`worktree-branch-badge${worktree.is_detached ? " detached" : ""}`}>
-                    {worktree.is_detached ? "detached" : worktree.branch_name}
+                    {worktree.is_detached
+                        ? (language === "en" ? "detached" : t("sidebar.worktree.detached", "detached"))
+                        : worktree.branch_name}
                 </span>
             )}
         </>
@@ -60,23 +71,7 @@ function resolveSessionState(activeSession: string | null, session: SessionSnaps
     return "running";
 }
 
-function labelForSessionState(state: SessionVisualState): string {
-    switch (state) {
-        case "selected":
-            return "Selected";
-        case "idle":
-            return "Stopped";
-        case "running":
-            return "Running";
-    }
-    const _exhaustive: never = state;
-    return _exhaustive;
-}
-
 const sessionRowHeight = 80;
-
-/** Module-level factory call — must not be inside a render function (see makeScrollStableOuter). */
-const SessionListOuter = makeScrollStableOuter({role: "list", ariaLabel: "Sessions"});
 
 interface SessionRowData {
     sessions: SessionSnapshot[];
@@ -157,6 +152,7 @@ const SessionRow = memo(function SessionRow({index, style, data}: ListChildCompo
 });
 
 export function Sidebar(props: SidebarProps) {
+    const {language, t} = useI18n();
     const setActiveSession = useTmuxStore((s) => s.setActiveSession);
     const reorderSession = useTmuxStore((s) => s.reorderSession);
     const addNotification = useNotificationStore((s) => s.addNotification);
@@ -173,6 +169,31 @@ export function Sidebar(props: SidebarProps) {
     const [promoteTarget, setPromoteTarget] = useState<string | null>(null);
     const activeSessionRef = useRef(props.activeSession);
     const renameInFlightRef = useRef<Set<string>>(new Set());
+
+    const sessionListOuter = useMemo(
+        () =>
+            makeScrollStableOuter({
+                role: "list",
+                ariaLabel: language === "en" ? "Sessions" : t("sidebar.aria.sessionsList", "Sessions"),
+            }),
+        [language, t],
+    );
+
+    const labelForSessionState = useCallback(
+        (state: SessionVisualState): string => {
+            switch (state) {
+                case "selected":
+                    return language === "en" ? "Selected" : t("sidebar.sessionState.selected", "Selected");
+                case "idle":
+                    return language === "en" ? "Stopped" : t("sidebar.sessionState.stopped", "Stopped");
+                case "running":
+                    return language === "en" ? "Running" : t("sidebar.sessionState.running", "Running");
+            }
+            const _exhaustive: never = state;
+            return _exhaustive;
+        },
+        [language, t],
+    );
 
     useEffect(() => {
         activeSessionRef.current = props.activeSession;
@@ -191,10 +212,15 @@ export function Sidebar(props: SidebarProps) {
                 setActiveSession(sessionName);
             } catch (error) {
                 console.error("[sidebar] SetActiveSession failed", {sessionName, error});
-                addNotification(`Failed to activate session "${sessionName}".`, "warn");
+                addNotification(
+                    language === "en"
+                        ? `Failed to activate session "${sessionName}".`
+                        : t("sidebar.error.activateFailed", "Failed to activate session \"{sessionName}\".", {sessionName}),
+                    "warn",
+                );
             }
         },
-        [addNotification, setActiveSession],
+        [addNotification, language, setActiveSession, t],
     );
 
     const commitRename = useCallback(
@@ -217,12 +243,17 @@ export function Sidebar(props: SidebarProps) {
                 }
             } catch (error) {
                 console.error("[sidebar] RenameSession failed", {oldName, newName, error});
-                addNotification(`Failed to rename session "${oldName}".`, "warn");
+                addNotification(
+                    language === "en"
+                        ? `Failed to rename session "${oldName}".`
+                        : t("sidebar.error.renameFailed", "Failed to rename session \"{oldName}\".", {oldName}),
+                    "warn",
+                );
             } finally {
                 renameInFlightRef.current.delete(oldName);
             }
         },
-        [addNotification, setActiveSession],
+        [addNotification, language, setActiveSession, t],
     );
 
     const handleKillClick = useCallback(
@@ -324,9 +355,15 @@ export function Sidebar(props: SidebarProps) {
                                         e.stopPropagation();
                                         setPromoteTarget(session.name);
                                     }}
-                                    title="ブランチに昇格"
+                                    title={
+                                        language === "en"
+                                            ? "Promote to branch"
+                                            : t("sidebar.action.promoteBranch.title", "ブランチに昇格")
+                                    }
                                 >
-                                    Promote
+                                    {language === "en"
+                                        ? "Promote"
+                                        : t("sidebar.action.promoteBranch.button", "Promote")}
                                 </button>
                             )}
                         </span>
@@ -339,11 +376,28 @@ export function Sidebar(props: SidebarProps) {
                                 e.stopPropagation();
                                 void api.OpenDirectoryInExplorer(session.name).catch((err) => {
                                     console.warn("[sidebar] OpenDirectoryInExplorer failed", err);
-                                    addNotification(`ディレクトリを開けませんでした: ${session.name}`, "warn");
+                                    addNotification(
+                                        language === "en"
+                                            ? `Could not open directory: ${session.name}`
+                                            : t("sidebar.error.openDirectoryFailed", "ディレクトリを開けませんでした: {sessionName}", {
+                                                sessionName: session.name,
+                                            }),
+                                        "warn",
+                                    );
                                 });
                             }}
-                            title="エクスプローラーで開く"
-                            aria-label={`Open directory for ${session.name}`}
+                            title={
+                                language === "en"
+                                    ? "Open in Explorer"
+                                    : t("sidebar.action.openInExplorer.title", "エクスプローラーで開く")
+                            }
+                            aria-label={
+                                language === "en"
+                                    ? `Open directory for ${session.name}`
+                                    : t("sidebar.action.openInExplorer.aria", "Open directory for {sessionName}", {
+                                        sessionName: session.name,
+                                    })
+                            }
                         >
                             {"\u21D7"}
                         </button>
@@ -352,15 +406,21 @@ export function Sidebar(props: SidebarProps) {
                         type="button"
                         className="session-close"
                         onClick={(e) => handleKillClick(e, session.name)}
-                        title="セッションを閉じる"
-                        aria-label={`Close session ${session.name}`}
+                        title={language === "en" ? "Close session" : t("sidebar.action.closeSession.title", "セッションを閉じる")}
+                        aria-label={
+                            language === "en"
+                                ? `Close session ${session.name}`
+                                : t("sidebar.action.closeSession.aria", "Close session {sessionName}", {
+                                    sessionName: session.name,
+                                })
+                        }
                     >
                         ×
                     </button>
                 </div>
             );
         },
-        [activateSession, addNotification, commitRename, handleKillClick, startRename],
+        [activateSession, addNotification, commitRename, handleKillClick, labelForSessionState, language, startRename, t],
     );
 
     const rowData = useMemo<SessionRowData>(
@@ -378,7 +438,11 @@ export function Sidebar(props: SidebarProps) {
         <aside className="sidebar">
             <div className="sidebar-header">
                 <h1>myT-x</h1>
-                <p>ターミナルマルチプレクサ</p>
+                <p>
+                    {language === "en"
+                        ? "Terminal Multiplexer"
+                        : t("sidebar.subtitle", "ターミナルマルチプレクサ")}
+                </p>
             </div>
 
             <div className="sidebar-actions">
@@ -387,7 +451,9 @@ export function Sidebar(props: SidebarProps) {
                     className="primary"
                     onClick={handleNewSession}
                 >
-                    + 新規セッション
+                    {language === "en"
+                        ? "+ New Session"
+                        : t("sidebar.action.newSession", "+ 新規セッション")}
                 </button>
             </div>
 
@@ -401,7 +467,7 @@ export function Sidebar(props: SidebarProps) {
                         itemSize={sessionRowHeight}
                         itemData={rowData}
                         overscanCount={6}
-                        outerElementType={SessionListOuter}
+                        outerElementType={sessionListOuter}
                     >
                         {SessionRow}
                     </FixedSizeList>

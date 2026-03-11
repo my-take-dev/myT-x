@@ -1,6 +1,8 @@
+import { useI18n } from "../i18n";
 import { useNotificationStore } from "../stores/notificationStore";
 
 export function ToastContainer() {
+  const { language, t } = useI18n();
   const notifications = useNotificationStore((s) => s.notifications);
   const removeNotification = useNotificationStore((s) => s.removeNotification);
 
@@ -15,7 +17,10 @@ export function ToastContainer() {
             type="button"
             className="toast-close"
             onClick={() => removeNotification(n.id)}
-            aria-label="通知を閉じる"
+            aria-label={t(
+              "toast.close",
+              language === "ja" ? "通知を閉じる" : "Close notification",
+            )}
           >
             ×
           </button>

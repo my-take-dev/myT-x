@@ -1,4 +1,5 @@
 import {useEffect, useLayoutEffect, useRef, useState} from "react";
+import {useI18n} from "../../../../i18n";
 import {writeClipboardText} from "../../../../utils/clipboardUtils";
 import {notifyClipboardFailure} from "../../../../utils/notifyUtils";
 import type {FlatNode} from "./fileTreeTypes";
@@ -11,6 +12,7 @@ interface FileTreeContextMenuProps {
 }
 
 export function FileTreeContextMenu({x, y, node, onClose}: FileTreeContextMenuProps) {
+    const {language, t} = useI18n();
     const menuRef = useRef<HTMLDivElement>(null);
     const [adjustedPos, setAdjustedPos] = useState({x, y});
     const previousFocusRef = useRef<Element | null>(null);
@@ -119,7 +121,10 @@ export function FileTreeContextMenu({x, y, node, onClose}: FileTreeContextMenuPr
             ref={menuRef}
             className="file-tree-context-menu"
             role="menu"
-            aria-label="ファイルツリーコンテキストメニュー"
+            aria-label={t(
+                "viewer.fileTree.contextMenu.aria",
+                language === "ja" ? "ファイルツリーコンテキストメニュー" : "File tree context menu",
+            )}
             style={{left: adjustedPos.x, top: adjustedPos.y}}
             onKeyDown={handleKeyDown}
         >
@@ -131,7 +136,10 @@ export function FileTreeContextMenu({x, y, node, onClose}: FileTreeContextMenuPr
                     void handleCopyPath();
                 }}
             >
-                パスのコピー
+                {t(
+                    "viewer.fileTree.contextMenu.copyPath",
+                    language === "ja" ? "パスのコピー" : "Copy path",
+                )}
             </button>
         </div>
     );

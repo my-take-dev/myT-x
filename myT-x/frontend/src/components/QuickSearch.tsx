@@ -3,6 +3,7 @@ import {api} from "../api";
 import {useNotificationStore} from "../stores/notificationStore";
 import {useTmuxStore} from "../stores/tmuxStore";
 import type {SessionSnapshot} from "../types/tmux";
+import {useI18n} from "../i18n";
 
 interface QuickSearchProps {
     open: boolean;
@@ -55,6 +56,7 @@ function searchSessions(sessions: SessionSnapshot[], query: string): SearchCandi
 }
 
 export function QuickSearch({open, onClose}: QuickSearchProps) {
+    const {language, t} = useI18n();
     const sessions = useTmuxStore((s) => s.sessions);
     const setActiveSession = useTmuxStore((s) => s.setActiveSession);
     const addNotification = useNotificationStore((s) => s.addNotification);
@@ -114,7 +116,12 @@ export function QuickSearch({open, onClose}: QuickSearchProps) {
         } catch (err) {
             if (!mountedRef.current) return;
             console.warn("[DEBUG-QUICKSEARCH] SetActiveSession failed:", err);
-            addNotification(`Failed to activate session "${sessionName}".`, "warn");
+            addNotification(
+                language === "en"
+                    ? `Failed to activate session "${sessionName}".`
+                    : t("quickSearch.error.activateFailed", "Failed to activate session \"{sessionName}\".", {sessionName}),
+                "warn",
+            );
         } finally {
             switchingRef.current = false;
             if (mountedRef.current) {
@@ -151,13 +158,21 @@ export function QuickSearch({open, onClose}: QuickSearchProps) {
                 className="quick-search-panel"
                 role="dialog"
                 aria-modal="true"
-                aria-label="セッションクイック検索"
+                aria-label={
+                    language === "en"
+                        ? "Session Quick Search"
+                        : t("quickSearch.aria.dialogLabel", "セッションクイック検索")
+                }
                 onClick={(e) => e.stopPropagation()}
             >
                 <input
                     ref={inputRef}
                     className="quick-search-input"
-                    placeholder="セッション名・リポ名・ブランチ名で検索..."
+                    placeholder={
+                        language === "en"
+                            ? "Search by session, repository, or branch..."
+                            : t("quickSearch.placeholder", "セッション名・リポ名・ブランチ名で検索...")
+                    }
                     value={query}
                     disabled={switching}
                     role="combobox"
@@ -170,8 +185,23 @@ export function QuickSearch({open, onClose}: QuickSearchProps) {
                     }}
                     onKeyDown={handleKeyDown}
                 />
-                {switching && <div className="quick-search-loading">切り替え中...</div>}
-                <div className="quick-search-results" id={listboxId} role="listbox" aria-label="検索結果">
+                {switching && (
+                    <div className="quick-search-loading">
+                        {language === "en"
+                            ? "Switching..."
+                            : t("quickSearch.switching", "切り替え中...")}
+                    </div>
+                )}
+                <div
+                    className="quick-search-results"
+                    id={listboxId}
+                    role="listbox"
+                    aria-label={
+                        language === "en"
+                            ? "Search results"
+                            : t("quickSearch.aria.resultsLabel", "検索結果")
+                    }
+                >
                     {results.map((r, i) => (
                         <div
                             key={r.sessionName}
@@ -190,7 +220,11 @@ export function QuickSearch({open, onClose}: QuickSearchProps) {
                         </div>
                     ))}
                     {results.length === 0 && query && (
-                        <div className="quick-search-empty">該当なし</div>
+                        <div className="quick-search-empty">
+                            {language === "en"
+                                ? "No results"
+                                : t("quickSearch.empty", "該当なし")}
+                        </div>
                     )}
                 </div>
             </div>

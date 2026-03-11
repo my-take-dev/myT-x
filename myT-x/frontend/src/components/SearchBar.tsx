@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import type {SearchAddon} from "@xterm/addon-search";
+import {useI18n} from "../i18n";
 
 interface SearchBarProps {
     open: boolean;
@@ -25,6 +26,7 @@ function safeAddonOp(addon: SearchAddon | null, op: (a: SearchAddon) => void): v
 }
 
 export function SearchBar({open, onClose, searchAddon}: SearchBarProps) {
+    const {language, t} = useI18n();
     const inputRef = useRef<HTMLInputElement | null>(null);
     const [query, setQuery] = useState("");
 
@@ -81,7 +83,11 @@ export function SearchBar({open, onClose, searchAddon}: SearchBarProps) {
                 ref={inputRef}
                 className="terminal-search-input"
                 type="text"
-                placeholder="Search..."
+                placeholder={
+                    language === "en"
+                        ? "Search..."
+                        : t("terminalSearch.placeholder", "Search...")
+                }
                 value={query}
                 onChange={(e) => {
                     const value = e.target.value;
@@ -97,7 +103,11 @@ export function SearchBar({open, onClose, searchAddon}: SearchBarProps) {
             <button
                 type="button"
                 className="terminal-search-btn"
-                title="Previous (Shift+Enter)"
+                title={
+                    language === "en"
+                        ? "Previous (Shift+Enter)"
+                        : t("terminalSearch.prev.title", "Previous (Shift+Enter)")
+                }
                 onClick={findPrev}
             >
                 &#x25B2;
@@ -105,7 +115,11 @@ export function SearchBar({open, onClose, searchAddon}: SearchBarProps) {
             <button
                 type="button"
                 className="terminal-search-btn"
-                title="Next (Enter)"
+                title={
+                    language === "en"
+                        ? "Next (Enter)"
+                        : t("terminalSearch.next.title", "Next (Enter)")
+                }
                 onClick={findNext}
             >
                 &#x25BC;
@@ -113,7 +127,11 @@ export function SearchBar({open, onClose, searchAddon}: SearchBarProps) {
             <button
                 type="button"
                 className="terminal-search-btn terminal-search-btn-close"
-                title="Close (Esc)"
+                title={
+                    language === "en"
+                        ? "Close (Esc)"
+                        : t("terminalSearch.close.title", "Close (Esc)")
+                }
                 onClick={() => {
                     safeAddonOp(searchAddon, (a) => a.clearDecorations());
                     onClose();

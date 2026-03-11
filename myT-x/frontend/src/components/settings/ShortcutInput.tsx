@@ -1,5 +1,6 @@
 import {useState} from "react";
 import {isFunctionKeyToken} from "../viewer/viewerShortcutUtils";
+import {useSettingsI18n} from "./settingsI18n";
 
 interface ShortcutInputProps {
     id?: string;
@@ -11,6 +12,7 @@ interface ShortcutInputProps {
 }
 
 export function ShortcutInput({id, value, onChange, placeholder, disabled, ariaLabel}: ShortcutInputProps) {
+    const {t} = useSettingsI18n();
     const [capturing, setCapturing] = useState(false);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -64,18 +66,28 @@ export function ShortcutInput({id, value, onChange, placeholder, disabled, ariaL
                 id={id}
                 className={`form-input shortcut-input ${capturing ? "capturing" : ""}`}
                 value={capturing ? "" : value}
-                placeholder={capturing ? "キーを押してください..." : placeholder}
+                placeholder={capturing
+                    ? t(
+                        "settings.shortcutInput.capturePlaceholder",
+                        "キーを押してください...",
+                        "Press keys...",
+                    )
+                    : placeholder}
                 data-escape-close-disabled={capturing ? "true" : undefined}
                 onFocus={() => !disabled && setCapturing(true)}
                 onBlur={() => setCapturing(false)}
                 onKeyDown={capturing ? handleKeyDown : undefined}
                 readOnly
                 disabled={disabled}
-                aria-label={ariaLabel || placeholder || "Shortcut input"}
+                aria-label={ariaLabel || placeholder || t("settings.shortcutInput.defaultAria", "ショートカット入力", "Shortcut input")}
             />
             {!disabled && (
                 <span className="shortcut-input-hint">
-                    修飾キー（Ctrl/Shift/Alt）+ キー、またはファンクションキー
+                    {t(
+                        "settings.shortcutInput.hint",
+                        "修飾キー（Ctrl/Shift/Alt）+ キー、またはファンクションキー",
+                        "Modifier key (Ctrl/Shift/Alt) + key, or function key",
+                    )}
                 </span>
             )}
         </div>

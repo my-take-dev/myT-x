@@ -23,20 +23,28 @@ import {
 import type {WailsConfigInput} from "../types/tmux";
 import {serializeViewerSidebarMode} from "../utils/viewerSidebarMode";
 import {normalizeShortcut} from "./viewer/viewerShortcutUtils";
+import {useSettingsI18n} from "./settings/settingsI18n";
 
 interface SettingsModalProps {
     open: boolean;
     onClose: () => void;
 }
 
+interface SettingsCategoryDefinition {
+    id: SettingsCategory;
+    labelKey: string;
+    labelJa: string;
+    labelEn: string;
+}
+
 // Settings category definitions.
-const SETTINGS_CATEGORIES: { id: SettingsCategory; label: string }[] = [
-    {id: "general", label: "基本設定"},
-    {id: "keybinds", label: "キーバインド"},
-    {id: "worktree", label: "Worktree"},
-    {id: "agent-model", label: "Agent Model"},
-    {id: "claude-env", label: "CLAUDE CODE環境変数"},
-    {id: "pane-env", label: "追加ペイン環境変数"},
+const SETTINGS_CATEGORIES: SettingsCategoryDefinition[] = [
+    {id: "general", labelKey: "settings.modal.categories.general", labelJa: "基本設定", labelEn: "General"},
+    {id: "keybinds", labelKey: "settings.modal.categories.keybinds", labelJa: "キーバインド", labelEn: "Keybinds"},
+    {id: "worktree", labelKey: "settings.modal.categories.worktree", labelJa: "Worktree", labelEn: "Worktree"},
+    {id: "agent-model", labelKey: "settings.modal.categories.agentModel", labelJa: "Agent Model", labelEn: "Agent Model"},
+    {id: "claude-env", labelKey: "settings.modal.categories.claudeEnv", labelJa: "CLAUDE CODE環境変数", labelEn: "Claude Code Environment Variables"},
+    {id: "pane-env", labelKey: "settings.modal.categories.paneEnv", labelJa: "追加ペイン環境変数", labelEn: "Additional Pane Environment Variables"},
 ];
 
 function getFocusableElements(root: HTMLElement | null): HTMLElement[] {
@@ -53,6 +61,7 @@ function getFocusableElements(root: HTMLElement | null): HTMLElement[] {
 // Settings modal root component.
 
 export function SettingsModal({open, onClose}: SettingsModalProps) {
+    const {t} = useSettingsI18n();
     const [s, dispatch] = useReducer(formReducer, INITIAL_FORM);
     const panelRef = useRef<HTMLDivElement | null>(null);
     const previouslyFocusedRef = useRef<HTMLElement | null>(null);
@@ -206,7 +215,15 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
 
     const handleSave = async () => {
         if (s.loadFailed) {
-            dispatch({type: "SET_FIELD", field: "error", value: "Cannot save because config loading failed."});
+            dispatch({
+                type: "SET_FIELD",
+                field: "error",
+                value: t(
+                    "settings.modal.error.configLoadFailedCannotSave",
+                    "設定の読み込みに失敗しているため保存できません。",
+                    "Cannot save because config loading failed.",
+                ),
+            });
             return;
         }
         const errors = {
@@ -312,7 +329,10 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
             const cfg = config.Config.createFrom(payload);
             await api.SaveConfig(cfg);
             const addNotification = useNotificationStore.getState().addNotification;
-            addNotification("設定を保存しました", "info");
+            addNotification(
+                t("settings.modal.notification.saved", "設定を保存しました", "Settings saved."),
+                "info",
+            );
             onClose();
         } catch (err) {
             dispatch({type: "SET_FIELD", field: "error", value: String(err)});
@@ -339,14 +359,18 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
                 tabIndex={-1}
             >
                 <div className="modal-header">
-                    <h2 id="settings-modal-title">設定(config.yaml)</h2>
+                    <h2 id="settings-modal-title">{t("settings.modal.title", "設定(config.yaml)", "Settings (config.yaml)")}</h2>
                 </div>
 
                 {s.loading ? (
-                    <div className="modal-loading">設定を読み込み中...</div>
+                    <div className="modal-loading">{t("settings.modal.loading", "設定を読み込み中...", "Loading settings...")}</div>
                 ) : (
                     <div className="settings-layout">
-                        <nav className="settings-sidebar" role="tablist" aria-label="Settings categories">
+                        <nav
+                            className="settings-sidebar"
+                            role="tablist"
+                            aria-label={t("settings.modal.categoriesAria", "設定カテゴリ", "Settings categories")}
+                        >
                             {SETTINGS_CATEGORIES.map((cat) => {
                                 const tabID = `settings-tab-${cat.id}`;
                                 const panelID = `settings-panel-${cat.id}`;
@@ -362,11 +386,11 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
                                         onClick={() => dispatch({
                                             type: "SET_FIELD",
                                             field: "activeCategory",
-                                            value: cat.id
+                                            value: cat.id,
                                         })}
                                         onKeyDown={(event) => handleCategoryKeyDown(event, cat.id)}
                                     >
-                                        {cat.label}
+                                        {t(cat.labelKey, cat.labelJa, cat.labelEn)}
                                     </button>
                                 );
                             })}
@@ -396,17 +420,24 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
                         <span className="settings-error">{s.error}</span>
                     ) : (
                         <span className="settings-restart-note">
-              ※ 一部設定はアプリ再起動後に反映されます        </span>
+                            {t(
+                                "settings.modal.restartNote",
+                                "※ 一部設定はアプリ再起動後に反映されます",
+                                "Some settings are applied after app restart.",
+                            )}
+                        </span>
                     )}
                     <button className="modal-btn" onClick={onClose} disabled={s.saving}>
-                        キャンセル
+                        {t("common.cancel", "キャンセル", "Cancel")}
                     </button>
                     <button
                         className="modal-btn primary"
                         onClick={handleSave}
                         disabled={s.loading || s.saving || s.loadFailed}
                     >
-                        {s.saving ? "\u4fdd\u5b58\u4e2d..." : "\u4fdd\u5b58"}
+                        {s.saving
+                            ? t("common.saving", "保存中...", "Saving...")
+                            : t("common.save", "保存", "Save")}
                     </button>
                 </div>
             </div>

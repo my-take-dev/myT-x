@@ -1,4 +1,5 @@
 import React from "react";
+import {getLanguage, translate} from "../i18n";
 import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
 import {sliceByCodePoints} from "../utils/codePointUtils";
 import {splitLines} from "../utils/textLines";
@@ -15,6 +16,10 @@ interface ErrorBoundaryState {
 
 function toErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error ?? "Unknown error");
+}
+
+function tr(key: string, jaText: string, enText: string): string {
+    return translate(key, getLanguage() === "ja" ? jaText : enText);
 }
 
 /**
@@ -70,20 +75,28 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
         const reachedRetryLimit = this.state.retryCount >= ErrorBoundary.MAX_RETRIES;
         return (
             <div className="error-boundary-fallback" role="alert">
-                <p className="error-boundary-title">予期しないエラーが発生しました。</p>
+                <p className="error-boundary-title">
+                    {tr("errorBoundary.title", "予期しないエラーが発生しました。", "An unexpected error occurred.")}
+                </p>
                 {this.state.message && (
                     <pre className="error-boundary-message">{this.state.message}</pre>
                 )}
                 {reachedRetryLimit ? (
                     <>
-                        <p className="error-boundary-exhaust">再試行の上限に達しました。アプリケーションを再読み込みしてください。</p>
+                        <p className="error-boundary-exhaust">
+                            {tr(
+                                "errorBoundary.retryLimit",
+                                "再試行の上限に達しました。アプリケーションを再読み込みしてください。",
+                                "The retry limit was reached. Please reload the application.",
+                            )}
+                        </p>
                         <button type="button" className="error-boundary-retry" onClick={() => window.location.reload()}>
-                            再読み込み
+                            {tr("errorBoundary.reload", "再読み込み", "Reload")}
                         </button>
                     </>
                 ) : (
                     <button type="button" className="error-boundary-retry" onClick={this.handleReset}>
-                        再試行
+                        {tr("errorBoundary.retry", "再試行", "Retry")}
                     </button>
                 )}
             </div>
