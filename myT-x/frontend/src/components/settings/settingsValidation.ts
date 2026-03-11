@@ -2,6 +2,7 @@ import type {ClaudeEnvEntry, OverrideEntry, PaneEnvEntry} from "./types";
 import {EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK, VALID_EFFORT_LEVELS} from "./constants";
 import {VIEWER_SHORTCUTS} from "../viewer/viewerShortcutDefinitions";
 import {getEffectiveViewerShortcut, hasShortcutModifier, normalizeShortcut} from "../viewer/viewerShortcutUtils";
+import {translateSettings} from "./settingsI18n";
 
 export function validateViewerShortcuts(
     viewerShortcuts: Record<string, string>,
@@ -24,7 +25,14 @@ export function validateViewerShortcuts(
             continue;
         }
         if (!hasShortcutModifier(effectiveShortcut)) {
-            setShortcutError(viewId, "修飾キーが必要です");
+            setShortcutError(
+                viewId,
+                translateSettings(
+                    "settings.validation.viewerShortcut.modifierRequired",
+                    "修飾キーが必要です",
+                    "Modifier key is required.",
+                ),
+            );
             continue;
         }
         const normalized = normalizeShortcut(effectiveShortcut);
@@ -32,7 +40,14 @@ export function validateViewerShortcuts(
             continue;
         }
         if (normalizedGlobalHotkey !== "" && normalized === normalizedGlobalHotkey) {
-            setShortcutError(viewId, "グローバルホットキーと重複しています");
+            setShortcutError(
+                viewId,
+                translateSettings(
+                    "settings.validation.viewerShortcut.duplicateWithGlobalHotkey",
+                    "グローバルホットキーと重複しています",
+                    "Duplicated with global hotkey.",
+                ),
+            );
             continue;
         }
         const owners = ownersByShortcut.get(normalized);
@@ -48,7 +63,14 @@ export function validateViewerShortcuts(
             continue;
         }
         for (const viewId of owners) {
-            setShortcutError(viewId, "他のビューと重複しています");
+            setShortcutError(
+                viewId,
+                translateSettings(
+                    "settings.validation.viewerShortcut.duplicateAcrossViews",
+                    "他のビューと重複しています",
+                    "Duplicated with another view.",
+                ),
+            );
         }
     }
 
@@ -78,7 +100,11 @@ export function validateAgentModelSettings(
     const from = agentFrom.trim();
     const to = agentTo.trim();
     if ((from && !to) || (!from && to)) {
-        errors["agent_model"] = "fromとtoは両方同時に指定が必要です";
+        errors["agent_model"] = translateSettings(
+            "settings.validation.agentModel.fromToRequired",
+            "fromとtoは両方同時に指定が必要です",
+            "Both from and to must be specified together.",
+        );
     }
 
     overrides.forEach((ov, i) => {
@@ -88,16 +114,28 @@ export function validateAgentModelSettings(
             return;
         }
         if (!name && model) {
-            errors[`override_name_${i}`] = "モデルが指定されている場合、名前は必須です";
+            errors[`override_name_${i}`] = translateSettings(
+                "settings.validation.agentModel.overrideNameRequiredWhenModelProvided",
+                "モデルが指定されている場合、名前は必須です",
+                "Name is required when a model is specified.",
+            );
             return;
         }
         const runeLen = [...name].length;
         if (runeLen < minOverrideNameLen) {
-            errors[`override_name_${i}`] =
-                `名前は${minOverrideNameLen}文字以上必要です (現在: ${runeLen}文字)`;
+            errors[`override_name_${i}`] = translateSettings(
+                "settings.validation.agentModel.overrideNameMinLength",
+                "名前は{min}文字以上必要です (現在: {current}文字)",
+                "Name must be at least {min} characters (current: {current}).",
+                {min: minOverrideNameLen, current: runeLen},
+            );
         }
         if (name && !model) {
-            errors[`override_model_${i}`] = "モデルは必須です";
+            errors[`override_model_${i}`] = translateSettings(
+                "settings.validation.agentModel.overrideModelRequired",
+                "モデルは必須です",
+                "Model is required.",
+            );
         }
     });
 
@@ -134,28 +172,52 @@ function validateEnvEntries(
             return;
         }
         if (!key && value) {
-            errors[`${keyPrefix}_key_${i}`] = "変数名は必須です";
+            errors[`${keyPrefix}_key_${i}`] = translateSettings(
+                "settings.validation.env.keyRequired",
+                "変数名は必須です",
+                "Variable name is required.",
+            );
             return;
         }
         if (!ENV_VAR_NAME_PATTERN.test(key)) {
-            errors[`${keyPrefix}_key_${i}`] = "変数名は英字・アンダースコアで始まり、英数字・アンダースコアのみ使用できます";
+            errors[`${keyPrefix}_key_${i}`] = translateSettings(
+                "settings.validation.env.keyPatternInvalid",
+                "変数名は英字・アンダースコアで始まり、英数字・アンダースコアのみ使用できます",
+                "Variable name must start with a letter or underscore, and contain only letters, digits, and underscores.",
+            );
             return;
         }
         const upper = key.toUpperCase();
         if (key && !value) {
-            errors[`${keyPrefix}_val_${i}`] = "値は必須です";
+            errors[`${keyPrefix}_val_${i}`] = translateSettings(
+                "settings.validation.env.valueRequired",
+                "値は必須です",
+                "Value is required.",
+            );
             return;
         }
         if (options.rejectEffortLevelKey && upper === EFFORT_LEVEL_KEY) {
-            errors[`${keyPrefix}_key_${i}`] = "この変数は上部の専用フィールドで設定してください";
+            errors[`${keyPrefix}_key_${i}`] = translateSettings(
+                "settings.validation.env.useDedicatedEffortLevelField",
+                "この変数は上部の専用フィールドで設定してください",
+                "Set this variable in the dedicated field above.",
+            );
             return;
         }
         if (BLOCKED_ENV_KEYS.has(upper)) {
-            errors[`${keyPrefix}_key_${i}`] = "システム変数は設定できません";
+            errors[`${keyPrefix}_key_${i}`] = translateSettings(
+                "settings.validation.env.systemKeyNotAllowed",
+                "システム変数は設定できません",
+                "System variables cannot be configured.",
+            );
             return;
         }
         if (seenKeys.has(upper)) {
-            errors[`${keyPrefix}_key_${i}`] = "変数名が重複しています";
+            errors[`${keyPrefix}_key_${i}`] = translateSettings(
+                "settings.validation.env.duplicateKey",
+                "変数名が重複しています",
+                "Variable name is duplicated.",
+            );
         }
         seenKeys.add(upper);
     });
@@ -170,7 +232,11 @@ export function validatePaneEnvSettings(
     const errors: Record<string, string> = {};
 
     if (!VALID_EFFORT_LEVELS.has(effortLevel.trim().toLowerCase())) {
-        errors["pane_env_effort"] = "low, medium, high のいずれかを指定してください";
+        errors["pane_env_effort"] = translateSettings(
+            "settings.validation.paneEnv.effortLevelInvalid",
+            "low, medium, high のいずれかを指定してください",
+            "Specify one of low, medium, or high.",
+        );
     }
 
     return {...errors, ...validateEnvEntries(entries, "pane_env", {rejectEffortLevelKey: true})};
@@ -197,7 +263,13 @@ export function validateDefaultSessionDir(rawPath: string): Record<string, strin
         return {};
     }
     if (!ABSOLUTE_SESSION_DIR_PATTERN.test(path)) {
-        return {default_session_dir: "絶対パスを指定してください"};
+        return {
+            default_session_dir: translateSettings(
+                "settings.validation.defaultSessionDir.absolutePathRequired",
+                "絶対パスを指定してください",
+                "Specify an absolute path.",
+            ),
+        };
     }
     return {};
 }
@@ -243,7 +315,11 @@ export function validateWorktreeCopyPathSettings(
     copyDirs: string[],
 ): Record<string, string> {
     const errors: Record<string, string> = {};
-    const pathErrorMessage = "相対パスのみ指定できます（絶対パス、'.'、'..' は不可）";
+    const pathErrorMessage = translateSettings(
+        "settings.validation.worktreeCopy.relativePathOnly",
+        "相対パスのみ指定できます（絶対パス、'.'、'..' は不可）",
+        "Only relative paths are allowed (absolute paths, '.', '..' are not allowed).",
+    );
 
     let fileErrorCount = 0;
     copyFiles.forEach((path, i) => {
@@ -256,7 +332,12 @@ export function validateWorktreeCopyPathSettings(
         }
     });
     if (fileErrorCount > 0) {
-        errors["wt_copy_files"] = `コピーファイルに不正なパスが${fileErrorCount}件あります`;
+        errors["wt_copy_files"] = translateSettings(
+            "settings.validation.worktreeCopy.filesInvalidCount",
+            "コピーファイルに不正なパスが{count}件あります",
+            "Copy files contain {count} invalid path(s).",
+            {count: fileErrorCount},
+        );
     }
 
     let dirErrorCount = 0;
@@ -270,7 +351,12 @@ export function validateWorktreeCopyPathSettings(
         }
     });
     if (dirErrorCount > 0) {
-        errors["wt_copy_dirs"] = `コピーディレクトリに不正なパスが${dirErrorCount}件あります`;
+        errors["wt_copy_dirs"] = translateSettings(
+            "settings.validation.worktreeCopy.dirsInvalidCount",
+            "コピーディレクトリに不正なパスが{count}件あります",
+            "Copy directories contain {count} invalid path(s).",
+            {count: dirErrorCount},
+        );
     }
 
     return errors;

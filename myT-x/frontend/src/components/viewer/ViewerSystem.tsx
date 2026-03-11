@@ -9,6 +9,7 @@ import {
     hasShortcutModifier,
     normalizeShortcut,
 } from "./viewerShortcutUtils";
+import {useI18n} from "../../i18n";
 import {useTmuxStore} from "../../stores/tmuxStore";
 import {useNotificationStore} from "../../stores/notificationStore";
 import {isImeTransitionalEvent} from "../../utils/ime";
@@ -37,6 +38,7 @@ import "./views/pane-scheduler";
 import "./views/error-log";
 
 export function ViewerSystem() {
+    const {language, t} = useI18n();
     const activeViewId = useViewerStore((s) => s.activeViewId);
     const toggleView = useViewerStore((s) => s.toggleView);
     const closeView = useViewerStore((s) => s.closeView);
@@ -86,14 +88,19 @@ export function ViewerSystem() {
                     );
                 }
                 duplicates.push(
-                    `ショートカット "${effectiveShortcut}" が "${existingOwner}" と "${view.id}" で重複しています`,
+                    t(
+                        "viewer.shortcuts.duplicate",
+                        language === "ja"
+                            ? `ショートカット "${effectiveShortcut}" が "${existingOwner}" と "${view.id}" で重複しています`
+                            : `Shortcut "${effectiveShortcut}" is duplicated between "${existingOwner}" and "${view.id}"`,
+                    ),
                 );
                 continue;
             }
             map.set(normalized, view.id);
         }
         return {shortcutMap: map, duplicateWarnings: duplicates};
-    }, [views, viewerShortcutsConfig]);
+    }, [views, viewerShortcutsConfig, language, t]);
 
     // Track previously notified duplicates to avoid re-firing the same
     // notifications when useMemo produces a new array reference with

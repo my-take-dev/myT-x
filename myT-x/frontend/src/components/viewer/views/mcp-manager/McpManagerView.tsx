@@ -1,4 +1,5 @@
 import {useState} from "react";
+import {useI18n} from "../../../../i18n";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {McpDetailPanel} from "./McpDetailPanel";
@@ -8,6 +9,7 @@ import {useMcpManager} from "./useMcpManager";
 type McpCategory = "lsp" | "orchestrator";
 
 export function McpManagerView() {
+    const {language, t} = useI18n();
     const closeView = useViewerStore((s) => s.closeView);
     const {
         lspMcpList,
@@ -32,7 +34,10 @@ export function McpManagerView() {
                 className="mcp-manager-view"
                 title="MCP Manager"
                 onClose={closeView}
-                message="アクティブなセッションがありません"
+                message={t(
+                    "viewer.mcpManager.noActiveSession",
+                    language === "ja" ? "アクティブなセッションがありません" : "No active session",
+                )}
             />
         );
     }
@@ -61,10 +66,27 @@ export function McpManagerView() {
                     </div>
                 )}
                 {isLoading ? (
-                    <div className="viewer-message">MCPプロファイルを読み込み中...</div>
+                    <div className="viewer-message">
+                        {t(
+                            "viewer.mcpManager.loadingProfiles",
+                            language === "ja" ? "MCPプロファイルを読み込み中..." : "Loading MCP profiles...",
+                        )}
+                    </div>
                 ) : !hasContent ? (
                     <div className="viewer-message">
-                        {error ? "このセッションのMCPプロファイルを読み込めませんでした。" : "このセッションで利用可能なMCPプロファイルはありません。"}
+                        {error
+                            ? t(
+                                "viewer.mcpManager.loadFailed",
+                                language === "ja"
+                                    ? "このセッションのMCPプロファイルを読み込めませんでした。"
+                                    : "Could not load MCP profiles for this session.",
+                            )
+                            : t(
+                                "viewer.mcpManager.noProfiles",
+                                language === "ja"
+                                    ? "このセッションで利用可能なMCPプロファイルはありません。"
+                                    : "No MCP profiles are available in this session.",
+                            )}
                     </div>
                 ) : (
                     <>

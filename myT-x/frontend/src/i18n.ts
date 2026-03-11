@@ -1,0 +1,520 @@
+import {useSyncExternalStore} from "react";
+
+export type UILanguage = "ja" | "en";
+
+type TranslationParams = Record<string, string | number>;
+
+const LANGUAGE_STORAGE_KEY = "mytx.ui.language";
+const DEFAULT_LANGUAGE: UILanguage = "ja";
+
+const EN_TRANSLATIONS: Record<string, string> = {
+    "app.closePane.action": "Close",
+    "app.closePane.message": "Close pane \"{paneId}\"?",
+    "app.closePane.title": "Close pane",
+    "app.confirm.closePane.message": "Close pane \"{paneId}\"?",
+    "app.confirm.closePane.title": "Close pane",
+    "common.cancel": "Cancel",
+    "common.save": "Save",
+    "common.saving": "Saving...",
+    "common.status.processing": "Processing...",
+    "common.action.cancel": "Cancel",
+    "common.action.close": "Close",
+    "menu.language": "Language",
+    "menu.language.english": "English",
+    "menu.language.japanese": "日本語",
+    "menu.settings": "Settings",
+    "status.noSessionFallback": "[No Session] | --:--",
+    "status.defaultPane": "Pane",
+    "status.noSession": "[No Session]",
+    "status.prefix": "Prefix",
+    "status.prefixIndicator": "Prefix",
+    "status.syncIndicator": "SYNC",
+
+    "settings.modal.categories.general": "General",
+    "settings.modal.categories.keybinds": "Keybinds",
+    "settings.modal.categories.worktree": "Worktree",
+    "settings.modal.categories.agentModel": "Agent Model",
+    "settings.modal.categories.claudeEnv": "Claude Code Environment Variables",
+    "settings.modal.categories.paneEnv": "Additional Pane Environment Variables",
+    "settings.modal.title": "Settings (config.yaml)",
+    "settings.modal.loading": "Loading settings...",
+    "settings.modal.categoriesAria": "Settings categories",
+    "settings.modal.error.configLoadFailedCannotSave": "Cannot save because config loading failed.",
+    "settings.modal.notification.saved": "Settings saved.",
+    "settings.modal.restartNote": "Some settings will be applied after restarting the app.",
+
+    "settings.general.title": "General",
+    "settings.general.shell.label": "Shell",
+    "settings.general.shell.description": "Shell used by terminal panes (default: powershell.exe)",
+    "settings.general.prefix.label": "Prefix",
+    "settings.general.prefix.aria": "Prefix shortcut",
+    "settings.general.prefix.description": "tmux-compatible prefix key. Enter an action key after this key to operate the app.",
+    "settings.general.quakeMode.label": "Quake Mode",
+    "settings.general.quakeMode.description": "Toggle window visibility with a global hotkey.",
+    "settings.general.globalHotkey.label": "Global Hotkey",
+    "settings.general.globalHotkey.aria": "Global hotkey shortcut",
+    "settings.general.globalHotkey.description": "Toggle key for Quake mode (used only when Quake mode is enabled) (default: Ctrl+Shift+F12)",
+    "settings.general.defaultSessionDir.label": "Default Session Directory",
+    "settings.general.defaultSessionDir.placeholder": "Not set (uses the startup directory)",
+    "settings.general.defaultSessionDir.browse": "Browse...",
+    "settings.general.defaultSessionDir.browseTitle": "Select folder",
+    "settings.general.defaultSessionDir.clearTitle": "Clear",
+    "settings.general.defaultSessionDir.clearAria": "Clear default session directory",
+    "settings.general.defaultSessionDir.description": "Working directory used by Quick Start. If unset, the app startup directory is used.",
+    "settings.general.notification.pickDirectoryFailed": "Failed to select directory",
+
+    "settings.keybinds.title": "Keybinds",
+    "settings.keybinds.description": "Configure tmux-compatible action keys used after the prefix key.",
+    "settings.keybinds.actions.splitVertical": "Split vertically",
+    "settings.keybinds.actions.splitHorizontal": "Split horizontally",
+    "settings.keybinds.actions.toggleZoom": "Toggle zoom",
+    "settings.keybinds.actions.killPane": "Close pane",
+    "settings.keybinds.actions.detachSession": "Detach session",
+    "settings.keybinds.shortcutAriaTemplate": "{label} shortcut",
+
+    "settings.worktree.title": "Worktree",
+    "settings.worktree.enabled.label": "Enable Worktree",
+    "settings.worktree.enabled.description": "Create and manage Git worktrees per session.",
+    "settings.worktree.forceCleanup.label": "Force Cleanup",
+    "settings.worktree.forceCleanup.description": "Force-delete worktrees when closing sessions.",
+    "settings.worktree.setupScripts.label": "Setup Scripts",
+    "settings.worktree.setupScripts.description": "Commands to run after creating a worktree.",
+    "settings.worktree.setupScripts.placeholderExample": "Example: npm install",
+    "settings.worktree.setupScripts.add": "Add Script",
+    "settings.worktree.copyFiles.label": "Files to Copy",
+    "settings.worktree.copyFiles.description": "Files copied into new worktrees.",
+    "settings.worktree.copyFiles.placeholderExample": "Example: .env",
+    "settings.worktree.copyFiles.add": "Add File",
+    "settings.worktree.copyDirs.label": "Directories to Copy",
+    "settings.worktree.copyDirs.description": "Directories copied into new worktrees.",
+    "settings.worktree.copyDirs.placeholderExample": "Example: .vscode",
+    "settings.worktree.copyDirs.add": "Add Directory",
+
+    "settings.agentModel.title": "Agent Model",
+    "settings.agentModel.description": "Remap source models to target models and configure per-agent overrides.",
+    "settings.agentModel.from.label": "From",
+    "settings.agentModel.to.label": "To",
+    "settings.agentModel.fromToHint": "Specify both values together.",
+    "settings.agentModel.overrides.label": "Overrides",
+    "settings.agentModel.overrides.note": "Overrides are applied in order from top to bottom.",
+    "settings.agentModel.overrides.agentNamePlaceholder": "Agent name",
+    "settings.agentModel.overrides.modelPlaceholder": "Model name",
+    "settings.agentModel.overrides.removeTitle": "Remove",
+    "settings.agentModel.overrides.add": "Add Override",
+
+    "settings.claudeEnv.title": "Claude Code Environment Variables",
+    "settings.claudeEnv.description": "Configure environment variables passed to Claude Code. They are applied to all panes, including the initial terminal when a session starts.",
+    "settings.claudeEnv.descriptionLoadFailed": "Failed to load variable descriptions. The settings themselves can still be used safely.",
+    "settings.claudeEnv.defaultEnabled": "Enabled by default when creating sessions",
+    "settings.claudeEnv.list.label": "Environment Variables",
+    "settings.claudeEnv.list.note": "Configure Claude Code-specific environment variables. System variables such as PATH cannot be overridden.",
+    "settings.claudeEnv.key.placeholder": "Variable name",
+    "settings.claudeEnv.value.placeholder": "Value",
+    "settings.claudeEnv.key.ariaTemplate": "Claude environment variable name {index}",
+    "settings.claudeEnv.value.ariaTemplate": "Claude environment variable value {index}",
+    "settings.claudeEnv.remove.title": "Remove",
+    "settings.claudeEnv.remove.ariaTemplate": "Remove Claude environment variable {name}",
+    "settings.claudeEnv.remove.ariaFallbackItem": "item {index}",
+    "settings.claudeEnv.add": "Add Environment Variable",
+
+    "settings.paneEnv.title": "Additional Pane Environment Variables",
+    "settings.paneEnv.description": "Configure environment variables applied only to additional panes created after a session starts.",
+    "settings.paneEnv.defaultEnabled": "Enabled by default when creating sessions",
+    "settings.paneEnv.effortLevel.label": "Effort Level (CLAUDE_CODE_EFFORT_LEVEL)",
+    "settings.paneEnv.effortLevel.unset": "Unset",
+    "settings.paneEnv.effortLevel.description": "Saved as the CLAUDE_CODE_EFFORT_LEVEL environment variable.",
+    "settings.paneEnv.customVars.label": "Custom Environment Variables",
+    "settings.paneEnv.customVars.note": "Add environment variables for additional panes. System variables such as PATH cannot be overridden.",
+    "settings.paneEnv.key.placeholder": "Variable name",
+    "settings.paneEnv.value.placeholder": "Value",
+    "settings.paneEnv.key.ariaTemplate": "Additional pane variable name {index}",
+    "settings.paneEnv.value.ariaTemplate": "Additional pane variable value {index}",
+    "settings.paneEnv.remove.title": "Remove",
+    "settings.paneEnv.remove.ariaTemplate": "Remove additional pane variable {name}",
+    "settings.paneEnv.remove.ariaFallbackItem": "item {index}",
+    "settings.paneEnv.add": "Add Environment Variable",
+
+    "settings.viewerShortcut.title": "Viewer Shortcuts",
+    "settings.viewerShortcut.description": "Configure shortcuts for opening each viewer.",
+    "settings.viewerShortcut.inputAriaTemplate": "{label} shortcut",
+
+    "settings.dynamicList.itemAriaTemplate": "{label} {index}",
+    "settings.dynamicList.itemAriaFallback": "item",
+    "settings.dynamicList.removeTitle": "Remove",
+    "settings.dynamicList.addDefault": "Add",
+
+    "settings.shortcutInput.capturePlaceholder": "Press a key...",
+    "settings.shortcutInput.defaultAria": "Shortcut input",
+    "settings.shortcutInput.hint": "Click the field and press the shortcut.",
+
+    "settings.validation.viewerShortcut.modifierRequired": "A modifier key is required",
+    "settings.validation.viewerShortcut.duplicateWithGlobalHotkey": "Conflicts with the global hotkey",
+    "settings.validation.viewerShortcut.duplicateAcrossViews": "Conflicts with another viewer",
+    "settings.validation.agentModel.fromToRequired": "Both from and to must be specified together",
+    "settings.validation.agentModel.overrideNameRequiredWhenModelProvided": "Name is required when a model is specified",
+    "settings.validation.agentModel.overrideNameMinLength": "Name must be at least {minLength} characters long (current: {currentLength})",
+    "settings.validation.agentModel.overrideModelRequired": "Model is required",
+    "settings.validation.env.keyRequired": "Variable name is required",
+    "settings.validation.env.keyPatternInvalid": "Variable name must start with a letter or underscore and contain only letters, digits, and underscores",
+    "settings.validation.env.valueRequired": "Value is required",
+    "settings.validation.env.useDedicatedEffortLevelField": "Set this variable in the dedicated field above",
+    "settings.validation.env.systemKeyNotAllowed": "System variables cannot be set",
+    "settings.validation.env.duplicateKey": "Variable name is duplicated",
+    "settings.validation.paneEnv.effortLevelInvalid": "Specify one of low, medium, or high",
+    "settings.validation.defaultSessionDir.absolutePathRequired": "Specify an absolute path",
+    "settings.validation.worktreeCopy.relativePathOnly": "Only relative paths are allowed (absolute paths, '.' and '..' are not allowed)",
+    "settings.validation.worktreeCopy.filesInvalidCount": "{count} invalid path(s) found in copy files",
+    "settings.validation.worktreeCopy.dirsInvalidCount": "{count} invalid path(s) found in copy directories",
+
+    "viewer.fileTree.label": "File Tree",
+    "viewer.gitGraph.label": "Git Graph",
+    "viewer.errorLog.label": "Error Log",
+    "viewer.diff.label": "Diff",
+    "viewer.inputHistory.label": "Input History",
+    "viewer.mcpManager.label": "MCP Manager",
+    "viewer.paneScheduler.label": "Pane Scheduler",
+
+    "quickSearch.error.activateFailed": "Failed to activate session \"{sessionName}\".",
+    "quickSearch.aria.dialogLabel": "Session quick search",
+    "quickSearch.placeholder": "Search by session, repo, or branch name...",
+    "quickSearch.switching": "Switching...",
+    "quickSearch.aria.resultsLabel": "Search results",
+    "quickSearch.empty": "No matches",
+
+    "sidebar.worktree.baseBranchFrom": "Base branch: {baseBranch}",
+    "sidebar.worktree.detached": "detached",
+    "sidebar.sessionState.selected": "Selected",
+    "sidebar.sessionState.stopped": "Stopped",
+    "sidebar.sessionState.running": "Running",
+    "sidebar.aria.sessionsList": "Sessions",
+    "sidebar.error.activateFailed": "Failed to activate session \"{sessionName}\".",
+    "sidebar.error.renameFailed": "Failed to rename session \"{oldName}\".",
+    "sidebar.action.promoteBranch.title": "Promote to Branch",
+    "sidebar.action.promoteBranch.button": "Promote",
+    "sidebar.error.openDirectoryFailed": "Could not open directory: {sessionName}",
+    "sidebar.action.openInExplorer.title": "Open in Explorer",
+    "sidebar.action.openInExplorer.aria": "Open directory for {sessionName}",
+    "sidebar.action.closeSession.title": "Close session",
+    "sidebar.action.closeSession.aria": "Close session {sessionName}",
+    "sidebar.subtitle": "Terminal Multiplexer",
+    "sidebar.action.newSession": "+ New Session",
+
+    "sessionView.error.unknown": "Unknown error",
+    "sessionView.empty.createSession": "Create a session.",
+    "sessionView.quickStart.loading": "Starting...",
+    "sessionView.quickStart.button": "▶ Quick Start",
+    "sessionView.empty.noWindows": "This session has no windows.",
+    "sessionView.empty.noActiveWindow": "There is no active window.",
+    "sessionView.syncMode.title": "Sync input mode (Prefix: s)",
+    "sessionView.syncMode.aria": "Toggle sync input mode",
+    "sessionView.syncMode.label": "Sync",
+
+    "terminalPane.titleInput.placeholder": "Pane name",
+    "terminalPane.action.splitVertical.title": "Split left-right (Prefix: %)",
+    "terminalPane.action.splitVertical.aria": "Split pane {paneId} left-right",
+    "terminalPane.action.splitHorizontal.title": "Split top-bottom (Prefix: \")",
+    "terminalPane.action.splitHorizontal.aria": "Split pane {paneId} top-bottom",
+    "terminalPane.action.close.title": "Close pane (Prefix: x)",
+    "terminalPane.action.close.aria": "Close pane {paneId}",
+    "terminalPane.action.scrollToBottom.title": "Scroll to bottom",
+    "terminalPane.confirm.closePane.title": "Close pane",
+    "terminalPane.confirm.closePane.message": "Close pane {paneId}?",
+
+    "promoteBranch.title": "Promote to Branch",
+    "promoteBranch.description": "Convert detached HEAD in session \"{sessionName}\" to a named branch.",
+    "promoteBranch.branchName.label": "Branch Name",
+    "promoteBranch.branchName.placeholder": "feature/my-branch",
+    "promoteBranch.action.promoting": "Promoting...",
+    "promoteBranch.action.promote": "Promote",
+
+    "newSession.title": "New Session",
+    "newSession.warning.configLoadFailedLine1": "Failed to load settings. Showing default values.",
+    "newSession.warning.configLoadFailedLine2": "Claude Code environment variables and additional pane environment variables will be OFF for creation.",
+    "newSession.directory.label": "Working Directory",
+    "newSession.directory.selectButton": "Select folder...",
+    "newSession.sessionName.label": "Session Name",
+    "newSession.sessionName.placeholder": "Enter session name",
+    "newSession.agentTeam.enable": "Start as Agent Team",
+    "newSession.agentTeam.shimMissing": "(shim not installed)",
+    "newSession.env.claude": "Use Claude Code environment variables",
+    "newSession.env.pane": "Use additional pane environment variables",
+    "newSession.git.currentBranch": "Current branch:",
+    "newSession.worktree.enable": "Use Git Worktree",
+    "newSession.worktree.source.existing": "Use existing worktree",
+    "newSession.worktree.select.placeholder": "Please select...",
+    "newSession.worktree.detached": "(detached)",
+    "newSession.worktree.conflict": "This worktree is already used by session \"{sessionName}\"",
+    "newSession.worktree.source.new": "Create new worktree",
+    "newSession.worktree.pullBefore": "Pull before creating",
+    "newSession.worktree.baseBranch.label": "Base Branch",
+    "newSession.worktree.branchName.label": "Branch Name",
+    "newSession.worktree.branchName.placeholder": "feature/my-branch",
+    "newSession.error.directoryConflict": "Cannot start session ({sessionName} is already using it)",
+    "newSession.action.creating": "Creating...",
+    "newSession.action.create": "Create",
+
+    "killSession.error.statusFetchFailedSafeMode": "Failed to fetch worktree status (treating as unsaved changes for safety): {error}",
+    "killSession.title": "Close Session",
+    "killSession.loading": "Checking worktree status...",
+    "killSession.confirm.message": "Close session \"{sessionName}\"?",
+    "killSession.warning.unsavedChanges": "The worktree for session \"{sessionName}\" has uncommitted changes.",
+    "killSession.warning.uncommitted": "There are uncommitted changes",
+    "killSession.commitMessage.label": "Commit Message",
+    "killSession.commitMessage.placeholder": "Enter changes...",
+    "killSession.warning.unpushed": "There are unpushed commits",
+    "killSession.deleteWorktree.label": "Delete worktree",
+    "killSession.deleteWorktree.hint": "If unchecked, the worktree will be kept",
+    "killSession.action.closeWithoutSaving": "Close without saving",
+    "killSession.action.close": "Close",
+    "killSession.action.commitAndPushThenClose": "Commit & Push then Close",
+    "killSession.action.commitThenClose": "Commit then Close",
+    "killSession.action.pushThenClose": "Push then Close",
+
+    "terminalSearch.placeholder": "Search...",
+    "terminalSearch.prev.title": "Previous (Shift+Enter)",
+    "terminalSearch.next.title": "Next (Enter)",
+    "terminalSearch.close.title": "Close (Esc)",
+
+    "layoutPreset.evenHorizontal": "Even Horizontal",
+    "layoutPreset.evenVertical": "Even Vertical",
+    "layoutPreset.mainVertical": "Main Left",
+    "layoutPreset.mainHorizontal": "Main Top",
+    "layoutPreset.tiled": "Tiled",
+    "layoutPreset.aria.layout": "Layout: {label}",
+
+    "layout.error.zoomPaneMissing": "Zoom target pane is missing.",
+    "layout.error.layoutMissing": "Layout is missing.",
+    "layout.error.paneIdMissing": "Pane id is missing.",
+    "layout.error.paneNotFound": "Pane {paneId} was not found.",
+
+    "viewer.activity.toggleOverlay": "Switch to overlay mode",
+    "viewer.activity.toggleDocked": "Switch to docked mode",
+    "viewer.shortcut.duplicate": "Shortcut \"{shortcut}\" is duplicated between \"{ownerA}\" and \"{ownerB}\"",
+    "viewer.common.refresh": "Refresh",
+    "viewer.common.close": "Close",
+    "viewer.copy.copied": "Copied!",
+    "viewer.copy.copyAll": "Copy all",
+    "viewer.copy.clickToCopy": "Click to copy",
+    "viewer.copy.copyEntry": "Copy entry",
+    "viewer.copyPath.copied": "Copied!",
+    "viewer.copyPath.failed": "Copy failed",
+    "viewer.copyPath.label": "Copy path",
+    "viewer.diff.hiddenContext.unavailable": "Hidden context expansion is not available.",
+    "viewer.diff.hiddenContext.lines": "Hidden context: {count} lines",
+    "viewer.diff.aria.oldLine": "old line {line}",
+    "viewer.diff.aria.newLine": "new line {line}",
+    "viewer.diff.title": "Diff",
+    "viewer.diff.noActiveSession": "No active session",
+    "viewer.diff.filesChanged": "Files Changed:",
+    "viewer.diff.truncated": "(truncated)",
+    "viewer.diff.loading": "Loading diff...",
+    "viewer.diff.noWorkingChanges": "No working changes",
+    "viewer.diff.empty.selectFile": "Select a file to view diff",
+    "viewer.diff.empty.noChangesInFile": "No changes in this file",
+    "viewer.diff.status.deleted": "deleted",
+    "viewer.diff.status.renamed": "renamed",
+    "viewer.diff.status.modified": "modified",
+    "viewer.diff.aria.directory": "Directory {name}",
+    "viewer.diff.aria.file": "File {name}",
+    "viewer.diff.error.parse": "Failed to parse diff.",
+    "viewer.diff.empty.noDiff": "No diff available",
+
+    "viewer.fileTree.title": "File Tree",
+    "viewer.fileTree.noActiveSession": "No active session",
+    "viewer.fileTree.loading": "Loading file tree...",
+    "viewer.fileTree.contextMenu.label": "File tree context menu",
+    "viewer.fileTree.contextMenu.copyPath": "Copy path",
+    "viewer.fileTree.error.load": "Failed to load file tree.",
+    "viewer.fileTree.error.loadDirectory": "Failed to load directory: {path}",
+    "viewer.fileTree.error.readFile": "Failed to read file: {path}",
+
+    "viewer.fileContent.loading": "Loading...",
+    "viewer.fileContent.empty.selectFile": "Select a file to preview",
+    "viewer.fileContent.binary": "Binary file ({detail})",
+    "viewer.fileContent.showSource": "Show source",
+    "viewer.fileContent.showPreview": "Show preview",
+    "viewer.fileContent.truncated": "(truncated)",
+    "viewer.fileContent.aria": "File content",
+    "viewer.fileContent.copySelectionUnavailable": "Text selection copy is not available for this content.",
+    "viewer.fileContent.highlightSkippedLargeFile": "Syntax highlighting skipped for large file.",
+    "viewer.fileContent.highlightSkippedUnsupported": "Syntax highlighting is not available for this file type.",
+
+    "viewer.markdown.blockedDesktopLink": "This link cannot be opened in the desktop app",
+    "viewer.markdown.blockedUnsupportedLink": "Unsupported link format in preview",
+    "viewer.markdown.fileLinkAria": "File link {label}",
+    "viewer.markdown.externalLinkAria": "External link {label}",
+    "viewer.markdown.unsupportedLinkAria": "Unsupported link {label}",
+    "viewer.markdown.imageBlocked": "Image blocked for security",
+    "viewer.markdown.imageBlockedInline": "[image blocked]",
+
+    "viewer.gitGraph.title": "Git Graph",
+    "viewer.gitGraph.noActiveSession": "No active session",
+    "viewer.gitGraph.allBranches": "All branches",
+    "viewer.gitGraph.loading": "Loading git data...",
+    "viewer.gitGraph.empty": "No commits found.",
+    "viewer.gitGraph.loadingDiff": "Loading diff...",
+    "viewer.gitGraph.commitHistory": "Commit history",
+    "viewer.gitGraph.loadMore": "Load more commits...",
+    "viewer.gitGraph.error.noActiveSession": "No active session",
+    "viewer.gitGraph.error.unknown": "Unknown error",
+    "viewer.gitGraph.error.loadLog": "Failed to load git log",
+    "viewer.gitGraph.error.loadStatus": "Failed to load git status",
+    "viewer.gitGraph.error.loadData": "Failed to load git data",
+    "viewer.gitGraph.error.loadCommitDiff": "Failed to load commit diff",
+    "viewer.gitStatus.unknown": "unknown",
+    "viewer.gitStatus.modified": "modified",
+    "viewer.gitStatus.staged": "staged",
+    "viewer.gitStatus.untracked": "untracked",
+    "viewer.time.now": "now",
+    "viewer.time.minuteShort": "m",
+    "viewer.time.hourShort": "h",
+    "viewer.time.dayShort": "d",
+    "viewer.time.monthShort": "mo",
+
+    "viewer.errorLog.title": "Error Log",
+    "viewer.errorLog.empty": "No errors logged",
+    "viewer.inputHistory.title": "Input History",
+    "viewer.inputHistory.empty": "No input history",
+
+    "viewer.mcp.manager.title": "MCP Manager",
+    "viewer.mcp.manager.noActiveSession": "No active session",
+    "viewer.mcp.manager.retry": "Retry",
+    "viewer.mcp.manager.dismiss": "Dismiss",
+    "viewer.mcp.manager.categoriesAria": "MCP categories",
+    "viewer.mcp.manager.lspCategory": "LSP-MCP",
+    "viewer.mcp.manager.orchestratorCategory": "Agent Orchestrator",
+    "viewer.mcp.manager.empty": "No MCP profiles are available for this session.",
+    "viewer.mcp.manager.loadError": "Failed to load MCP profiles for this session.",
+
+    "viewer.scheduler.title": "Schedule",
+    "viewer.scheduler.dismiss": "Dismiss",
+    "viewer.scheduler.start": "Start",
+    "viewer.scheduler.applyChanges": "Apply Changes",
+    "viewer.scheduler.form.back": "Back",
+    "viewer.scheduler.form.template": "Template",
+    "viewer.scheduler.form.manualInput": "-- Manual input --",
+    "viewer.scheduler.form.delete": "Delete",
+    "viewer.scheduler.form.title": "Title",
+    "viewer.scheduler.form.targetPane": "Target Pane",
+    "viewer.scheduler.form.selectPane": "Select pane...",
+    "viewer.scheduler.form.message": "Message",
+    "viewer.scheduler.form.interval": "Interval (min)",
+    "viewer.scheduler.form.count": "Count",
+    "viewer.scheduler.form.namePlaceholder": "Scheduler name...",
+    "viewer.scheduler.form.messagePlaceholder": "Message to send...",
+    "viewer.scheduler.form.starting": "Starting...",
+    "viewer.scheduler.form.applying": "Applying...",
+    "viewer.scheduler.form.saving": "Saving...",
+    "viewer.scheduler.form.saveAsTemplate": "Save as Template",
+    "viewer.scheduler.list.new": "+ New",
+    "viewer.scheduler.list.empty": "No schedulers",
+    "viewer.scheduler.list.edit": "Edit",
+    "viewer.scheduler.list.save": "Save",
+    "viewer.scheduler.list.stop": "Stop",
+    "viewer.scheduler.list.start": "Start",
+    "viewer.scheduler.list.delete": "Delete",
+    "viewer.scheduler.list.status": "Status",
+    "viewer.scheduler.list.running": "Running",
+    "viewer.scheduler.list.stopped": "Stopped",
+    "viewer.scheduler.list.pane": "Pane",
+    "viewer.scheduler.list.every": "Every",
+    "viewer.scheduler.list.sent": "Sent",
+    "viewer.scheduler.error.loadStatuses": "Failed to load scheduler statuses. Please refresh.",
+    "viewer.scheduler.error.loadTemplates": "Failed to load templates for session {sessionName}.",
+    "viewer.scheduler.error.stopped": "Scheduler stopped: {reason}",
+
+    "sync.configLoadFailed": "Failed to load settings. Please restart the app.",
+    "sync.sessionListLoadFailed": "Failed to load the active session.",
+    "sync.worktree.cleanupFailed": "Failed to clean up worktree{sessionSuffix}: {error}",
+    "sync.worker.panicRecovered": "A worker panic was recovered: {message}",
+    "sync.mcp.detailRefreshFailed": "Failed to refresh MCP details.",
+    "sync.paneStream.connectionFailed": "Failed to connect terminal output. Please restart the app.",
+};
+
+const listeners = new Set<() => void>();
+
+function isBrowser(): boolean {
+    return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+}
+
+function normalizeLanguage(value: string | null | undefined): UILanguage {
+    return value === "en" ? "en" : DEFAULT_LANGUAGE;
+}
+
+function readStoredLanguage(): UILanguage {
+    if (!isBrowser()) {
+        return DEFAULT_LANGUAGE;
+    }
+    try {
+        return normalizeLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY));
+    } catch {
+        return DEFAULT_LANGUAGE;
+    }
+}
+
+let currentLanguage: UILanguage = readStoredLanguage();
+
+function notifyLanguageChange(): void {
+    for (const listener of listeners) {
+        listener();
+    }
+}
+
+export function getLanguage(): UILanguage {
+    return currentLanguage;
+}
+
+export function setLanguage(language: UILanguage): void {
+    if (currentLanguage === language) {
+        return;
+    }
+    currentLanguage = language;
+    if (isBrowser()) {
+        try {
+            window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+        } catch {
+            // Ignore storage failures and keep in-memory state.
+        }
+    }
+    notifyLanguageChange();
+}
+
+function subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => {
+        listeners.delete(listener);
+    };
+}
+
+function formatTemplate(template: string, params?: TranslationParams): string {
+    if (!params) {
+        return template;
+    }
+    return template.replace(/\{(\w+)\}/g, (_, key: string) => {
+        const value = params[key];
+        return value === undefined ? "" : String(value);
+    });
+}
+
+export function translate(key: string, defaultText: string, params?: TranslationParams): string {
+    const template = currentLanguage === "en" ? EN_TRANSLATIONS[key] ?? defaultText : defaultText;
+    return formatTemplate(template, params);
+}
+
+export function translateStatusLine(statusLine: string): string {
+    if (currentLanguage !== "en") {
+        return statusLine;
+    }
+    return statusLine
+        .replace("[セッションなし]", translate("status.noSession", "[セッションなし]"))
+        .replace(/"ペイン"/g, `"${translate("status.defaultPane", "ペイン")}"`);
+}
+
+export function useI18n() {
+    const language = useSyncExternalStore(subscribe, getLanguage, () => DEFAULT_LANGUAGE);
+    return {
+        language,
+        setLanguage,
+        t: (key: string, defaultText: string, params?: TranslationParams) => translate(key, defaultText, params),
+    };
+}

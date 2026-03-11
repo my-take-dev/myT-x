@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useId, useRef} from "react";
+import {useI18n} from "../i18n";
 
 interface ConfirmAction {
     label: string;
@@ -16,6 +17,7 @@ interface ConfirmDialogProps {
 }
 
 export function ConfirmDialog({open, title, message, actions, onAction, onClose}: ConfirmDialogProps) {
+    const {t} = useI18n();
     // S-31 / S-32: WAI-ARIA dialog pattern — generate stable IDs for
     // aria-labelledby / aria-describedby associations.
     const instanceId = useId();
@@ -105,7 +107,7 @@ export function ConfirmDialog({open, title, message, actions, onAction, onClose}
                 </div>
                 <div className="modal-footer">
                     <button ref={cancelBtnRef} type="button" className="modal-btn" onClick={onClose}>
-                        キャンセル
+                        {t("common.cancel", "キャンセル")}
                     </button>
                     {actions.map((action) => (
                         <button

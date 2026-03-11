@@ -1,6 +1,7 @@
 ﻿import {useEffect, useRef} from "react";
 import {EventsOn} from "../../wailsjs/runtime/runtime";
 import {api} from "../api";
+import {getLanguage, translate} from "../i18n";
 import {connect as connectPaneStream, disconnect as disconnectPaneStream} from "../services/paneDataStream";
 import {useErrorLogStore} from "../stores/errorLogStore";
 import {useInputHistoryStore} from "../stores/inputHistoryStore";
@@ -173,6 +174,8 @@ export function useBackendSync() {
 
         const addNotification = useNotificationStore.getState().addNotification;
         const notifyWarn = (message: string) => addNotification(message, "warn");
+        const tr = (key: string, jaText: string, enText: string, params?: Record<string, string | number>) =>
+            translate(key, getLanguage() === "ja" ? jaText : enText, params);
         const cleanupFns: Array<() => void> = [];
 
         // I-37: typed event registration — handler receives a single unknown payload
@@ -241,7 +244,13 @@ export function useBackendSync() {
                 if (import.meta.env.DEV) {
                     console.error("[SYNC] GetConfig failed:", configResult.reason);
                 }
-                notifyWarn("設定の読み込みに失敗しました。アプリを再起動してください。");
+                notifyWarn(
+                    tr(
+                        "sync.notifications.configLoadFailed",
+                        "設定の読み込みに失敗しました。アプリを再起動してください。",
+                        "Failed to load settings. Please restart the app.",
+                    ),
+                );
                 logFrontendEventSafe("error", "GetConfigAndFlushWarnings failed on startup", "frontend/api");
             }
 
@@ -267,7 +276,13 @@ export function useBackendSync() {
                 if (import.meta.env.DEV) {
                     console.warn("[SYNC] GetActiveSession failed:", activeResult.reason);
                 }
-                notifyWarn("アクティブセッションの取得に失敗しました。");
+                notifyWarn(
+                    tr(
+                        "sync.notifications.activeSessionLoadFailed",
+                        "アクティブセッションの取得に失敗しました。",
+                        "Failed to fetch the active session.",
+                    ),
+                );
                 logFrontendEventSafe("warn", "GetActiveSession failed on startup", "frontend/api");
                 // Fall back to the first available session from ListSessions.
                 const fallback = normalizedSessions[0]?.name ?? null;
@@ -451,7 +466,11 @@ export function useBackendSync() {
                 console.warn("[worktree] cleanup-failed:", sessionName, path, error);
             }
             notifyWarn(
-                `Worktreeのクリーンアップに失敗しました: ${sessionName ? ` (${sessionName})` : ""}: ${error || "不明なエラー"}`,
+                tr(
+                    "sync.notifications.worktreeCleanupFailed",
+                    `Worktreeのクリーンアップに失敗しました: ${sessionName ? ` (${sessionName})` : ""}: ${error || "不明なエラー"}`,
+                    `Failed to clean up worktree${sessionName ? ` (${sessionName})` : ""}: ${error || "Unknown error"}`,
+                ),
             );
         });
 
@@ -470,7 +489,11 @@ export function useBackendSync() {
                 console.warn("[worktree] copy-files-failed:", sessionName, files);
             }
             notifyWarn(
-                `ファイルコピーに失敗しました (${sessionName}): ${(files ?? []).join(", ")}`,
+                tr(
+                    "sync.notifications.worktreeCopyFilesFailed",
+                    `ファイルコピーに失敗しました (${sessionName}): ${(files ?? []).join(", ")}`,
+                    `Failed to copy files (${sessionName}): ${(files ?? []).join(", ")}`,
+                ),
             );
         });
 
@@ -489,7 +512,11 @@ export function useBackendSync() {
                 console.warn("[worktree] copy-dirs-failed:", sessionName, dirs);
             }
             notifyWarn(
-                `ディレクトリコピーに失敗しました (${sessionName}): ${(dirs ?? []).join(", ")}`,
+                tr(
+                    "sync.notifications.worktreeCopyDirsFailed",
+                    `ディレクトリコピーに失敗しました (${sessionName}): ${(dirs ?? []).join(", ")}`,
+                    `Failed to copy directories (${sessionName}): ${(dirs ?? []).join(", ")}`,
+                ),
             );
         });
 

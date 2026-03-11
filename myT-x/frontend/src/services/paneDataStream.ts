@@ -13,6 +13,7 @@
  * After max retries, a user-visible error notification is displayed.
  */
 
+import {getLanguage, translate} from "../i18n";
 import {useNotificationStore} from "../stores/notificationStore";
 
 // --- Constants ---
@@ -32,6 +33,10 @@ const MAX_RECONNECT_RETRIES = 10;
 // Custom event type dispatched when max reconnect retries are exhausted.
 // External code can listen for this to implement recovery UI.
 const MAX_RETRIES_EVENT = "paneDataStream:maxRetriesReached";
+
+function tr(key: string, jaText: string, enText: string): string {
+    return translate(key, getLanguage() === "ja" ? jaText : enText);
+}
 
 // --- Module state ---
 
@@ -300,7 +305,11 @@ function scheduleReconnect(): void {
         // #87: UI notification for persistent connection failure.
         try { // #84: catch内でユーザー通知
             useNotificationStore.getState().addNotification(
-                "ターミナル出力の接続に失敗しました。アプリを再起動してください。",
+                tr(
+                    "services.paneDataStream.connectionFailed",
+                    "ターミナル出力の接続に失敗しました。アプリを再起動してください。",
+                    "Failed to connect terminal output stream. Please restart the app.",
+                ),
                 "error",
             );
         } catch (err) {

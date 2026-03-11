@@ -15,6 +15,7 @@ import {useViewerStore} from "./components/viewer/viewerStore";
 import {useBackendSync} from "./hooks/useBackendSync";
 import {useFileDrop} from "./hooks/useFileDrop";
 import {usePrefixKeyMode} from "./hooks/usePrefixKeyMode";
+import {useI18n} from "./i18n";
 import {useTmuxStore} from "./stores/tmuxStore";
 import {isImeTransitionalEvent} from "./utils/ime";
 import {resolveActivePaneID} from "./utils/session";
@@ -26,6 +27,7 @@ type DockedAppBodyStyle = CSSProperties & {
 
 function App() {
     useBackendSync();
+    const {t} = useI18n();
     const [quickSearchOpen, setQuickSearchOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const lastSyncedSessionRef = useRef<string | null>(null);
@@ -102,9 +104,13 @@ function App() {
             <QuickSearch open={quickSearchOpen} onClose={() => setQuickSearchOpen(false)}/>
             <ConfirmDialog
                 open={pendingPrefixKillPaneId !== null}
-                title="Close pane"
-                message={pendingPrefixKillPaneId ? `Close pane "${pendingPrefixKillPaneId}"?` : ""}
-                actions={[{label: "Close", value: "close", variant: "danger"}]}
+                title={t("app.closePane.title", "Close pane")}
+                message={
+                    pendingPrefixKillPaneId
+                        ? t("app.closePane.message", "Close pane \"{paneId}\"?", {paneId: pendingPrefixKillPaneId})
+                        : ""
+                }
+                actions={[{label: t("app.closePane.action", "Close"), value: "close", variant: "danger"}]}
                 onAction={(value) => {
                     if (value !== "close") {
                         setPendingPrefixKillPaneId(null);

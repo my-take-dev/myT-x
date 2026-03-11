@@ -3,6 +3,7 @@ import {api} from "../api";
 import {useTmuxStore} from "../stores/tmuxStore";
 import type {PaneSnapshot, SessionSnapshot} from "../types/tmux";
 import {resolveActivePane, resolveActiveWindow} from "../utils/session";
+import {useI18n} from "../i18n";
 import {LayoutPresetSelector} from "./LayoutPresetSelector";
 import {LayoutRenderer} from "./LayoutRenderer";
 
@@ -11,6 +12,7 @@ interface SessionViewProps {
 }
 
 export function SessionView(props: SessionViewProps) {
+    const {language, t} = useI18n();
     const zoomPaneId = useTmuxStore((s) => s.zoomPaneId);
     const setZoomPaneId = useTmuxStore((s) => s.setZoomPaneId);
     const setActiveSession = useTmuxStore((s) => s.setActiveSession);
@@ -97,14 +99,16 @@ export function SessionView(props: SessionViewProps) {
             setActiveSession(snapshot.name);
         } catch (err) {
             if (!mountedRef.current) return;
-            const message = err instanceof Error ? err.message : String(err ?? "Unknown error");
+            const message = err instanceof Error
+                ? err.message
+                : String(err ?? (language === "en" ? "Unknown error" : t("sessionView.error.unknown", "Unknown error")));
             setQuickStartError(message);
         } finally {
             if (mountedRef.current) {
                 setQuickStartLoading(false);
             }
         }
-    }, [setActiveSession]);
+    }, [language, setActiveSession, t]);
 
     const onDetachSession = useCallback(() => {
         const sessionName = props.session?.name;
@@ -121,14 +125,24 @@ export function SessionView(props: SessionViewProps) {
             return (
                 <div className="session-empty">
                     <div className="session-empty-content">
-                        <p className="session-empty-message">セッションを作成してください。</p>
+                        <p className="session-empty-message">
+                            {language === "en"
+                                ? "Create a session to get started."
+                                : t("sessionView.empty.createSession", "セッションを作成してください。")}
+                        </p>
                         <button
                             type="button"
                             className="session-quick-start-btn"
                             onClick={handleQuickStart}
                             disabled={quickStartLoading}
                         >
-                            {quickStartLoading ? "開始中..." : "\u25B6 クイックスタート"}
+                            {quickStartLoading
+                                ? (language === "en"
+                                    ? "Starting..."
+                                    : t("sessionView.quickStart.loading", "開始中..."))
+                                : (language === "en"
+                                    ? "▶ Quick Start"
+                                    : t("sessionView.quickStart.button", "▶ クイックスタート"))}
                         </button>
                         {quickStartError && (
                             <p className="session-quick-start-error">{quickStartError}</p>
@@ -138,10 +152,22 @@ export function SessionView(props: SessionViewProps) {
             );
         }
         if (props.session.windows.length === 0) {
-            return <div className="session-empty">セッションにウィンドウがありません。</div>;
+            return (
+                <div className="session-empty">
+                    {language === "en"
+                        ? "No windows in this session."
+                        : t("sessionView.empty.noWindows", "セッションにウィンドウがありません。")}
+                </div>
+            );
         }
         if (!activeWindow) {
-            return <div className="session-empty">アクティブウィンドウがありません。</div>;
+            return (
+                <div className="session-empty">
+                    {language === "en"
+                        ? "No active window."
+                        : t("sessionView.empty.noActiveWindow", "アクティブウィンドウがありません。")}
+                </div>
+            );
         }
 
         return (
@@ -155,8 +181,16 @@ export function SessionView(props: SessionViewProps) {
                         <button
                             type="button"
                             className={`terminal-toolbar-btn sync-toggle-btn ${syncInputMode ? "sync-active" : ""}`}
-                            title="同期入力モード (Prefix: s)"
-                            aria-label="Toggle sync input mode"
+                            title={
+                                language === "en"
+                                    ? "Sync input mode (Prefix: s)"
+                                    : t("sessionView.syncMode.title", "同期入力モード (Prefix: s)")
+                            }
+                            aria-label={
+                                language === "en"
+                                    ? "Toggle sync input mode"
+                                    : t("sessionView.syncMode.aria", "Toggle sync input mode")
+                            }
                             onClick={toggleSyncInputMode}
                         >
                             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
@@ -164,7 +198,11 @@ export function SessionView(props: SessionViewProps) {
                                 <path d="M2 5h4l-2-3M12 9H8l2 3"/>
                                 <path d="M2 5c0 3.3 2.7 6 6 6M12 9c0-3.3-2.7-6-6-6"/>
                             </svg>
-                            <span className="sync-toggle-label">Sync</span>
+                            <span className="sync-toggle-label">
+                                {language === "en"
+                                    ? "Sync"
+                                    : t("sessionView.syncMode.label", "Sync")}
+                            </span>
                         </button>
                     )}
                 </div>

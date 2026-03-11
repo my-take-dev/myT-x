@@ -1,6 +1,7 @@
 import type {FormDispatch, FormState} from "./types";
 import {ShortcutInput} from "./ShortcutInput";
 import {VIEWER_SHORTCUTS} from "../viewer/viewerShortcutDefinitions";
+import {useSettingsI18n} from "./settingsI18n";
 
 interface ViewerShortcutSettingsProps {
     s: FormState;
@@ -8,11 +9,19 @@ interface ViewerShortcutSettingsProps {
 }
 
 export function ViewerShortcutSettings({s, dispatch}: ViewerShortcutSettingsProps) {
+    const {t} = useSettingsI18n();
+
     return (
         <div className="settings-section">
-            <div className="settings-section-title">ビューアーショートカット</div>
+            <div className="settings-section-title">
+                {t("settings.viewerShortcut.title", "ビューアーショートカット", "Viewer shortcuts")}
+            </div>
             <span className="settings-desc" style={{marginBottom: 8, display: "block"}}>
-                右サイドバーのビューを開閉するショートカットキー
+                {t(
+                    "settings.viewerShortcut.description",
+                    "右サイドバーのビューを開閉するショートカットキー",
+                    "Shortcut keys to toggle views in the right sidebar.",
+                )}
             </span>
 
             {VIEWER_SHORTCUTS.map((viewerShortcut) => {
@@ -28,7 +37,11 @@ export function ViewerShortcutSettings({s, dispatch}: ViewerShortcutSettingsProp
                                 dispatch({type: "UPDATE_VIEWER_SHORTCUT", viewId: viewerShortcut.viewId, value})
                             }
                             placeholder={viewerShortcut.defaultShortcut}
-                            ariaLabel={`${viewerShortcut.label} viewer shortcut`}
+                            ariaLabel={t(
+                                "settings.viewerShortcut.inputAriaTemplate",
+                                `${viewerShortcut.label} ビューアーショートカット`,
+                                `${viewerShortcut.label} viewer shortcut`,
+                            )}
                         />
                         {s.validationErrors[errorKey] && (
                             <span className="settings-field-error">{s.validationErrors[errorKey]}</span>

@@ -2,6 +2,7 @@ import {useCallback, useEffect, useMemo, useState} from "react";
 import {api} from "../api";
 import {useEscapeClose} from "../hooks/useEscapeClose";
 import type {git} from "../../wailsjs/go/models";
+import {useI18n} from "../i18n";
 
 interface NewSessionModalProps {
     open: boolean;
@@ -12,6 +13,9 @@ interface NewSessionModalProps {
 type WorktreeSource = "existing" | "new";
 
 export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps) {
+    const {language, t} = useI18n();
+    const isEn = language === "en";
+
     const [directory, setDirectory] = useState("");
     const [sessionName, setSessionName] = useState("");
     const [isGitRepo, setIsGitRepo] = useState(false);
@@ -217,27 +221,42 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="modal-header">
-                    <h2 id="new-session-title">新規セッション</h2>
+                    <h2 id="new-session-title">
+                        {isEn ? "New Session" : t("newSession.title", "新規セッション")}
+                    </h2>
                 </div>
                 <div className="modal-body">
                     {configLoadFailed && (
                         <p className="form-warning">
-                            設定の読み込みに失敗しました。デフォルト値で表示しています。
-                            Claude Code環境変数とペイン環境変数はOFFで作成されます。
+                            {isEn
+                                ? "Failed to load settings. Showing defaults."
+                                : t("newSession.warning.configLoadFailedLine1", "設定の読み込みに失敗しました。デフォルト値で表示しています。")}
+                            <br/>
+                            {isEn
+                                ? "Claude Code env vars and pane env vars will start as OFF."
+                                : t("newSession.warning.configLoadFailedLine2", "Claude Code環境変数とペイン環境変数はOFFで作成されます。")}
                         </p>
                     )}
                     {/* Directory selection */}
                     <div className="form-group">
-                        <span className="form-label">作業ディレクトリ</span>
+                        <span className="form-label">
+                            {isEn ? "Working Directory" : t("newSession.directory.label", "作業ディレクトリ")}
+                        </span>
                         <button type="button" className="modal-btn" onClick={handlePickDirectory}>
-                            {directory ? directory : "フォルダを選択..."}
+                            {directory
+                                ? directory
+                                : (isEn
+                                    ? "Select folder..."
+                                    : t("newSession.directory.selectButton", "フォルダを選択..."))}
                         </button>
                     </div>
 
                     {/* Session name */}
                     {directory && (
                         <div className="form-group">
-                            <span className="form-label">セッション名</span>
+                            <span className="form-label">
+                                {isEn ? "Session Name" : t("newSession.sessionName.label", "セッション名")}
+                            </span>
                             <input
                                 className="form-input"
                                 value={sessionName}
@@ -245,7 +264,11 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                 onKeyDown={(e) => {
                                     if (e.key === "Enter" && canSubmit) void handleSubmit();
                                 }}
-                                placeholder="セッション名を入力"
+                                placeholder={
+                                    isEn
+                                        ? "Enter session name"
+                                        : t("newSession.sessionName.placeholder", "セッション名を入力")
+                                }
                                 autoFocus
                             />
                         </div>
@@ -262,8 +285,14 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                 disabled={!shimAvailable}
                             />
                             <label htmlFor="enable-agent-team">
-                                Agent Team として開始
-                                {!shimAvailable && <span className="form-hint"> (シム未インストール)</span>}
+                                {isEn ? "Start as Agent Team" : t("newSession.agentTeam.enable", "Agent Team として開始")}
+                                {!shimAvailable && (
+                                    <span className="form-hint">
+                                        {isEn
+                                            ? " (shim not installed)"
+                                            : t("newSession.agentTeam.shimMissing", " (シム未インストール)")}
+                                    </span>
+                                )}
                             </label>
                         </div>
                     )}
@@ -278,7 +307,9 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                 onChange={(e) => setUseClaudeEnv(e.target.checked)}
                             />
                             <label htmlFor="use-claude-env">
-                                Claude Code 環境変数を利用する
+                                {isEn
+                                    ? "Use Claude Code environment variables"
+                                    : t("newSession.env.claude", "Claude Code 環境変数を利用する")}
                             </label>
                         </div>
                     )}
@@ -293,7 +324,9 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                 onChange={(e) => setUsePaneEnv(e.target.checked)}
                             />
                             <label htmlFor="use-pane-env">
-                                追加ペイン専用環境変数を利用する
+                                {isEn
+                                    ? "Use additional pane-only environment variables"
+                                    : t("newSession.env.pane", "追加ペイン専用環境変数を利用する")}
                             </label>
                         </div>
                     )}
@@ -304,7 +337,9 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                             {/* Current branch display */}
                             {currentBranch && (
                                 <div className="current-branch-info">
-                                    現在のブランチ: <span className="current-branch-name">{currentBranch}</span>
+                                    {isEn ? "Current branch:" : t("newSession.git.currentBranch", "現在のブランチ:")}
+                                    {" "}
+                                    <span className="current-branch-name">{currentBranch}</span>
                                 </div>
                             )}
 
@@ -316,7 +351,9 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                     checked={useWorktree}
                                     onChange={(e) => setUseWorktree(e.target.checked)}
                                 />
-                                <label htmlFor="use-worktree">Git Worktree を使用</label>
+                                <label htmlFor="use-worktree">
+                                    {isEn ? "Use Git Worktree" : t("newSession.worktree.enable", "Git Worktree を使用")}
+                                </label>
                             </div>
 
                             {useWorktree && (
@@ -332,7 +369,11 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                                     checked={worktreeSource === "existing"}
                                                     onChange={() => setWorktreeSource("existing")}
                                                 />
-                                                <label htmlFor="wt-source-existing">既存worktreeを使用</label>
+                                                <label htmlFor="wt-source-existing">
+                                                    {isEn
+                                                        ? "Use existing worktree"
+                                                        : t("newSession.worktree.source.existing", "既存worktreeを使用")}
+                                                </label>
                                             </div>
                                             {worktreeSource === "existing" && (
                                                 <div className="form-group indented">
@@ -344,16 +385,29 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                                             if (wt) void handleSelectWorktree(wt);
                                                         }}
                                                     >
-                                                        <option value="">選択してください...</option>
+                                                        <option value="">
+                                                            {isEn
+                                                                ? "Please select..."
+                                                                : t("newSession.worktree.select.placeholder", "選択してください...")}
+                                                        </option>
                                                         {nonMainWorktrees.map((wt) => (
                                                             <option key={wt.path} value={wt.path}>
-                                                                {wt.branch || "(detached)"} - {wt.path}
+                                                                {wt.branch
+                                                                    || (isEn
+                                                                        ? "(detached)"
+                                                                        : t("newSession.worktree.detached", "(detached)"))}
+                                                                {" - "}
+                                                                {wt.path}
                                                             </option>
                                                         ))}
                                                     </select>
                                                     {worktreeConflict && (
                                                         <p className="form-error">
-                                                            このworktreeはセッション「{worktreeConflict}」で使用中です
+                                                            {isEn
+                                                                ? `This worktree is already used by session "${worktreeConflict}".`
+                                                                : t("newSession.worktree.conflict", "このworktreeはセッション「{sessionName}」で使用中です", {
+                                                                    sessionName: worktreeConflict,
+                                                                })}
                                                         </p>
                                                     )}
                                                 </div>
@@ -370,7 +424,11 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                             checked={worktreeSource === "new"}
                                             onChange={() => setWorktreeSource("new")}
                                         />
-                                        <label htmlFor="wt-source-new">新規worktreeを作成</label>
+                                        <label htmlFor="wt-source-new">
+                                            {isEn
+                                                ? "Create new worktree"
+                                                : t("newSession.worktree.source.new", "新規worktreeを作成")}
+                                        </label>
                                     </div>
                                     {worktreeSource === "new" && (
                                         <div className="form-group indented">
@@ -382,12 +440,20 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                                     checked={pullBefore}
                                                     onChange={(e) => setPullBefore(e.target.checked)}
                                                 />
-                                                <label htmlFor="pull-before">作成前に pull（最新取得）</label>
+                                                <label htmlFor="pull-before">
+                                                    {isEn
+                                                        ? "Pull latest before create"
+                                                        : t("newSession.worktree.pullBefore", "作成前に pull（最新取得）")}
+                                                </label>
                                             </div>
 
                                             {/* Base branch */}
                                             <div className="form-group">
-                                                <span className="form-label">ベースブランチ</span>
+                                                <span className="form-label">
+                                                    {isEn
+                                                        ? "Base Branch"
+                                                        : t("newSession.worktree.baseBranch.label", "ベースブランチ")}
+                                                </span>
                                                 <select
                                                     className="form-select"
                                                     value={baseBranch}
@@ -401,12 +467,20 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
 
                                             {/* Branch name */}
                                             <div className="form-group">
-                                                <span className="form-label">ブランチ名</span>
+                                                <span className="form-label">
+                                                    {isEn
+                                                        ? "Branch Name"
+                                                        : t("newSession.worktree.branchName.label", "ブランチ名")}
+                                                </span>
                                                 <input
                                                     className="form-input"
                                                     value={branchName}
                                                     onChange={(e) => setBranchName(e.target.value)}
-                                                    placeholder="feature/my-branch"
+                                                    placeholder={
+                                                        isEn
+                                                            ? "feature/my-branch"
+                                                            : t("newSession.worktree.branchName.placeholder", "feature/my-branch")
+                                                    }
                                                 />
                                             </div>
                                         </div>
@@ -421,11 +495,15 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                 <div className="modal-footer">
                     {directoryConflict && !useWorktree && (
                         <span className="form-error" style={{marginRight: "auto"}}>
-              セッション開始不可（{directoryConflict} が使用中）
-            </span>
+                            {isEn
+                                ? `Cannot start session (${directoryConflict} is already in use)`
+                                : t("newSession.error.directoryConflict", "セッション開始不可（{sessionName} が使用中）", {
+                                    sessionName: directoryConflict,
+                                })}
+                        </span>
                     )}
                     <button type="button" className="modal-btn" onClick={onClose} disabled={loading}>
-                        キャンセル
+                        {isEn ? "Cancel" : t("common.cancel", "キャンセル")}
                     </button>
                     <button
                         type="button"
@@ -433,7 +511,9 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                         onClick={handleSubmit}
                         disabled={!canSubmit}
                     >
-                        {loading ? "作成中..." : "作成"}
+                        {loading
+                            ? (isEn ? "Creating..." : t("newSession.action.creating", "作成中..."))
+                            : (isEn ? "Create" : t("newSession.action.create", "作成"))}
                     </button>
                 </div>
             </div>

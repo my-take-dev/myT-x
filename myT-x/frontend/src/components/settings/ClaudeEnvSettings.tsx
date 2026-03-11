@@ -2,6 +2,8 @@ import {useEffect, useMemo, useState} from "react";
 import type {FormDispatch, FormState} from "./types";
 import {generateId} from "./types";
 import {api} from "../../api";
+import {useSettingsI18n} from "./settingsI18n";
+import {claudeEnvVarDescriptionsEn} from "./claudeEnvDescriptionsEn";
 
 // Module-level cache for static descriptions data.
 // Prevents redundant API calls when the settings tab is re-mounted.
@@ -13,6 +15,7 @@ interface ClaudeEnvSettingsProps {
 }
 
 export function ClaudeEnvSettings({s, dispatch}: ClaudeEnvSettingsProps) {
+    const {language, t} = useSettingsI18n();
     const [descriptions, setDescriptions] = useState<Record<string, string>>(
         cachedDescriptions ?? {},
     );
@@ -61,15 +64,24 @@ export function ClaudeEnvSettings({s, dispatch}: ClaudeEnvSettingsProps) {
 
     return (
         <div className="settings-section">
-            <div className="settings-section-title">CLAUDE CODE 環境変数</div>
+            <div className="settings-section-title">
+                {t("settings.claudeEnv.title", "CLAUDE CODE 環境変数", "Claude Code environment variables")}
+            </div>
             <span className="settings-desc" style={{marginBottom: 8, display: "block"}}>
-        Claude Codeに渡す環境変数を設定します。
-        セッション開始時の初期ターミナルを含む全てのペインに適用されます。
-      </span>
+                {t(
+                    "settings.claudeEnv.description",
+                    "Claude Codeに渡す環境変数を設定します。セッション開始時の初期ターミナルを含む全てのペインに適用されます。",
+                    "Configure environment variables passed to Claude Code. Applied to all panes including the initial terminal at session start.",
+                )}
+            </span>
             {descriptionLoadFailed && (
                 <span className="settings-desc" style={{marginBottom: 4, display: "block", opacity: 0.7}}>
-          ※ 変数の説明文を取得できませんでした。設定自体は問題なく利用できます。
-        </span>
+                    {t(
+                        "settings.claudeEnv.descriptionLoadFailed",
+                        "※ 変数の説明文を取得できませんでした。設定自体は問題なく利用できます。",
+                        "Could not load variable descriptions. Settings can still be used.",
+                    )}
+                </span>
             )}
 
             <div className="form-checkbox-row" style={{marginBottom: 12}}>
@@ -82,14 +94,18 @@ export function ClaudeEnvSettings({s, dispatch}: ClaudeEnvSettingsProps) {
                     }
                 />
                 <label htmlFor="claude-env-default-enabled">
-                    セッション作成時にデフォルトON
+                    {t("settings.claudeEnv.defaultEnabled", "セッション作成時にデフォルトON", "Enabled by default when creating session")}
                 </label>
             </div>
 
             <div className="form-group">
-                <label className="form-label">環境変数一覧</label>
+                <label className="form-label">{t("settings.claudeEnv.list.label", "環境変数一覧", "Environment variables")}</label>
                 <div className="settings-note">
-                    Claude Code固有の環境変数を設定します。システム変数(PATH等)は上書きできません。
+                    {t(
+                        "settings.claudeEnv.list.note",
+                        "Claude Code固有の環境変数を設定します。システム変数(PATH等)は上書きできません。",
+                        "Configure Claude Code specific environment variables. System variables (e.g. PATH) cannot be overridden.",
+                    )}
                 </div>
 
                 <datalist id={datalistId}>
@@ -100,7 +116,10 @@ export function ClaudeEnvSettings({s, dispatch}: ClaudeEnvSettingsProps) {
 
                 <div className="dynamic-list">
                     {s.claudeEnvEntries.map((entry, index) => {
-                        const desc = entry.key.trim() ? descriptions[entry.key.trim()] : undefined;
+                        const normalizedKey = entry.key.trim();
+                        const desc = normalizedKey
+                            ? (language === "en" ? claudeEnvVarDescriptionsEn[normalizedKey] ?? descriptions[normalizedKey] : descriptions[normalizedKey])
+                            : undefined;
                         return (
                             <div key={entry.id} className="override-row">
                                 <div className="override-fields">
@@ -113,17 +132,22 @@ export function ClaudeEnvSettings({s, dispatch}: ClaudeEnvSettingsProps) {
                                                     type: "UPDATE_CLAUDE_ENV_ENTRY",
                                                     index,
                                                     field: "key",
-                                                    value: e.target.value
+                                                    value: e.target.value,
                                                 })
                                             }
-                                            placeholder="変数名"
+                                            placeholder={t("settings.claudeEnv.key.placeholder", "変数名", "Variable name")}
                                             list={datalistId}
-                                            aria-label={`Claude環境変数名 ${index + 1}`}
+                                            aria-label={t(
+                                                "settings.claudeEnv.key.ariaTemplate",
+                                                "Claude環境変数名 {index}",
+                                                "Claude environment variable name {index}",
+                                                {index: index + 1},
+                                            )}
                                         />
                                         {s.validationErrors[`claude_env_key_${index}`] && (
                                             <span className="form-error">
-                        {s.validationErrors[`claude_env_key_${index}`]}
-                      </span>
+                                                {s.validationErrors[`claude_env_key_${index}`]}
+                                            </span>
                                         )}
                                         {desc && (
                                             <span className="settings-desc">{desc}</span>
@@ -138,16 +162,21 @@ export function ClaudeEnvSettings({s, dispatch}: ClaudeEnvSettingsProps) {
                                                     type: "UPDATE_CLAUDE_ENV_ENTRY",
                                                     index,
                                                     field: "value",
-                                                    value: e.target.value
+                                                    value: e.target.value,
                                                 })
                                             }
-                                            placeholder="値"
-                                            aria-label={`Claude環境変数値 ${index + 1}`}
+                                            placeholder={t("settings.claudeEnv.value.placeholder", "値", "Value")}
+                                            aria-label={t(
+                                                "settings.claudeEnv.value.ariaTemplate",
+                                                "Claude環境変数値 {index}",
+                                                "Claude environment variable value {index}",
+                                                {index: index + 1},
+                                            )}
                                         />
                                         {s.validationErrors[`claude_env_val_${index}`] && (
                                             <span className="form-error">
-                        {s.validationErrors[`claude_env_val_${index}`]}
-                      </span>
+                                                {s.validationErrors[`claude_env_val_${index}`]}
+                                            </span>
                                         )}
                                     </div>
                                 </div>
@@ -160,8 +189,20 @@ export function ClaudeEnvSettings({s, dispatch}: ClaudeEnvSettingsProps) {
                                             entries: s.claudeEnvEntries.filter((e) => e.id !== entry.id),
                                         })
                                     }
-                                    title="削除"
-                                    aria-label={`Claude環境変数 ${entry.key || `項目${index + 1}`} を削除`}
+                                    title={t("settings.claudeEnv.remove.title", "削除", "Remove")}
+                                    aria-label={t(
+                                        "settings.claudeEnv.remove.ariaTemplate",
+                                        "Claude環境変数 {name} を削除",
+                                        "Remove Claude environment variable {name}",
+                                        {
+                                            name: entry.key || t(
+                                                "settings.claudeEnv.remove.ariaFallbackItem",
+                                                "項目{index}",
+                                                "Item {index}",
+                                                {index: index + 1},
+                                            ),
+                                        },
+                                    )}
                                 >
                                     &times;
                                 </button>
@@ -178,7 +219,7 @@ export function ClaudeEnvSettings({s, dispatch}: ClaudeEnvSettingsProps) {
                             })
                         }
                     >
-                        + 環境変数追加
+                        + {t("settings.claudeEnv.add", "環境変数追加", "Add environment variable")}
                     </button>
                 </div>
             </div>

@@ -1,5 +1,6 @@
 import React, {useCallback, useRef, useState, useSyncExternalStore} from "react";
 import {api} from "../../api";
+import {useI18n} from "../../i18n";
 import {useTmuxStore} from "../../stores/tmuxStore";
 import {normalizeViewerSidebarMode} from "../../utils/viewerSidebarMode";
 import type {ViewPlugin} from "./viewerRegistry";
@@ -55,6 +56,7 @@ const ActivityButton = React.memo(function ActivityButton({
 });
 
 export function ActivityStrip() {
+    const {language, t} = useI18n();
     const views = getRegisteredViews();
     const activeViewId = useViewerStore((s) => s.activeViewId);
     const toggleView = useViewerStore((s) => s.toggleView);
@@ -82,7 +84,12 @@ export function ActivityStrip() {
         }
     }, [isDocked]);
 
-    const toggleTitle = isDocked ? "オーバーレイ表示に切替" : "ドッキング表示に切替";
+    const toggleTitle = t(
+        "viewer.activityStrip.toggleSidebarMode",
+        language === "ja"
+            ? (isDocked ? "オーバーレイ表示に切替" : "ドッキング表示に切替")
+            : (isDocked ? "Switch to overlay view" : "Switch to docked view"),
+    );
 
     if (views.length === 0) {
         return null;
