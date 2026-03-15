@@ -14,6 +14,7 @@ type Handler struct {
 	querySvc    *usecase.TaskQueryService
 	responseSvc *usecase.ResponseService
 	captureSvc  *usecase.CaptureService
+	instanceID  string
 }
 
 // NewHandler は Handler を構築する。
@@ -23,6 +24,7 @@ func NewHandler(
 	querySvc *usecase.TaskQueryService,
 	responseSvc *usecase.ResponseService,
 	captureSvc *usecase.CaptureService,
+	instanceID string,
 ) *Handler {
 	return &Handler{
 		agentSvc:    agentSvc,
@@ -30,6 +32,7 @@ func NewHandler(
 		querySvc:    querySvc,
 		responseSvc: responseSvc,
 		captureSvc:  captureSvc,
+		instanceID:  instanceID,
 	}
 }
 
@@ -49,7 +52,7 @@ func (h *Handler) BuildRegistry() (*mcp.Registry, error) {
 func (h *Handler) registerAgentTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "register_agent",
-		Description: "エージェントのペインIDと名前を紐付け、ロール・得意分野をSQLiteに記録する。同名で再呼び出しすると情報を更新する。登録・変更・更新は caller の pane に関係なく実行できる。",
+		Description: "エージェントのペインIDと名前を紐付け、ロール・得意分野をSQLiteに記録する。同名で再呼び出しすると情報を更新する。登録・変更・更新は caller の pane に関係なく実行できる。※ 他ツール利用の前提条件。最初に必ず実行すること。",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -57,9 +60,16 @@ func (h *Handler) registerAgentTool() mcp.Tool {
 				"pane_id": map[string]any{"type": "string", "description": "tmux ペインID（例: \"%1\"）"},
 				"role":    map[string]any{"type": "string", "description": "役割（最大120文字）"},
 				"skills": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "string"},
-					"description": "得意分野（最大20件、各100文字）",
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"name":        map[string]any{"type": "string", "description": "スキル名（最大100文字）"},
+							"description": map[string]any{"type": "string", "description": "スキル説明（最大400文字）"},
+						},
+						"required": []string{"name"},
+					},
+					"description": "得意分野（最大20件。文字列配列も後方互換で受付可）",
 				},
 			},
 			"required": []string{"name", "pane_id"},
@@ -81,16 +91,17 @@ func (h *Handler) handleRegisterAgent(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return nil, err
 	}
-	skills, err := optionalStringList(args, "skills", maxSkills, maxSkillLen)
+	skills, err := optionalSkillList(args, "skills", maxSkills)
 	if err != nil {
 		return nil, err
 	}
 
 	result, err := h.agentSvc.Register(ctx, usecase.RegisterAgentCmd{
-		Name:   name,
-		PaneID: paneID,
-		Role:   role,
-		Skills: skills,
+		Name:          name,
+		PaneID:        paneID,
+		Role:          role,
+		Skills:        skills,
+		MCPInstanceID: h.instanceID,
 	})
 	if err != nil {
 		return nil, err
@@ -112,7 +123,7 @@ func (h *Handler) handleRegisterAgent(ctx context.Context, args map[string]any) 
 func (h *Handler) listAgentsTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "list_agents",
-		Description: "全エージェント情報を取得し、tmux list-panes と突合して全ペインの状態を返す。登録済みエージェントのみ実行可能。",
+		Description: "全エージェント情報を取得し、tmux list-panes と突合して全ペインの状態を返す。登録済みエージェントのみ実行可能。戻り値: registered_agents（名前・役割・スキル）と unregistered_panes。",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -157,14 +168,13 @@ func (h *Handler) handleListAgents(ctx context.Context, _ map[string]any) (any, 
 func (h *Handler) sendTaskTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "send_task",
-		Description: "エージェント間でメッセージを送信し、SQLiteにタスクを記録する。誰でも送信可能。`from_agent` は返信先として使う登録済みエージェント名。",
+		Description: "エージェント間でメッセージを送信し、SQLiteにタスクを記録する。誰でも送信可能。from_agent は自分の名前を指定（返信先として使う登録済みエージェント名）。デフォルトでメッセージ末尾に応答テンプレートを自動付与する。",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"agent_name":                    map[string]any{"type": "string", "description": "宛先エージェント名"},
 				"from_agent":                    map[string]any{"type": "string", "description": "送信元エージェント名。返信先として使う登録済みエージェント名"},
 				"message":                       map[string]any{"type": "string", "description": "送信メッセージ（最大8000文字）"},
-				"task_label":                    map[string]any{"type": "string", "description": "管理用ラベル（最大120文字、デフォルト: メッセージ先頭50文字）"},
 				"include_response_instructions": map[string]any{"type": "boolean", "description": "応答方法テンプレートを末尾に自動付与する（デフォルト: true）"},
 			},
 			"required": []string{"agent_name", "from_agent", "message"},
@@ -186,10 +196,6 @@ func (h *Handler) handleSendTask(ctx context.Context, args map[string]any) (any,
 	if err != nil {
 		return nil, err
 	}
-	taskLabel, err := optionalBoundedString(args, "task_label", maxTaskLabelLen)
-	if err != nil {
-		return nil, err
-	}
 	includeInstructions, err := optionalBool(args, "include_response_instructions", true)
 	if err != nil {
 		return nil, err
@@ -199,25 +205,26 @@ func (h *Handler) handleSendTask(ctx context.Context, args map[string]any) (any,
 		AgentName:                   agentName,
 		FromAgent:                   fromAgent,
 		Message:                     message,
-		TaskLabel:                   taskLabel,
 		IncludeResponseInstructions: includeInstructions,
+		SenderInstanceID:            h.instanceID,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	return map[string]any{
-		"task_id":    result.TaskID,
-		"agent_name": result.AgentName,
-		"pane_id":    result.PaneID,
-		"sent_at":    result.SentAt,
+		"task_id":        result.TaskID,
+		"agent_name":     result.AgentName,
+		"pane_id":        result.PaneID,
+		"sender_pane_id": result.SenderPaneID,
+		"sent_at":        result.SentAt,
 	}, nil
 }
 
 func (h *Handler) getMyTasksTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_my_tasks",
-		Description: "自分宛のタスク情報と応答方法をSQLiteから取得する。呼び出し元の登録名と agent_name が一致する場合のみ返す。",
+		Description: "自分宛のタスク情報と応答方法をSQLiteから取得する。呼び出し元の登録名と agent_name が一致する場合のみ返す。status_filter 省略時は pending のみ。戻り値に response_instructions（返信手順）を含む。",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -251,10 +258,13 @@ func (h *Handler) handleGetMyTasks(ctx context.Context, args map[string]any) (an
 	taskList := make([]map[string]any, 0, len(result.Tasks))
 	for _, t := range result.Tasks {
 		entry := map[string]any{
-			"task_id": t.TaskID,
-			"label":   t.Label,
-			"status":  t.Status,
-			"sent_at": t.SentAt,
+			"task_id":        t.TaskID,
+			"status":         t.Status,
+			"sent_at":        t.SentAt,
+			"is_now_session": t.IsNowSession,
+		}
+		if t.SenderPaneID != "" {
+			entry["sender_pane_id"] = t.SenderPaneID
 		}
 		if t.CompletedAt != "" {
 			entry["completed_at"] = t.CompletedAt
@@ -272,7 +282,7 @@ func (h *Handler) handleGetMyTasks(ctx context.Context, args map[string]any) (an
 func (h *Handler) sendResponseTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "send_response",
-		Description: "タスク送信者にメッセージを返信し、対象タスクを `completed` に更新する。`pending` 状態の task_id を持つ担当者のみ実行可能。",
+		Description: "タスク送信者にメッセージを返信し、対象タスクを completed に更新する。pending 状態の task_id を持つ担当者のみ実行可能。task_id を省略するとエラー。送信者のペインにメッセージが送られる。",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -321,7 +331,7 @@ func (h *Handler) handleSendResponse(ctx context.Context, args map[string]any) (
 func (h *Handler) checkTasksTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "check_tasks",
-		Description: "全タスクの状態をSQLiteから取得する。登録済みエージェントであれば誰でも実行可能。",
+		Description: "全タスクの状態をSQLiteから取得する。登録済みエージェントであれば誰でも実行可能。status_filter 省略時は all。戻り値に summary（pending/completed/failed/abandoned 件数）を含む。",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -354,17 +364,17 @@ func (h *Handler) handleCheckTasks(ctx context.Context, args map[string]any) (an
 	taskList := make([]map[string]any, 0, len(result.Tasks))
 	for _, t := range result.Tasks {
 		entry := map[string]any{
-			"task_id":    t.TaskID,
-			"agent_name": t.AgentName,
-			"label":      t.Label,
-			"status":     t.Status,
-			"sent_at":    t.SentAt,
+			"task_id":        t.TaskID,
+			"agent_name":     t.AgentName,
+			"status":         t.Status,
+			"sent_at":        t.SentAt,
+			"is_now_session": t.IsNowSession,
+		}
+		if t.SenderPaneID != "" {
+			entry["sender_pane_id"] = t.SenderPaneID
 		}
 		if t.CompletedAt != "" {
 			entry["completed_at"] = t.CompletedAt
-		}
-		if t.Notes != "" {
-			entry["notes"] = t.Notes
 		}
 		taskList = append(taskList, entry)
 	}
@@ -383,7 +393,7 @@ func (h *Handler) handleCheckTasks(ctx context.Context, args map[string]any) (an
 func (h *Handler) capturePaneTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "capture_pane",
-		Description: "指定エージェントのペイン表示内容を取得する。登録済みエージェントであれば誰でも実行可能。",
+		Description: "指定エージェントのペイン表示内容を取得する。登録済みエージェントであれば誰でも実行可能。相手の進捗確認・エラー確認に使用。デフォルト50行、最大200行。",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

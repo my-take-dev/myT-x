@@ -175,6 +175,36 @@ export function GeneralSettings({s, dispatch}: GeneralSettingsProps) {
                 </span>
                 {defaultSessionDirError && <span className="form-error">{defaultSessionDirError}</span>}
             </div>
+
+            <div className="form-group">
+                <label className="form-label" htmlFor="chat-overlay-percentage">
+                    {t(
+                        "settings.general.chatOverlayPercentage.label",
+                        "チャットオーバーレイの高さ (%)",
+                        "Chat overlay height (%)",
+                    )}
+                </label>
+                <input
+                    id="chat-overlay-percentage"
+                    className="form-input"
+                    type="number"
+                    min={30}
+                    max={95}
+                    value={s.chatOverlayPercentage}
+                    onChange={(e) => {
+                        const v = Math.max(30, Math.min(95, Number(e.target.value) || 80));
+                        dispatch({type: "SET_FIELD", field: "chatOverlayPercentage", value: v});
+                    }}
+                    style={{width: "100px"}}
+                />
+                <span className="settings-desc">
+                    {t(
+                        "settings.general.chatOverlayPercentage.description",
+                        "チャット入力欄を拡大した時のターミナル領域に対する高さの割合（30-95%、デフォルト: 80）",
+                        "Height ratio of the expanded chat overlay relative to the terminal area (30-95%, default: 80).",
+                    )}
+                </span>
+            </div>
         </div>
     );
 }

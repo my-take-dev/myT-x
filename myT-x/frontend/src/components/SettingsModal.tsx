@@ -314,6 +314,7 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
                 }
                 : undefined,
             viewer_sidebar_mode: serializeViewerSidebarMode(s.viewerSidebarMode),
+            chat_overlay_percentage: s.chatOverlayPercentage,
             default_session_dir: s.defaultSessionDir.trim() || undefined,
             viewer_shortcuts: (() => {
                 const filtered = Object.fromEntries(

@@ -42,6 +42,10 @@ export function CreateSessionWithWorktree(arg1, arg2, arg3) {
   return window['go']['main']['App']['CreateSessionWithWorktree'](arg1, arg2, arg3);
 }
 
+export function DeleteOrchestratorTeam(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DeleteOrchestratorTeam'](arg1, arg2, arg3);
+}
+
 export function DeleteScheduler(arg1) {
   return window['go']['main']['App']['DeleteScheduler'](arg1);
 }
@@ -126,6 +130,10 @@ export function GetPaneEnv(arg1) {
   return window['go']['main']['App']['GetPaneEnv'](arg1);
 }
 
+export function GetPaneProcessStatus(arg1) {
+  return window['go']['main']['App']['GetPaneProcessStatus'](arg1);
+}
+
 export function GetPaneReplay(arg1) {
   return window['go']['main']['App']['GetPaneReplay'](arg1);
 }
@@ -182,12 +190,24 @@ export function ListMCPServers(arg1) {
   return window['go']['main']['App']['ListMCPServers'](arg1);
 }
 
+export function ListOrchestratorAgents(arg1) {
+  return window['go']['main']['App']['ListOrchestratorAgents'](arg1);
+}
+
+export function ListOrchestratorTasks(arg1) {
+  return window['go']['main']['App']['ListOrchestratorTasks'](arg1);
+}
+
 export function ListSessions() {
   return window['go']['main']['App']['ListSessions']();
 }
 
 export function ListWorktreesByRepo(arg1) {
   return window['go']['main']['App']['ListWorktreesByRepo'](arg1);
+}
+
+export function LoadOrchestratorTeams(arg1) {
+  return window['go']['main']['App']['LoadOrchestratorTeams'](arg1);
 }
 
 export function LoadSchedulerTemplates(arg1) {
@@ -222,6 +242,10 @@ export function RenameSession(arg1, arg2) {
   return window['go']['main']['App']['RenameSession'](arg1, arg2);
 }
 
+export function ReorderOrchestratorTeams(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ReorderOrchestratorTeams'](arg1, arg2, arg3);
+}
+
 export function ResizePane(arg1, arg2, arg3) {
   return window['go']['main']['App']['ResizePane'](arg1, arg2, arg3);
 }
@@ -238,8 +262,16 @@ export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
 }
 
+export function SaveOrchestratorTeam(arg1, arg2) {
+  return window['go']['main']['App']['SaveOrchestratorTeam'](arg1, arg2);
+}
+
 export function SaveSchedulerTemplate(arg1, arg2) {
   return window['go']['main']['App']['SaveSchedulerTemplate'](arg1, arg2);
+}
+
+export function SendChatMessage(arg1, arg2) {
+  return window['go']['main']['App']['SendChatMessage'](arg1, arg2);
 }
 
 export function SendInput(arg1, arg2) {
@@ -256,6 +288,10 @@ export function SetActiveSession(arg1) {
 
 export function SplitPane(arg1, arg2) {
   return window['go']['main']['App']['SplitPane'](arg1, arg2);
+}
+
+export function StartOrchestratorTeam(arg1) {
+  return window['go']['main']['App']['StartOrchestratorTeam'](arg1);
 }
 
 export function StartScheduler(arg1, arg2, arg3, arg4, arg5) {

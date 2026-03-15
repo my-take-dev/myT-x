@@ -32,6 +32,7 @@ export interface FormState {
     paneEnvDefaultEnabled: boolean;
     claudeEnvDefaultEnabled: boolean;
     claudeEnvEntries: ClaudeEnvEntry[];
+    chatOverlayPercentage: number;
     minOverrideNameLen: number;
     allowedShells: string[];
     loading: boolean;

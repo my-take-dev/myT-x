@@ -74,6 +74,14 @@ import {
     ToggleViewerSidebarMode,
     SwapPanes,
     OpenDirectoryInExplorer,
+    LoadOrchestratorTeams,
+    SaveOrchestratorTeam,
+    DeleteOrchestratorTeam,
+    SendChatMessage,
+    StartOrchestratorTeam,
+    ListOrchestratorTasks,
+    ListOrchestratorAgents,
+    GetPaneProcessStatus,
 } from "../wailsjs/go/main/App";
 import type {MCPSnapshot} from "./types/mcp";
 import {normalizeMCPSnapshot, normalizeMCPSnapshots} from "./types/mcp";
@@ -155,4 +163,12 @@ export const api = {
     GetSessionLogFilePath,
     LogFrontendEvent,
     OpenDirectoryInExplorer,
+    LoadOrchestratorTeams,
+    SaveOrchestratorTeam,
+    DeleteOrchestratorTeam,
+    SendChatMessage,
+    StartOrchestratorTeam,
+    ListOrchestratorTasks,
+    ListOrchestratorAgents,
+    GetPaneProcessStatus,
 };

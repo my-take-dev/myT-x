@@ -109,6 +109,9 @@ type Config struct {
 	// MCPServers defines built-in MCP server configurations.
 	// Each entry describes an MCP that can be toggled per session.
 	MCPServers []MCPServerConfig `yaml:"mcp_servers,omitempty" json:"mcp_servers,omitempty"`
+	// ChatOverlayPercentage controls the height of the expanded chat overlay
+	// as a percentage of the terminal area (30-95). Default is 80.
+	ChatOverlayPercentage int `yaml:"chat_overlay_percentage,omitempty" json:"chat_overlay_percentage,omitempty"`
 }
 
 // MCPServerConfig describes a single MCP server entry in the config file.
@@ -204,7 +207,8 @@ func DefaultConfig() Config {
 			CopyFiles:    []string{},
 			CopyDirs:     []string{},
 		},
-		ViewerSidebarMode: "overlay",
+		ViewerSidebarMode:     "overlay",
+		ChatOverlayPercentage: 80,
 	}
 }
 
@@ -563,6 +567,7 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	}
 	validateWebSocketPort(cfg)
 	validateViewerSidebarMode(cfg)
+	validateChatOverlayPercentage(cfg)
 	sanitizePaneEnv(cfg)
 	sanitizeClaudeEnv(cfg)
 	sanitizeMCPServers(cfg)
@@ -628,6 +633,24 @@ func validateViewerSidebarMode(cfg *Config) {
 
 // validateDefaultSessionDir normalizes DefaultSessionDir in place.
 // Expands ~ prefix to the user's home directory, applies filepath.Clean,
+// validateChatOverlayPercentage clamps ChatOverlayPercentage to the valid
+// range (30-95). Zero means "use default" (80).
+func validateChatOverlayPercentage(cfg *Config) {
+	if cfg.ChatOverlayPercentage == 0 {
+		cfg.ChatOverlayPercentage = 80
+	}
+	if cfg.ChatOverlayPercentage < 30 {
+		slog.Warn("[WARN-CONFIG] chat_overlay_percentage too low, clamping to 30",
+			"configured", cfg.ChatOverlayPercentage)
+		cfg.ChatOverlayPercentage = 30
+	}
+	if cfg.ChatOverlayPercentage > 95 {
+		slog.Warn("[WARN-CONFIG] chat_overlay_percentage too high, clamping to 95",
+			"configured", cfg.ChatOverlayPercentage)
+		cfg.ChatOverlayPercentage = 95
+	}
+}
+
 // and clears non-absolute paths with a warning log (non-fatal).
 func validateDefaultSessionDir(cfg *Config) {
 	dir := strings.TrimSpace(cfg.DefaultSessionDir)

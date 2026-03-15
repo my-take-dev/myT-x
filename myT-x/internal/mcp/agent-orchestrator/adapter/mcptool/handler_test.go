@@ -91,7 +91,7 @@ func (m *mockRepo) ListTasks(_ context.Context, filter domain.TaskFilter) ([]dom
 	return result, nil
 }
 
-func (m *mockRepo) CompleteTask(_ context.Context, taskID string, notes string, completedAt string) error {
+func (m *mockRepo) CompleteTask(_ context.Context, taskID string, responseID string, completedAt string) error {
 	if m.completeTaskErr != nil {
 		return m.completeTaskErr
 	}
@@ -103,13 +103,13 @@ func (m *mockRepo) CompleteTask(_ context.Context, taskID string, notes string, 
 		return fmt.Errorf("task %q is %s", taskID, t.Status)
 	}
 	t.Status = "completed"
-	t.Notes = notes
+	t.SendResponseID = responseID
 	t.CompletedAt = completedAt
 	m.tasks[taskID] = t
 	return nil
 }
 
-func (m *mockRepo) MarkTaskFailed(_ context.Context, taskID string, notes string) error {
+func (m *mockRepo) MarkTaskFailed(_ context.Context, taskID string) error {
 	if m.markTaskFailedErr != nil {
 		return m.markTaskFailedErr
 	}
@@ -121,7 +121,6 @@ func (m *mockRepo) MarkTaskFailed(_ context.Context, taskID string, notes string
 		return fmt.Errorf("task %q is %s", taskID, t.Status)
 	}
 	t.Status = "failed"
-	t.Notes = notes
 	m.tasks[taskID] = t
 	return nil
 }
@@ -142,6 +141,32 @@ func (m *mockRepo) AbandonTasksByPaneID(_ context.Context, paneID string) error 
 			m.tasks[id] = t
 		}
 	}
+	return nil
+}
+
+func (m *mockRepo) EndSessionByInstanceID(_ context.Context, instanceID string) error {
+	return nil
+}
+
+type mockMessageRepo struct {
+	messages  map[string]domain.TaskMessage
+	responses map[string]domain.TaskMessage
+}
+
+func newMockMessageRepo() *mockMessageRepo {
+	return &mockMessageRepo{
+		messages:  make(map[string]domain.TaskMessage),
+		responses: make(map[string]domain.TaskMessage),
+	}
+}
+
+func (m *mockMessageRepo) SaveMessage(_ context.Context, msg domain.TaskMessage) error {
+	m.messages[msg.ID] = msg
+	return nil
+}
+
+func (m *mockMessageRepo) SaveResponse(_ context.Context, msg domain.TaskMessage) error {
+	m.responses[msg.ID] = msg
 	return nil
 }
 
@@ -213,12 +238,13 @@ func testLogger() *log.Logger {
 
 func buildTestHandler(repo *mockRepo, paneOps *mockPaneOps) *Handler {
 	logger := testLogger()
+	msgRepo := newMockMessageRepo()
 	agentSvc := usecase.NewAgentService(repo, paneOps, paneOps, paneOps, logger)
-	dispatchSvc := usecase.NewTaskDispatchService(repo, repo, paneOps, logger)
+	dispatchSvc := usecase.NewTaskDispatchService(repo, repo, msgRepo, paneOps, logger)
 	querySvc := usecase.NewTaskQueryService(repo, repo, paneOps, logger)
-	responseSvc := usecase.NewResponseService(repo, repo, paneOps, paneOps, logger)
+	responseSvc := usecase.NewResponseService(repo, repo, msgRepo, paneOps, paneOps, logger)
 	captureSvc := usecase.NewCaptureService(repo, paneOps, paneOps, logger)
-	return NewHandler(agentSvc, dispatchSvc, querySvc, responseSvc, captureSvc)
+	return NewHandler(agentSvc, dispatchSvc, querySvc, responseSvc, captureSvc, "mcp-test-instance")
 }
 
 func TestRegisterAgentRequiresSelfPane(t *testing.T) {

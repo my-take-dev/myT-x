@@ -1362,8 +1362,8 @@ func TestAllowedShellListIsSorted(t *testing.T) {
 }
 
 func TestConfigStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeFor[Config]().NumField(); got != 15 {
-		t.Fatalf("Config field count = %d, want 15; update isZeroConfig tests for new fields", got)
+	if got := reflect.TypeFor[Config]().NumField(); got != 16 {
+		t.Fatalf("Config field count = %d, want 16; update isZeroConfig tests for new fields", got)
 	}
 	if got := reflect.TypeFor[WorktreeConfig]().NumField(); got != 5 {
 		t.Fatalf("WorktreeConfig field count = %d, want 5 (enabled, force_cleanup, setup_scripts, copy_files, copy_dirs)", got)

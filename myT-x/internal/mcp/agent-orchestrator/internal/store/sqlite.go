@@ -16,6 +16,25 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// unmarshalSkillsJSON は JSON 文字列から []domain.Skill をパースする。
+// 新形式 [{"name":"x","description":"y"}] と旧形式 ["x","y"] の両方に対応する。
+func unmarshalSkillsJSON(raw string) ([]domain.Skill, error) {
+	var skills []domain.Skill
+	if err := json.Unmarshal([]byte(raw), &skills); err == nil {
+		return skills, nil
+	}
+	// 旧形式: []string → []Skill{Name: s} に変換
+	var legacy []string
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		return nil, fmt.Errorf("unmarshal skills: invalid format")
+	}
+	skills = make([]domain.Skill, len(legacy))
+	for i, s := range legacy {
+		skills[i] = domain.Skill{Name: s}
+	}
+	return skills, nil
+}
+
 func wrapNotFound(err error, msg string) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%s: %w", msg, domain.ErrNotFound)
@@ -104,15 +123,29 @@ func createTables(db *sql.DB) error {
 			agent_name   TEXT NOT NULL REFERENCES agents(name),
 			assignee_pane_id TEXT,
 			sender_name  TEXT,
-			label        TEXT,
+			send_message_id  TEXT,
+			send_response_id TEXT,
 			status       TEXT NOT NULL DEFAULT 'pending',
 			sent_at      TEXT NOT NULL DEFAULT (datetime('now')),
-			completed_at TEXT,
-			notes        TEXT
+			completed_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS send_messages (
+			id         TEXT PRIMARY KEY,
+			content    TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS send_responses (
+			id         TEXT PRIMARY KEY,
+			content    TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE TABLE IF NOT EXISTS config (
 			key   TEXT PRIMARY KEY,
 			value TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS mcp_instances (
+			instance_id TEXT PRIMARY KEY,
+			started_at  TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 	}
 
@@ -136,6 +169,36 @@ func createTables(db *sql.DB) error {
 			table:  "tasks",
 			column: "assignee_pane_id",
 			stmt:   `ALTER TABLE tasks ADD COLUMN assignee_pane_id TEXT`,
+		},
+		{
+			table:  "agents",
+			column: "mcp_instance_id",
+			stmt:   `ALTER TABLE agents ADD COLUMN mcp_instance_id TEXT`,
+		},
+		{
+			table:  "tasks",
+			column: "sender_instance_id",
+			stmt:   `ALTER TABLE tasks ADD COLUMN sender_instance_id TEXT`,
+		},
+		{
+			table:  "tasks",
+			column: "send_message_id",
+			stmt:   `ALTER TABLE tasks ADD COLUMN send_message_id TEXT`,
+		},
+		{
+			table:  "tasks",
+			column: "send_response_id",
+			stmt:   `ALTER TABLE tasks ADD COLUMN send_response_id TEXT`,
+		},
+		{
+			table:  "tasks",
+			column: "sender_pane_id",
+			stmt:   `ALTER TABLE tasks ADD COLUMN sender_pane_id TEXT`,
+		},
+		{
+			table:  "tasks",
+			column: "is_now_session",
+			stmt:   `ALTER TABLE tasks ADD COLUMN is_now_session INTEGER NOT NULL DEFAULT 1`,
 		},
 	}
 	for _, m := range migrations {
@@ -181,11 +244,15 @@ func (s *Store) UpsertAgent(ctx context.Context, agent domain.Agent) error {
 		return fmt.Errorf("marshal skills: %w", err)
 	}
 
+	var mcpInstID any
+	if agent.MCPInstanceID != "" {
+		mcpInstID = agent.MCPInstanceID
+	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO agents (name, pane_id, role, skills, created_at) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(name) DO UPDATE SET pane_id=excluded.pane_id, role=excluded.role, skills=excluded.skills`,
-		agent.Name, agent.PaneID, agent.Role, string(skillsJSON), time.Now().UTC().Format(time.RFC3339),
+		`INSERT INTO agents (name, pane_id, role, skills, mcp_instance_id, created_at) VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(name) DO UPDATE SET pane_id=excluded.pane_id, role=excluded.role, skills=excluded.skills, mcp_instance_id=excluded.mcp_instance_id`,
+		agent.Name, agent.PaneID, agent.Role, string(skillsJSON), mcpInstID, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert agent: %w", err)
@@ -196,18 +263,23 @@ func (s *Store) UpsertAgent(ctx context.Context, agent domain.Agent) error {
 // GetAgent は名前でエージェントを取得する。
 func (s *Store) GetAgent(ctx context.Context, name string) (domain.Agent, error) {
 	var a domain.Agent
-	var skillsJSON sql.NullString
+	var skillsJSON, mcpInstanceID sql.NullString
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT name, pane_id, role, skills, created_at FROM agents WHERE name = ?`, name,
-	).Scan(&a.Name, &a.PaneID, &a.Role, &skillsJSON, &a.CreatedAt)
+		`SELECT name, pane_id, role, skills, created_at, mcp_instance_id FROM agents WHERE name = ?`, name,
+	).Scan(&a.Name, &a.PaneID, &a.Role, &skillsJSON, &a.CreatedAt, &mcpInstanceID)
 	if err != nil {
 		return domain.Agent{}, wrapNotFound(err, fmt.Sprintf("get agent %q", name))
 	}
+	if mcpInstanceID.Valid {
+		a.MCPInstanceID = mcpInstanceID.String
+	}
 	if skillsJSON.Valid && skillsJSON.String != "" {
-		if jsonErr := json.Unmarshal([]byte(skillsJSON.String), &a.Skills); jsonErr != nil {
+		skills, jsonErr := unmarshalSkillsJSON(skillsJSON.String)
+		if jsonErr != nil {
 			return domain.Agent{}, fmt.Errorf("unmarshal skills: %w", jsonErr)
 		}
+		a.Skills = skills
 	}
 	return a, nil
 }
@@ -216,7 +288,7 @@ func (s *Store) GetAgent(ctx context.Context, name string) (domain.Agent, error)
 func (s *Store) GetAgentByPaneID(ctx context.Context, paneID string) (domain.Agent, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT name, pane_id, role, skills, created_at FROM agents WHERE pane_id = ? ORDER BY name`,
+		`SELECT name, pane_id, role, skills, created_at, mcp_instance_id FROM agents WHERE pane_id = ? ORDER BY name`,
 		paneID,
 	)
 	if err != nil {
@@ -227,14 +299,19 @@ func (s *Store) GetAgentByPaneID(ctx context.Context, paneID string) (domain.Age
 	var agents []domain.Agent
 	for rows.Next() {
 		var a domain.Agent
-		var skillsJSON sql.NullString
-		if err := rows.Scan(&a.Name, &a.PaneID, &a.Role, &skillsJSON, &a.CreatedAt); err != nil {
+		var skillsJSON, mcpInstanceID sql.NullString
+		if err := rows.Scan(&a.Name, &a.PaneID, &a.Role, &skillsJSON, &a.CreatedAt, &mcpInstanceID); err != nil {
 			return domain.Agent{}, fmt.Errorf("scan agent by pane_id %q: %w", paneID, err)
 		}
+		if mcpInstanceID.Valid {
+			a.MCPInstanceID = mcpInstanceID.String
+		}
 		if skillsJSON.Valid && skillsJSON.String != "" {
-			if jsonErr := json.Unmarshal([]byte(skillsJSON.String), &a.Skills); jsonErr != nil {
+			skills, jsonErr := unmarshalSkillsJSON(skillsJSON.String)
+			if jsonErr != nil {
 				return domain.Agent{}, fmt.Errorf("unmarshal skills for pane_id %q: %w", paneID, jsonErr)
 			}
+			a.Skills = skills
 		}
 		agents = append(agents, a)
 	}
@@ -252,7 +329,7 @@ func (s *Store) GetAgentByPaneID(ctx context.Context, paneID string) (domain.Age
 
 // ListAgents は全エージェント情報を取得する。
 func (s *Store) ListAgents(ctx context.Context) ([]domain.Agent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, pane_id, role, skills, created_at FROM agents ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT name, pane_id, role, skills, created_at, mcp_instance_id FROM agents ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -261,14 +338,19 @@ func (s *Store) ListAgents(ctx context.Context) ([]domain.Agent, error) {
 	var agents []domain.Agent
 	for rows.Next() {
 		var a domain.Agent
-		var skillsJSON sql.NullString
-		if err := rows.Scan(&a.Name, &a.PaneID, &a.Role, &skillsJSON, &a.CreatedAt); err != nil {
+		var skillsJSON, mcpInstanceID sql.NullString
+		if err := rows.Scan(&a.Name, &a.PaneID, &a.Role, &skillsJSON, &a.CreatedAt, &mcpInstanceID); err != nil {
 			return nil, fmt.Errorf("scan agent: %w", err)
 		}
+		if mcpInstanceID.Valid {
+			a.MCPInstanceID = mcpInstanceID.String
+		}
 		if skillsJSON.Valid && skillsJSON.String != "" {
-			if jsonErr := json.Unmarshal([]byte(skillsJSON.String), &a.Skills); jsonErr != nil {
+			skills, jsonErr := unmarshalSkillsJSON(skillsJSON.String)
+			if jsonErr != nil {
 				return nil, fmt.Errorf("unmarshal skills: %w", jsonErr)
 			}
+			a.Skills = skills
 		}
 		agents = append(agents, a)
 	}
@@ -286,10 +368,22 @@ func (s *Store) DeleteAgentsByPaneID(ctx context.Context, paneID string) error {
 
 // CreateTask はタスクを作成する。
 func (s *Store) CreateTask(ctx context.Context, task domain.Task) error {
+	var senderInstID any
+	if task.SenderInstanceID != "" {
+		senderInstID = task.SenderInstanceID
+	}
+	var sendMsgID any
+	if task.SendMessageID != "" {
+		sendMsgID = task.SendMessageID
+	}
+	var senderPaneID any
+	if task.SenderPaneID != "" {
+		senderPaneID = task.SenderPaneID
+	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO tasks (task_id, agent_name, assignee_pane_id, sender_name, label, status, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		task.ID, task.AgentName, task.AssigneePaneID, task.SenderName, task.Label, task.Status, task.SentAt,
+		`INSERT INTO tasks (task_id, agent_name, assignee_pane_id, sender_pane_id, sender_name, sender_instance_id, send_message_id, status, sent_at, is_now_session) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		task.ID, task.AgentName, task.AssigneePaneID, senderPaneID, task.SenderName, senderInstID, sendMsgID, task.Status, task.SentAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create task %q: %w", task.ID, err)
@@ -300,33 +394,42 @@ func (s *Store) CreateTask(ctx context.Context, task domain.Task) error {
 // GetTask はタスクIDでタスクを取得する。
 func (s *Store) GetTask(ctx context.Context, taskID string) (domain.Task, error) {
 	var t domain.Task
-	var assigneePaneID, senderName, completedAt, notes sql.NullString
+	var assigneePaneID, senderPaneID, senderName, senderInstanceID, sendMessageID, sendResponseID, completedAt sql.NullString
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT task_id, agent_name, assignee_pane_id, sender_name, label, status, sent_at, completed_at, notes FROM tasks WHERE task_id = ?`,
+		`SELECT task_id, agent_name, assignee_pane_id, sender_pane_id, sender_name, sender_instance_id, send_message_id, send_response_id, status, sent_at, completed_at, is_now_session FROM tasks WHERE task_id = ?`,
 		taskID,
-	).Scan(&t.ID, &t.AgentName, &assigneePaneID, &senderName, &t.Label, &t.Status, &t.SentAt, &completedAt, &notes)
+	).Scan(&t.ID, &t.AgentName, &assigneePaneID, &senderPaneID, &senderName, &senderInstanceID, &sendMessageID, &sendResponseID, &t.Status, &t.SentAt, &completedAt, &t.IsNowSession)
 	if err != nil {
 		return domain.Task{}, wrapNotFound(err, fmt.Sprintf("get task %q", taskID))
 	}
 	if assigneePaneID.Valid {
 		t.AssigneePaneID = assigneePaneID.String
 	}
+	if senderPaneID.Valid {
+		t.SenderPaneID = senderPaneID.String
+	}
 	if senderName.Valid {
 		t.SenderName = senderName.String
 	}
+	if senderInstanceID.Valid {
+		t.SenderInstanceID = senderInstanceID.String
+	}
+	if sendMessageID.Valid {
+		t.SendMessageID = sendMessageID.String
+	}
+	if sendResponseID.Valid {
+		t.SendResponseID = sendResponseID.String
+	}
 	if completedAt.Valid {
 		t.CompletedAt = completedAt.String
-	}
-	if notes.Valid {
-		t.Notes = notes.String
 	}
 	return t, nil
 }
 
 // ListTasks はフィルタ条件に基づいてタスクを取得する。
 func (s *Store) ListTasks(ctx context.Context, filter domain.TaskFilter) ([]domain.Task, error) {
-	query := `SELECT task_id, agent_name, assignee_pane_id, sender_name, label, status, sent_at, completed_at, notes FROM tasks WHERE 1=1`
+	query := `SELECT task_id, agent_name, assignee_pane_id, sender_pane_id, sender_name, sender_instance_id, send_message_id, send_response_id, status, sent_at, completed_at, is_now_session FROM tasks WHERE 1=1`
 	var args []any
 
 	if filter.Status != "" && filter.Status != "all" {
@@ -336,6 +439,13 @@ func (s *Store) ListTasks(ctx context.Context, filter domain.TaskFilter) ([]doma
 	if filter.AgentName != "" {
 		query += ` AND agent_name = ?`
 		args = append(args, filter.AgentName)
+	}
+	if filter.IsNowSession != nil {
+		if *filter.IsNowSession {
+			query += ` AND is_now_session = 1`
+		} else {
+			query += ` AND is_now_session = 0`
+		}
 	}
 	query += ` ORDER BY sent_at DESC`
 
@@ -348,21 +458,30 @@ func (s *Store) ListTasks(ctx context.Context, filter domain.TaskFilter) ([]doma
 	var tasks []domain.Task
 	for rows.Next() {
 		var t domain.Task
-		var assigneePaneID, senderName, completedAt, notes sql.NullString
-		if err := rows.Scan(&t.ID, &t.AgentName, &assigneePaneID, &senderName, &t.Label, &t.Status, &t.SentAt, &completedAt, &notes); err != nil {
+		var assigneePaneID, senderPaneID, senderName, senderInstanceID, sendMessageID, sendResponseID, completedAt sql.NullString
+		if err := rows.Scan(&t.ID, &t.AgentName, &assigneePaneID, &senderPaneID, &senderName, &senderInstanceID, &sendMessageID, &sendResponseID, &t.Status, &t.SentAt, &completedAt, &t.IsNowSession); err != nil {
 			return nil, fmt.Errorf("scan task: %w", err)
 		}
 		if assigneePaneID.Valid {
 			t.AssigneePaneID = assigneePaneID.String
 		}
+		if senderPaneID.Valid {
+			t.SenderPaneID = senderPaneID.String
+		}
 		if senderName.Valid {
 			t.SenderName = senderName.String
 		}
+		if senderInstanceID.Valid {
+			t.SenderInstanceID = senderInstanceID.String
+		}
+		if sendMessageID.Valid {
+			t.SendMessageID = sendMessageID.String
+		}
+		if sendResponseID.Valid {
+			t.SendResponseID = sendResponseID.String
+		}
 		if completedAt.Valid {
 			t.CompletedAt = completedAt.String
-		}
-		if notes.Valid {
-			t.Notes = notes.String
 		}
 		tasks = append(tasks, t)
 	}
@@ -370,11 +489,15 @@ func (s *Store) ListTasks(ctx context.Context, filter domain.TaskFilter) ([]doma
 }
 
 // CompleteTask はタスクを完了状態に更新する。
-func (s *Store) CompleteTask(ctx context.Context, taskID string, notes string, completedAt string) error {
+func (s *Store) CompleteTask(ctx context.Context, taskID string, responseID string, completedAt string) error {
+	var respID any
+	if responseID != "" {
+		respID = responseID
+	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE tasks SET status = 'completed', completed_at = ?, notes = ? WHERE task_id = ? AND status = 'pending'`,
-		completedAt, notes, taskID,
+		`UPDATE tasks SET status = 'completed', completed_at = ?, send_response_id = ? WHERE task_id = ? AND status = 'pending'`,
+		completedAt, respID, taskID,
 	)
 	if err != nil {
 		return fmt.Errorf("complete task %q: %w", taskID, err)
@@ -394,11 +517,11 @@ func (s *Store) CompleteTask(ctx context.Context, taskID string, notes string, c
 }
 
 // MarkTaskFailed はタスクを failed 状態に更新する。
-func (s *Store) MarkTaskFailed(ctx context.Context, taskID string, notes string) error {
+func (s *Store) MarkTaskFailed(ctx context.Context, taskID string) error {
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE tasks SET status = 'failed', completed_at = ?, notes = ? WHERE task_id = ? AND status = 'pending'`,
-		time.Now().UTC().Format(time.RFC3339), notes, taskID,
+		`UPDATE tasks SET status = 'failed', completed_at = ? WHERE task_id = ? AND status = 'pending'`,
+		time.Now().UTC().Format(time.RFC3339), taskID,
 	)
 	if err != nil {
 		return fmt.Errorf("mark task failed %q: %w", taskID, err)
@@ -435,6 +558,44 @@ func (s *Store) AbandonTasksByPaneID(ctx context.Context, paneID string) error {
 	return nil
 }
 
+// EndSessionByInstanceID は指定インスタンスIDのタスクの is_now_session を false に更新する。
+func (s *Store) EndSessionByInstanceID(ctx context.Context, instanceID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET is_now_session = 0 WHERE sender_instance_id = ?`,
+		instanceID,
+	)
+	if err != nil {
+		return fmt.Errorf("end session by instance_id %q: %w", instanceID, err)
+	}
+	return nil
+}
+
+// SaveMessage は送信メッセージを保存する。
+func (s *Store) SaveMessage(ctx context.Context, msg domain.TaskMessage) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO send_messages (id, content, created_at) VALUES (?, ?, ?)`,
+		msg.ID, msg.Content, msg.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("save message %q: %w", msg.ID, err)
+	}
+	return nil
+}
+
+// SaveResponse は応答メッセージを保存する。
+func (s *Store) SaveResponse(ctx context.Context, msg domain.TaskMessage) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO send_responses (id, content, created_at) VALUES (?, ?, ?)`,
+		msg.ID, msg.Content, msg.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("save response %q: %w", msg.ID, err)
+	}
+	return nil
+}
+
 // GetConfig は設定値を取得する。
 func (s *Store) GetConfig(key string) (string, error) {
 	var value string
@@ -455,6 +616,96 @@ func (s *Store) SetConfig(key, value string) error {
 		return fmt.Errorf("set config %q: %w", key, err)
 	}
 	return nil
+}
+
+// RegisterInstance は MCP インスタンスを生存リストに登録する。
+func (s *Store) RegisterInstance(ctx context.Context, instanceID string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO mcp_instances (instance_id, started_at) VALUES (?, ?)`,
+		instanceID, time.Now().UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("register instance %q: %w", instanceID, err)
+	}
+	return nil
+}
+
+// UnregisterInstance は MCP インスタンスを生存リストから除去する。
+func (s *Store) UnregisterInstance(ctx context.Context, instanceID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM mcp_instances WHERE instance_id = ?`, instanceID)
+	if err != nil {
+		return fmt.Errorf("unregister instance %q: %w", instanceID, err)
+	}
+	return nil
+}
+
+// ListActiveInstances は生存中の MCP インスタンスIDを返す。
+func (s *Store) ListActiveInstances(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id FROM mcp_instances`)
+	if err != nil {
+		return nil, fmt.Errorf("list active instances: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan instance id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// CleanupStaleAgents は生存リストに含まれないインスタンスのエージェントを削除する。
+func (s *Store) CleanupStaleAgents(ctx context.Context, activeInstanceIDs []string) (int64, error) {
+	if len(activeInstanceIDs) == 0 {
+		result, err := s.db.ExecContext(ctx, `DELETE FROM agents WHERE mcp_instance_id IS NOT NULL`)
+		if err != nil {
+			return 0, fmt.Errorf("cleanup stale agents: %w", err)
+		}
+		return result.RowsAffected()
+	}
+	placeholders := strings.Repeat("?,", len(activeInstanceIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(activeInstanceIDs))
+	for i, id := range activeInstanceIDs {
+		args[i] = id
+	}
+	result, err := s.db.ExecContext(ctx,
+		`DELETE FROM agents WHERE mcp_instance_id IS NOT NULL AND mcp_instance_id NOT IN (`+placeholders+`)`,
+		args...)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup stale agents: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// CleanupStaleTasks は生存リストに含まれないインスタンスの pending タスクを abandoned に更新する。
+func (s *Store) CleanupStaleTasks(ctx context.Context, activeInstanceIDs []string) (int64, error) {
+	if len(activeInstanceIDs) == 0 {
+		result, err := s.db.ExecContext(ctx,
+			`UPDATE tasks SET status = 'abandoned', is_now_session = 0 WHERE status = 'pending' AND sender_instance_id IS NOT NULL`)
+		if err != nil {
+			return 0, fmt.Errorf("cleanup stale tasks: %w", err)
+		}
+		return result.RowsAffected()
+	}
+	placeholders := strings.Repeat("?,", len(activeInstanceIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(activeInstanceIDs))
+	for i, id := range activeInstanceIDs {
+		args[i] = id
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET status = 'abandoned', is_now_session = 0 WHERE status = 'pending' AND sender_instance_id IS NOT NULL AND sender_instance_id NOT IN (`+placeholders+`)`,
+		args...)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup stale tasks: %w", err)
+	}
+	return result.RowsAffected()
 }
 
 // Close はデータベース接続を閉じる。

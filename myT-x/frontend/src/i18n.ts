@@ -1,4 +1,4 @@
-import {useSyncExternalStore} from "react";
+import {useCallback, useSyncExternalStore} from "react";
 
 export type UILanguage = "ja" | "en";
 
@@ -423,6 +423,75 @@ const EN_TRANSLATIONS: Record<string, string> = {
     "viewer.scheduler.error.loadTemplates": "Failed to load templates for session {sessionName}.",
     "viewer.scheduler.error.stopped": "Scheduler stopped: {reason}",
 
+    "viewer.orchestratorTeams.label": "Teams",
+    "viewer.orchestratorTeams.title": "Teams",
+    "viewer.orchestratorTeams.dismiss": "Dismiss",
+    "viewer.orchestratorTeams.list.new": "+ New",
+    "viewer.orchestratorTeams.list.start": "Start",
+    "viewer.orchestratorTeams.list.noActiveSession": "Start is unavailable until an active session is selected.",
+    "viewer.orchestratorTeams.list.loading": "Loading teams...",
+    "viewer.orchestratorTeams.list.empty": "No teams saved yet.",
+    "viewer.orchestratorTeams.list.memberCount": "{count} member(s)",
+    "viewer.orchestratorTeams.list.selected": "Selected",
+    "viewer.orchestratorTeams.list.stored": "Stored",
+    "viewer.orchestratorTeams.list.noMembers": "No members configured",
+    "viewer.orchestratorTeams.list.edit": "Edit",
+    "viewer.orchestratorTeams.list.copy": "Copy",
+    "viewer.orchestratorTeams.list.moveUp": "Move up",
+    "viewer.orchestratorTeams.list.moveDown": "Move down",
+    "viewer.orchestratorTeams.list.delete": "Delete",
+    "viewer.orchestratorTeams.editor.back": "Back",
+    "viewer.orchestratorTeams.editor.teamName": "Team Name",
+    "viewer.orchestratorTeams.editor.duplicateTeamName": "A team with the same name already exists",
+    "viewer.orchestratorTeams.editor.description": "Team Description",
+    "viewer.orchestratorTeams.editor.descriptionHint": "Only the first ~50 characters are shown in the list. Put the key point first for easy identification. (Max 400 chars)",
+    "viewer.orchestratorTeams.editor.descriptionPlaceholder": "Describe the purpose or usage of this team",
+    "viewer.orchestratorTeams.editor.members": "Members",
+    "viewer.orchestratorTeams.editor.membersDescription": "Each member defines a pane title, role, launch command, args, and custom bootstrap message.",
+    "viewer.orchestratorTeams.editor.addMember": "+ Member",
+    "viewer.orchestratorTeams.editor.copyMember": "Copy from other team",
+    "viewer.orchestratorTeams.editor.noMembers": "No members configured yet.",
+    "viewer.orchestratorTeams.editor.untitledMember": "Untitled member",
+    "viewer.orchestratorTeams.editor.missingFields": "Missing required fields",
+    "viewer.orchestratorTeams.editor.roleNotSet": "Role name not set",
+    "viewer.orchestratorTeams.editor.commandNotSet": "Command not set",
+    "viewer.orchestratorTeams.editor.noArgs": "No args",
+    "viewer.orchestratorTeams.editor.argCount": "{count} arg(s)",
+    "viewer.orchestratorTeams.editor.edit": "Edit",
+    "viewer.orchestratorTeams.editor.remove": "Remove",
+    "viewer.orchestratorTeams.editor.saving": "Saving...",
+    "viewer.orchestratorTeams.editor.saveTeam": "Save Team",
+    "viewer.orchestratorTeams.editor.bootstrapDelay": "Bootstrap Delay (sec)",
+    "viewer.orchestratorTeams.editor.bootstrapDelayDescription": "Wait time after launching a command before sending the role message. Increase if agents take longer to start.",
+    "viewer.orchestratorTeams.member.back": "Back",
+    "viewer.orchestratorTeams.member.paneTitle": "Pane Title",
+    "viewer.orchestratorTeams.member.role": "Role Name",
+    "viewer.orchestratorTeams.member.command": "Launch Command",
+    "viewer.orchestratorTeams.member.args": "Arguments",
+    "viewer.orchestratorTeams.member.customMessage": "Role Prompt",
+    "viewer.orchestratorTeams.member.save": "Save Member",
+    "viewer.orchestratorTeams.member.skills": "Skills",
+    "viewer.orchestratorTeams.member.skillName": "Skill name",
+    "viewer.orchestratorTeams.member.skillDescription": "Description (max 400 chars)",
+    "viewer.orchestratorTeams.member.removeSkill": "Remove skill",
+    "viewer.orchestratorTeams.member.addSkill": "Add skill",
+    "viewer.orchestratorTeams.member.duplicatePaneTitle": "A pane title with the same name already exists",
+    "viewer.orchestratorTeams.member.contextWarning": "Saved and referenced by AI. Keep entries concise — verbose or redundant text wastes context budget.",
+    "viewer.orchestratorTeams.member.rolePromptContextWarning": "Saved and referenced by AI. Avoid lengthy or redundant descriptions to conserve context budget.",
+    "viewer.orchestratorTeams.start.back": "Back",
+    "viewer.orchestratorTeams.start.launch": "Launch",
+    "viewer.orchestratorTeams.start.description": "The launch uses the current active session root/worktree as the execution context. Existing panes are reused in the active window, or a fresh session is created and tiled before bootstrapping the team.",
+    "viewer.orchestratorTeams.start.reuseActive": "Reuse Active Window",
+    "viewer.orchestratorTeams.start.reuseActiveDescription": "Use the current active session and add panes only when the team needs more capacity.",
+    "viewer.orchestratorTeams.start.createNew": "Create New Session",
+    "viewer.orchestratorTeams.start.createNewDescription": "Create a dedicated session from the current active session root/worktree and tile its panes.",
+    "viewer.orchestratorTeams.start.sourceSession": "Source Session",
+    "viewer.orchestratorTeams.start.newSessionName": "New Session Name",
+    "viewer.orchestratorTeams.start.starting": "Starting...",
+    "viewer.orchestratorTeams.start.launchTeam": "Launch Team",
+    "viewer.orchestratorTeams.notice.started": "Started {name}",
+    "viewer.orchestratorTeams.notice.startedWithWarnings": "Started {name} with warnings:",
+
     "sync.configLoadFailed": "Failed to load settings. Please restart the app.",
     "sync.sessionListLoadFailed": "Failed to load the active session.",
     "sync.worktree.cleanupFailed": "Failed to clean up worktree{sessionSuffix}: {error}",
@@ -512,9 +581,10 @@ export function translateStatusLine(statusLine: string): string {
 
 export function useI18n() {
     const language = useSyncExternalStore(subscribe, getLanguage, () => DEFAULT_LANGUAGE);
-    return {
-        language,
-        setLanguage,
-        t: (key: string, defaultText: string, params?: TranslationParams) => translate(key, defaultText, params),
-    };
+    // translate reads module-level currentLanguage internally, so empty deps is safe.
+    const t = useCallback(
+        (key: string, defaultText: string, params?: TranslationParams) => translate(key, defaultText, params),
+        [],
+    );
+    return {language, setLanguage, t};
 }

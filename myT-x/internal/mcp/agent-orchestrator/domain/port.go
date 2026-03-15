@@ -22,9 +22,25 @@ type TaskRepository interface {
 	CreateTask(ctx context.Context, task Task) error
 	GetTask(ctx context.Context, taskID string) (Task, error)
 	ListTasks(ctx context.Context, filter TaskFilter) ([]Task, error)
-	CompleteTask(ctx context.Context, taskID string, notes string, completedAt string) error
-	MarkTaskFailed(ctx context.Context, taskID string, notes string) error
+	CompleteTask(ctx context.Context, taskID string, responseID string, completedAt string) error
+	MarkTaskFailed(ctx context.Context, taskID string) error
 	AbandonTasksByPaneID(ctx context.Context, paneID string) error
+	EndSessionByInstanceID(ctx context.Context, instanceID string) error
+}
+
+// MessageRepository はタスクメッセージの永続化操作を定義する。
+type MessageRepository interface {
+	SaveMessage(ctx context.Context, msg TaskMessage) error
+	SaveResponse(ctx context.Context, msg TaskMessage) error
+}
+
+// InstanceRegistry は MCP インスタンスの生存追跡とstaleデータのクリーンアップを提供する。
+type InstanceRegistry interface {
+	RegisterInstance(ctx context.Context, instanceID string) error
+	UnregisterInstance(ctx context.Context, instanceID string) error
+	ListActiveInstances(ctx context.Context) ([]string, error)
+	CleanupStaleAgents(ctx context.Context, activeInstanceIDs []string) (int64, error)
+	CleanupStaleTasks(ctx context.Context, activeInstanceIDs []string) (int64, error)
 }
 
 // PaneSender はペインにキーストロークを送信する。

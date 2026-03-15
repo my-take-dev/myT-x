@@ -1,0 +1,42 @@
+[
+  {
+    "id": "8c469e67-6c9b-4977-b7ae-5b0fe6638120",
+    "team_id": "e9b3b8d0-91c8-4081-accd-ff4b0cf54f09",
+    "order": 0,
+    "pane_title": "cto",
+    "role": "テスト責任者",
+    "command": "claude",
+    "args": [],
+    "custom_message": "貴方はテスト責任者です。チームのメンバーと一緒にこの機能のテストを実施します。チームメンバーの登録状況を確認して、テスターが追加されたらテストメッセージを送って応答を貰ってください。テストメッセージの応答があるまで定期的に登録状況を確認してください。"
+  },
+  {
+    "id": "01afe168-6e32-4994-9c11-7df9b0e4b79e",
+    "team_id": "e9b3b8d0-91c8-4081-accd-ff4b0cf54f09",
+    "order": 1,
+    "pane_title": "tester",
+    "role": "テスター",
+    "command": "claude",
+    "args": [],
+    "custom_message": "テストを実施します。"
+  },
+  {
+    "id": "3f72f09b-3a1e-4605-8dfc-97cf80d220e5",
+    "team_id": "ee8d2994-b8ab-4355-bf79-507545176019",
+    "order": 0,
+    "pane_title": "cto",
+    "role": "テスト責任者",
+    "command": "codex",
+    "args": [],
+    "custom_message": "貴方はテスト責任者です。チームのメンバーと一緒にこの機能のテストを実施します。チームメンバーの登録状況を確認して、テスターが追加されたらテストメッセージを送って応答を貰ってください。テストメッセージの応答があるまで定期的に登録状況を確認してください。"
+  },
+  {
+    "id": "629ff861-af67-4ba1-b4ff-5e2286104d17",
+    "team_id": "ee8d2994-b8ab-4355-bf79-507545176019",
+    "order": 1,
+    "pane_title": "tester",
+    "role": "テスター",
+    "command": "codex",
+    "args": [],
+    "custom_message": "テストを実施します。"
+  }
+]

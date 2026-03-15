@@ -124,7 +124,7 @@ func (r *testTaskRepo) ListTasks(_ context.Context, filter domain.TaskFilter) ([
 	return tasks, nil
 }
 
-func (r *testTaskRepo) CompleteTask(_ context.Context, taskID string, notes string, completedAt string) error {
+func (r *testTaskRepo) CompleteTask(_ context.Context, taskID string, responseID string, completedAt string) error {
 	if r.completeTaskErr != nil {
 		return r.completeTaskErr
 	}
@@ -136,13 +136,13 @@ func (r *testTaskRepo) CompleteTask(_ context.Context, taskID string, notes stri
 		return errors.New("task is not pending")
 	}
 	task.Status = "completed"
-	task.Notes = notes
+	task.SendResponseID = responseID
 	task.CompletedAt = completedAt
 	r.tasks[taskID] = task
 	return nil
 }
 
-func (r *testTaskRepo) MarkTaskFailed(_ context.Context, taskID string, notes string) error {
+func (r *testTaskRepo) MarkTaskFailed(_ context.Context, taskID string) error {
 	if r.markFailedErr != nil {
 		return r.markFailedErr
 	}
@@ -151,12 +151,44 @@ func (r *testTaskRepo) MarkTaskFailed(_ context.Context, taskID string, notes st
 		return domain.ErrNotFound
 	}
 	task.Status = "failed"
-	task.Notes = notes
 	r.tasks[taskID] = task
 	return nil
 }
 
 func (r *testTaskRepo) AbandonTasksByPaneID(context.Context, string) error {
+	return nil
+}
+
+func (r *testTaskRepo) EndSessionByInstanceID(context.Context, string) error {
+	return nil
+}
+
+type testMessageRepo struct {
+	messages  map[string]domain.TaskMessage
+	responses map[string]domain.TaskMessage
+	saveErr   error
+}
+
+func newTestMessageRepo() *testMessageRepo {
+	return &testMessageRepo{
+		messages:  make(map[string]domain.TaskMessage),
+		responses: make(map[string]domain.TaskMessage),
+	}
+}
+
+func (r *testMessageRepo) SaveMessage(_ context.Context, msg domain.TaskMessage) error {
+	if r.saveErr != nil {
+		return r.saveErr
+	}
+	r.messages[msg.ID] = msg
+	return nil
+}
+
+func (r *testMessageRepo) SaveResponse(_ context.Context, msg domain.TaskMessage) error {
+	if r.saveErr != nil {
+		return r.saveErr
+	}
+	r.responses[msg.ID] = msg
 	return nil
 }
 
@@ -206,6 +238,7 @@ func discardLogger() *log.Logger {
 func TestConstructorsDefaultToStandardLogger(t *testing.T) {
 	agents := newTestAgentRepo()
 	tasks := newTestTaskRepo()
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{}
 
 	tests := []struct {
@@ -213,9 +246,9 @@ func TestConstructorsDefaultToStandardLogger(t *testing.T) {
 		got  *log.Logger
 	}{
 		{"agent", NewAgentService(agents, panes, panes, panes, nil).logger},
-		{"dispatch", NewTaskDispatchService(agents, tasks, panes, nil).logger},
+		{"dispatch", NewTaskDispatchService(agents, tasks, messages, panes, nil).logger},
 		{"query", NewTaskQueryService(agents, tasks, panes, nil).logger},
-		{"response", NewResponseService(agents, tasks, panes, panes, nil).logger},
+		{"response", NewResponseService(agents, tasks, messages, panes, panes, nil).logger},
 		{"capture", NewCaptureService(agents, panes, panes, nil).logger},
 	}
 
@@ -330,8 +363,9 @@ func TestTaskDispatchServiceSendReturnsPersistError(t *testing.T) {
 	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
 	tasks := newTestTaskRepo()
 	tasks.createErr = errors.New("db busy")
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%2"}
-	svc := NewTaskDispatchService(agents, tasks, panes, discardLogger())
+	svc := NewTaskDispatchService(agents, tasks, messages, panes, discardLogger())
 
 	_, err := svc.Send(context.Background(), SendTaskCmd{
 		AgentName: "codex",
@@ -357,8 +391,9 @@ func TestTaskDispatchServiceSendReturnsIDGenerationError(t *testing.T) {
 	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%2"}
 	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
 	tasks := newTestTaskRepo()
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%2"}
-	svc := NewTaskDispatchService(agents, tasks, panes, discardLogger())
+	svc := NewTaskDispatchService(agents, tasks, messages, panes, discardLogger())
 
 	_, err := svc.Send(context.Background(), SendTaskCmd{
 		AgentName: "codex",
@@ -375,8 +410,9 @@ func TestTaskDispatchServiceSendAllowsUnregisteredCallerWhenSenderExists(t *test
 	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%2"}
 	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
 	tasks := newTestTaskRepo()
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%9"}
-	svc := NewTaskDispatchService(agents, tasks, panes, discardLogger())
+	svc := NewTaskDispatchService(agents, tasks, messages, panes, discardLogger())
 
 	result, err := svc.Send(context.Background(), SendTaskCmd{
 		AgentName:                   "codex",
@@ -406,14 +442,21 @@ func TestTaskDispatchServiceSendAllowsUnregisteredCallerWhenSenderExists(t *test
 	if task.AssigneePaneID != "%1" {
 		t.Fatalf("assignee pane = %q, want %%1", task.AssigneePaneID)
 	}
+	if task.SendMessageID == "" {
+		t.Fatal("send_message_id should be set")
+	}
+	if len(messages.messages) != 1 {
+		t.Fatalf("expected 1 message saved, got %d", len(messages.messages))
+	}
 }
 
 func TestTaskDispatchServiceSendRejectsUnknownSender(t *testing.T) {
 	agents := newTestAgentRepo()
 	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
 	tasks := newTestTaskRepo()
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%9"}
-	svc := NewTaskDispatchService(agents, tasks, panes, discardLogger())
+	svc := NewTaskDispatchService(agents, tasks, messages, panes, discardLogger())
 
 	_, err := svc.Send(context.Background(), SendTaskCmd{
 		AgentName: "codex",
@@ -432,8 +475,9 @@ func TestResponseServiceSendReturnsNotAvailableForUnknownTask(t *testing.T) {
 	agents := newTestAgentRepo()
 	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
 	tasks := newTestTaskRepo()
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%1"}
-	svc := NewResponseService(agents, tasks, panes, panes, discardLogger())
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
 
 	_, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
 	if err == nil || err.Error() != "task is not available" {
@@ -446,8 +490,9 @@ func TestResponseServiceSendRejectsNonPendingTask(t *testing.T) {
 	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
 	tasks := newTestTaskRepo()
 	tasks.tasks["t-001"] = domain.Task{ID: "t-001", AgentName: "worker", SenderName: "codex", Status: "completed"}
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%1"}
-	svc := NewResponseService(agents, tasks, panes, panes, discardLogger())
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
 
 	_, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
 	if err == nil || err.Error() != "task is not pending" {
@@ -460,8 +505,9 @@ func TestResponseServiceSendRejectsMissingSender(t *testing.T) {
 	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
 	tasks := newTestTaskRepo()
 	tasks.tasks["t-001"] = domain.Task{ID: "t-001", AgentName: "worker", Status: "pending"}
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%1"}
-	svc := NewResponseService(agents, tasks, panes, panes, discardLogger())
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
 
 	_, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
 	if err == nil || err.Error() != "task sender is unknown; cannot deliver response" {
@@ -481,8 +527,9 @@ func TestResponseServiceSendAllowsSamePaneAfterAgentRename(t *testing.T) {
 		SenderName:     "orchestrator",
 		Status:         "pending",
 	}
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%1"}
-	svc := NewResponseService(agents, tasks, panes, panes, discardLogger())
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
 
 	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
 	if err != nil {
@@ -493,6 +540,9 @@ func TestResponseServiceSendAllowsSamePaneAfterAgentRename(t *testing.T) {
 	}
 	if tasks.tasks["t-001"].Status != "completed" {
 		t.Fatalf("task status = %s, want completed", tasks.tasks["t-001"].Status)
+	}
+	if len(messages.responses) != 1 {
+		t.Fatalf("expected 1 response saved, got %d", len(messages.responses))
 	}
 }
 
@@ -508,8 +558,9 @@ func TestResponseServiceSendAllowsAgentNameFallbackAfterPaneMove(t *testing.T) {
 		SenderName:     "orchestrator",
 		Status:         "pending",
 	}
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%2"}
-	svc := NewResponseService(agents, tasks, panes, panes, discardLogger())
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
 
 	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
 	if err != nil {
@@ -532,8 +583,9 @@ func TestResponseServiceSendRejectsMismatchedPaneAndAgentName(t *testing.T) {
 		SenderName:     "orchestrator",
 		Status:         "pending",
 	}
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%2"}
-	svc := NewResponseService(agents, tasks, panes, panes, discardLogger())
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
 
 	_, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
 	if err == nil || err.Error() != "access denied" {
@@ -552,8 +604,9 @@ func TestResponseServiceSendAllowsLegacyTaskWithoutAssigneePaneID(t *testing.T) 
 		SenderName: "orchestrator",
 		Status:     "pending",
 	}
+	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%1"}
-	svc := NewResponseService(agents, tasks, panes, panes, discardLogger())
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
 
 	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
 	if err != nil {
@@ -575,7 +628,8 @@ func TestResponseServiceSendAllowsTrustedCaller(t *testing.T) {
 		SenderName:     "orchestrator",
 		Status:         "pending",
 	}
-	svc := NewResponseService(agents, tasks, &testPaneOps{}, errorResolver{err: errors.New("tmux missing")}, discardLogger())
+	messages := newTestMessageRepo()
+	svc := NewResponseService(agents, tasks, messages, &testPaneOps{}, errorResolver{err: errors.New("tmux missing")}, discardLogger())
 
 	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
 	if err != nil {
@@ -624,25 +678,5 @@ func TestTaskQueryServiceGetMyTasksIncludesTaskIDPlaceholderInstruction(t *testi
 	}
 	if !strings.Contains(result.ResponseInstructions, "send_response(task_id=\"<task_id>\", message=\"...\")") {
 		t.Fatalf("response instructions should include send_response example: %q", result.ResponseInstructions)
-	}
-}
-
-func TestTruncate(t *testing.T) {
-	tests := []struct {
-		input  string
-		maxLen int
-		want   string
-	}{
-		{"short", 10, "short"},
-		{"hello world", 5, "hello..."},
-		{"日本語テスト", 3, "日本語..."},
-		{"line1\nline2", 20, "line1 line2"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			if got := truncate(tt.input, tt.maxLen); got != tt.want {
-				t.Fatalf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
-			}
-		})
 	}
 }

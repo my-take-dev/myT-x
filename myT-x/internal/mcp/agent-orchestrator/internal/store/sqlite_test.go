@@ -30,7 +30,7 @@ func TestUpsertAndGetAgent(t *testing.T) {
 		Name:   "codex",
 		PaneID: "%1",
 		Role:   "バックエンド実装",
-		Skills: []string{"Go", "API設計"},
+		Skills: []domain.Skill{{Name: "Go"}, {Name: "API設計"}},
 	}
 	if err := st.UpsertAgent(ctx, agent); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
@@ -43,7 +43,7 @@ func TestUpsertAndGetAgent(t *testing.T) {
 	if got.Name != "codex" || got.PaneID != "%1" || got.Role != "バックエンド実装" {
 		t.Errorf("got %+v", got)
 	}
-	if len(got.Skills) != 2 || got.Skills[0] != "Go" || got.Skills[1] != "API設計" {
+	if len(got.Skills) != 2 || got.Skills[0].Name != "Go" || got.Skills[1].Name != "API設計" {
 		t.Errorf("skills = %v", got.Skills)
 	}
 }
@@ -156,7 +156,6 @@ func TestCreateAndGetTask(t *testing.T) {
 		AgentName:      "codex",
 		AssigneePaneID: "%1",
 		SenderName:     "orchestrator",
-		Label:          "テスト",
 		Status:         "pending",
 		SentAt:         "2026-03-07T10:00:00Z",
 	}
@@ -170,6 +169,36 @@ func TestCreateAndGetTask(t *testing.T) {
 	}
 	if got.ID != "t-001" || got.Status != "pending" || got.AgentName != "codex" || got.AssigneePaneID != "%1" || got.SenderName != "orchestrator" {
 		t.Errorf("got %+v", got)
+	}
+}
+
+func TestCreateTaskWithSendMessageID(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	st.UpsertAgent(ctx, domain.Agent{Name: "codex", PaneID: "%1"})
+
+	// メッセージを先に保存
+	if err := st.SaveMessage(ctx, domain.TaskMessage{ID: "m-001", Content: "hello", CreatedAt: "2026-03-07T10:00:00Z"}); err != nil {
+		t.Fatalf("SaveMessage: %v", err)
+	}
+
+	task := domain.Task{
+		ID:            "t-001",
+		AgentName:     "codex",
+		SendMessageID: "m-001",
+		Status:        "pending",
+		SentAt:        "2026-03-07T10:00:00Z",
+	}
+	if err := st.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	got, err := st.GetTask(ctx, "t-001")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.SendMessageID != "m-001" {
+		t.Errorf("send_message_id = %q, want m-001", got.SendMessageID)
 	}
 }
 
@@ -217,14 +246,19 @@ func TestCompleteTask(t *testing.T) {
 	ctx := context.Background()
 	st.UpsertAgent(ctx, domain.Agent{Name: "codex", PaneID: "%1"})
 	st.CreateTask(ctx, domain.Task{ID: "t-001", AgentName: "codex", Status: "pending", SentAt: "2026-03-07T10:00:00Z"})
-	completedAt := "2026-03-08T12:34:56Z"
 
-	if err := st.CompleteTask(ctx, "t-001", "done", completedAt); err != nil {
+	// レスポンスを保存
+	if err := st.SaveResponse(ctx, domain.TaskMessage{ID: "r-001", Content: "done", CreatedAt: "2026-03-08T12:34:56Z"}); err != nil {
+		t.Fatalf("SaveResponse: %v", err)
+	}
+
+	completedAt := "2026-03-08T12:34:56Z"
+	if err := st.CompleteTask(ctx, "t-001", "r-001", completedAt); err != nil {
 		t.Fatalf("CompleteTask: %v", err)
 	}
 
 	got, _ := st.GetTask(ctx, "t-001")
-	if got.Status != "completed" || got.Notes != "done" || got.CompletedAt != completedAt {
+	if got.Status != "completed" || got.SendResponseID != "r-001" || got.CompletedAt != completedAt {
 		t.Errorf("got %+v", got)
 	}
 }
@@ -243,7 +277,7 @@ func TestCompleteTaskRejectsNonPending(t *testing.T) {
 	st.UpsertAgent(ctx, domain.Agent{Name: "codex", PaneID: "%1"})
 	st.CreateTask(ctx, domain.Task{ID: "t-001", AgentName: "codex", Status: "completed", SentAt: "2026-03-07T10:00:00Z"})
 
-	err := st.CompleteTask(ctx, "t-001", "done again", "2026-03-08T12:34:56Z")
+	err := st.CompleteTask(ctx, "t-001", "", "2026-03-08T12:34:56Z")
 	if err == nil {
 		t.Fatal("expected error for non-pending task")
 	}
@@ -259,7 +293,7 @@ func TestMarkTaskFailed(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	if err := st.MarkTaskFailed(ctx, "t-001", "delivery failed"); err != nil {
+	if err := st.MarkTaskFailed(ctx, "t-001"); err != nil {
 		t.Fatalf("MarkTaskFailed: %v", err)
 	}
 
@@ -267,7 +301,7 @@ func TestMarkTaskFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if got.Status != "failed" || got.Notes != "delivery failed" || got.CompletedAt == "" {
+	if got.Status != "failed" || got.CompletedAt == "" {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -333,6 +367,46 @@ func TestAbandonTasksByPaneIDUsesAssigneePaneSnapshot(t *testing.T) {
 	}
 }
 
+func TestSaveAndRetrieveMessage(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	msg := domain.TaskMessage{ID: "m-001", Content: "hello world", CreatedAt: "2026-03-07T10:00:00Z"}
+	if err := st.SaveMessage(ctx, msg); err != nil {
+		t.Fatalf("SaveMessage: %v", err)
+	}
+
+	// メッセージが保存されたことを確認（直接SQLで確認）
+	var content string
+	err := st.db.QueryRowContext(ctx, `SELECT content FROM send_messages WHERE id = ?`, "m-001").Scan(&content)
+	if err != nil {
+		t.Fatalf("query message: %v", err)
+	}
+	if content != "hello world" {
+		t.Fatalf("content = %q, want 'hello world'", content)
+	}
+}
+
+func TestSaveAndRetrieveResponse(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	resp := domain.TaskMessage{ID: "r-001", Content: "task completed", CreatedAt: "2026-03-07T10:00:00Z"}
+	if err := st.SaveResponse(ctx, resp); err != nil {
+		t.Fatalf("SaveResponse: %v", err)
+	}
+
+	// レスポンスが保存されたことを確認（直接SQLで確認）
+	var content string
+	err := st.db.QueryRowContext(ctx, `SELECT content FROM send_responses WHERE id = ?`, "r-001").Scan(&content)
+	if err != nil {
+		t.Fatalf("query response: %v", err)
+	}
+	if content != "task completed" {
+		t.Fatalf("content = %q, want 'task completed'", content)
+	}
+}
+
 func TestConfigGetSet(t *testing.T) {
 	st := newTestStore(t)
 
@@ -375,6 +449,250 @@ func TestMigrateIsIdempotent(t *testing.T) {
 
 	if err := st.Migrate(); err != nil {
 		t.Fatalf("second Migrate: %v", err)
+	}
+}
+
+func TestUnmarshalSkillsJSONFormats(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantLen   int
+		wantFirst domain.Skill
+		wantErr   bool
+	}{
+		{
+			name:      "new format with description",
+			input:     `[{"name":"Go","description":"backend dev"}]`,
+			wantLen:   1,
+			wantFirst: domain.Skill{Name: "Go", Description: "backend dev"},
+		},
+		{
+			name:      "new format without description",
+			input:     `[{"name":"Go"}]`,
+			wantLen:   1,
+			wantFirst: domain.Skill{Name: "Go"},
+		},
+		{
+			name:      "legacy string format",
+			input:     `["Go","API設計"]`,
+			wantLen:   2,
+			wantFirst: domain.Skill{Name: "Go"},
+		},
+		{
+			name:    "invalid JSON",
+			input:   `not-json`,
+			wantErr: true,
+		},
+		{
+			name:    "empty array",
+			input:   `[]`,
+			wantLen: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := unmarshalSkillsJSON(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("unmarshalSkillsJSON(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if len(got) != tt.wantLen {
+				t.Fatalf("got %d skills, want %d", len(got), tt.wantLen)
+			}
+			if tt.wantLen > 0 && got[0] != tt.wantFirst {
+				t.Fatalf("first skill = %+v, want %+v", got[0], tt.wantFirst)
+			}
+		})
+	}
+}
+
+func TestGetAgentReadLegacySkillsFormat(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	// 旧形式で直接DBに挿入
+	_, err := st.db.ExecContext(ctx,
+		`INSERT INTO agents (name, pane_id, role, skills, created_at) VALUES (?, ?, ?, ?, ?)`,
+		"legacy-agent", "%5", "worker", `["Go","testing"]`, "2026-03-14T00:00:00Z",
+	)
+	if err != nil {
+		t.Fatalf("insert legacy: %v", err)
+	}
+
+	got, err := st.GetAgent(ctx, "legacy-agent")
+	if err != nil {
+		t.Fatalf("GetAgent: %v", err)
+	}
+	if len(got.Skills) != 2 || got.Skills[0].Name != "Go" || got.Skills[1].Name != "testing" {
+		t.Fatalf("skills = %+v, want [{Go} {testing}]", got.Skills)
+	}
+	if got.Skills[0].Description != "" {
+		t.Fatalf("legacy skill should have empty description, got %q", got.Skills[0].Description)
+	}
+}
+
+func TestRegisterAndListInstances(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.RegisterInstance(ctx, "mcp-aaa"); err != nil {
+		t.Fatalf("RegisterInstance: %v", err)
+	}
+	if err := st.RegisterInstance(ctx, "mcp-bbb"); err != nil {
+		t.Fatalf("RegisterInstance: %v", err)
+	}
+
+	ids, err := st.ListActiveInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveInstances: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 active instances, got %d", len(ids))
+	}
+}
+
+func TestUnregisterInstance(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	st.RegisterInstance(ctx, "mcp-aaa")
+	st.RegisterInstance(ctx, "mcp-bbb")
+
+	if err := st.UnregisterInstance(ctx, "mcp-aaa"); err != nil {
+		t.Fatalf("UnregisterInstance: %v", err)
+	}
+
+	ids, err := st.ListActiveInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveInstances: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "mcp-bbb" {
+		t.Fatalf("expected [mcp-bbb], got %v", ids)
+	}
+}
+
+func TestCleanupStaleAgents(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	// 2つのインスタンスからエージェント登録
+	st.UpsertAgent(ctx, domain.Agent{Name: "alive-agent", PaneID: "%1", MCPInstanceID: "mcp-alive"})
+	st.UpsertAgent(ctx, domain.Agent{Name: "stale-agent", PaneID: "%2", MCPInstanceID: "mcp-dead"})
+	st.UpsertAgent(ctx, domain.Agent{Name: "legacy-agent", PaneID: "%3"}) // MCPInstanceID なし（旧データ）
+
+	n, err := st.CleanupStaleAgents(ctx, []string{"mcp-alive"})
+	if err != nil {
+		t.Fatalf("CleanupStaleAgents: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 deleted, got %d", n)
+	}
+
+	agents, _ := st.ListAgents(ctx)
+	if len(agents) != 2 {
+		t.Fatalf("expected 2 remaining agents, got %d", len(agents))
+	}
+	for _, a := range agents {
+		if a.Name == "stale-agent" {
+			t.Fatalf("stale-agent should have been deleted")
+		}
+	}
+}
+
+func TestCleanupStaleAgentsNoActiveInstances(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	st.UpsertAgent(ctx, domain.Agent{Name: "agent1", PaneID: "%1", MCPInstanceID: "mcp-dead"})
+	st.UpsertAgent(ctx, domain.Agent{Name: "legacy", PaneID: "%2"})
+
+	n, err := st.CleanupStaleAgents(ctx, []string{})
+	if err != nil {
+		t.Fatalf("CleanupStaleAgents: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 deleted, got %d", n)
+	}
+
+	agents, _ := st.ListAgents(ctx)
+	if len(agents) != 1 || agents[0].Name != "legacy" {
+		t.Fatalf("expected only legacy agent, got %v", agents)
+	}
+}
+
+func TestCleanupStaleTasks(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	st.UpsertAgent(ctx, domain.Agent{Name: "a1", PaneID: "%1"})
+	st.UpsertAgent(ctx, domain.Agent{Name: "a2", PaneID: "%2"})
+
+	st.CreateTask(ctx, domain.Task{ID: "t-alive", AgentName: "a1", SenderInstanceID: "mcp-alive", Status: "pending", SentAt: "2026-01-01T00:00:00Z"})
+	st.CreateTask(ctx, domain.Task{ID: "t-stale", AgentName: "a2", SenderInstanceID: "mcp-dead", Status: "pending", SentAt: "2026-01-01T00:00:00Z"})
+	st.CreateTask(ctx, domain.Task{ID: "t-legacy", AgentName: "a1", Status: "pending", SentAt: "2026-01-01T00:00:00Z"})
+	st.CreateTask(ctx, domain.Task{ID: "t-done", AgentName: "a2", SenderInstanceID: "mcp-dead", Status: "completed", SentAt: "2026-01-01T00:00:00Z"})
+
+	n, err := st.CleanupStaleTasks(ctx, []string{"mcp-alive"})
+	if err != nil {
+		t.Fatalf("CleanupStaleTasks: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 abandoned, got %d", n)
+	}
+
+	task, _ := st.GetTask(ctx, "t-stale")
+	if task.Status != "abandoned" {
+		t.Fatalf("expected t-stale to be abandoned, got %s", task.Status)
+	}
+
+	// alive task should remain pending
+	aliveTask, _ := st.GetTask(ctx, "t-alive")
+	if aliveTask.Status != "pending" {
+		t.Fatalf("expected t-alive to remain pending, got %s", aliveTask.Status)
+	}
+
+	// legacy task (no sender_instance_id) should remain pending
+	legacyTask, _ := st.GetTask(ctx, "t-legacy")
+	if legacyTask.Status != "pending" {
+		t.Fatalf("expected t-legacy to remain pending, got %s", legacyTask.Status)
+	}
+
+	// completed task should remain completed
+	doneTask, _ := st.GetTask(ctx, "t-done")
+	if doneTask.Status != "completed" {
+		t.Fatalf("expected t-done to remain completed, got %s", doneTask.Status)
+	}
+}
+
+func TestAgentMCPInstanceIDRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	st.UpsertAgent(ctx, domain.Agent{Name: "x", PaneID: "%1", MCPInstanceID: "mcp-abc123"})
+	got, err := st.GetAgent(ctx, "x")
+	if err != nil {
+		t.Fatalf("GetAgent: %v", err)
+	}
+	if got.MCPInstanceID != "mcp-abc123" {
+		t.Fatalf("expected mcp_instance_id=mcp-abc123, got %q", got.MCPInstanceID)
+	}
+}
+
+func TestTaskSenderInstanceIDRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	st.UpsertAgent(ctx, domain.Agent{Name: "a", PaneID: "%1"})
+	st.CreateTask(ctx, domain.Task{ID: "t-1", AgentName: "a", SenderInstanceID: "mcp-xyz789", Status: "pending", SentAt: "2026-01-01T00:00:00Z"})
+	got, err := st.GetTask(ctx, "t-1")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.SenderInstanceID != "mcp-xyz789" {
+		t.Fatalf("expected sender_instance_id=mcp-xyz789, got %q", got.SenderInstanceID)
 	}
 }
 

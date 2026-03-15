@@ -2,6 +2,3 @@
 .myT-x/*.db
 .myT-x/*.db-shm
 .myT-x/*.db-wal
-
-AGENTS.md
-CLAUDE.md
