@@ -59,7 +59,7 @@ export type KnownKeyBinding =
 
 type AppConfigBase = Pick<
     wailsConfig.Config,
-    "shell" | "prefix" | "keys" | "quake_mode" | "global_hotkey" | "viewer_sidebar_mode" | "default_session_dir"
+    "shell" | "prefix" | "keys" | "quake_mode" | "global_hotkey" | "viewer_sidebar_mode" | "default_session_dir" | "chat_overlay_percentage"
 >;
 
 export type AppConfigClaudeEnv = Pick<wailsConfig.ClaudeEnvConfig, "default_enabled" | "vars">;

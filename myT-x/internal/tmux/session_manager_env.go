@@ -346,6 +346,37 @@ func (m *SessionManager) HasPane(paneID string) bool {
 	return ok
 }
 
+// PanePIDInfo はペインIDとシェルプロセスPIDの組を表す。
+type PanePIDInfo struct {
+	PaneID string
+	PID    int
+}
+
+// GetSessionPanePIDs はセッション内の全ペインのPID情報を返す。
+// ロック順序: SessionManager.mu (RLock) → Terminal.mu (RLock via PID())
+func (m *SessionManager) GetSessionPanePIDs(sessionName string) ([]PanePIDInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	session, ok := m.sessions[parseSessionName(sessionName)]
+	if !ok {
+		return nil, fmt.Errorf("session %q not found", sessionName)
+	}
+	var result []PanePIDInfo
+	for _, w := range session.Windows {
+		for _, p := range w.Panes {
+			pid := 0
+			if p.Terminal != nil {
+				pid = p.Terminal.PID()
+			}
+			result = append(result, PanePIDInfo{
+				PaneID: p.IDString(),
+				PID:    pid,
+			})
+		}
+	}
+	return result, nil
+}
+
 func worktreeInfoEqual(left, right *SessionWorktreeInfo) bool {
 	if left == nil || right == nil {
 		return left == right

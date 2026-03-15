@@ -28,6 +28,8 @@ export function CreateSessionWithExistingWorktree(arg1:string,arg2:string,arg3:s
 
 export function CreateSessionWithWorktree(arg1:string,arg2:string,arg3:main.WorktreeSessionOptions):Promise<tmux.SessionSnapshot>;
 
+export function DeleteOrchestratorTeam(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function DeleteScheduler(arg1:string):Promise<void>;
 
 export function DeleteSchedulerTemplate(arg1:string,arg2:string):Promise<void>;
@@ -70,6 +72,8 @@ export function GetMCPDetail(arg1:string,arg2:string):Promise<mcp.Snapshot>;
 
 export function GetPaneEnv(arg1:string):Promise<Record<string, string>>;
 
+export function GetPaneProcessStatus(arg1:string):Promise<Array<main.PaneProcessStatus>>;
+
 export function GetPaneReplay(arg1:string):Promise<string>;
 
 export function GetSchedulerStatuses():Promise<Array<main.SchedulerEntryStatus>>;
@@ -98,9 +102,15 @@ export function ListBranches(arg1:string):Promise<Array<string>>;
 
 export function ListMCPServers(arg1:string):Promise<Array<mcp.Snapshot>>;
 
+export function ListOrchestratorAgents(arg1:string):Promise<Array<main.OrchestratorAgent>>;
+
+export function ListOrchestratorTasks(arg1:string):Promise<Array<main.OrchestratorTask>>;
+
 export function ListSessions():Promise<Array<tmux.SessionSnapshot>>;
 
 export function ListWorktreesByRepo(arg1:string):Promise<Array<git.WorktreeInfo>>;
+
+export function LoadOrchestratorTeams(arg1:string):Promise<Array<main.OrchestratorTeamDefinition>>;
 
 export function LoadSchedulerTemplates(arg1:string):Promise<Array<main.SchedulerTemplate>>;
 
@@ -118,6 +128,8 @@ export function RenamePane(arg1:string,arg2:string):Promise<void>;
 
 export function RenameSession(arg1:string,arg2:string):Promise<void>;
 
+export function ReorderOrchestratorTeams(arg1:Array<string>,arg2:string,arg3:string):Promise<void>;
+
 export function ResizePane(arg1:string,arg2:number,arg3:number):Promise<void>;
 
 export function ResolveMCPStdio(arg1:string,arg2:string):Promise<ipc.MCPStdioResolvePayload>;
@@ -126,7 +138,11 @@ export function ResumeScheduler(arg1:string):Promise<void>;
 
 export function SaveConfig(arg1:config.Config):Promise<void>;
 
+export function SaveOrchestratorTeam(arg1:main.OrchestratorTeamDefinition,arg2:string):Promise<void>;
+
 export function SaveSchedulerTemplate(arg1:string,arg2:main.SchedulerTemplate):Promise<void>;
+
+export function SendChatMessage(arg1:string,arg2:string):Promise<void>;
 
 export function SendInput(arg1:string,arg2:string):Promise<void>;
 
@@ -135,6 +151,8 @@ export function SendSyncInput(arg1:string,arg2:string):Promise<void>;
 export function SetActiveSession(arg1:string):Promise<void>;
 
 export function SplitPane(arg1:string,arg2:boolean):Promise<string>;
+
+export function StartOrchestratorTeam(arg1:main.StartOrchestratorTeamRequest):Promise<main.StartOrchestratorTeamResult>;
 
 export function StartScheduler(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<string>;
 

@@ -2095,3 +2095,537 @@
 .pane-scheduler-delete-card-btn:hover {
     opacity: 0.8;
 }
+
+/* ── Orchestrator Teams View ── */
+.orchestrator-teams-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.orchestrator-teams-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 14px;
+    background:
+        radial-gradient(circle at top right, rgba(150, 182, 219, 0.12), transparent 36%),
+        linear-gradient(180deg, rgba(15, 24, 35, 0.96), rgba(9, 14, 22, 0.98));
+}
+
+.orchestrator-teams-banner {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(150, 182, 219, 0.16);
+    white-space: pre-wrap;
+}
+
+.orchestrator-teams-banner.error {
+    background: rgba(145, 45, 45, 0.22);
+    border-color: rgba(209, 77, 65, 0.3);
+    color: #ffd3d0;
+}
+
+.orchestrator-teams-banner.notice {
+    background: rgba(39, 84, 123, 0.2);
+    border-color: rgba(150, 182, 219, 0.26);
+    color: rgba(234, 242, 255, 0.94);
+}
+
+.orchestrator-teams-banner button {
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.76rem;
+}
+
+.orchestrator-teams-toolbar {
+    display: flex;
+    gap: 10px;
+}
+
+.orchestrator-teams-primary-btn,
+.orchestrator-teams-secondary-btn,
+.orchestrator-teams-start-btn,
+.orchestrator-teams-back-btn {
+    border: 1px solid rgba(150, 182, 219, 0.2);
+    border-radius: 10px;
+    color: rgba(239, 245, 255, 0.94);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.orchestrator-teams-primary-btn,
+.orchestrator-teams-start-btn,
+.orchestrator-teams-secondary-btn {
+    min-height: 38px;
+    padding: 0 14px;
+}
+
+.orchestrator-teams-primary-btn {
+    background: linear-gradient(135deg, rgba(67, 128, 184, 0.9), rgba(100, 164, 223, 0.88));
+}
+
+.orchestrator-teams-start-btn {
+    background: rgba(28, 58, 89, 0.88);
+}
+
+.orchestrator-teams-secondary-btn,
+.orchestrator-teams-back-btn {
+    background: rgba(18, 29, 43, 0.88);
+}
+
+.orchestrator-teams-back-btn {
+    align-self: flex-start;
+    min-height: 34px;
+    padding: 0 12px;
+}
+
+.orchestrator-teams-primary-btn:hover:not(:disabled),
+.orchestrator-teams-start-btn:hover:not(:disabled),
+.orchestrator-teams-secondary-btn:hover:not(:disabled),
+.orchestrator-teams-back-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    border-color: rgba(150, 182, 219, 0.4);
+}
+
+.orchestrator-teams-primary-btn:disabled,
+.orchestrator-teams-start-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.orchestrator-teams-inline-note,
+.orchestrator-teams-empty,
+.orchestrator-team-member-empty-panel {
+    border: 1px dashed rgba(150, 182, 219, 0.18);
+    border-radius: 12px;
+    padding: 14px;
+    color: rgba(214, 225, 242, 0.72);
+    background: rgba(12, 19, 28, 0.5);
+}
+
+.orchestrator-teams-list {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: 10px;
+}
+
+.orchestrator-teams-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    padding-right: 4px;
+}
+
+.orchestrator-team-card {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 6px 12px;
+    border: 1px solid rgba(150, 182, 219, 0.14);
+    border-radius: 8px;
+    background:
+        linear-gradient(180deg, rgba(24, 38, 55, 0.92), rgba(14, 22, 32, 0.94)),
+        rgba(10, 16, 23, 0.95);
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.orchestrator-team-card-description {
+    width: 100%;
+    font-size: 0.72rem;
+    color: rgba(198, 212, 232, 0.72);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.orchestrator-team-card.selected {
+    border-color: rgba(100, 164, 223, 0.58);
+    box-shadow: 0 0 0 1px rgba(100, 164, 223, 0.16), 0 2px 8px rgba(0, 0, 0, 0.24);
+}
+
+.orchestrator-team-card-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 100px;
+    max-width: 160px;
+    gap: 1px;
+}
+
+.orchestrator-team-editor-header,
+.orchestrator-team-editor-member,
+.orchestrator-team-editor-member-title-row,
+.orchestrator-team-editor-member-actions,
+.orchestrator-teams-grid,
+.orchestrator-teams-start-grid {
+    display: flex;
+    gap: 10px;
+}
+
+.orchestrator-team-editor-header,
+.orchestrator-team-editor-member,
+.orchestrator-team-editor-member-title-row {
+    justify-content: space-between;
+}
+
+.orchestrator-team-editor-header,
+.orchestrator-team-editor-member-title-row {
+    align-items: center;
+}
+
+.orchestrator-team-card-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: rgba(244, 248, 255, 0.96);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.orchestrator-team-editor-title {
+    font-size: 0.98rem;
+    font-weight: 700;
+    color: rgba(244, 248, 255, 0.96);
+}
+
+.orchestrator-team-card-meta,
+.orchestrator-team-editor-subtitle,
+.orchestrator-team-editor-member-meta,
+.orchestrator-team-member-empty {
+    font-size: 0.72rem;
+    color: rgba(198, 212, 232, 0.72);
+}
+
+.orchestrator-team-card-tag,
+.orchestrator-team-editor-member-warning {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+}
+
+.orchestrator-team-card-tag {
+    background: rgba(100, 164, 223, 0.18);
+    color: rgba(223, 235, 251, 0.94);
+}
+
+.orchestrator-team-card-tag.project {
+    background: rgba(100, 200, 130, 0.22);
+    color: rgba(180, 240, 200, 0.94);
+}
+
+.orchestrator-team-card-tag.global {
+    background: rgba(100, 164, 223, 0.12);
+    color: rgba(180, 210, 240, 0.8);
+}
+
+.orchestrator-team-storage-selector {
+    display: flex;
+    gap: 16px;
+}
+
+.orchestrator-team-storage-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: rgba(223, 235, 251, 0.9);
+}
+
+.orchestrator-team-storage-option.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.orchestrator-team-editor-member-warning {
+    background: rgba(209, 152, 65, 0.16);
+    color: #ffd9a4;
+}
+
+.orchestrator-team-member-list {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.orchestrator-team-member-chip {
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(233, 241, 252, 0.88);
+    font-size: 0.70rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.orchestrator-team-member-chip.more {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(200, 215, 235, 0.7);
+}
+
+.orchestrator-team-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.orchestrator-team-card-btn {
+    min-height: 26px;
+    padding: 0 8px;
+    border: 1px solid rgba(150, 182, 219, 0.14);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(233, 241, 252, 0.88);
+    cursor: pointer;
+    font-size: 0.74rem;
+}
+
+.orchestrator-team-card-btn.icon {
+    min-height: 24px;
+    min-width: 24px;
+    padding: 0;
+    font-size: 0.68rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.orchestrator-team-card-btn.icon:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.orchestrator-team-card-btn.danger {
+    color: #ffc5c0;
+    border-color: rgba(209, 77, 65, 0.24);
+    background: rgba(209, 77, 65, 0.08);
+}
+
+.orchestrator-team-editor,
+.orchestrator-member-editor,
+.orchestrator-teams-start-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+}
+
+.orchestrator-member-editor {
+    overflow-y: auto;
+}
+
+.orchestrator-team-editor-members {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: auto;
+    padding-right: 4px;
+}
+
+.orchestrator-team-editor-member {
+    align-items: center;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(150, 182, 219, 0.12);
+    background: rgba(14, 22, 32, 0.66);
+}
+
+.orchestrator-team-editor-member-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.orchestrator-team-editor-member-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: rgba(244, 248, 255, 0.94);
+}
+
+.orchestrator-team-editor-member-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+}
+
+.orchestrator-team-editor-footer {
+    display: flex;
+    justify-content: flex-end;
+    flex-shrink: 0;
+}
+
+.orchestrator-teams-grid,
+.orchestrator-teams-start-grid {
+    flex-wrap: wrap;
+}
+
+.orchestrator-teams-grid > .form-group,
+.orchestrator-teams-start-grid > * {
+    flex: 1 1 240px;
+}
+
+.orchestrator-teams-textarea {
+    min-height: 140px;
+    resize: vertical;
+}
+
+.orchestrator-teams-textarea.small {
+    min-height: 96px;
+}
+
+.orchestrator-teams-count {
+    font-weight: normal;
+    opacity: 0.6;
+    font-size: 0.85em;
+}
+
+.orchestrator-teams-skill-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: flex-start;
+}
+
+.orchestrator-teams-skill-fields {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.orchestrator-teams-remove-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary, #888);
+    cursor: pointer;
+    font-size: 18px;
+    padding: 4px 8px;
+    line-height: 1;
+    border-radius: 4px;
+    flex-shrink: 0;
+    margin-top: 4px;
+}
+
+.orchestrator-teams-remove-btn:hover {
+    color: var(--danger-color, #e55);
+    background: rgba(255, 80, 80, 0.1);
+}
+
+.orchestrator-teams-add-btn {
+    background: none;
+    border: 1px dashed var(--border-color, #444);
+    color: var(--text-secondary, #888);
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.85em;
+    width: 100%;
+    text-align: center;
+}
+
+.orchestrator-teams-add-btn:hover:not(:disabled) {
+    color: var(--text-primary, #ccc);
+    border-color: var(--text-secondary, #888);
+}
+
+.orchestrator-teams-add-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.orchestrator-teams-field-note {
+    margin: 0;
+    font-size: 0.8em;
+    color: var(--text-secondary, #888);
+    opacity: 0.8;
+    line-height: 1.4;
+}
+
+.orchestrator-teams-input-error {
+    border-color: var(--danger-color, #e55) !important;
+}
+
+.orchestrator-teams-field-error {
+    color: var(--danger-color, #e55);
+    font-size: 0.8em;
+    margin-top: 4px;
+    display: block;
+}
+
+.orchestrator-teams-start-hero {
+    padding: 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(150, 182, 219, 0.14);
+    background:
+        linear-gradient(135deg, rgba(22, 36, 53, 0.9), rgba(14, 22, 32, 0.92)),
+        rgba(10, 16, 23, 0.96);
+}
+
+.orchestrator-teams-start-hero h3 {
+    margin: 10px 0 8px;
+    font-size: 1.05rem;
+    color: rgba(245, 249, 255, 0.98);
+}
+
+.orchestrator-teams-start-hero p,
+.orchestrator-teams-mode-card p {
+    margin: 0;
+    line-height: 1.5;
+    color: rgba(206, 220, 240, 0.78);
+}
+
+.orchestrator-teams-mode-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px;
+    border: 1px solid rgba(150, 182, 219, 0.12);
+    border-radius: 14px;
+    background: rgba(15, 24, 35, 0.72);
+}
+
+.orchestrator-teams-mode-card.selected {
+    border-color: rgba(100, 164, 223, 0.45);
+    box-shadow: inset 0 0 0 1px rgba(100, 164, 223, 0.12);
+}
+
+.orchestrator-teams-mode-card-warning {
+    font-size: 0.78rem;
+    color: rgba(255, 200, 120, 0.88);
+}
+
+.orchestrator-teams-mode-card label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: rgba(242, 247, 255, 0.94);
+}

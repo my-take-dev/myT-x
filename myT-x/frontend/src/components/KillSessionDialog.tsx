@@ -53,16 +53,18 @@ export function KillSessionDialog({open, sessionName, onClose, onKilled}: KillSe
                 // Safe fallback: assume worktree with uncommitted changes to prevent data loss.
                 setStatus({has_worktree: true, has_uncommitted: true, has_unpushed: true, branch_name: "", is_detached: false});
                 setPhase("ready");
+                const raw = String(err);
                 setError(
                     isEn
-                        ? `Failed to read worktree status (treated as unsaved changes for safety): ${String(err)}`
-                        : t("killSession.error.statusFetchFailedSafeMode", "ワークツリー状態の取得に失敗しました（安全のため未保存変更ありとして扱います）: {error}", {
-                            error: String(err),
-                        }),
+                        ? `Failed to read worktree status (treated as unsaved changes for safety): ${raw}`
+                        : t("killSession.error.statusFetchFailedSafeMode", "ワークツリー状態の取得に失敗しました（安全のため未保存変更ありとして扱います）: {error}", {error: raw}),
                 );
                 console.warn("[worktree] CheckWorktreeStatus failed:", err);
             });
-    }, [isEn, open, sessionName, t]);
+        // NOTE: isEn and t are intentionally omitted — they are used only for error
+        // formatting and t is a stable reference (useCallback in useI18n).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, sessionName]);
 
     useEscapeClose(open && phase !== "processing", onClose);
 

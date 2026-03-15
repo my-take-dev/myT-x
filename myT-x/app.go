@@ -39,6 +39,7 @@ type App struct {
 	//   windowMu, outputMu, snapshotRequestMu, snapshotMetricsMu,
 	//   startupWarnMu, activeSessMu, ctxMu, sessionLogMu,
 	//   inputHistoryMu, inputLineBufMu, schedulerMu, schedulerTemplateMu
+	//   orchestratorTeamMu
 	//   tmux.SessionManager.mu, tmux.CommandRouter.mu
 	//
 	// Keep cfgSaveMu/cfgMu isolated from the independent lock set above.
@@ -139,6 +140,10 @@ type App struct {
 	schedulerMu         sync.Mutex
 	schedulerEntries    map[string]*schedulerEntry // key: UUID
 	schedulerTemplateMu sync.Mutex
+
+	// Orchestrator team persistence state.
+	// orchestratorTeamMu is independent of all other App-level locks.
+	orchestratorTeamMu sync.Mutex
 
 	// Background worker cancellation/waits.
 	idleCancel context.CancelFunc

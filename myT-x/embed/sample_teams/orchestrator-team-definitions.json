@@ -1,0 +1,16 @@
+[
+  {
+    "id": "e9b3b8d0-91c8-4081-accd-ff4b0cf54f09",
+    "name": "claudeテスト",
+    "description": "テスト用のチームです。ここは説明欄です。",
+    "order": 1,
+    "bootstrap_delay_ms": 5000
+  },
+  {
+    "id": "ee8d2994-b8ab-4355-bf79-507545176019",
+    "name": "codexテスト",
+    "description": "テスト用のチームです。ここは説明欄です。",
+    "order": 1,
+    "bootstrap_delay_ms": 3000
+  }
+]

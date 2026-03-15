@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +38,7 @@ type Config struct {
 	// DI注入点（nil の場合はデフォルト実装を使用）
 	AgentRepo    domain.AgentRepository
 	TaskRepo     domain.TaskRepository
+	MessageRepo  domain.MessageRepository
 	Sender       domain.PaneSender
 	Lister       domain.PaneLister
 	Capturer     domain.PaneCapturer
@@ -45,33 +48,49 @@ type Config struct {
 
 // Runtime は MCP サーバーとライフサイクルを管理する。
 type Runtime struct {
-	cfg       Config
-	store     *store.Store
-	resolver  domain.SelfPaneResolver
-	agentRepo domain.AgentRepository
-	taskRepo  domain.TaskRepository
-	server    *mcp.Server
-	selfPane  string
+	cfg        Config
+	store      *store.Store
+	resolver   domain.SelfPaneResolver
+	agentRepo  domain.AgentRepository
+	taskRepo   domain.TaskRepository
+	server     *mcp.Server
+	selfPane   string
+	instanceID string
 
 	mu      sync.Mutex
 	started bool
 	closed  bool
 }
 
+// generateInstanceID は MCP インスタンスのユニークIDを生成する。
+func generateInstanceID() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate instance id: %w", err)
+	}
+	return "mcp-" + hex.EncodeToString(b), nil
+}
+
 // NewRuntime はランタイムを構築する。
 func NewRuntime(cfg Config) (*Runtime, error) {
+	instanceID, err := generateInstanceID()
+	if err != nil {
+		return nil, err
+	}
+
 	normalized := normalizeConfig(cfg)
 
 	var st *store.Store
 	agentRepo := normalized.AgentRepo
 	taskRepo := normalized.TaskRepo
+	messageRepo := normalized.MessageRepo
 	sender := normalized.Sender
 	lister := normalized.Lister
 	capturer := normalized.Capturer
 	resolver := normalized.SelfResolver
 	titleSetter := normalized.TitleSetter
 	// デフォルト実装の生成
-	if agentRepo == nil || taskRepo == nil {
+	if agentRepo == nil || taskRepo == nil || messageRepo == nil {
 		var err error
 		st, err = store.Open(normalized.DBPath)
 		if err != nil {
@@ -88,6 +107,9 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		}
 		if taskRepo == nil {
 			taskRepo = st
+		}
+		if messageRepo == nil {
+			messageRepo = st
 		}
 	}
 
@@ -113,12 +135,12 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 
 	// usecase サービス構築
 	agentSvc := usecase.NewAgentService(agentRepo, stickyResolver, lister, titleSetter, normalized.Logger)
-	dispatchSvc := usecase.NewTaskDispatchService(agentRepo, taskRepo, sender, normalized.Logger)
+	dispatchSvc := usecase.NewTaskDispatchService(agentRepo, taskRepo, messageRepo, sender, normalized.Logger)
 	querySvc := usecase.NewTaskQueryService(agentRepo, taskRepo, stickyResolver, normalized.Logger)
-	responseSvc := usecase.NewResponseService(agentRepo, taskRepo, sender, stickyResolver, normalized.Logger)
+	responseSvc := usecase.NewResponseService(agentRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
 	captureSvc := usecase.NewCaptureService(agentRepo, capturer, stickyResolver, normalized.Logger)
 
-	handler := mcptool.NewHandler(agentSvc, dispatchSvc, querySvc, responseSvc, captureSvc)
+	handler := mcptool.NewHandler(agentSvc, dispatchSvc, querySvc, responseSvc, captureSvc, instanceID)
 	registry, err := handler.BuildRegistry()
 	if err != nil {
 		var cleanupErrs []error
@@ -143,12 +165,13 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	})
 
 	return &Runtime{
-		cfg:       normalized,
-		store:     st,
-		resolver:  stickyResolver,
-		agentRepo: agentRepo,
-		taskRepo:  taskRepo,
-		server:    server,
+		cfg:        normalized,
+		store:      st,
+		resolver:   stickyResolver,
+		agentRepo:  agentRepo,
+		taskRepo:   taskRepo,
+		server:     server,
+		instanceID: instanceID,
 	}, nil
 }
 
@@ -197,6 +220,30 @@ func (r *Runtime) Start(ctx context.Context) error {
 		r.cfg.Logger.Printf("自ペインID: %s", paneID)
 	}
 
+	// インスタンス登録とstaleデータのクリーンアップ
+	if r.store != nil {
+		if regErr := r.store.RegisterInstance(ctx, r.instanceID); regErr != nil {
+			r.cfg.Logger.Printf("[DEBUG:instance-cleanup] インスタンス登録に失敗: %v", regErr)
+		} else {
+			r.cfg.Logger.Printf("[DEBUG:instance-cleanup] インスタンス登録完了: %s", r.instanceID)
+			activeIDs, listErr := r.store.ListActiveInstances(ctx)
+			if listErr != nil {
+				r.cfg.Logger.Printf("[DEBUG:instance-cleanup] アクティブインスタンス取得に失敗: %v", listErr)
+			} else {
+				if n, cleanErr := r.store.CleanupStaleAgents(ctx, activeIDs); cleanErr != nil {
+					r.cfg.Logger.Printf("[DEBUG:instance-cleanup] ゴーストエージェントクリーンアップに失敗: %v", cleanErr)
+				} else if n > 0 {
+					r.cfg.Logger.Printf("[DEBUG:instance-cleanup] ゴーストエージェント %d 件を削除しました", n)
+				}
+				if n, cleanErr := r.store.CleanupStaleTasks(ctx, activeIDs); cleanErr != nil {
+					r.cfg.Logger.Printf("[DEBUG:instance-cleanup] 孤立タスククリーンアップに失敗: %v", cleanErr)
+				} else if n > 0 {
+					r.cfg.Logger.Printf("[DEBUG:instance-cleanup] 孤立タスク %d 件を abandoned に更新しました", n)
+				}
+			}
+		}
+	}
+
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -235,6 +282,11 @@ func (r *Runtime) Close(ctx context.Context) error {
 		return r.closeResources(ctx)
 	}
 
+	// セッション終了マーク: sender_instance_id ベースで全タスクの is_now_session を false に更新
+	if err := r.taskRepo.EndSessionByInstanceID(ctx, r.instanceID); err != nil {
+		r.cfg.Logger.Printf("セッション終了マーク更新に失敗: %v", err)
+	}
+
 	if r.selfPane != "" {
 		if err := r.taskRepo.AbandonTasksByPaneID(ctx, r.selfPane); err != nil {
 			r.cfg.Logger.Printf("タスク abandoned 化に失敗: %v", err)
@@ -244,6 +296,13 @@ func (r *Runtime) Close(ctx context.Context) error {
 		}
 	} else {
 		r.cfg.Logger.Printf("自ペインID不明のため終了時クリーンアップをスキップします")
+	}
+
+	// インスタンス登録解除
+	if r.store != nil {
+		if err := r.store.UnregisterInstance(ctx, r.instanceID); err != nil {
+			r.cfg.Logger.Printf("[DEBUG:instance-cleanup] インスタンス登録解除に失敗: %v", err)
+		}
 	}
 
 	return r.closeResources(ctx)

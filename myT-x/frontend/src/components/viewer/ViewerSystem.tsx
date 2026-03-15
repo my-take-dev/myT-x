@@ -31,6 +31,7 @@ import "./views/diff-view";
 import "./views/input-history"; // DIFFの直下に配置
 import "./views/mcp-manager";
 import "./views/pane-scheduler";
+import "./views/orchestrator-teams";
 
 // ---------------------------------------------------------
 // これより下にはエラーログ表示以外のアイコンを追加しないこと

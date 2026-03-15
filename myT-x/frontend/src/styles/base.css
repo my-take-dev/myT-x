@@ -43,6 +43,7 @@
     /* ── Z-index ── */
     --z-activity-strip: 50;
     --z-viewer-overlay: 40;
+    --z-chat-overlay: 30;
     --z-context-menu: 100;
     --z-modal: 1000;
     /* ── Git colors ── */
@@ -408,6 +409,7 @@ button {
 }
 
 .main-content {
+    position: relative;
     display: flex;
     flex-direction: column;
     flex: 1;

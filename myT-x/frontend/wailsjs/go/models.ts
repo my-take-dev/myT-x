@@ -163,6 +163,7 @@ export namespace config {
 	    viewer_sidebar_mode?: string;
 	    default_session_dir?: string;
 	    mcp_servers?: MCPServerConfig[];
+	    chat_overlay_percentage?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -185,6 +186,7 @@ export namespace config {
 	        this.viewer_sidebar_mode = source["viewer_sidebar_mode"];
 	        this.default_session_dir = source["default_session_dir"];
 	        this.mcp_servers = this.convertValues(source["mcp_servers"], MCPServerConfig);
+	        this.chat_overlay_percentage = source["chat_overlay_percentage"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -403,6 +405,166 @@ export namespace main {
 	        this.session = source["session"];
 	    }
 	}
+	export class OrchestratorAgent {
+	    name: string;
+	    pane_id: string;
+	    role: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrchestratorAgent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.pane_id = source["pane_id"];
+	        this.role = source["role"];
+	    }
+	}
+	export class OrchestratorTask {
+	    task_id: string;
+	    agent_name: string;
+	    sender_pane_id: string;
+	    assignee_pane_id: string;
+	    sender_name: string;
+	    status: string;
+	    sent_at: string;
+	    completed_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrchestratorTask(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.task_id = source["task_id"];
+	        this.agent_name = source["agent_name"];
+	        this.sender_pane_id = source["sender_pane_id"];
+	        this.assignee_pane_id = source["assignee_pane_id"];
+	        this.sender_name = source["sender_name"];
+	        this.status = source["status"];
+	        this.sent_at = source["sent_at"];
+	        this.completed_at = source["completed_at"];
+	    }
+	}
+	export class OrchestratorTeamMemberSkill {
+	    name: string;
+	    description?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrchestratorTeamMemberSkill(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	    }
+	}
+	export class OrchestratorTeamMember {
+	    id: string;
+	    team_id: string;
+	    order: number;
+	    pane_title: string;
+	    role: string;
+	    command: string;
+	    args: string[];
+	    custom_message: string;
+	    skills?: OrchestratorTeamMemberSkill[];
+	
+	    static createFrom(source: any = {}) {
+	        return new OrchestratorTeamMember(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.team_id = source["team_id"];
+	        this.order = source["order"];
+	        this.pane_title = source["pane_title"];
+	        this.role = source["role"];
+	        this.command = source["command"];
+	        this.args = source["args"];
+	        this.custom_message = source["custom_message"];
+	        this.skills = this.convertValues(source["skills"], OrchestratorTeamMemberSkill);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OrchestratorTeamDefinition {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    order: number;
+	    bootstrap_delay_ms?: number;
+	    storage_location?: string;
+	    members: OrchestratorTeamMember[];
+	
+	    static createFrom(source: any = {}) {
+	        return new OrchestratorTeamDefinition(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.order = source["order"];
+	        this.bootstrap_delay_ms = source["bootstrap_delay_ms"];
+	        this.storage_location = source["storage_location"];
+	        this.members = this.convertValues(source["members"], OrchestratorTeamMember);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class PaneProcessStatus {
+	    pane_id: string;
+	    has_child_process: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PaneProcessStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pane_id = source["pane_id"];
+	        this.has_child_process = source["has_child_process"];
+	    }
+	}
 	export class SchedulerEntryStatus {
 	    id: string;
 	    title: string;
@@ -465,6 +627,42 @@ export namespace main {
 	        this.level = source["level"];
 	        this.msg = source["msg"];
 	        this.source = source["source"];
+	    }
+	}
+	export class StartOrchestratorTeamRequest {
+	    team_id: string;
+	    launch_mode: string;
+	    source_session_name: string;
+	    new_session_name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StartOrchestratorTeamRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.team_id = source["team_id"];
+	        this.launch_mode = source["launch_mode"];
+	        this.source_session_name = source["source_session_name"];
+	        this.new_session_name = source["new_session_name"];
+	    }
+	}
+	export class StartOrchestratorTeamResult {
+	    session_name: string;
+	    launch_mode: string;
+	    member_pane_ids: Record<string, string>;
+	    warnings: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StartOrchestratorTeamResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session_name = source["session_name"];
+	        this.launch_mode = source["launch_mode"];
+	        this.member_pane_ids = source["member_pane_ids"];
+	        this.warnings = source["warnings"];
 	    }
 	}
 	export class ValidationRules {

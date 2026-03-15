@@ -12,9 +12,9 @@ const (
 	maxAgentNameLen = 64
 	maxRoleLen      = 120
 	maxSkillLen     = 100
+	maxSkillDescLen = 400
 	maxSkills       = 20
 	maxMessageLen   = 8000
-	maxTaskLabelLen = 120
 	maxTaskIDLen    = 64
 	maxCaptureLines = 200
 )
@@ -145,6 +145,54 @@ func optionalStringList(args map[string]any, key string, maxItems int, maxItemLe
 		items = append(items, str)
 	}
 	return items, nil
+}
+
+// optionalSkillList はスキル配列をパースする。
+// オブジェクト配列 [{"name":"x","description":"y"}] とレガシー文字列配列 ["x"] の両方を受け付ける。
+func optionalSkillList(args map[string]any, key string, maxItems int) ([]domain.Skill, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return nil, nil
+	}
+	raw, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be an array", key)
+	}
+	if len(raw) > maxItems {
+		return nil, fmt.Errorf("%s must contain %d items or fewer", key, maxItems)
+	}
+
+	skills := make([]domain.Skill, 0, len(raw))
+	for i, item := range raw {
+		switch v := item.(type) {
+		case string:
+			// レガシー文字列形式
+			if strings.TrimSpace(v) == "" {
+				return nil, fmt.Errorf("%s[%d] name is required", key, i)
+			}
+			if len([]rune(v)) > maxSkillLen {
+				return nil, fmt.Errorf("%s[%d] name must be %d characters or fewer", key, i, maxSkillLen)
+			}
+			skills = append(skills, domain.Skill{Name: v})
+		case map[string]any:
+			// オブジェクト形式
+			name, nameOK := v["name"].(string)
+			if !nameOK || strings.TrimSpace(name) == "" {
+				return nil, fmt.Errorf("%s[%d] name is required", key, i)
+			}
+			if len([]rune(name)) > maxSkillLen {
+				return nil, fmt.Errorf("%s[%d] name must be %d characters or fewer", key, i, maxSkillLen)
+			}
+			desc, _ := v["description"].(string)
+			if len([]rune(desc)) > maxSkillDescLen {
+				return nil, fmt.Errorf("%s[%d] description must be %d characters or fewer", key, i, maxSkillDescLen)
+			}
+			skills = append(skills, domain.Skill{Name: name, Description: desc})
+		default:
+			return nil, fmt.Errorf("%s[%d] must be a string or object", key, i)
+		}
+	}
+	return skills, nil
 }
 
 func optionalBool(args map[string]any, key string, defaultValue bool) (bool, error) {

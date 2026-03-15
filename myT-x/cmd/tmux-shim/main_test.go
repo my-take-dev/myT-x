@@ -242,6 +242,34 @@ func TestValidateCommandSpecConsistency(t *testing.T) {
 	}
 }
 
+func TestRenderUsageIncludesCommandDescriptions(t *testing.T) {
+	var output bytes.Buffer
+
+	renderUsage(&output)
+
+	rendered := output.String()
+	if !strings.Contains(rendered, "tmux shim for myT-x") {
+		t.Fatalf("usage output missing title: %q", rendered)
+	}
+	if !strings.Contains(rendered, "Supported commands:") {
+		t.Fatalf("usage output missing header: %q", rendered)
+	}
+
+	for _, name := range commandOrder {
+		spec, ok := commandSpecs[name]
+		if !ok {
+			t.Fatalf("command %q missing from commandSpecs", name)
+		}
+		if strings.TrimSpace(spec.description) == "" {
+			t.Fatalf("command %q missing description", name)
+		}
+		wantLine := fmt.Sprintf("  %-18s  %s", name, spec.description)
+		if !strings.Contains(rendered, wantLine) {
+			t.Fatalf("usage output missing command line %q\nfull output:\n%s", wantLine, rendered)
+		}
+	}
+}
+
 func TestParseCommandCombinedBoolFlags(t *testing.T) {
 	tests := []struct {
 		name      string

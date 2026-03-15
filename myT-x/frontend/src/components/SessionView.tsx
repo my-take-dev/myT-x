@@ -6,6 +6,9 @@ import {resolveActivePane, resolveActiveWindow} from "../utils/session";
 import {useI18n} from "../i18n";
 import {LayoutPresetSelector} from "./LayoutPresetSelector";
 import {LayoutRenderer} from "./LayoutRenderer";
+import {CanvasModeToggle} from "./canvas/CanvasModeToggle";
+import {CanvasView} from "./canvas/CanvasView";
+import {useCanvasStore} from "../stores/canvasStore";
 
 interface SessionViewProps {
     session: SessionSnapshot | null;
@@ -18,6 +21,7 @@ export function SessionView(props: SessionViewProps) {
     const setActiveSession = useTmuxStore((s) => s.setActiveSession);
     const syncInputMode = useTmuxStore((s) => s.syncInputMode);
     const toggleSyncInputMode = useTmuxStore((s) => s.toggleSyncInputMode);
+    const canvasMode = useCanvasStore((s) => s.mode);
 
     const activeWindow = useMemo(() => resolveActiveWindow(props.session), [props.session]);
 
@@ -177,6 +181,7 @@ export function SessionView(props: SessionViewProps) {
                         sessionName={props.session.name}
                         paneCount={paneList.length}
                     />
+                    <CanvasModeToggle/>
                     {paneList.length >= 2 && (
                         <button
                             type="button"
@@ -207,20 +212,36 @@ export function SessionView(props: SessionViewProps) {
                     )}
                 </div>
                 <div className="session-view-body">
-                    <LayoutRenderer
-                        layout={activeWindow.layout ?? null}
-                        panes={activeWindow.panes}
-                        activePaneId={activePaneId}
-                        zoomPaneId={zoomPaneId}
-                        onFocusPane={onFocusPane}
-                        onSplitVertical={onSplitVertical}
-                        onSplitHorizontal={onSplitHorizontal}
-                        onToggleZoom={onToggleZoom}
-                        onKillPane={onKillPane}
-                        onRenamePane={onRenamePane}
-                        onSwapPane={onSwapPane}
-                        onDetachSession={onDetachSession}
-                    />
+                    {canvasMode === "canvas" ? (
+                        <CanvasView
+                            panes={activeWindow.panes}
+                            activePaneId={activePaneId}
+                            sessionName={props.session.name}
+                            onFocusPane={onFocusPane}
+                            onSplitVertical={onSplitVertical}
+                            onSplitHorizontal={onSplitHorizontal}
+                            onToggleZoom={onToggleZoom}
+                            onKillPane={onKillPane}
+                            onRenamePane={onRenamePane}
+                            onSwapPane={onSwapPane}
+                            onDetachSession={onDetachSession}
+                        />
+                    ) : (
+                        <LayoutRenderer
+                            layout={activeWindow.layout ?? null}
+                            panes={activeWindow.panes}
+                            activePaneId={activePaneId}
+                            zoomPaneId={zoomPaneId}
+                            onFocusPane={onFocusPane}
+                            onSplitVertical={onSplitVertical}
+                            onSplitHorizontal={onSplitHorizontal}
+                            onToggleZoom={onToggleZoom}
+                            onKillPane={onKillPane}
+                            onRenamePane={onRenamePane}
+                            onSwapPane={onSwapPane}
+                            onDetachSession={onDetachSession}
+                        />
+                    )}
                 </div>
             </>
         );

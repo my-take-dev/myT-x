@@ -48,6 +48,9 @@ websocket_port: 0
 #   error-log: "Ctrl+Shift+L"
 #   diff: "Ctrl+Shift+D"
 #   input-history: "Ctrl+Shift+H"
+# chat_overlay_percentage: チャット入力オーバーレイの高さ（ターミナル領域に対する%）
+# 30-95の範囲で指定可能。デフォルトは80。
+# chat_overlay_percentage: 80
 # viewer_sidebar_mode: right viewer sidebar layout mode
 # overlay = full-screen overlay (default), docked = right-side panel
 # viewer_sidebar_mode: overlay

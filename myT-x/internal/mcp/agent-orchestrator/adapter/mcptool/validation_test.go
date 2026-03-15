@@ -154,6 +154,114 @@ func TestOptionalStatusFilterRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestOptionalSkillListFormats(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      map[string]any
+		wantLen   int
+		wantErr   bool
+		wantFirst string // expected first skill name
+	}{
+		{
+			name:    "nil key",
+			args:    map[string]any{},
+			wantLen: 0,
+		},
+		{
+			name:      "legacy string array",
+			args:      map[string]any{"skills": []any{"Go", "API"}},
+			wantLen:   2,
+			wantFirst: "Go",
+		},
+		{
+			name: "object array with description",
+			args: map[string]any{"skills": []any{
+				map[string]any{"name": "Go", "description": "backend"},
+			}},
+			wantLen:   1,
+			wantFirst: "Go",
+		},
+		{
+			name: "object array without description",
+			args: map[string]any{"skills": []any{
+				map[string]any{"name": "testing"},
+			}},
+			wantLen:   1,
+			wantFirst: "testing",
+		},
+		{
+			name:    "empty string name",
+			args:    map[string]any{"skills": []any{""}},
+			wantErr: true,
+		},
+		{
+			name: "empty object name",
+			args: map[string]any{"skills": []any{
+				map[string]any{"name": ""},
+			}},
+			wantErr: true,
+		},
+		{
+			name:    "too many items",
+			args:    map[string]any{"skills": makeStringAnySlice(21, "x")},
+			wantErr: true,
+		},
+		{
+			name:    "name too long",
+			args:    map[string]any{"skills": []any{strings.Repeat("a", 101)}},
+			wantErr: true,
+		},
+		{
+			name: "description too long",
+			args: map[string]any{"skills": []any{
+				map[string]any{"name": "Go", "description": strings.Repeat("あ", 401)},
+			}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid type in array",
+			args:    map[string]any{"skills": []any{42}},
+			wantErr: true,
+		},
+		{
+			name:    "not an array",
+			args:    map[string]any{"skills": "not-array"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := optionalSkillList(tt.args, "skills", maxSkills)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("optionalSkillList error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if len(got) != tt.wantLen {
+				t.Fatalf("got %d skills, want %d", len(got), tt.wantLen)
+			}
+			if tt.wantFirst != "" && got[0].Name != tt.wantFirst {
+				t.Fatalf("first skill name = %q, want %q", got[0].Name, tt.wantFirst)
+			}
+		})
+	}
+}
+
+func TestOptionalSkillListPreservesDescription(t *testing.T) {
+	args := map[string]any{"skills": []any{
+		map[string]any{"name": "Go", "description": "Goコードのレビュー"},
+	}}
+	got, err := optionalSkillList(args, "skills", maxSkills)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got[0].Description != "Goコードのレビュー" {
+		t.Fatalf("description = %q, want %q", got[0].Description, "Goコードのレビュー")
+	}
+}
+
 func makeStringAnySlice(count int, value string) []any {
 	items := make([]any, 0, count)
 	for range count {

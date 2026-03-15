@@ -23,11 +23,12 @@ type GetMyTasksResult struct {
 
 // TaskEntry はタスクエントリ。
 type TaskEntry struct {
-	TaskID      string
-	Label       string
-	Status      string
-	SentAt      string
-	CompletedAt string
+	TaskID       string
+	SenderPaneID string
+	Status       string
+	SentAt       string
+	CompletedAt  string
+	IsNowSession bool
 }
 
 // CheckTasksCmd はタスク確認コマンド。
@@ -47,13 +48,13 @@ type CheckTasksResult struct {
 
 // CheckTaskEntry はタスク確認のエントリ。
 type CheckTaskEntry struct {
-	TaskID      string
-	AgentName   string
-	Label       string
-	Status      string
-	SentAt      string
-	CompletedAt string
-	Notes       string
+	TaskID       string
+	AgentName    string
+	SenderPaneID string
+	Status       string
+	SentAt       string
+	CompletedAt  string
+	IsNowSession bool
 }
 
 // TaskQueryService はタスクの照会を管理する。
@@ -101,11 +102,12 @@ func (s *TaskQueryService) GetMyTasks(ctx context.Context, cmd GetMyTasksCmd) (G
 	entries := make([]TaskEntry, 0, len(tasks))
 	for _, t := range tasks {
 		entries = append(entries, TaskEntry{
-			TaskID:      t.ID,
-			Label:       t.Label,
-			Status:      t.Status,
-			SentAt:      t.SentAt,
-			CompletedAt: t.CompletedAt,
+			TaskID:       t.ID,
+			SenderPaneID: t.SenderPaneID,
+			Status:       t.Status,
+			SentAt:       t.SentAt,
+			CompletedAt:  t.CompletedAt,
+			IsNowSession: t.IsNowSession,
 		})
 	}
 
@@ -134,13 +136,13 @@ func (s *TaskQueryService) CheckTasks(ctx context.Context, cmd CheckTasksCmd) (C
 	pending, completed, failed, abandoned := 0, 0, 0, 0
 	for _, t := range tasks {
 		entries = append(entries, CheckTaskEntry{
-			TaskID:      t.ID,
-			AgentName:   t.AgentName,
-			Label:       t.Label,
-			Status:      t.Status,
-			SentAt:      t.SentAt,
-			CompletedAt: t.CompletedAt,
-			Notes:       t.Notes,
+			TaskID:       t.ID,
+			AgentName:    t.AgentName,
+			SenderPaneID: t.SenderPaneID,
+			Status:       t.Status,
+			SentAt:       t.SentAt,
+			CompletedAt:  t.CompletedAt,
+			IsNowSession: t.IsNowSession,
 		})
 		switch t.Status {
 		case "pending":

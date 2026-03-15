@@ -12,11 +12,13 @@ const (
 )
 
 type commandSpec struct {
-	flags map[string]flagKind
+	description string
+	flags       map[string]flagKind
 }
 
 var commandSpecs = map[string]commandSpec{
 	"new-session": {
+		description: "Create a new session. Common flags: -s name, -c dir, -d detached.",
 		flags: map[string]flagKind{
 			"-d": flagBool,
 			"-P": flagBool,
@@ -30,11 +32,13 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"has-session": {
+		description: "Check whether the target session exists.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 		},
 	},
 	"split-window": {
+		description: "Split the target pane. Common flags: -h horizontal, -v vertical, -c dir.",
 		flags: map[string]flagKind{
 			"-h": flagBool,
 			"-v": flagBool,
@@ -49,6 +53,7 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"send-keys": {
+		description: "Send key input or literal text to a pane.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-l": flagBool,
@@ -59,6 +64,7 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"select-pane": {
+		description: "Focus a pane or move focus with -U/-D/-L/-R.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-T": flagString,
@@ -69,17 +75,20 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"list-sessions": {
+		description: "List sessions. Use -F to format output and -f to filter.",
 		flags: map[string]flagKind{
 			"-F": flagString,
 			"-f": flagString, // filter expression
 		},
 	},
 	"kill-session": {
+		description: "Close the target session.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 		},
 	},
 	"list-panes": {
+		description: "List panes. Use -t target, -a all sessions, -F format, -f filter.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-s": flagBool,
@@ -89,27 +98,32 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"display-message": {
+		description: "Print a tmux format string with -p.",
 		flags: map[string]flagKind{
 			"-p": flagBool,
 			"-t": flagString,
 		},
 	},
 	"attach-session": {
+		description: "Attach or switch to the target session.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 		},
 	},
 	"kill-pane": {
+		description: "Close the target pane.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 		},
 	},
 	"rename-session": {
+		description: "Rename the target session. Pass the new name as an argument.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 		},
 	},
 	"resize-pane": {
+		description: "Resize or zoom a pane. Use -x/-y size or -U/-D/-L/-R direction.",
 		// Note: -t is optional for resize-pane (defaults to current pane).
 		flags: map[string]flagKind{
 			"-t": flagString,
@@ -123,12 +137,14 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"show-environment": {
+		description: "Show environment variables for a session or globally with -g.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-g": flagBool,
 		},
 	},
 	"set-environment": {
+		description: "Set or unset environment variables. Use -u to unset and -g for global scope.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-u": flagBool,
@@ -136,6 +152,7 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"list-windows": {
+		description: "List windows. Use -t target, -a all sessions, -F format, -f filter.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-a": flagBool,
@@ -144,6 +161,7 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"rename-window": {
+		description: "Rename the target window. Pass the new name as an argument.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 		},
@@ -153,6 +171,7 @@ var commandSpecs = map[string]commandSpec{
 	// myT-x:    子セッション（child session）を作成する。-n フラグで指定された名前が
 	//           子セッション名として使用されるため、-n は必須である。
 	"new-window": {
+		description: "Create a child session from a session. Requires -t parent and -n child name.",
 		flags: map[string]flagKind{
 			"-d": flagBool,
 			"-P": flagBool,
@@ -164,16 +183,19 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"kill-window": {
+		description: "Close the target window.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 		},
 	},
 	"select-window": {
+		description: "Focus the target window.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 		},
 	},
 	"copy-mode": {
+		description: "Enter or control copy mode for a pane.",
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-q": flagBool, // quit copy mode
@@ -182,11 +204,13 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"list-buffers": {
+		description: "List paste buffers. Use -F to format output.",
 		flags: map[string]flagKind{
 			"-F": flagString, // output format
 		},
 	},
 	"set-buffer": {
+		description: "Create or update a paste buffer. Use -b name, -a append, -n rename.",
 		flags: map[string]flagKind{
 			"-a": flagBool,   // append to buffer
 			"-b": flagString, // buffer name
@@ -194,6 +218,7 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"paste-buffer": {
+		description: "Paste a buffer into a pane. Use -b name and -t target pane.",
 		flags: map[string]flagKind{
 			"-d": flagBool,   // delete after paste
 			"-b": flagString, // buffer name
@@ -204,6 +229,7 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"load-buffer": {
+		description: "Load file contents into a paste buffer.",
 		flags: map[string]flagKind{
 			"-b": flagString,
 			"-w": flagBool,
@@ -211,12 +237,14 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"save-buffer": {
+		description: "Save a paste buffer to a file.",
 		flags: map[string]flagKind{
 			"-a": flagBool,
 			"-b": flagString,
 		},
 	},
 	"capture-pane": {
+		description: "Capture pane output. Use -p to print and -S/-E to choose line range.",
 		flags: map[string]flagKind{
 			"-a": flagBool,
 			"-b": flagString,
@@ -235,6 +263,7 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"run-shell": {
+		description: "Run a shell command. Use -C to run tmux commands and -b for background.",
 		flags: map[string]flagKind{
 			"-b": flagBool,   // background (no wait)
 			"-t": flagString, // target pane (for format context)
@@ -243,6 +272,7 @@ var commandSpecs = map[string]commandSpec{
 		},
 	},
 	"if-shell": {
+		description: "Run commands conditionally from a shell or format test.",
 		flags: map[string]flagKind{
 			"-b": flagBool,   // background
 			"-F": flagBool,   // format condition (not shell command)

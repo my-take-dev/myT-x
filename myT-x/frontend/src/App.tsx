@@ -7,6 +7,7 @@ import {QuickSearch} from "./components/QuickSearch";
 import {SessionView} from "./components/SessionView";
 import {SettingsModal} from "./components/SettingsModal";
 import {Sidebar} from "./components/Sidebar";
+import {ChatInputBar} from "./components/ChatInputBar";
 import {StatusBar} from "./components/StatusBar";
 import {ToastContainer} from "./components/ToastContainer";
 import {ViewerSystem} from "./components/viewer";
@@ -18,7 +19,7 @@ import {usePrefixKeyMode} from "./hooks/usePrefixKeyMode";
 import {useI18n} from "./i18n";
 import {useTmuxStore} from "./stores/tmuxStore";
 import {isImeTransitionalEvent} from "./utils/ime";
-import {resolveActivePaneID} from "./utils/session";
+import {resolveActivePane, resolveActivePaneID, resolveActiveWindow} from "./utils/session";
 
 type DockedAppBodyStyle = CSSProperties & {
     "--dock-main-width": string;
@@ -43,6 +44,9 @@ function App() {
     );
 
     const activePaneId = useMemo(() => resolveActivePaneID(current), [current]);
+    const activeWindow = useMemo(() => resolveActiveWindow(current), [current]);
+    const activePane = useMemo(() => resolveActivePane(activeWindow), [activeWindow]);
+    const config = useTmuxStore((s) => s.config);
     const dockRatio = useViewerStore((s) => s.dockRatio);
     const isViewerDocked = useIsViewerDocked();
     const appBodyClassName = isViewerDocked
@@ -95,6 +99,13 @@ function App() {
                 <Sidebar sessions={sessions} activeSession={current?.name ?? null}/>
                 <main className="main-content">
                     <SessionView session={current}/>
+                    <ChatInputBar
+                        activePaneId={activePaneId}
+                        activePaneIndex={activePane?.index ?? 0}
+                        activePaneTitle={activePane?.title ?? ""}
+                        panes={activeWindow?.panes ?? []}
+                        chatOverlayPercentage={config?.chat_overlay_percentage ?? 80}
+                    />
                     <StatusBar/>
                 </main>
                 <ViewerSystem/>

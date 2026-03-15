@@ -29,6 +29,7 @@ type SendResponseResult struct {
 type ResponseService struct {
 	agents   domain.AgentRepository
 	tasks    domain.TaskRepository
+	messages domain.MessageRepository
 	sender   domain.PaneSender
 	resolver domain.SelfPaneResolver
 	logger   *log.Logger
@@ -38,6 +39,7 @@ type ResponseService struct {
 func NewResponseService(
 	agents domain.AgentRepository,
 	tasks domain.TaskRepository,
+	messages domain.MessageRepository,
 	sender domain.PaneSender,
 	resolver domain.SelfPaneResolver,
 	logger *log.Logger,
@@ -45,6 +47,7 @@ func NewResponseService(
 	return &ResponseService{
 		agents:   agents,
 		tasks:    tasks,
+		messages: messages,
 		sender:   sender,
 		resolver: resolver,
 		logger:   ensureLogger(logger),
@@ -115,9 +118,25 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 		SentToName: target.Name,
 	}
 
-	notes := truncate(cmd.Message, 200)
+	// レスポンスを保存
+	respID, err := generateResponseID()
+	if err != nil {
+		result.Warning = "message delivered but response id generation failed"
+		logf(s.logger, "generate response id for task %s: %v", cmd.TaskID, err)
+		return result, nil
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := s.tasks.CompleteTask(ctx, cmd.TaskID, notes, now); err != nil {
+	if err := s.messages.SaveResponse(ctx, domain.TaskMessage{
+		ID:        respID,
+		Content:   cmd.Message,
+		CreatedAt: now,
+	}); err != nil {
+		result.Warning = "message delivered but response persistence failed"
+		logf(s.logger, "save response for task %s: %v", cmd.TaskID, err)
+		return result, nil
+	}
+
+	if err := s.tasks.CompleteTask(ctx, cmd.TaskID, respID, now); err != nil {
 		result.Warning = "message delivered but task completion update failed"
 		logf(s.logger, "complete task %s after response: %v", cmd.TaskID, err)
 	} else {

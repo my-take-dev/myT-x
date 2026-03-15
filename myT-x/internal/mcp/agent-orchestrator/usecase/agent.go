@@ -12,10 +12,11 @@ const orchestratorAgentName = "orchestrator"
 
 // RegisterAgentCmd はエージェント登録コマンド。
 type RegisterAgentCmd struct {
-	Name   string
-	PaneID string
-	Role   string
-	Skills []string
+	Name          string
+	PaneID        string
+	Role          string
+	Skills        []domain.Skill
+	MCPInstanceID string
 }
 
 // RegisterAgentResult はエージェント登録結果。
@@ -23,7 +24,7 @@ type RegisterAgentResult struct {
 	Name         string
 	PaneID       string
 	Role         string
-	Skills       []string
+	Skills       []domain.Skill
 	PaneTitle    string
 	TitleWarning string
 }
@@ -41,7 +42,7 @@ type AgentEntry struct {
 	Name   string
 	PaneID string
 	Role   string
-	Skills []string
+	Skills []domain.Skill
 }
 
 // OrchestratorEntry はオーケストレーター情報。
@@ -87,10 +88,11 @@ func (s *AgentService) Register(ctx context.Context, cmd RegisterAgentCmd) (Regi
 	}
 
 	agent := domain.Agent{
-		Name:   cmd.Name,
-		PaneID: cmd.PaneID,
-		Role:   cmd.Role,
-		Skills: cmd.Skills,
+		Name:          cmd.Name,
+		PaneID:        cmd.PaneID,
+		Role:          cmd.Role,
+		Skills:        cmd.Skills,
+		MCPInstanceID: cmd.MCPInstanceID,
 	}
 	if err := s.agents.UpsertAgent(ctx, agent); err != nil {
 		return RegisterAgentResult{}, operationError(s.logger, "failed to register agent", err)

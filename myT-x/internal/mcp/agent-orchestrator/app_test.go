@@ -38,7 +38,8 @@ func (r *testAgentRepo) DeleteAgentsByPaneID(_ context.Context, paneID string) e
 }
 
 type testTaskRepo struct {
-	abandonCalls []string
+	abandonCalls    []string
+	endSessionCalls []string
 }
 
 func (r *testTaskRepo) CreateTask(context.Context, domain.Task) error { return nil }
@@ -49,9 +50,13 @@ func (r *testTaskRepo) ListTasks(context.Context, domain.TaskFilter) ([]domain.T
 	return nil, nil
 }
 func (r *testTaskRepo) CompleteTask(context.Context, string, string, string) error { return nil }
-func (r *testTaskRepo) MarkTaskFailed(context.Context, string, string) error       { return nil }
+func (r *testTaskRepo) MarkTaskFailed(context.Context, string) error               { return nil }
 func (r *testTaskRepo) AbandonTasksByPaneID(_ context.Context, paneID string) error {
 	r.abandonCalls = append(r.abandonCalls, paneID)
+	return nil
+}
+func (r *testTaskRepo) EndSessionByInstanceID(_ context.Context, instanceID string) error {
+	r.endSessionCalls = append(r.endSessionCalls, instanceID)
 	return nil
 }
 

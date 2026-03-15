@@ -1,13 +1,24 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+	"os"
+)
 
 func printUsage() {
 	// NOTE: Usage output is best-effort; write failures are non-fatal for the shim.
-	_, _ = fmt.Println("tmux shim for myT-x")
-	_, _ = fmt.Println("Usage: tmux <command> [flags] [args]")
-	_, _ = fmt.Println("Supported commands:")
+	renderUsage(os.Stdout)
+}
+
+func renderUsage(w io.Writer) {
+	const commandPadding = 18
+
+	_, _ = fmt.Fprintln(w, "tmux shim for myT-x")
+	_, _ = fmt.Fprintln(w, "Usage: tmux <command> [flags] [args]")
+	_, _ = fmt.Fprintln(w, "Supported commands:")
 	for _, name := range commandOrder {
-		_, _ = fmt.Printf("  %s\n", name)
+		description := commandSpecs[name].description
+		_, _ = fmt.Fprintf(w, "  %-*s  %s\n", commandPadding, name, description)
 	}
 }
