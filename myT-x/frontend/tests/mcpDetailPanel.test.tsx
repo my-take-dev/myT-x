@@ -149,7 +149,7 @@ describe("McpDetailPanel", () => {
 
         const copiedText = mocked.writeClipboardText.mock.calls[0]?.[0] ?? "";
         expect(copiedText).toContain(`command = "C:\\\\tmp\\\\myT-x\\ttool\\r\\n\\u0000"`);
-        expect(copiedText).toContain(`args = ["mcp", "stdio", "--session", "session-a", "--mcp", "$LSP_NAME"]`);
+        expect(copiedText).toContain(`args = ["mcp", "stdio", "--mcp", "$LSP_NAME"]`);
     });
 
     it("escapes quotes in the bridge command preview", () => {

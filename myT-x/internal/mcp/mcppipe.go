@@ -111,7 +111,7 @@ func (s *MCPPipeServer) Stop() {
 
 	if listener != nil {
 		if err := listener.Close(); err != nil {
-			slog.Warn("[DEBUG-MCP-PIPE] failed to close pipe listener", "error", err)
+			slog.Warn("[WARN-MCP-PIPE] failed to close pipe listener", "error", err)
 		}
 	}
 	s.wg.Wait()
@@ -135,7 +135,7 @@ func (s *MCPPipeServer) acceptLoop() {
 			default:
 				consecutiveErrors++
 				if consecutiveErrors > 10 {
-					slog.Warn("[DEBUG-MCP-PIPE] accept: repeated failures",
+					slog.Warn("[WARN-MCP-PIPE] accept: repeated failures",
 						"error", err, "count", consecutiveErrors)
 					time.Sleep(500 * time.Millisecond)
 				} else {
@@ -147,7 +147,7 @@ func (s *MCPPipeServer) acceptLoop() {
 		consecutiveErrors = 0
 
 		if !s.acquireConnSlot() {
-			slog.Warn("[DEBUG-MCP-PIPE] connection rejected: slot exhausted")
+			slog.Warn("[WARN-MCP-PIPE] connection rejected: slot exhausted")
 			if closeErr := conn.Close(); closeErr != nil {
 				slog.Debug("[DEBUG-MCP-PIPE] failed to close rejected conn", "error", closeErr)
 			}
@@ -201,17 +201,17 @@ func (s *MCPPipeServer) handleConnection(conn net.Conn) {
 		})
 	}
 	if err != nil {
-		slog.Warn("[DEBUG-MCP-PIPE] failed to create runtime",
+		slog.Warn("[WARN-MCP-PIPE] failed to create runtime",
 			"error", err, "lsp", s.cfg.LSPCommand)
 		return
 	}
 
 	if err := runtime.Start(s.ctx); err != nil {
-		slog.Warn("[DEBUG-MCP-PIPE] failed to start runtime",
+		slog.Warn("[WARN-MCP-PIPE] failed to start runtime",
 			"error", err, "lsp", s.cfg.LSPCommand)
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), mcpPipeRuntimeCloseTimeout)
 		if closeErr := runtime.Close(closeCtx); closeErr != nil {
-			slog.Warn("[DEBUG-MCP-PIPE] runtime close after start failure",
+			slog.Warn("[WARN-MCP-PIPE] runtime close after start failure",
 				"closeError", closeErr,
 				"startError", err,
 				"lsp", s.cfg.LSPCommand,
@@ -266,7 +266,7 @@ func (s *MCPPipeServer) releaseConnSlot() {
 	select {
 	case <-s.connSlots:
 	default:
-		slog.Warn("[DEBUG-MCP-PIPE] releaseConnSlot: no slot to release")
+		slog.Warn("[WARN-MCP-PIPE] releaseConnSlot: no slot to release")
 	}
 }
 

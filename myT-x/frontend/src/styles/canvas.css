@@ -27,7 +27,7 @@
     background: var(--bg-panel, #1e1e1e);
     border: 2px solid var(--border-color, #333);
     border-radius: 8px;
-    overflow: hidden;
+    overflow: visible;
     width: 100%;
     height: 100%;
     display: flex;
@@ -55,6 +55,8 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    border-radius: 0 0 6px 6px;
 }
 
 .canvas-terminal-body .terminal-pane {
@@ -115,6 +117,7 @@
 /* ===== Resize handles ===== */
 .canvas-resize-line {
     border-color: var(--accent-secondary, #58a6ff) !important;
+    z-index: 5 !important;
 }
 
 .canvas-resize-handle {
@@ -123,17 +126,38 @@
     background: var(--accent-secondary, #58a6ff) !important;
     border: 2px solid var(--bg-panel, #1e1e1e) !important;
     border-radius: 50% !important;
+    z-index: 5 !important;
 }
 
 /* ===== Edge animation ===== */
 .canvas-edge-animated {
     stroke-dasharray: 5;
     animation: canvas-edge-dash 0.5s linear infinite;
+    filter: drop-shadow(0 0 3px rgba(88, 166, 255, 0.5));
+}
+
+/* completed状態のエッジに微細トランジション */
+.react-flow__edge path.react-flow__edge-path {
+    transition: stroke 0.3s ease, stroke-width 0.3s ease;
 }
 
 @keyframes canvas-edge-dash {
     from { stroke-dashoffset: 10; }
     to { stroke-dashoffset: 0; }
+}
+
+/* ===== Edge count badge ===== */
+.canvas-edge-badge {
+    background: rgba(30, 30, 30, 0.9);
+    border: 1px solid var(--border-color, #444);
+    border-radius: 10px;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-primary, #ccc);
+    text-align: center;
+    white-space: nowrap;
+    line-height: 1.4;
 }
 
 /* ===== Edge tooltip ===== */
@@ -153,14 +177,57 @@
     line-height: 1.4;
 }
 
-.canvas-edge-tooltip-status {
-    color: var(--text-secondary, #888);
+/* ステータス別件数の集約行 */
+.canvas-edge-tooltip-summary {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
     font-size: 10px;
+    padding: 3px 0;
+    border-top: 1px solid var(--border-color, #333);
+    border-bottom: 1px solid var(--border-color, #333);
+    margin: 3px 0;
 }
 
-.canvas-edge-tooltip-time {
-    color: var(--text-secondary, #888);
+.canvas-edge-stat {
+    font-weight: 500;
+}
+
+.canvas-edge-stat-pending {
+    color: #58a6ff;
+}
+
+.canvas-edge-stat-completed {
+    color: rgba(63, 185, 80, 0.9);
+}
+
+.canvas-edge-stat-failed {
+    color: #ff4444;
+}
+
+.canvas-edge-stat-abandoned {
+    color: #666;
+}
+
+/* 直近タスク一覧 */
+.canvas-edge-tooltip-task-list {
     font-size: 10px;
+    color: var(--text-secondary, #888);
+    text-align: left;
+    max-height: 80px;
+    overflow-y: auto;
+}
+
+.canvas-edge-tooltip-task-item {
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.canvas-edge-tooltip-direction {
+    color: var(--accent-secondary, #58a6ff);
+    font-weight: 600;
 }
 
 /* ===== React Flow overrides for dark theme ===== */

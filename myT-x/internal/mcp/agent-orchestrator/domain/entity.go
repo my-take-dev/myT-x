@@ -5,6 +5,17 @@ import (
 	"regexp"
 )
 
+// TaskStatus はタスクの状態を表す列挙型。
+type TaskStatus = string
+
+// TaskStatus の定数定義。
+const (
+	TaskStatusPending   TaskStatus = "pending"
+	TaskStatusCompleted TaskStatus = "completed"
+	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusAbandoned TaskStatus = "abandoned"
+)
+
 var paneIDPattern = regexp.MustCompile(`^%[0-9]+$`)
 
 // ValidatePaneID は tmux ペインIDを検証する。

@@ -92,7 +92,7 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 		)
 		return SendResponseResult{}, errors.New("access denied")
 	}
-	if task.Status != "pending" {
+	if task.Status != domain.TaskStatusPending {
 		logf(s.logger, "send_response rejected non-pending task_id=%s status=%s", task.ID, task.Status)
 		return SendResponseResult{}, errors.New("task is not pending")
 	}
@@ -119,13 +119,18 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 	}
 
 	// レスポンスを保存
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// TaskID is always set: the caller needs it regardless of downstream failures.
+	result.TaskID = cmd.TaskID
+
 	respID, err := generateResponseID()
 	if err != nil {
 		result.Warning = "message delivered but response id generation failed"
 		logf(s.logger, "generate response id for task %s: %v", cmd.TaskID, err)
+		completeTaskBestEffort(s, ctx, cmd.TaskID, "", now, &result, "response id failure")
 		return result, nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
 	if err := s.messages.SaveResponse(ctx, domain.TaskMessage{
 		ID:        respID,
 		Content:   cmd.Message,
@@ -133,20 +138,35 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 	}); err != nil {
 		result.Warning = "message delivered but response persistence failed"
 		logf(s.logger, "save response for task %s: %v", cmd.TaskID, err)
+		completeTaskBestEffort(s, ctx, cmd.TaskID, "", now, &result, "save response failure")
 		return result, nil
 	}
 
 	if err := s.tasks.CompleteTask(ctx, cmd.TaskID, respID, now); err != nil {
 		result.Warning = "message delivered but task completion update failed"
+		result.TaskStatus = "unknown"
 		logf(s.logger, "complete task %s after response: %v", cmd.TaskID, err)
 	} else {
 		logf(s.logger, "send_response completed task_id=%s completed_at=%s", cmd.TaskID, now)
-		result.TaskID = cmd.TaskID
-		result.TaskStatus = "completed"
+		result.TaskStatus = domain.TaskStatusCompleted
 		result.CompletedAt = now
 	}
 
 	return result, nil
+}
+
+// completeTaskBestEffort attempts to mark a task as completed after a non-fatal
+// error (e.g. response ID generation or persistence failure). On double-fault
+// (CompleteTask also fails), the task status is set to "unknown" and a warning
+// is logged indicating both the original and completion failures.
+func completeTaskBestEffort(s *ResponseService, ctx context.Context, taskID, respID, now string, result *SendResponseResult, context string) {
+	if completeErr := s.tasks.CompleteTask(ctx, taskID, respID, now); completeErr != nil {
+		logf(s.logger, "double-fault: complete task %s after %s also failed: %v", taskID, context, completeErr)
+		result.TaskStatus = "unknown"
+	} else {
+		result.TaskStatus = domain.TaskStatusCompleted
+		result.CompletedAt = now
+	}
 }
 
 func authorizeResponseCaller(task domain.Task, caller domain.Agent) (string, bool) {

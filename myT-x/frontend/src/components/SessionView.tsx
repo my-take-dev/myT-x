@@ -7,6 +7,7 @@ import {useI18n} from "../i18n";
 import {LayoutPresetSelector} from "./LayoutPresetSelector";
 import {LayoutRenderer} from "./LayoutRenderer";
 import {CanvasModeToggle} from "./canvas/CanvasModeToggle";
+import {ReactFlowProvider} from "@xyflow/react";
 import {CanvasView} from "./canvas/CanvasView";
 import {useCanvasStore} from "../stores/canvasStore";
 
@@ -213,19 +214,21 @@ export function SessionView(props: SessionViewProps) {
                 </div>
                 <div className="session-view-body">
                     {canvasMode === "canvas" ? (
-                        <CanvasView
-                            panes={activeWindow.panes}
-                            activePaneId={activePaneId}
-                            sessionName={props.session.name}
-                            onFocusPane={onFocusPane}
-                            onSplitVertical={onSplitVertical}
-                            onSplitHorizontal={onSplitHorizontal}
-                            onToggleZoom={onToggleZoom}
-                            onKillPane={onKillPane}
-                            onRenamePane={onRenamePane}
-                            onSwapPane={onSwapPane}
-                            onDetachSession={onDetachSession}
-                        />
+                        <ReactFlowProvider>
+                            <CanvasView
+                                panes={activeWindow.panes}
+                                activePaneId={activePaneId}
+                                sessionName={props.session.name}
+                                onFocusPane={onFocusPane}
+                                onSplitVertical={onSplitVertical}
+                                onSplitHorizontal={onSplitHorizontal}
+                                onToggleZoom={onToggleZoom}
+                                onKillPane={onKillPane}
+                                onRenamePane={onRenamePane}
+                                onSwapPane={onSwapPane}
+                                onDetachSession={onDetachSession}
+                            />
+                        </ReactFlowProvider>
                     ) : (
                         <LayoutRenderer
                             layout={activeWindow.layout ?? null}

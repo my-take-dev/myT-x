@@ -53,6 +53,10 @@ type RouterOptions struct {
 	OnSessionRenamed func(oldName, newName string)
 	// ResolveMCPStdio resolves and prepares a Named Pipe endpoint for one MCP.
 	ResolveMCPStdio func(sessionName, mcpName string) (MCPStdioResolution, error)
+	// ResolveSessionByCwd resolves a session name from a working directory path.
+	// Used by the MCP bridge CLI to auto-detect the session when --session and
+	// $MYTX_SESSION are unavailable.
+	ResolveSessionByCwd func(cwd string) (string, error)
 }
 
 // CommandRouter dispatches tmux-compatible commands.
@@ -377,37 +381,38 @@ func NewCommandRouter(sessions *SessionManager, emitter EventEmitter, opts Route
 	router.attachTerminalFn = router.attachTerminal
 	router.getSessionForNewWindowFn = sessions.GetSession
 	router.handlers = map[string]func(ipc.TmuxRequest) ipc.TmuxResponse{
-		"new-session":       router.handleNewSession,
-		"has-session":       router.handleHasSession,
-		"split-window":      router.handleSplitWindow,
-		"send-keys":         router.handleSendKeys,
-		"select-pane":       router.handleSelectPane,
-		"list-sessions":     router.handleListSessions,
-		"kill-session":      router.handleKillSession,
-		"list-panes":        router.handleListPanes,
-		"display-message":   router.handleDisplayMessage,
-		"activate-window":   router.handleActivateWindow,
-		"attach-session":    router.handleAttachSession,
-		"kill-pane":         router.handleKillPane,
-		"rename-session":    router.handleRenameSession,
-		"resize-pane":       router.handleResizePane,
-		"show-environment":  router.handleShowEnvironment,
-		"set-environment":   router.handleSetEnvironment,
-		"list-windows":      router.handleListWindows,
-		"rename-window":     router.handleRenameWindow,
-		"new-window":        router.handleNewWindow,
-		"kill-window":       router.handleKillWindow,
-		"select-window":     router.handleSelectWindow,
-		"copy-mode":         router.handleCopyMode,
-		"list-buffers":      router.handleListBuffers,
-		"set-buffer":        router.handleSetBuffer,
-		"paste-buffer":      router.handlePasteBuffer,
-		"load-buffer":       router.handleLoadBuffer,
-		"save-buffer":       router.handleSaveBuffer,
-		"capture-pane":      router.handleCapturePane,
-		"run-shell":         router.handleRunShell,
-		"if-shell":          router.handleIfShell,
-		"mcp-resolve-stdio": router.handleMCPResolveStdio,
+		"new-session":            router.handleNewSession,
+		"has-session":            router.handleHasSession,
+		"split-window":           router.handleSplitWindow,
+		"send-keys":              router.handleSendKeys,
+		"select-pane":            router.handleSelectPane,
+		"list-sessions":          router.handleListSessions,
+		"kill-session":           router.handleKillSession,
+		"list-panes":             router.handleListPanes,
+		"display-message":        router.handleDisplayMessage,
+		"activate-window":        router.handleActivateWindow,
+		"attach-session":         router.handleAttachSession,
+		"kill-pane":              router.handleKillPane,
+		"rename-session":         router.handleRenameSession,
+		"resize-pane":            router.handleResizePane,
+		"show-environment":       router.handleShowEnvironment,
+		"set-environment":        router.handleSetEnvironment,
+		"list-windows":           router.handleListWindows,
+		"rename-window":          router.handleRenameWindow,
+		"new-window":             router.handleNewWindow,
+		"kill-window":            router.handleKillWindow,
+		"select-window":          router.handleSelectWindow,
+		"copy-mode":              router.handleCopyMode,
+		"list-buffers":           router.handleListBuffers,
+		"set-buffer":             router.handleSetBuffer,
+		"paste-buffer":           router.handlePasteBuffer,
+		"load-buffer":            router.handleLoadBuffer,
+		"save-buffer":            router.handleSaveBuffer,
+		"capture-pane":           router.handleCapturePane,
+		"run-shell":              router.handleRunShell,
+		"if-shell":               router.handleIfShell,
+		"mcp-resolve-stdio":      router.handleMCPResolveStdio,
+		"resolve-session-by-cwd": router.handleResolveSessionByCwd,
 	}
 	return router
 }

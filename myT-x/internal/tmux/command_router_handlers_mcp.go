@@ -59,6 +59,31 @@ func resolveMCPStdioRequestTarget(req ipc.TmuxRequest) (string, string, error) {
 	return sessionName, mcpName, nil
 }
 
+func (r *CommandRouter) handleResolveSessionByCwd(req ipc.TmuxRequest) ipc.TmuxResponse {
+	if r.opts.ResolveSessionByCwd == nil {
+		return errResp(errors.New("session-by-cwd resolver is unavailable"))
+	}
+
+	cwdRaw, ok := req.Flags["cwd"]
+	if !ok {
+		return errResp(errors.New("cwd flag is required"))
+	}
+	cwd, ok := cwdRaw.(string)
+	if !ok {
+		return errResp(fmt.Errorf("cwd flag must be a string, got %T", cwdRaw))
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return errResp(errors.New("cwd flag must not be empty"))
+	}
+
+	sessionName, err := r.opts.ResolveSessionByCwd(cwd)
+	if err != nil {
+		return errResp(err)
+	}
+	return okResp(sessionName)
+}
+
 func optionalMCPResolveFlag(flags map[string]any, key string) (string, bool, error) {
 	if flags == nil {
 		return "", false, nil

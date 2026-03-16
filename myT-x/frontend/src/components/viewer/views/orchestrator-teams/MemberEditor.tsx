@@ -1,22 +1,21 @@
-import {useEffect, useState} from "react";
 import {useI18n} from "../../../../i18n";
 import type {OrchestratorMemberDraft, OrchestratorMemberDraftSkill} from "./types";
 import {isMemberDraftValid} from "./useOrchestratorTeams";
 
 interface MemberEditorProps {
-    initialDraft: OrchestratorMemberDraft;
+    draft: OrchestratorMemberDraft;
     existingPaneTitles: string[];
+    onChange: (draft: OrchestratorMemberDraft) => void;
     onBack: () => void;
-    onSave: (draft: OrchestratorMemberDraft) => void;
+    onSave: () => void;
 }
 
 const maxPaneTitle = 30;
 const maxRole = 50;
 const maxCommand = 100;
 
-export function MemberEditor({initialDraft, existingPaneTitles, onBack, onSave}: MemberEditorProps) {
+export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSave}: MemberEditorProps) {
     const {t} = useI18n();
-    const [draft, setDraft] = useState(initialDraft);
     const maxSkills = 20;
 
     const paneTitleDuplicate = draft.paneTitle.trim() !== "" &&
@@ -33,21 +32,17 @@ export function MemberEditor({initialDraft, existingPaneTitles, onBack, onSave}:
     function updateSkill(index: number, field: keyof Omit<OrchestratorMemberDraftSkill, "id">, value: string) {
         const skills = [...draft.skills];
         skills[index] = {...skills[index], [field]: value};
-        setDraft({...draft, skills});
+        onChange({...draft, skills});
     }
 
     function removeSkill(index: number) {
-        setDraft({...draft, skills: draft.skills.filter((_, i) => i !== index)});
+        onChange({...draft, skills: draft.skills.filter((_, i) => i !== index)});
     }
 
     function addSkill() {
         if (draft.skills.length >= maxSkills) return;
-        setDraft({...draft, skills: [...draft.skills, createDraftSkill()]});
+        onChange({...draft, skills: [...draft.skills, createDraftSkill()]});
     }
-
-    useEffect(() => {
-        setDraft(initialDraft);
-    }, [initialDraft]);
 
     return (
         <div className="orchestrator-member-editor">
@@ -64,7 +59,7 @@ export function MemberEditor({initialDraft, existingPaneTitles, onBack, onSave}:
                     className={`form-input${paneTitleDuplicate ? " orchestrator-teams-input-error" : ""}`}
                     type="text"
                     value={draft.paneTitle}
-                    onChange={(event) => setDraft({...draft, paneTitle: event.target.value})}
+                    onChange={(event) => onChange({...draft, paneTitle: event.target.value})}
                     placeholder="Lead"
                     maxLength={maxPaneTitle}
                 />
@@ -84,7 +79,7 @@ export function MemberEditor({initialDraft, existingPaneTitles, onBack, onSave}:
                     className="form-input"
                     type="text"
                     value={draft.role}
-                    onChange={(event) => setDraft({...draft, role: event.target.value})}
+                    onChange={(event) => onChange({...draft, role: event.target.value})}
                     placeholder="リードエンジニア"
                     maxLength={maxRole}
                 />
@@ -100,7 +95,7 @@ export function MemberEditor({initialDraft, existingPaneTitles, onBack, onSave}:
                         className="form-input"
                         type="text"
                         value={draft.command}
-                        onChange={(event) => setDraft({...draft, command: event.target.value})}
+                        onChange={(event) => onChange({...draft, command: event.target.value})}
                         placeholder="codex"
                         maxLength={maxCommand}
                     />
@@ -110,7 +105,7 @@ export function MemberEditor({initialDraft, existingPaneTitles, onBack, onSave}:
                     <textarea
                         className="form-input orchestrator-teams-textarea small"
                         value={draft.argsText}
-                        onChange={(event) => setDraft({...draft, argsText: event.target.value})}
+                        onChange={(event) => onChange({...draft, argsText: event.target.value})}
                         placeholder={"--sandbox\nworkspace-write"}
                     />
                 </div>
@@ -124,7 +119,7 @@ export function MemberEditor({initialDraft, existingPaneTitles, onBack, onSave}:
                 <textarea
                     className="form-input orchestrator-teams-textarea"
                     value={draft.customMessage}
-                    onChange={(event) => setDraft({...draft, customMessage: event.target.value})}
+                    onChange={(event) => onChange({...draft, customMessage: event.target.value})}
                     placeholder="この役割の詳細な責務や行動指針を記述してください"
                 />
             </div>
@@ -181,7 +176,7 @@ export function MemberEditor({initialDraft, existingPaneTitles, onBack, onSave}:
                     type="button"
                     className="orchestrator-teams-primary-btn"
                     disabled={!isMemberDraftValid(draft) || paneTitleDuplicate}
-                    onClick={() => onSave(draft)}
+                    onClick={onSave}
                 >
                     {t("viewer.orchestratorTeams.member.save", "メンバーを保存")}
                 </button>

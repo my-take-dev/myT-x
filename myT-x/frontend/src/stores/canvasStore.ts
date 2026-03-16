@@ -64,15 +64,20 @@ export const useCanvasStore = create<CanvasState>((set) => ({
             for (const task of tasks) {
                 next[task.task_id] = task;
             }
-            // 最大エントリ数を超過した場合、古いエントリ（sent_at昇順）を破棄
+            // 最大エントリ数を超過した場合、完了/失敗済みの古いエントリ（sent_at昇順）から破棄。
+            // pending/assigned は保護する。
             const keys = Object.keys(next);
             if (keys.length > MAX_TASK_EDGES) {
-                const sorted = keys.sort((a, b) => {
+                const removable = keys.filter((k) => {
+                    const s = next[k].status;
+                    return s === "completed" || s === "failed" || s === "abandoned";
+                });
+                const sorted = removable.sort((a, b) => {
                     const ta = next[a].sent_at;
                     const tb = next[b].sent_at;
                     return ta < tb ? -1 : ta > tb ? 1 : 0;
                 });
-                const removeCount = sorted.length - MAX_TASK_EDGES;
+                const removeCount = Math.min(sorted.length, keys.length - MAX_TASK_EDGES);
                 for (let i = 0; i < removeCount; i++) {
                     delete next[sorted[i]];
                 }

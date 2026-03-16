@@ -103,7 +103,7 @@ func (s *TaskDispatchService) Send(ctx context.Context, cmd SendTaskCmd) (SendTa
 		SenderName:       cmd.FromAgent,
 		SenderInstanceID: cmd.SenderInstanceID,
 		SendMessageID:    msgID,
-		Status:           "pending",
+		Status:           domain.TaskStatusPending,
 		SentAt:           now,
 	}
 	if err := s.tasks.CreateTask(ctx, task); err != nil {

@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {
     DeleteOrchestratorTeam,
     LoadOrchestratorTeams,
@@ -6,6 +6,7 @@ import {
     SaveOrchestratorTeam,
     StartOrchestratorTeam,
 } from "../../../../../wailsjs/go/main/App";
+import {main} from "../../../../../wailsjs/go/models";
 import {translate} from "../../../../i18n";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
 import type {
@@ -223,17 +224,29 @@ export function useOrchestratorTeams() {
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const isMountedRef = useRef(true);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     const refresh = useCallback(async () => {
         setLoading(true);
         try {
             const result = await LoadOrchestratorTeams(activeSession ?? "");
+            if (!isMountedRef.current) return;
             setTeams((result ?? []) as OrchestratorTeamDefinition[]);
         } catch (err) {
+            if (!isMountedRef.current) return;
             console.warn("[orchestrator-teams] failed to load teams", err);
             setError(String(err));
         } finally {
-            setLoading(false);
+            if (isMountedRef.current) {
+                setLoading(false);
+            }
         }
     }, [activeSession]);
 
@@ -245,7 +258,7 @@ export function useOrchestratorTeams() {
         setError(null);
         setNotice(null);
         try {
-            await SaveOrchestratorTeam(buildTeamPayload(draft) as never, activeSession ?? "");
+            await SaveOrchestratorTeam(main.OrchestratorTeamDefinition.createFrom(buildTeamPayload(draft)), activeSession ?? "");
             await refresh();
         } catch (err) {
             setError(String(err));
@@ -269,7 +282,7 @@ export function useOrchestratorTeams() {
         setError(null);
         setNotice(null);
         try {
-            const result = await StartOrchestratorTeam(request as never) as StartOrchestratorTeamResult;
+            const result = await StartOrchestratorTeam(main.StartOrchestratorTeamRequest.createFrom(request)) as StartOrchestratorTeamResult;
             if (result.warnings.length > 0) {
                 const prefix = translate("viewer.orchestratorTeams.notice.startedWithWarnings", "{name} を起動しました（警告あり）:", {name: result.session_name});
                 setNotice(`${prefix}\n${result.warnings.join("\n")}`);
@@ -283,41 +296,29 @@ export function useOrchestratorTeams() {
         }
     }, []);
 
-    const moveTeamUp = useCallback(async (teamID: string) => {
+    const moveTeam = useCallback(async (teamID: string, direction: "up" | "down") => {
         const team = teams.find((t) => t.id === teamID);
         if (!team) return;
         const loc = team.storage_location ?? "global";
         const sameSource = teams.filter((t) => (t.storage_location ?? "global") === loc);
         const index = sameSource.findIndex((t) => t.id === teamID);
-        if (index <= 0) return;
+        if (direction === "up" && index <= 0) return;
+        if (direction === "down" && (index < 0 || index >= sameSource.length - 1)) return;
         const ids = sameSource.map((t) => t.id);
-        [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]];
+        const swapIndex = direction === "up" ? index - 1 : index + 1;
+        [ids[index], ids[swapIndex]] = [ids[swapIndex], ids[index]];
         setError(null);
         try {
             await ReorderOrchestratorTeams(ids, loc, activeSession ?? "");
             await refresh();
         } catch (err) {
             setError(String(err));
+            throw err;
         }
     }, [activeSession, teams, refresh, setError]);
 
-    const moveTeamDown = useCallback(async (teamID: string) => {
-        const team = teams.find((t) => t.id === teamID);
-        if (!team) return;
-        const loc = team.storage_location ?? "global";
-        const sameSource = teams.filter((t) => (t.storage_location ?? "global") === loc);
-        const index = sameSource.findIndex((t) => t.id === teamID);
-        if (index < 0 || index >= sameSource.length - 1) return;
-        const ids = sameSource.map((t) => t.id);
-        [ids[index], ids[index + 1]] = [ids[index + 1], ids[index]];
-        setError(null);
-        try {
-            await ReorderOrchestratorTeams(ids, loc, activeSession ?? "");
-            await refresh();
-        } catch (err) {
-            setError(String(err));
-        }
-    }, [activeSession, teams, refresh, setError]);
+    const moveTeamUp = useCallback((teamID: string) => moveTeam(teamID, "up"), [moveTeam]);
+    const moveTeamDown = useCallback((teamID: string) => moveTeam(teamID, "down"), [moveTeam]);
 
     return {
         teams,

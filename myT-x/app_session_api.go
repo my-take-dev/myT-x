@@ -26,12 +26,15 @@ type CreateSessionOptions struct {
 // agentTeamEnvVars returns the environment variables that signal Claude Code
 // to enable Agent Teams mode. The caller is responsible for passing these
 // through the IPC request's Env field.
-func agentTeamEnvVars(teamName string) map[string]string {
+// sessionName is set as MYTX_SESSION so that MCP bridge processes can
+// automatically resolve which session they belong to.
+func agentTeamEnvVars(teamName, sessionName string) map[string]string {
 	return map[string]string{
 		"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
 		"CLAUDE_CODE_TEAM_NAME":                teamName,
 		"CLAUDE_CODE_AGENT_ID":                 "lead",
 		"CLAUDE_CODE_AGENT_TYPE":               "lead",
+		"MYTX_SESSION":                         sessionName,
 	}
 }
 
@@ -598,6 +601,22 @@ func (a *App) findSessionByRootPath(dir string) string {
 // Returns the session name if conflict exists, or "".
 func (a *App) CheckDirectoryConflict(dir string) string {
 	return a.findSessionByRootPath(strings.TrimSpace(dir))
+}
+
+// resolveSessionByCwd resolves a session name from a working directory path.
+// It checks both root paths and worktree paths.
+func (a *App) resolveSessionByCwd(cwd string) (string, error) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return "", errors.New("cwd is empty")
+	}
+	if name := a.findSessionByRootPath(cwd); name != "" {
+		return name, nil
+	}
+	if name := a.findSessionByWorktreePath(cwd); name != "" {
+		return name, nil
+	}
+	return "", fmt.Errorf("no session found for cwd: %s", cwd)
 }
 
 // openExplorerFn is the function used to launch the file explorer.

@@ -173,8 +173,6 @@ func TestApplyMCPBridgeRecommendation_RunningUsesMyTXCommand(t *testing.T) {
 	wantArgs := []string{
 		"mcp",
 		"stdio",
-		"--session",
-		"session-a",
 		"--mcp",
 		"gopls",
 	}
@@ -202,8 +200,6 @@ func TestApplyMCPBridgeRecommendation_StoppedStillProvidesLaunchRecommendation(t
 	wantArgs := []string{
 		"mcp",
 		"stdio",
-		"--session",
-		"session-a",
 		"--mcp",
 		"gopls",
 	}
@@ -229,8 +225,6 @@ func TestApplyMCPBridgeRecommendation_ErrorStillProvidesLaunchRecommendation(t *
 	wantArgs := []string{
 		"mcp",
 		"stdio",
-		"--session",
-		"session-a",
 		"--mcp",
 		"gopls",
 	}
@@ -334,8 +328,6 @@ func TestApplyMCPBridgeRecommendation_NormalizesVariantLSPIDs(t *testing.T) {
 			wantArgs := []string{
 				"mcp",
 				"stdio",
-				"--session",
-				"session-a",
 				"--mcp",
 				tt.wantMCP,
 			}

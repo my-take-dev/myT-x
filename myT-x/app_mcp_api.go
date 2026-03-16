@@ -347,8 +347,6 @@ func (a *App) applyMCPBridgeRecommendation(sessionName string, snapshot *mcp.MCP
 	snapshot.BridgeArgs = []string{
 		"mcp",
 		"stdio",
-		"--session",
-		sessionName,
 		"--mcp",
 		mcpName,
 	}

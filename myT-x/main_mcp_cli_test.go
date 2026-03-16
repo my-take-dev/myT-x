@@ -45,9 +45,76 @@ func TestParseMCPStdioCLI_DefaultDialTimeout(t *testing.T) {
 }
 
 func TestParseMCPStdioCLI_MissingSession(t *testing.T) {
+	origEnv := resolveSessionByEnvFn
+	origCwd := resolveSessionByCwdFn
+	origGetwd := getwdFn
+	t.Cleanup(func() {
+		resolveSessionByEnvFn = origEnv
+		resolveSessionByCwdFn = origCwd
+		getwdFn = origGetwd
+	})
+	resolveSessionByEnvFn = func() string { return "" }
+	resolveSessionByCwdFn = func(_, _ string) (string, error) { return "", errors.New("not found") }
+	getwdFn = func() (string, error) { return "/tmp", nil }
+
 	_, err := parseMCPStdioCLI([]string{"--mcp", "gopls"})
 	if err == nil {
-		t.Fatal("parseMCPStdioCLI should fail when --session is missing")
+		t.Fatal("parseMCPStdioCLI should fail when --session is missing and all fallbacks fail")
+	}
+}
+
+func TestParseMCPStdioCLI_FallbackToEnvVar(t *testing.T) {
+	origEnv := resolveSessionByEnvFn
+	t.Cleanup(func() { resolveSessionByEnvFn = origEnv })
+	resolveSessionByEnvFn = func() string { return "env-session" }
+
+	cfg, err := parseMCPStdioCLI([]string{"--mcp", "gopls"})
+	if err != nil {
+		t.Fatalf("parseMCPStdioCLI error = %v", err)
+	}
+	if cfg.sessionName != "env-session" {
+		t.Fatalf("sessionName = %q, want %q", cfg.sessionName, "env-session")
+	}
+}
+
+func TestParseMCPStdioCLI_FallbackToIPCResolve(t *testing.T) {
+	origEnv := resolveSessionByEnvFn
+	origCwd := resolveSessionByCwdFn
+	origGetwd := getwdFn
+	t.Cleanup(func() {
+		resolveSessionByEnvFn = origEnv
+		resolveSessionByCwdFn = origCwd
+		getwdFn = origGetwd
+	})
+	resolveSessionByEnvFn = func() string { return "" }
+	getwdFn = func() (string, error) { return "/my/repo", nil }
+	resolveSessionByCwdFn = func(_, cwd string) (string, error) {
+		if cwd != "/my/repo" {
+			t.Fatalf("cwd = %q, want %q", cwd, "/my/repo")
+		}
+		return "ipc-session", nil
+	}
+
+	cfg, err := parseMCPStdioCLI([]string{"--mcp", "gopls"})
+	if err != nil {
+		t.Fatalf("parseMCPStdioCLI error = %v", err)
+	}
+	if cfg.sessionName != "ipc-session" {
+		t.Fatalf("sessionName = %q, want %q", cfg.sessionName, "ipc-session")
+	}
+}
+
+func TestParseMCPStdioCLI_FlagTakesPriority(t *testing.T) {
+	origEnv := resolveSessionByEnvFn
+	t.Cleanup(func() { resolveSessionByEnvFn = origEnv })
+	resolveSessionByEnvFn = func() string { return "env-session" }
+
+	cfg, err := parseMCPStdioCLI([]string{"--session", "flag-session", "--mcp", "gopls"})
+	if err != nil {
+		t.Fatalf("parseMCPStdioCLI error = %v", err)
+	}
+	if cfg.sessionName != "flag-session" {
+		t.Fatalf("sessionName = %q, want %q (flag should take priority over env)", cfg.sessionName, "flag-session")
 	}
 }
 

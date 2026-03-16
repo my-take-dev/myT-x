@@ -260,7 +260,7 @@ func (m *Manager) SetEnabled(sessionName, mcpID string, enabled bool) error {
 func (m *Manager) startInstance(sessionName, mcpID string, inst *instance, def Definition, gen uint64) {
 	rootDir, err := m.resolveWorkDir(sessionName)
 	if err != nil {
-		slog.Warn("[DEBUG-MCP] failed to resolve work dir for instance start",
+		slog.Warn("[WARN-MCP] failed to resolve work dir for instance start",
 			"session", sessionName, "mcp", mcpID, "error", err)
 		inst.mu.Lock()
 		if inst.generation != gen {
@@ -279,11 +279,11 @@ func (m *Manager) startInstance(sessionName, mcpID string, inst *instance, def D
 	}
 
 	pipeName := BuildMCPPipeName(sessionName, mcpID)
-	pipeCfg := buildPipeConfig(pipeName, rootDir, def)
+	pipeCfg := buildPipeConfig(pipeName, rootDir, sessionName, def)
 	pipe := m.newPipeServer(pipeCfg)
 
 	if err := pipe.Start(); err != nil {
-		slog.Warn("[DEBUG-MCP] failed to start pipe server",
+		slog.Warn("[WARN-MCP] failed to start pipe server",
 			"session", sessionName, "mcp", mcpID, "pipe", pipeName, "error", err)
 		inst.mu.Lock()
 		if inst.generation != gen {

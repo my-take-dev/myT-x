@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
@@ -587,18 +588,17 @@ func TestCleanupStaleAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CleanupStaleAgents: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("expected 1 deleted, got %d", n)
+	// Both stale-agent (dead instance) and legacy-agent (NULL instance) are removed.
+	if n != 2 {
+		t.Fatalf("expected 2 deleted, got %d", n)
 	}
 
 	agents, _ := st.ListAgents(ctx)
-	if len(agents) != 2 {
-		t.Fatalf("expected 2 remaining agents, got %d", len(agents))
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 remaining agent, got %d", len(agents))
 	}
-	for _, a := range agents {
-		if a.Name == "stale-agent" {
-			t.Fatalf("stale-agent should have been deleted")
-		}
+	if agents[0].Name != "alive-agent" {
+		t.Fatalf("expected alive-agent, got %s", agents[0].Name)
 	}
 }
 
@@ -613,13 +613,14 @@ func TestCleanupStaleAgentsNoActiveInstances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CleanupStaleAgents: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("expected 1 deleted, got %d", n)
+	// Both agents (dead instance + NULL instance) are removed.
+	if n != 2 {
+		t.Fatalf("expected 2 deleted, got %d", n)
 	}
 
 	agents, _ := st.ListAgents(ctx)
-	if len(agents) != 1 || agents[0].Name != "legacy" {
-		t.Fatalf("expected only legacy agent, got %v", agents)
+	if len(agents) != 0 {
+		t.Fatalf("expected no remaining agents, got %v", agents)
 	}
 }
 
@@ -639,8 +640,9 @@ func TestCleanupStaleTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CleanupStaleTasks: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("expected 1 abandoned, got %d", n)
+	// Both t-stale (dead instance) and t-legacy (NULL instance) are abandoned.
+	if n != 2 {
+		t.Fatalf("expected 2 abandoned, got %d", n)
 	}
 
 	task, _ := st.GetTask(ctx, "t-stale")
@@ -654,10 +656,10 @@ func TestCleanupStaleTasks(t *testing.T) {
 		t.Fatalf("expected t-alive to remain pending, got %s", aliveTask.Status)
 	}
 
-	// legacy task (no sender_instance_id) should remain pending
+	// legacy task (no sender_instance_id) should now be abandoned
 	legacyTask, _ := st.GetTask(ctx, "t-legacy")
-	if legacyTask.Status != "pending" {
-		t.Fatalf("expected t-legacy to remain pending, got %s", legacyTask.Status)
+	if legacyTask.Status != "abandoned" {
+		t.Fatalf("expected t-legacy to be abandoned, got %s", legacyTask.Status)
 	}
 
 	// completed task should remain completed
@@ -693,6 +695,167 @@ func TestTaskSenderInstanceIDRoundTrip(t *testing.T) {
 	}
 	if got.SenderInstanceID != "mcp-xyz789" {
 		t.Fatalf("expected sender_instance_id=mcp-xyz789, got %q", got.SenderInstanceID)
+	}
+}
+
+func TestDomainAgentFieldCount(t *testing.T) {
+	if got := reflect.TypeOf(domain.Agent{}).NumField(); got != 6 {
+		t.Fatalf("domain.Agent has %d fields (expected 6). Update UpsertAgent/GetAgent/ListAgents scan logic and this constant.", got)
+	}
+}
+
+func TestDomainTaskFieldCount(t *testing.T) {
+	if got := reflect.TypeOf(domain.Task{}).NumField(); got != 12 {
+		t.Fatalf("domain.Task has %d fields (expected 12). Update GetTask/ListTasks scan logic and this constant.", got)
+	}
+}
+
+func TestEndSessionByInstanceID(t *testing.T) {
+	tests := []struct {
+		name           string
+		instanceID     string
+		setupTasks     []domain.Task
+		setupAgents    []domain.Agent
+		wantNowSession map[string]bool // taskID -> expected is_now_session
+	}{
+		{
+			name:       "matching sender_instance_id tasks updated",
+			instanceID: "mcp-end",
+			setupAgents: []domain.Agent{
+				{Name: "a1", PaneID: "%1"},
+			},
+			setupTasks: []domain.Task{
+				{ID: "t-match", AgentName: "a1", SenderInstanceID: "mcp-end", Status: "pending", SentAt: "2026-01-01T00:00:00Z"},
+				{ID: "t-other", AgentName: "a1", SenderInstanceID: "mcp-other", Status: "pending", SentAt: "2026-01-01T00:00:00Z"},
+			},
+			wantNowSession: map[string]bool{
+				"t-match": false,
+				"t-other": true,
+			},
+		},
+		{
+			name:       "zero matching tasks causes no error",
+			instanceID: "mcp-nonexistent",
+			setupAgents: []domain.Agent{
+				{Name: "a1", PaneID: "%1"},
+			},
+			setupTasks: []domain.Task{
+				{ID: "t-1", AgentName: "a1", SenderInstanceID: "mcp-alive", Status: "pending", SentAt: "2026-01-01T00:00:00Z"},
+			},
+			wantNowSession: map[string]bool{
+				"t-1": true,
+			},
+		},
+		{
+			name:       "other tasks not affected",
+			instanceID: "mcp-end",
+			setupAgents: []domain.Agent{
+				{Name: "a1", PaneID: "%1"},
+				{Name: "a2", PaneID: "%2"},
+			},
+			setupTasks: []domain.Task{
+				{ID: "t-end1", AgentName: "a1", SenderInstanceID: "mcp-end", Status: "pending", SentAt: "2026-01-01T00:00:00Z"},
+				{ID: "t-end2", AgentName: "a2", SenderInstanceID: "mcp-end", Status: "completed", SentAt: "2026-01-01T00:00:00Z"},
+				{ID: "t-keep", AgentName: "a1", SenderInstanceID: "mcp-alive", Status: "pending", SentAt: "2026-01-01T00:00:00Z"},
+			},
+			wantNowSession: map[string]bool{
+				"t-end1": false,
+				"t-end2": false,
+				"t-keep": true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newTestStore(t)
+			ctx := context.Background()
+
+			for _, agent := range tt.setupAgents {
+				if err := st.UpsertAgent(ctx, agent); err != nil {
+					t.Fatalf("UpsertAgent(%s): %v", agent.Name, err)
+				}
+			}
+			for _, task := range tt.setupTasks {
+				if err := st.CreateTask(ctx, task); err != nil {
+					t.Fatalf("CreateTask(%s): %v", task.ID, err)
+				}
+			}
+
+			if err := st.EndSessionByInstanceID(ctx, tt.instanceID); err != nil {
+				t.Fatalf("EndSessionByInstanceID(%s): %v", tt.instanceID, err)
+			}
+
+			for taskID, wantNow := range tt.wantNowSession {
+				got, err := st.GetTask(ctx, taskID)
+				if err != nil {
+					t.Fatalf("GetTask(%s): %v", taskID, err)
+				}
+				if got.IsNowSession != wantNow {
+					t.Errorf("task %s: IsNowSession = %v, want %v", taskID, got.IsNowSession, wantNow)
+				}
+			}
+		})
+	}
+}
+
+func TestListTasksIsNowSessionFilter(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	st.UpsertAgent(ctx, domain.Agent{Name: "a1", PaneID: "%1"})
+
+	// Create tasks: t-now is is_now_session=1 (default from CreateTask), t-old needs is_now_session=0
+	st.CreateTask(ctx, domain.Task{ID: "t-now", AgentName: "a1", Status: "pending", SentAt: "2026-01-01T00:00:00Z"})
+	st.CreateTask(ctx, domain.Task{ID: "t-old", AgentName: "a1", SenderInstanceID: "mcp-end", Status: "pending", SentAt: "2026-01-01T00:00:00Z"})
+	// End session to mark t-old as is_now_session=0
+	st.EndSessionByInstanceID(ctx, "mcp-end")
+
+	boolTrue := true
+	boolFalse := false
+
+	tests := []struct {
+		name        string
+		filter      domain.TaskFilter
+		wantCount   int
+		wantTaskIDs []string
+	}{
+		{
+			name:      "nil IsNowSession returns all",
+			filter:    domain.TaskFilter{Status: "all", IsNowSession: nil},
+			wantCount: 2,
+		},
+		{
+			name:        "true returns is_now_session=1 only",
+			filter:      domain.TaskFilter{Status: "all", IsNowSession: &boolTrue},
+			wantCount:   1,
+			wantTaskIDs: []string{"t-now"},
+		},
+		{
+			name:        "false returns is_now_session=0 only",
+			filter:      domain.TaskFilter{Status: "all", IsNowSession: &boolFalse},
+			wantCount:   1,
+			wantTaskIDs: []string{"t-old"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasks, err := st.ListTasks(ctx, tt.filter)
+			if err != nil {
+				t.Fatalf("ListTasks: %v", err)
+			}
+			if len(tasks) != tt.wantCount {
+				t.Fatalf("got %d tasks, want %d", len(tasks), tt.wantCount)
+			}
+			if tt.wantTaskIDs != nil {
+				for i, wantID := range tt.wantTaskIDs {
+					if tasks[i].ID != wantID {
+						t.Errorf("tasks[%d].ID = %q, want %q", i, tasks[i].ID, wantID)
+					}
+				}
+			}
+		})
 	}
 }
 

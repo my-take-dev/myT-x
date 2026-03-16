@@ -18,11 +18,22 @@ const (
 )
 
 // RealExecutor は実際の tmux コマンドを実行する。
-type RealExecutor struct{}
+type RealExecutor struct {
+	// SessionName は空の場合、セッション無指定（全セッション対象）。
+	SessionName string
+	// SessionAllPanes が false（デフォルト）かつ SessionName が非空の場合、
+	// ListPanes は自セッションのペインのみ返す。
+	SessionAllPanes bool
+}
 
-// NewExecutor は新しい RealExecutor を返す。
+// NewExecutor は新しい RealExecutor を返す（全セッション対象、既存互換）。
 func NewExecutor() *RealExecutor {
 	return &RealExecutor{}
+}
+
+// NewSessionAwareExecutor はセッションスコープ対応の RealExecutor を返す。
+func NewSessionAwareExecutor(sessionName string, allPanes bool) *RealExecutor {
+	return &RealExecutor{SessionName: sessionName, SessionAllPanes: allPanes}
 }
 
 func newTmuxCommand(ctx context.Context, args ...string) *exec.Cmd {
@@ -43,13 +54,42 @@ func (e *RealExecutor) GetPaneID(ctx context.Context) (string, error) {
 	return paneID, nil
 }
 
-// ListPanes は全セッションの全ペイン情報を取得する。
+// ListPanes はペイン情報を取得する。
+// SessionAllPanes=false かつ SessionName が非空の場合、2層フィルタで自セッションのみ返す:
+//   - Layer 1: tmux コマンドレベルで -s -t <session> によるフィルタ（データ量削減）
+//   - Layer 2: アプリケーションレベルで PaneInfo.Session による防御的フィルタ
+//
+// SessionName が空、または SessionAllPanes=true の場合は -a で全セッションを返す。
 func (e *RealExecutor) ListPanes(ctx context.Context) ([]domain.PaneInfo, error) {
-	out, err := newTmuxCommand(ctx, "list-panes", "-a", "-F", "#{pane_id}\t#{pane_title}\t#{session_name}\t#{window_index}").Output()
+	args := []string{"list-panes"}
+	if !e.SessionAllPanes && e.SessionName != "" {
+		// Layer 1: tmux コマンドレベルで自セッションに絞る
+		args = append(args, "-s", "-t", e.SessionName)
+	} else {
+		args = append(args, "-a")
+	}
+	args = append(args, "-F", "#{pane_id}\t#{pane_title}\t#{session_name}\t#{window_index}")
+	out, err := newTmuxCommand(ctx, args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("list panes: %w", err)
 	}
-	return ParseListPanesOutput(string(out)), nil
+	panes := ParseListPanesOutput(string(out))
+	// Layer 2: アプリケーションレベルでセッションフィルタ（防御的）
+	if !e.SessionAllPanes && e.SessionName != "" {
+		panes = filterPanesBySession(panes, e.SessionName)
+	}
+	return panes, nil
+}
+
+// filterPanesBySession は PaneInfo.Session が一致するペインのみ返す。
+func filterPanesBySession(panes []domain.PaneInfo, sessionName string) []domain.PaneInfo {
+	filtered := make([]domain.PaneInfo, 0, len(panes))
+	for _, p := range panes {
+		if strings.EqualFold(p.Session, sessionName) {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
 }
 
 // SetPaneTitle はペインタイトルを設定する。

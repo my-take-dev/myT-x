@@ -33,7 +33,6 @@ export function OrchestratorDetailPanel({representativeMCP, activeSession}: Orch
 
     const bridgeRecommendation = buildOrchMcpLaunchRecommendation(
         resolveBridgeCommand(representativeMCP),
-        normalizedSession,
     );
     const cliExamples = bridgeRecommendation == null ? [] : buildCliExamples(bridgeRecommendation, orchMcpConfigServerName);
     const orchToolDescriptions = [

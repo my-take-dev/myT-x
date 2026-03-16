@@ -17,9 +17,9 @@ func (a *App) SendChatMessage(paneID string, text string) error {
 	if text == "" {
 		return nil
 	}
-	router := a.router
-	if router == nil {
-		return errSessionNotInitialized
+	router, err := a.requireRouter()
+	if err != nil {
+		return err
 	}
 	if err := sendKeysLiteralWithEnter(router, paneID, text); err != nil {
 		slog.Debug("[CHAT] SendChatMessage failed", "paneID", paneID, "err", err)

@@ -15,18 +15,19 @@ interface ChatInputBarProps {
 const MIN_OVERLAY_HEIGHT_PX = 120;
 
 export function ChatInputBar({
-    activePaneId,
-    activePaneIndex,
-    activePaneTitle,
-    panes,
-    chatOverlayPercentage,
-}: ChatInputBarProps) {
+                                 activePaneId,
+                                 activePaneIndex,
+                                 activePaneTitle,
+                                 panes,
+                                 chatOverlayPercentage,
+                             }: ChatInputBarProps) {
     const {t} = useI18n();
     const [text, setText] = useState("");
     const [expanded, setExpanded] = useState(false);
     const [halfHeight, setHalfHeight] = useState(false);
     const [anchorTop, setAnchorTop] = useState(false);
     const [sending, setSending] = useState(false);
+    const [sendError, setSendError] = useState<string | null>(null);
     const [heightPx, setHeightPx] = useState<number | null>(null);
     const [fullHeightPx, setFullHeightPx] = useState<number | null>(null);
     const [selectedPaneId, setSelectedPaneId] = useState<string | null>(activePaneId);
@@ -69,17 +70,27 @@ export function ChatInputBar({
 
     const targetPaneId = selectedPaneId ?? activePaneId;
 
+    // Auto-clear send error after a few seconds.
+    useEffect(() => {
+        if (sendError == null) return;
+        const id = setTimeout(() => setSendError(null), 5000);
+        return () => clearTimeout(id);
+    }, [sendError]);
+
     const handleSend = useCallback(async () => {
         const trimmed = text.trim();
         if (!trimmed || !targetPaneId || sending) {
             return;
         }
         setSending(true);
+        setSendError(null);
         try {
             await api.SendChatMessage(targetPaneId, trimmed);
             setText("");
+            setExpanded(false);
         } catch (err) {
             console.warn("[chat] SendChatMessage failed", err);
+            setSendError(String(err));
         } finally {
             setSending(false);
         }
@@ -153,13 +164,14 @@ export function ChatInputBar({
                 dragCleanupRef.current = null;
             }
             // Update fullHeightPx to current height after drag.
-            setHeightPx((current) => {
-                if (current != null) {
-                    setFullHeightPx(current);
+            // Read the latest heightPx from overlayRef instead of using setState updater side-effects.
+            if (overlayRef.current) {
+                const currentHeight = overlayRef.current.getBoundingClientRect().height;
+                if (currentHeight > 0) {
+                    setFullHeightPx(currentHeight);
                     setHalfHeight(false);
                 }
-                return current;
-            });
+            }
         };
 
         if (dragCleanupRef.current) {
@@ -238,6 +250,12 @@ export function ChatInputBar({
                     </button>
                 </div>
 
+                {sendError && (
+                    <div className="chat-overlay-error" onClick={() => setSendError(null)}>
+                        {sendError}
+                    </div>
+                )}
+
                 <textarea
                     ref={textareaRef}
                     className="chat-overlay-textarea"
@@ -288,6 +306,14 @@ export function ChatInputBar({
             <span className="chat-input-bar-pane">
                 %{activePaneIndex} {activePaneTitle || ""}
             </span>
+            {sendError && (
+                <div className="chat-input-bar-error" onClick={(e) => {
+                    e.stopPropagation();
+                    setSendError(null);
+                }}>
+                    {sendError}
+                </div>
+            )}
             <input
                 className="chat-input-bar-input"
                 type="text"

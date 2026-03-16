@@ -251,7 +251,7 @@ func (a *App) createSessionForDirectory(
 		},
 	}
 	if opts.EnableAgentTeam {
-		req.Env = agentTeamEnvVars(sessionName)
+		req.Env = agentTeamEnvVars(sessionName, sessionName)
 	}
 
 	// Merge claude_env into initial pane env when enabled.

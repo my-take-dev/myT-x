@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -97,7 +98,7 @@ func sendKeysLiteralPasteWithEnter(router *tmux.CommandRouter, paneID string, te
 	for i := 0; i < len(runes); i += sendKeysLiteralChunkSize {
 		end := min(i+sendKeysLiteralChunkSize, len(runes))
 		chunk := string(runes[i:end])
-		resp := executeRouterRequestFn(router, ipc.TmuxRequest{
+		chunkResp := executeRouterRequestFn(router, ipc.TmuxRequest{
 			Command: "send-keys",
 			Flags: map[string]any{
 				"-t": paneID,
@@ -105,17 +106,39 @@ func sendKeysLiteralPasteWithEnter(router *tmux.CommandRouter, paneID string, te
 			},
 			Args: []string{chunk},
 		})
-		if resp.ExitCode != 0 {
-			return fmt.Errorf("send-keys text failed: %s", strings.TrimSpace(resp.Stderr))
+		if chunkResp.ExitCode != 0 {
+			// Text send failed; still send paste-end to leave terminal in a clean state.
+			sendPasteEnd(router, paneID)
+			return fmt.Errorf("send-keys text failed: %s", strings.TrimSpace(chunkResp.Stderr))
 		}
 		if end < len(runes) {
 			sendKeysLiteralSleepFn(sendKeysLiteralDelay)
 		}
 	}
 
-	// Step 3: Send paste mode end: ESC[201~
+	// Step 3: Send paste-end: ESC[201~
 	sendKeysLiteralSleepFn(sendKeysLiteralDelay)
-	resp = executeRouterRequestFn(router, ipc.TmuxRequest{
+	sendPasteEnd(router, paneID)
+
+	// Step 4: Send Enter (C-m) separately.
+	sendKeysLiteralSleepFn(sendKeysLiteralDelay)
+	enterResp := executeRouterRequestFn(router, ipc.TmuxRequest{
+		Command: "send-keys",
+		Flags: map[string]any{
+			"-t": paneID,
+		},
+		Args: []string{"C-m"},
+	})
+	if enterResp.ExitCode != 0 {
+		return fmt.Errorf("send-keys C-m failed: %s", strings.TrimSpace(enterResp.Stderr))
+	}
+	return nil
+}
+
+// sendPasteEnd sends the bracketed paste end sequence (best-effort).
+// Failure is logged but not propagated to avoid masking the original error.
+func sendPasteEnd(router *tmux.CommandRouter, paneID string) {
+	endResp := executeRouterRequestFn(router, ipc.TmuxRequest{
 		Command: "send-keys",
 		Flags: map[string]any{
 			"-t": paneID,
@@ -123,21 +146,9 @@ func sendKeysLiteralPasteWithEnter(router *tmux.CommandRouter, paneID string, te
 		},
 		Args: []string{bracketedPasteEnd},
 	})
-	if resp.ExitCode != 0 {
-		return fmt.Errorf("send-keys paste-end failed: %s", strings.TrimSpace(resp.Stderr))
+	if endResp.ExitCode != 0 {
+		slog.Warn("[WARN-SENDKEYS] paste-end send failed",
+			"paneID", paneID,
+			"stderr", strings.TrimSpace(endResp.Stderr))
 	}
-
-	// Step 4: Send Enter (C-m) separately.
-	sendKeysLiteralSleepFn(sendKeysLiteralDelay)
-	resp = executeRouterRequestFn(router, ipc.TmuxRequest{
-		Command: "send-keys",
-		Flags: map[string]any{
-			"-t": paneID,
-		},
-		Args: []string{"C-m"},
-	})
-	if resp.ExitCode != 0 {
-		return fmt.Errorf("send-keys C-m failed: %s", strings.TrimSpace(resp.Stderr))
-	}
-	return nil
 }
