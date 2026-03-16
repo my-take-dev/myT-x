@@ -631,8 +631,6 @@ func validateViewerSidebarMode(cfg *Config) {
 	}
 }
 
-// validateDefaultSessionDir normalizes DefaultSessionDir in place.
-// Expands ~ prefix to the user's home directory, applies filepath.Clean,
 // validateChatOverlayPercentage clamps ChatOverlayPercentage to the valid
 // range (30-95). Zero means "use default" (80).
 func validateChatOverlayPercentage(cfg *Config) {
@@ -651,6 +649,8 @@ func validateChatOverlayPercentage(cfg *Config) {
 	}
 }
 
+// validateDefaultSessionDir normalizes DefaultSessionDir in place.
+// Expands ~ prefix to the user's home directory, applies filepath.Clean,
 // and clears non-absolute paths with a warning log (non-fatal).
 func validateDefaultSessionDir(cfg *Config) {
 	dir := strings.TrimSpace(cfg.DefaultSessionDir)

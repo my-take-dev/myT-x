@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useId, useRef} from "react";
 import {useI18n} from "../i18n";
 
-interface ConfirmAction {
+export interface ConfirmAction {
     label: string;
     value: string;
     variant?: "primary" | "danger" | "ghost";

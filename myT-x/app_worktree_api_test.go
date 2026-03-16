@@ -2957,7 +2957,7 @@ func TestCreateSessionWithWorktreeEnableAgentTeamSetsEnvVars(t *testing.T) {
 		t.Fatalf("CreateSessionWithWorktree() error = %v", err)
 	}
 
-	wantEnv := agentTeamEnvVars(snapshot.Name)
+	wantEnv := agentTeamEnvVars(snapshot.Name, snapshot.Name)
 	if len(capturedReq.Env) != len(wantEnv) {
 		t.Fatalf("captured env count = %d, want %d", len(capturedReq.Env), len(wantEnv))
 	}
@@ -3449,7 +3449,7 @@ func TestCreateSessionWithExistingWorktreeEnableAgentTeamSetsEnvVars(t *testing.
 		t.Fatalf("CreateSessionWithExistingWorktree() error = %v", err)
 	}
 
-	wantEnv := agentTeamEnvVars(snapshot.Name)
+	wantEnv := agentTeamEnvVars(snapshot.Name, snapshot.Name)
 	if len(capturedReq.Env) != len(wantEnv) {
 		t.Fatalf("captured env count = %d, want %d", len(capturedReq.Env), len(wantEnv))
 	}

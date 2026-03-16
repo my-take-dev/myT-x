@@ -197,7 +197,8 @@ func (a *App) startup(ctx context.Context) {
 				a.mcpManager.CleanupSession(oldName)
 			}
 		},
-		ResolveMCPStdio: a.ResolveMCPStdio,
+		ResolveMCPStdio:     a.ResolveMCPStdio,
+		ResolveSessionByCwd: a.resolveSessionByCwd,
 	}
 	slog.Debug("[CONFIG] agent model mapping is handled by tmux-shim")
 	a.router = tmux.NewCommandRouter(

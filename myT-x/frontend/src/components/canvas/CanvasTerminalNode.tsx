@@ -1,5 +1,6 @@
-import {memo} from "react";
+import {memo, useCallback} from "react";
 import {Handle, type NodeProps, NodeResizer, Position} from "@xyflow/react";
+import {useShallow} from "zustand/react/shallow";
 import {TerminalPane} from "../TerminalPane";
 import {useCanvasStore} from "../../stores/canvasStore";
 
@@ -15,6 +16,7 @@ interface CanvasTerminalNodeData {
     onRenamePane: (paneId: string, title: string) => void | Promise<void>;
     onSwapPane: (sourcePaneId: string, targetPaneId: string) => void | Promise<void>;
     onDetach: () => void;
+
     [key: string]: unknown;
 }
 
@@ -22,12 +24,24 @@ function CanvasTerminalNodeComponent(props: NodeProps) {
     const {selected} = props;
     const data = props.data as CanvasTerminalNodeData;
 
-    const agentInfo = useCanvasStore((s) => s.agentMap[data.paneId]);
-    const hasChildProcess = useCanvasStore((s) => s.processStatusMap[data.paneId] ?? false);
+    const {agentInfo, hasChildProcess, setNodePosition, setNodeSize} = useCanvasStore(useShallow((s) => ({
+        agentInfo: s.agentMap[data.paneId],
+        hasChildProcess: s.processStatusMap[data.paneId] ?? false,
+        setNodePosition: s.setNodePosition,
+        setNodeSize: s.setNodeSize,
+    })));
+
+    const handleResizeEnd = useCallback(
+        (_event: unknown, params: { x: number; y: number; width: number; height: number }) => {
+            setNodePosition(data.paneId, {x: params.x, y: params.y});
+            setNodeSize(data.paneId, {width: params.width, height: params.height});
+        },
+        [data.paneId, setNodePosition, setNodeSize],
+    );
 
     const borderClass = data.active ? "canvas-node-active"
         : hasChildProcess ? "canvas-node-running"
-        : "canvas-node-idle";
+            : "canvas-node-idle";
 
     return (
         <div className={`canvas-terminal-node ${borderClass}`}>
@@ -37,8 +51,9 @@ function CanvasTerminalNodeComponent(props: NodeProps) {
                 isVisible={selected === true}
                 lineClassName="canvas-resize-line"
                 handleClassName="canvas-resize-handle"
+                onResizeEnd={handleResizeEnd}
             />
-            <Handle type="target" position={Position.Left} id="input" className="canvas-handle"/>
+            <Handle type="target" position={Position.Top} id="input" className="canvas-handle"/>
             {agentInfo && (
                 <div className="canvas-agent-badge">{agentInfo.name}</div>
             )}
@@ -59,7 +74,7 @@ function CanvasTerminalNodeComponent(props: NodeProps) {
                     onDetach={data.onDetach}
                 />
             </div>
-            <Handle type="source" position={Position.Right} id="output" className="canvas-handle"/>
+            <Handle type="source" position={Position.Bottom} id="output" className="canvas-handle"/>
         </div>
     );
 }

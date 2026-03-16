@@ -18,7 +18,6 @@ export interface BridgeLaunchRecommendation {
 export const lspMcpConfigServerName = "mytx-lsp-mcp";
 export const orchMcpConfigServerName = "mytx-agent-orchestrator";
 export const lspMcpNamePlaceholder = "$LSP_NAME";
-export const lspSessionNamePlaceholder = "$SESSION_NAME";
 
 export function escapeTomlBasicString(value: string): string {
     const out: string[] = [];
@@ -63,24 +62,16 @@ function normalizeBridgeCommand(command: string | null | undefined): string {
     return command?.trim() ?? "";
 }
 
-function normalizeSessionName(sessionName: string | null | undefined): string {
-    const trimmed = sessionName?.trim() ?? "";
-    return trimmed === "" ? lspSessionNamePlaceholder : trimmed;
-}
-
 export function resolveBridgeCommand(mcp: MCPSnapshot | null): string {
     return normalizeBridgeCommand(mcp?.bridge_command);
 }
 
 export function buildLspMcpBridgeArgs(
-    sessionName: string | null | undefined,
     lspName: string = lspMcpNamePlaceholder,
 ): string[] {
     return [
         "mcp",
         "stdio",
-        "--session",
-        normalizeSessionName(sessionName),
         "--mcp",
         lspName,
     ];
@@ -97,14 +88,13 @@ export function buildCommandPreview(command: string, args: string[]): string {
 
 export function buildLspMcpLaunchRecommendation(
     bridgeCommand: string | null | undefined,
-    sessionName: string | null | undefined,
     lspName: string = lspMcpNamePlaceholder,
 ): BridgeLaunchRecommendation | null {
     const command = normalizeBridgeCommand(bridgeCommand);
     if (command === "") {
         return null;
     }
-    const args = buildLspMcpBridgeArgs(sessionName, lspName);
+    const args = buildLspMcpBridgeArgs(lspName);
     return {
         command,
         args,
@@ -177,12 +167,10 @@ export function buildCopilotCLIConfigSnippet(serverName: string, command: string
     );
 }
 
-export function buildOrchMcpBridgeArgs(sessionName: string | null | undefined): string[] {
+export function buildOrchMcpBridgeArgs(): string[] {
     return [
         "mcp",
         "stdio",
-        "--session",
-        normalizeSessionName(sessionName),
         "--mcp",
         "agent-orchestrator",
     ];
@@ -190,13 +178,12 @@ export function buildOrchMcpBridgeArgs(sessionName: string | null | undefined): 
 
 export function buildOrchMcpLaunchRecommendation(
     bridgeCommand: string | null | undefined,
-    sessionName: string | null | undefined,
 ): BridgeLaunchRecommendation | null {
     const command = normalizeBridgeCommand(bridgeCommand);
     if (command === "") {
         return null;
     }
-    const args = buildOrchMcpBridgeArgs(sessionName);
+    const args = buildOrchMcpBridgeArgs();
     return {
         command,
         args,

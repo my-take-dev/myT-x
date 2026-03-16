@@ -35,6 +35,13 @@ type Config struct {
 	ServerName    string
 	ServerVersion string
 
+	// SessionName は MCP インスタンスが属するセッション名。
+	// 空の場合はセッション名不明として扱い、list_panes は全セッションを返す。
+	SessionName string
+	// SessionAllPanes が true の場合、list_panes は全セッションのペインを返す（既存動作互換）。
+	// false（デフォルト）の場合、SessionName が設定されていれば自セッションのみに絞り込む。
+	SessionAllPanes bool
+
 	// DI注入点（nil の場合はデフォルト実装を使用）
 	AgentRepo    domain.AgentRepository
 	TaskRepo     domain.TaskRepository
@@ -119,7 +126,12 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 			sender = exec
 		}
 		if lister == nil {
-			lister = exec
+			// Use session-aware executor when SessionName is available.
+			if normalized.SessionName != "" {
+				lister = tmux.NewSessionAwareExecutor(normalized.SessionName, normalized.SessionAllPanes)
+			} else {
+				lister = exec
+			}
 		}
 		if capturer == nil {
 			capturer = exec

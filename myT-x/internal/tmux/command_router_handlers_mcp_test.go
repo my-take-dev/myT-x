@@ -168,6 +168,97 @@ func TestResolveMCPStdioRequestTarget_RejectsPartialFlagSet(t *testing.T) {
 	}
 }
 
+// --- resolve-session-by-cwd handler tests ---
+
+func TestHandleResolveSessionByCwd_ResolverUnavailable(t *testing.T) {
+	router := NewCommandRouter(NewSessionManager(), nil, RouterOptions{})
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "resolve-session-by-cwd",
+		Flags:   map[string]any{"cwd": "/some/path"},
+	})
+	if resp.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1", resp.ExitCode)
+	}
+	if !strings.Contains(resp.Stderr, "resolver is unavailable") {
+		t.Fatalf("Stderr = %q, want resolver unavailable", resp.Stderr)
+	}
+}
+
+func TestHandleResolveSessionByCwd_Success(t *testing.T) {
+	router := NewCommandRouter(NewSessionManager(), nil, RouterOptions{
+		ResolveSessionByCwd: func(cwd string) (string, error) {
+			if cwd != "/repo/path" {
+				t.Fatalf("cwd = %q, want %q", cwd, "/repo/path")
+			}
+			return "my-session", nil
+		},
+	})
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "resolve-session-by-cwd",
+		Flags:   map[string]any{"cwd": "/repo/path"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	if strings.TrimSpace(resp.Stdout) != "my-session" {
+		t.Fatalf("Stdout = %q, want %q", resp.Stdout, "my-session")
+	}
+}
+
+func TestHandleResolveSessionByCwd_MissingCwd(t *testing.T) {
+	router := NewCommandRouter(NewSessionManager(), nil, RouterOptions{
+		ResolveSessionByCwd: func(string) (string, error) {
+			t.Fatal("resolver should not be called for missing cwd")
+			return "", nil
+		},
+	})
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "resolve-session-by-cwd",
+		Flags:   map[string]any{},
+	})
+	if resp.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1", resp.ExitCode)
+	}
+	if !strings.Contains(resp.Stderr, "cwd flag is required") {
+		t.Fatalf("Stderr = %q, want cwd required error", resp.Stderr)
+	}
+}
+
+func TestHandleResolveSessionByCwd_EmptyCwd(t *testing.T) {
+	router := NewCommandRouter(NewSessionManager(), nil, RouterOptions{
+		ResolveSessionByCwd: func(string) (string, error) {
+			t.Fatal("resolver should not be called for empty cwd")
+			return "", nil
+		},
+	})
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "resolve-session-by-cwd",
+		Flags:   map[string]any{"cwd": "  "},
+	})
+	if resp.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1", resp.ExitCode)
+	}
+}
+
+func TestHandleResolveSessionByCwd_NonStringCwd(t *testing.T) {
+	router := NewCommandRouter(NewSessionManager(), nil, RouterOptions{
+		ResolveSessionByCwd: func(string) (string, error) {
+			t.Fatal("resolver should not be called for non-string cwd")
+			return "", nil
+		},
+	})
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "resolve-session-by-cwd",
+		Flags:   map[string]any{"cwd": 42},
+	})
+	if resp.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1", resp.ExitCode)
+	}
+	if !strings.Contains(resp.Stderr, "must be a string") {
+		t.Fatalf("Stderr = %q, want type error", resp.Stderr)
+	}
+}
+
 func TestResolveMCPStdioRequestTarget_RejectsWrongArgCount(t *testing.T) {
 	_, _, err := resolveMCPStdioRequestTarget(ipc.TmuxRequest{
 		Args: []string{"session-a"},

@@ -2,7 +2,10 @@ package tmux
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"myT-x/internal/mcp/agent-orchestrator/domain"
 )
 
 func TestValidatePaneID(t *testing.T) {
@@ -76,5 +79,66 @@ func TestExecutorGetPaneIDRejectsInvalidTMUXPANE(t *testing.T) {
 	_, err := exec.GetPaneID(context.Background())
 	if err == nil {
 		t.Fatal("GetPaneID should reject invalid TMUX_PANE")
+	}
+}
+
+func TestNewSessionAwareExecutor(t *testing.T) {
+	exec := NewSessionAwareExecutor("my-session", false)
+	if exec.SessionName != "my-session" {
+		t.Fatalf("SessionName = %q, want %q", exec.SessionName, "my-session")
+	}
+	if exec.SessionAllPanes {
+		t.Fatal("SessionAllPanes should be false")
+	}
+
+	execAll := NewSessionAwareExecutor("other", true)
+	if !execAll.SessionAllPanes {
+		t.Fatal("SessionAllPanes should be true")
+	}
+}
+
+func TestNewExecutorDefaults(t *testing.T) {
+	exec := NewExecutor()
+	if exec.SessionName != "" {
+		t.Fatalf("SessionName = %q, want empty", exec.SessionName)
+	}
+	if exec.SessionAllPanes {
+		t.Fatal("SessionAllPanes should default to false")
+	}
+}
+
+func TestFilterPanesBySession(t *testing.T) {
+	panes := []domain.PaneInfo{
+		{ID: "%1", Session: "session-a"},
+		{ID: "%2", Session: "session-b"},
+		{ID: "%3", Session: "session-a"},
+		{ID: "%4", Session: "SESSION-A"}, // case insensitive match
+	}
+
+	filtered := filterPanesBySession(panes, "session-a")
+	if len(filtered) != 3 {
+		t.Fatalf("filtered count = %d, want 3", len(filtered))
+	}
+	for _, p := range filtered {
+		if !strings.EqualFold(p.Session, "session-a") {
+			t.Errorf("unexpected pane in filtered result: %+v", p)
+		}
+	}
+}
+
+func TestFilterPanesBySession_Empty(t *testing.T) {
+	filtered := filterPanesBySession(nil, "session-a")
+	if len(filtered) != 0 {
+		t.Fatalf("filtered count = %d, want 0", len(filtered))
+	}
+}
+
+func TestFilterPanesBySession_NoMatch(t *testing.T) {
+	panes := []domain.PaneInfo{
+		{ID: "%1", Session: "session-b"},
+	}
+	filtered := filterPanesBySession(panes, "session-a")
+	if len(filtered) != 0 {
+		t.Fatalf("filtered count = %d, want 0", len(filtered))
 	}
 }

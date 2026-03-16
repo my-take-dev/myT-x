@@ -5,12 +5,11 @@ import type {OrchestratorLaunchMode, OrchestratorTeamDefinition} from "./types";
 interface StartDialogProps {
     team: OrchestratorTeamDefinition;
     activeSession: string | null;
-    starting: boolean;
     onBack: () => void;
     onStart: (launchMode: OrchestratorLaunchMode, newSessionName: string) => void;
 }
 
-export function StartDialog({team, activeSession, starting, onBack, onStart}: StartDialogProps) {
+export function StartDialog({team, activeSession, onBack, onStart}: StartDialogProps) {
     const {t} = useI18n();
     const [launchMode, setLaunchMode] = useState<OrchestratorLaunchMode>("active_session");
     const [newSessionName, setNewSessionName] = useState(team.name.toLowerCase().replace(/\s+/g, "-"));
@@ -82,12 +81,10 @@ export function StartDialog({team, activeSession, starting, onBack, onStart}: St
                 <button
                     type="button"
                     className="orchestrator-teams-primary-btn"
-                    disabled={activeSession === null || starting || (launchMode === "new_session" && newSessionName.trim() === "")}
+                    disabled={activeSession === null || (launchMode === "new_session" && newSessionName.trim() === "")}
                     onClick={() => onStart(launchMode, newSessionName)}
                 >
-                    {starting
-                        ? t("viewer.orchestratorTeams.start.starting", "起動中...")
-                        : t("viewer.orchestratorTeams.start.launchTeam", "チームを起動")}
+                    {t("viewer.orchestratorTeams.start.launchTeam", "チームを起動")}
                 </button>
             </div>
         </div>

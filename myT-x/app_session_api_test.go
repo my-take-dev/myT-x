@@ -362,7 +362,7 @@ func TestCreateSessionWithAgentTeamEnvVars(t *testing.T) {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
 
-	want := agentTeamEnvVars("team-session")
+	want := agentTeamEnvVars("team-session", "team-session")
 	if len(capturedReq.Env) != len(want) {
 		t.Fatalf("CreateSession() env count = %d, want %d", len(capturedReq.Env), len(want))
 	}
@@ -370,6 +370,19 @@ func TestCreateSessionWithAgentTeamEnvVars(t *testing.T) {
 		if got := capturedReq.Env[key]; got != wantValue {
 			t.Fatalf("CreateSession() env[%q] = %q, want %q", key, got, wantValue)
 		}
+	}
+}
+
+func TestAgentTeamEnvVarsContainsMYTXSession(t *testing.T) {
+	env := agentTeamEnvVars("team-name", "session-name")
+	if got, ok := env["MYTX_SESSION"]; !ok {
+		t.Fatal("MYTX_SESSION key not found in agentTeamEnvVars")
+	} else if got != "session-name" {
+		t.Fatalf("MYTX_SESSION = %q, want %q", got, "session-name")
+	}
+	// Team name should still be set correctly.
+	if got := env["CLAUDE_CODE_TEAM_NAME"]; got != "team-name" {
+		t.Fatalf("CLAUDE_CODE_TEAM_NAME = %q, want %q", got, "team-name")
 	}
 }
 
@@ -2136,7 +2149,7 @@ func TestCreateSessionForDirectoryFillOnlyPriority(t *testing.T) {
 			verifyEnv: func(t *testing.T, capturedEnv map[string]string) {
 				t.Helper()
 				// Agent team vars must retain their original values (not overwritten by claude_env).
-				agentVars := agentTeamEnvVars("test-session")
+				agentVars := agentTeamEnvVars("test-session", "test-session")
 				for key, wantValue := range agentVars {
 					if got := capturedEnv[key]; got != wantValue {
 						t.Errorf("env[%q] = %q, want %q (agent team env must take priority)", key, got, wantValue)
@@ -2175,7 +2188,7 @@ func TestCreateSessionForDirectoryFillOnlyPriority(t *testing.T) {
 			},
 			verifyEnv: func(t *testing.T, capturedEnv map[string]string) {
 				t.Helper()
-				agentVars := agentTeamEnvVars("test-session")
+				agentVars := agentTeamEnvVars("test-session", "test-session")
 				for key, wantValue := range agentVars {
 					if got := capturedEnv[key]; got != wantValue {
 						t.Errorf("env[%q] = %q, want %q", key, got, wantValue)

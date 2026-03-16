@@ -50,6 +50,7 @@ func TestCommandRouterHandlerMapHasNoDuplicateKeys(t *testing.T) {
 		"run-shell",
 		"if-shell",
 		"mcp-resolve-stdio",
+		"resolve-session-by-cwd",
 	}
 
 	if len(router.handlers) != len(expectedCommands) {

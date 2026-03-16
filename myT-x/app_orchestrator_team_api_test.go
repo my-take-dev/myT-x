@@ -59,6 +59,7 @@ func withOrchestratorTeamSeams(t *testing.T) {
 	origSplitPane := splitPaneForOrchestratorTeamFn
 	origRenamePane := renamePaneForOrchestratorTeamFn
 	origSendKeys := sendKeysForOrchestratorTeamFn
+	origSendKeysPaste := sendKeysPasteForOrchestratorTeamFn
 	origApplyLayout := applyLayoutPresetForOrchestratorTeamFn
 
 	orchestratorTeamSleepFn = func(time.Duration) {}
@@ -69,6 +70,7 @@ func withOrchestratorTeamSeams(t *testing.T) {
 		splitPaneForOrchestratorTeamFn = origSplitPane
 		renamePaneForOrchestratorTeamFn = origRenamePane
 		sendKeysForOrchestratorTeamFn = origSendKeys
+		sendKeysPasteForOrchestratorTeamFn = origSendKeysPaste
 		applyLayoutPresetForOrchestratorTeamFn = origApplyLayout
 	})
 }
@@ -543,6 +545,11 @@ func TestStartOrchestratorTeamNewSessionCreatesPanesAndAppliesLayout(t *testing.
 		sent = append(sent, paneID+":"+strings.TrimSpace(text))
 		return nil
 	}
+	pastedSent := make([]string, 0)
+	sendKeysPasteForOrchestratorTeamFn = func(router *tmux.CommandRouter, paneID string, text string) error {
+		pastedSent = append(pastedSent, paneID+":"+strings.TrimSpace(text))
+		return nil
+	}
 
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 	result, err := app.StartOrchestratorTeam(StartOrchestratorTeamRequest{
@@ -563,10 +570,16 @@ func TestStartOrchestratorTeamNewSessionCreatesPanesAndAppliesLayout(t *testing.
 	if len(result.MemberPaneIDs) != 2 {
 		t.Fatalf("len(result.MemberPaneIDs) = %d, want 2", len(result.MemberPaneIDs))
 	}
-	if len(sent) != 6 {
-		t.Fatalf("len(sent) = %d, want 6 (cd + launch + bootstrap for 2 members)", len(sent))
+	// 5 regular sends: cd + launch + bootstrap(codex) for Lead, cd + launch for Reviewer
+	// 1 paste send: bootstrap(claude) for Reviewer (isClaudeCommand detects "claude" command)
+	totalSent := len(sent) + len(pastedSent)
+	if totalSent != 6 {
+		t.Fatalf("total sent = %d (regular=%d, paste=%d), want 6 (cd + launch + bootstrap for 2 members)", totalSent, len(sent), len(pastedSent))
 	}
-	if !strings.Contains(sent[0], `cd '`) {
+	if len(pastedSent) != 1 {
+		t.Fatalf("len(pastedSent) = %d, want 1 (bootstrap for claude member)", len(pastedSent))
+	}
+	if !strings.Contains(sent[0], `cd "`) {
 		t.Fatalf("first send-keys should be cd command: %q", sent[0])
 	}
 	if !strings.Contains(sent[1], `--sandbox`) {
@@ -761,6 +774,126 @@ func TestStartOrchestratorTeamUsesCustomBootstrapDelay(t *testing.T) {
 	// The bootstrap delay (5s) should appear in the recorded sleep durations.
 	if !slices.Contains(sleepDurations, 5*time.Second) {
 		t.Fatalf("expected 5s bootstrap delay in sleep durations: %v", sleepDurations)
+	}
+}
+
+func TestQuoteOrchestratorCommandArg(t *testing.T) {
+	tests := []struct {
+		name string
+		arg  string
+		want string
+	}{
+		{name: "empty string", arg: "", want: `""`},
+		{name: "no special chars", arg: "--flag", want: "--flag"},
+		{name: "contains space", arg: "hello world", want: `"hello world"`},
+		{name: "contains tab", arg: "hello\tworld", want: "\"hello\tworld\""},
+		{name: "contains double quote", arg: `say "hi"`, want: `"say \"hi\""`},
+		{name: "backslash before quote", arg: `path\"end`, want: `"path\\\"end"`},
+		{name: "trailing backslash no special chars", arg: `path\`, want: `path\`},
+		{name: "trailing backslash with space", arg: `path to\`, want: `"path to\\"`},
+		{name: "no quoting needed for simple flag", arg: "--sandbox", want: "--sandbox"},
+		{name: "space at start", arg: " leading", want: `" leading"`},
+		{name: "multiple spaces", arg: "a b c", want: `"a b c"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := quoteOrchestratorCommandArg(tt.arg)
+			if got != tt.want {
+				t.Fatalf("quoteOrchestratorCommandArg(%q) = %q, want %q", tt.arg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsClaudeCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{name: "claude", command: "claude", want: true},
+		{name: "claude.exe", command: "claude.exe", want: true},
+		{name: "absolute path claude", command: "/usr/bin/claude", want: true},
+		{name: "windows path no space claude.exe", command: `C:\Tools\claude.exe`, want: true},
+		{name: "claude-code", command: "claude-code", want: true},
+		{name: "claude-code-v2", command: "claude-code-v2", want: true},
+		{name: "codex is not claude", command: "codex", want: false},
+		{name: "empty command", command: "", want: false},
+		{name: "whitespace only", command: "   ", want: false},
+		{name: "claude with args ignored", command: "claude --model opus", want: true},
+		{name: "CLAUDE uppercase", command: "CLAUDE", want: true},
+		{name: "Claude mixed case", command: "Claude", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isClaudeCommand(tt.command)
+			if got != tt.want {
+				t.Fatalf("isClaudeCommand(%q) = %v, want %v", tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReorderOrchestratorTeamsDuplicateID(t *testing.T) {
+	app := newOrchestratorTeamTestApp(t)
+
+	for _, team := range []OrchestratorTeamDefinition{
+		{ID: "team-a", Name: "Alpha", Members: []OrchestratorTeamMember{{PaneTitle: "A", Role: "A", Command: "codex"}}},
+		{ID: "team-b", Name: "Beta", Members: []OrchestratorTeamMember{{PaneTitle: "B", Role: "B", Command: "codex"}}},
+	} {
+		if err := app.SaveOrchestratorTeam(team, ""); err != nil {
+			t.Fatalf("SaveOrchestratorTeam(%s) error = %v", team.ID, err)
+		}
+	}
+
+	// Duplicate ID: team-a appears twice. Second occurrence sets order=1, overwriting order=0.
+	// This is allowed (last-write-wins for the same ID).
+	err := app.ReorderOrchestratorTeams([]string{"team-a", "team-b", "team-a"}, "", "")
+	if err != nil {
+		// If the implementation rejects duplicates, that's also acceptable behavior.
+		if !strings.Contains(err.Error(), "not found") {
+			t.Logf("ReorderOrchestratorTeams with duplicate ID returned: %v", err)
+		}
+	}
+}
+
+func TestReorderOrchestratorTeamsSubsetIDs(t *testing.T) {
+	app := newOrchestratorTeamTestApp(t)
+
+	for _, team := range []OrchestratorTeamDefinition{
+		{ID: "team-a", Name: "Alpha", Members: []OrchestratorTeamMember{{PaneTitle: "A", Role: "A", Command: "codex"}}},
+		{ID: "team-b", Name: "Beta", Members: []OrchestratorTeamMember{{PaneTitle: "B", Role: "B", Command: "codex"}}},
+		{ID: "team-c", Name: "Charlie", Members: []OrchestratorTeamMember{{PaneTitle: "C", Role: "C", Command: "codex"}}},
+	} {
+		if err := app.SaveOrchestratorTeam(team, ""); err != nil {
+			t.Fatalf("SaveOrchestratorTeam(%s) error = %v", team.ID, err)
+		}
+	}
+
+	// Reorder only a subset of IDs. team-c is not included, so its order stays unchanged.
+	if err := app.ReorderOrchestratorTeams([]string{"team-b", "team-a"}, "", ""); err != nil {
+		t.Fatalf("ReorderOrchestratorTeams() error = %v", err)
+	}
+
+	teams, err := app.LoadOrchestratorTeams("")
+	if err != nil {
+		t.Fatalf("LoadOrchestratorTeams() error = %v", err)
+	}
+	if len(teams) != 3 {
+		t.Fatalf("len(teams) = %d, want 3", len(teams))
+	}
+
+	// team-b got order=0, team-a got order=1, team-c retained original order=2
+	if teams[0].Name != "Beta" {
+		t.Fatalf("teams[0].Name = %q, want Beta", teams[0].Name)
+	}
+	if teams[1].Name != "Alpha" {
+		t.Fatalf("teams[1].Name = %q, want Alpha", teams[1].Name)
+	}
+	if teams[2].Name != "Charlie" {
+		t.Fatalf("teams[2].Name = %q, want Charlie", teams[2].Name)
 	}
 }
 

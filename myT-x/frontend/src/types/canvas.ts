@@ -1,24 +1,10 @@
-export interface OrchestratorTask {
-    task_id: string;
-    agent_name: string;
-    sender_pane_id: string;
-    assignee_pane_id: string;
-    sender_name: string;
-    status: string;
-    sent_at: string;
-    completed_at: string;
-}
+import type {main} from "../../wailsjs/go/models";
 
-export interface OrchestratorAgent {
-    name: string;
-    pane_id: string;
-    role: string;
-}
-
-export interface PaneProcessStatus {
-    pane_id: string;
-    has_child_process: boolean;
-}
+// Re-export Wails-generated types to avoid duplicate definitions.
+// Use these types throughout canvas-related code.
+export type OrchestratorTask = main.OrchestratorTask;
+export type OrchestratorAgent = main.OrchestratorAgent;
+export type PaneProcessStatus = main.PaneProcessStatus;
 
 export interface CanvasNodePosition {
     x: number;

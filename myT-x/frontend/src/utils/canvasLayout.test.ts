@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest";
 import {computeTreeLayout} from "./canvasLayout";
-import type {OrchestratorTask} from "../types/canvas";
+import type {CanvasNodeSize, OrchestratorTask} from "../types/canvas";
 
 function makeTask(overrides: Partial<OrchestratorTask> = {}): OrchestratorTask {
     return {
@@ -116,5 +116,105 @@ describe("computeTreeLayout", () => {
         const tasks = [makeTask({task_id: "t-1", sender_pane_id: "", assignee_pane_id: "%1"})];
         const result = computeTreeLayout(["%0", "%1"], tasks);
         expect(Object.keys(result)).toHaveLength(2);
+    });
+
+    describe("nodeSizes support", () => {
+        const H_GAP = 80;
+        const V_GAP = 60;
+        const DEFAULT_W = 450;
+        const DEFAULT_H = 350;
+
+        it("uses actual node widths for X spacing — no overlap", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%0", assignee_pane_id: "%2"}),
+            ];
+            const sizes: Record<string, CanvasNodeSize> = {
+                "%1": {width: 800, height: DEFAULT_H},
+                "%2": {width: 600, height: DEFAULT_H},
+            };
+            const result = computeTreeLayout(["%0", "%1", "%2"], tasks, sizes);
+
+            // %1 と %2 は同一レベル。%2 の左端は %1 の右端 + H_GAP 以上
+            expect(result["%2"].x).toBeGreaterThanOrEqual(result["%1"].x + 800 + H_GAP);
+        });
+
+        it("uses actual node heights for Y level spacing", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%1", assignee_pane_id: "%2"}),
+            ];
+            const sizes: Record<string, CanvasNodeSize> = {
+                "%1": {width: DEFAULT_W, height: 700},
+            };
+            const result = computeTreeLayout(["%0", "%1", "%2"], tasks, sizes);
+
+            // %2 の Y は %1 の Y + 700 (高さ) + V_GAP 以上
+            expect(result["%2"].y).toBeGreaterThanOrEqual(result["%1"].y + 700 + V_GAP);
+        });
+
+        it("falls back to default size for nodes without size entry", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%0", assignee_pane_id: "%2"}),
+            ];
+            const sizes: Record<string, CanvasNodeSize> = {
+                "%1": {width: 600, height: DEFAULT_H},
+            };
+            const result = computeTreeLayout(["%0", "%1", "%2"], tasks, sizes);
+
+            // %0 (root) はデフォルトサイズ。%1 の Y は root の Y + DEFAULT_H + V_GAP
+            expect(result["%1"].y).toBe(result["%0"].y + DEFAULT_H + V_GAP);
+            // %2 は幅デフォルト。%2 の左端は %1 の右端 + H_GAP 以上
+            expect(result["%2"].x).toBeGreaterThanOrEqual(result["%1"].x + 600 + H_GAP);
+        });
+
+        it("orphan placement uses actual sizes — no overlap", () => {
+            // no tasks → all orphans
+            const sizes: Record<string, CanvasNodeSize> = {
+                "%0": {width: 800, height: 500},
+                "%1": {width: 600, height: 400},
+                "%2": {width: 700, height: 300},
+            };
+            const result = computeTreeLayout(["%0", "%1", "%2"], [], sizes);
+
+            // 同一行内: 各ノードの右端が次のノードの左端より左
+            const ids = ["%0", "%1", "%2"];
+            for (let i = 0; i < ids.length - 1; i++) {
+                const rightEdge = result[ids[i]].x + (sizes[ids[i]]?.width ?? DEFAULT_W);
+                expect(result[ids[i + 1]].x).toBeGreaterThanOrEqual(rightEdge + H_GAP);
+            }
+        });
+
+        it("wide node does not overlap siblings in the same level", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%0", assignee_pane_id: "%2"}),
+            ];
+            const sizes: Record<string, CanvasNodeSize> = {
+                "%1": {width: 900, height: DEFAULT_H},
+            };
+            const result = computeTreeLayout(["%0", "%1", "%2"], tasks, sizes);
+
+            // %2 の左端 >= %1 の右端 + H_GAP
+            expect(result["%2"].x).toBeGreaterThanOrEqual(result["%1"].x + 900 + H_GAP);
+        });
+
+        it("empty nodeSizes behaves like no argument", () => {
+            const tasks = [makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"})];
+            const withEmpty = computeTreeLayout(["%0", "%1"], tasks, {});
+            const withoutArg = computeTreeLayout(["%0", "%1"], tasks);
+            expect(withEmpty).toEqual(withoutArg);
+        });
+
+        it("single node with custom size gets positioned", () => {
+            const sizes: Record<string, CanvasNodeSize> = {
+                "%0": {width: 600, height: 500},
+            };
+            const result = computeTreeLayout(["%0"], [], sizes);
+            expect(result).toHaveProperty("%0");
+            expect(result["%0"]).toHaveProperty("x");
+            expect(result["%0"]).toHaveProperty("y");
+        });
     });
 });

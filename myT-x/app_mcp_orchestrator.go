@@ -11,5 +11,11 @@ func orchestratorMCPDefinitions() []mcp.Definition {
 		Description:    "tmux上の複数AIエージェント間でタスク送信・返信・状態管理を行うMCPサーバー",
 		Kind:           "orchestrator",
 		DefaultEnabled: false,
+		ConfigParams: []mcp.ConfigParam{{
+			Key:          "session_all_panes",
+			Label:        "全セッションペイン表示",
+			DefaultValue: "false",
+			Description:  "false: 自セッションのペインのみ / true: 全セッションのペインを表示",
+		}},
 	}}
 }

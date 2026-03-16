@@ -54,7 +54,7 @@ export function McpDetailPanel({
         );
     }
 
-    const bridgeRecommendation = buildLspMcpLaunchRecommendation(resolveBridgeCommand(representativeMCP), normalizedSession);
+    const bridgeRecommendation = buildLspMcpLaunchRecommendation(resolveBridgeCommand(representativeMCP));
     const cliExamples = bridgeRecommendation == null ? [] : buildCliExamples(bridgeRecommendation);
     const statusDetail = describeAggregateStatus(aggregateStatus, tr);
 

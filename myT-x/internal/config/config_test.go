@@ -2886,6 +2886,35 @@ func TestValidateDefaultSessionDirTildeExpansionError(t *testing.T) {
 	}
 }
 
+func TestValidateChatOverlayPercentageBoundary(t *testing.T) {
+	tests := []struct {
+		name  string
+		input int
+		want  int
+	}{
+		{name: "zero defaults to 80", input: 0, want: 80},
+		{name: "29 clamped to 30", input: 29, want: 30},
+		{name: "30 preserved", input: 30, want: 30},
+		{name: "50 preserved", input: 50, want: 50},
+		{name: "80 preserved", input: 80, want: 80},
+		{name: "95 preserved (upper bound)", input: 95, want: 95},
+		{name: "96 clamped to 95", input: 96, want: 95},
+		{name: "100 clamped to 95", input: 100, want: 95},
+		{name: "negative clamped to 30", input: -10, want: 30},
+		{name: "1 clamped to 30", input: 1, want: 30},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{ChatOverlayPercentage: tt.input}
+			validateChatOverlayPercentage(cfg)
+			if cfg.ChatOverlayPercentage != tt.want {
+				t.Fatalf("validateChatOverlayPercentage(%d) = %d, want %d", tt.input, cfg.ChatOverlayPercentage, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadSanitizesMCPServers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	raw := []byte(`

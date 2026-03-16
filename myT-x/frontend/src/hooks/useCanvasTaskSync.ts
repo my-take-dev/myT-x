@@ -1,4 +1,4 @@
-import {useEffect, useRef} from "react";
+import {useEffect} from "react";
 import {api} from "../api";
 import {useCanvasStore} from "../stores/canvasStore";
 
@@ -12,14 +12,6 @@ const POLL_INTERVAL_MS = 3000;
 export function useCanvasTaskSync(sessionName: string | null): void {
     const mode = useCanvasStore((s) => s.mode);
     const resetForSession = useCanvasStore((s) => s.resetForSession);
-    const mountedRef = useRef(true);
-
-    useEffect(() => {
-        mountedRef.current = true;
-        return () => {
-            mountedRef.current = false;
-        };
-    }, []);
 
     // セッション変更時にリセット
     useEffect(() => {
@@ -35,31 +27,49 @@ export function useCanvasTaskSync(sessionName: string | null): void {
 
         const poll = async (): Promise<void> => {
             try {
-                const [tasks, agents, processStatus] = await Promise.all([
+                const results = await Promise.allSettled([
                     api.ListOrchestratorTasks(sessionName),
                     api.ListOrchestratorAgents(sessionName),
                     api.GetPaneProcessStatus(sessionName),
                 ]);
-                if (cancelled || !mountedRef.current) return;
+                if (cancelled) return;
 
-                if (tasks) useCanvasStore.getState().updateTaskEdges(tasks);
-                if (agents) useCanvasStore.getState().updateAgents(agents);
-                if (processStatus) useCanvasStore.getState().updateProcessStatus(processStatus);
+                for (const result of results) {
+                    if (result.status === "rejected") {
+                        console.warn("[canvas-sync] poll partial failure", result.reason);
+                    }
+                }
+
+                if (results[0].status === "fulfilled" && results[0].value) {
+                    useCanvasStore.getState().updateTaskEdges(results[0].value);
+                }
+                if (results[1].status === "fulfilled" && results[1].value) {
+                    useCanvasStore.getState().updateAgents(results[1].value);
+                }
+                if (results[2].status === "fulfilled" && results[2].value) {
+                    useCanvasStore.getState().updateProcessStatus(results[2].value);
+                }
             } catch (err) {
-                console.warn("[DEBUG-canvas-sync] poll failed", err);
+                console.warn("[canvas-sync] poll failed", err);
+            }
+
+            if (!cancelled) {
+                timerId = setTimeout(() => {
+                    void poll();
+                }, POLL_INTERVAL_MS);
             }
         };
+
+        let timerId: ReturnType<typeof setTimeout> | null = null;
 
         // 初回即時実行
         void poll();
 
-        const id = setInterval(() => {
-            void poll();
-        }, POLL_INTERVAL_MS);
-
         return () => {
             cancelled = true;
-            clearInterval(id);
+            if (timerId != null) {
+                clearTimeout(timerId);
+            }
         };
     }, [mode, sessionName]);
 }

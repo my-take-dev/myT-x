@@ -7,7 +7,6 @@ import {
     escapeTomlBasicString,
     lspMcpConfigServerName,
     lspMcpNamePlaceholder,
-    lspSessionNamePlaceholder,
     resolveBridgeCommand,
 } from "../src/components/viewer/views/mcp-manager/mcpConfigSnippets";
 import type {MCPSnapshot} from "../src/types/mcp";
@@ -33,29 +32,16 @@ describe("mcpConfigSnippets", () => {
     });
 
     it("builds bridge args with the shared LSP placeholder", () => {
-        expect(buildLspMcpBridgeArgs("session-a")).toEqual([
+        expect(buildLspMcpBridgeArgs()).toEqual([
             "mcp",
             "stdio",
-            "--session",
-            "session-a",
-            "--mcp",
-            lspMcpNamePlaceholder,
-        ]);
-    });
-
-    it("uses a session placeholder instead of emitting an empty session argument", () => {
-        expect(buildLspMcpBridgeArgs("   ")).toEqual([
-            "mcp",
-            "stdio",
-            "--session",
-            lspSessionNamePlaceholder,
             "--mcp",
             lspMcpNamePlaceholder,
         ]);
     });
 
     it("builds shared CLI examples for the LSP-MCP category", () => {
-        const recommendation = buildLspMcpLaunchRecommendation(resolveBridgeCommand(sampleMCP()), "session-a");
+        const recommendation = buildLspMcpLaunchRecommendation(resolveBridgeCommand(sampleMCP()));
         expect(recommendation).not.toBeNull();
         const examples = buildCliExamples(recommendation!);
         expect(examples).toHaveLength(4);
@@ -66,7 +52,7 @@ describe("mcpConfigSnippets", () => {
     });
 
     it("builds a quoted command preview from the bridge recommendation", () => {
-        const recommendation = buildLspMcpLaunchRecommendation(`C:\\Tools\\my "quoted".exe`, "session-a");
+        const recommendation = buildLspMcpLaunchRecommendation(`C:\\Tools\\my "quoted".exe`);
         expect(recommendation).not.toBeNull();
         if (recommendation == null) {
             throw new Error("expected a bridge recommendation");
@@ -76,7 +62,7 @@ describe("mcpConfigSnippets", () => {
     });
 
     it("returns no launch recommendation when bridge command metadata is unavailable", () => {
-        const recommendation = buildLspMcpLaunchRecommendation("   ", "session-a");
+        const recommendation = buildLspMcpLaunchRecommendation("   ");
         expect(recommendation).toBeNull();
     });
 

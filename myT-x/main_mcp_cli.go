@@ -79,6 +79,37 @@ func executeMCPCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	}
 }
 
+// resolveSessionByEnvFn is a test seam for reading $MYTX_SESSION.
+var resolveSessionByEnvFn = func() string {
+	return strings.TrimSpace(os.Getenv("MYTX_SESSION"))
+}
+
+// resolveSessionByCwdFn is a test seam for IPC-based session resolution.
+var resolveSessionByCwdFn = func(pipeName, cwd string) (string, error) {
+	resp, err := sendIPCRequestFn(pipeName, ipc.TmuxRequest{
+		Command: "resolve-session-by-cwd",
+		Flags:   map[string]any{"cwd": cwd},
+	})
+	if err != nil {
+		return "", fmt.Errorf("ipc request failed: %w", err)
+	}
+	if resp.ExitCode != 0 {
+		msg := strings.TrimSpace(resp.Stderr)
+		if msg == "" {
+			msg = "session not found"
+		}
+		return "", errors.New(msg)
+	}
+	resolved := strings.TrimSpace(resp.Stdout)
+	if resolved == "" {
+		return "", errors.New("ipc returned empty session name")
+	}
+	return resolved, nil
+}
+
+// getwdFn is a test seam for os.Getwd.
+var getwdFn = os.Getwd
+
 func parseMCPStdioCLI(args []string) (mcpStdioCLIConfig, error) {
 	fs := flag.NewFlagSet("mcp stdio", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -91,7 +122,20 @@ func parseMCPStdioCLI(args []string) (mcpStdioCLIConfig, error) {
 		return mcpStdioCLIConfig{}, err
 	}
 
+	// 3-stage fallback: --session flag > $MYTX_SESSION > IPC resolve-session-by-cwd
 	session := strings.TrimSpace(*sessionName)
+	if session == "" {
+		session = resolveSessionByEnvFn()
+	}
+	if session == "" {
+		cwd, cwdErr := getwdFn()
+		if cwdErr == nil && cwd != "" {
+			resolved, resolveErr := resolveSessionByCwdFn(mcpCLIPipeNameFn(), cwd)
+			if resolveErr == nil {
+				session = resolved
+			}
+		}
+	}
 	if session == "" {
 		return mcpStdioCLIConfig{}, errors.New("--session is required")
 	}

@@ -1,15 +1,17 @@
-import {useCallback, useEffect, useMemo} from "react";
+import {useCallback, useEffect, useMemo, useState} from "react";
 import {
+    applyEdgeChanges,
+    applyNodeChanges,
     Background,
     BackgroundVariant,
     Controls,
     MiniMap,
     ReactFlow,
+    useReactFlow,
     type Edge,
+    type EdgeChange,
     type Node,
     type NodeChange,
-    useNodesState,
-    useEdgesState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -17,8 +19,11 @@ import type {PaneSnapshot} from "../../types/tmux";
 import {useCanvasStore} from "../../stores/canvasStore";
 import {useCanvasTaskSync} from "../../hooks/useCanvasTaskSync";
 import {computeTreeLayout} from "../../utils/canvasLayout";
+import {aggregateTaskEdges} from "../../utils/aggregateTaskEdges";
+import {determineEdgeDirection} from "../../utils/edgeRouting";
 import {CanvasTerminalNode} from "./CanvasTerminalNode";
 import {TaskEdge} from "./TaskEdge";
+import type {TaskEdgeData} from "./TaskEdge";
 import {useI18n} from "../../i18n";
 import "../../styles/canvas.css";
 
@@ -41,7 +46,7 @@ interface CanvasViewProps {
 
 export function CanvasView(props: CanvasViewProps) {
     const {language, t} = useI18n();
-    const nodePositions = useCanvasStore((s) => s.nodePositions);
+    const {fitView} = useReactFlow();
     const setNodePosition = useCanvasStore((s) => s.setNodePosition);
     const taskEdgeMap = useCanvasStore((s) => s.taskEdgeMap);
 
@@ -49,12 +54,18 @@ export function CanvasView(props: CanvasViewProps) {
     useCanvasTaskSync(props.sessionName);
 
     // ペインからReact Flowノードを生成
+    // nodePositions は命令的に読み取り（getState）、依存配列に含めない。
+    // ドラッグ終了時の setNodePosition → nodePositions 変更 → nodes 再計算 → setRfNodes
+    // → ReactFlow再計測 → 無限ループを防止する。
     const nodes: Node[] = useMemo(() => {
+        const currentPositions = useCanvasStore.getState().nodePositions;
+        const currentSizes = useCanvasStore.getState().nodeSizes;
         return props.panes.map((pane, index) => {
-            const pos = nodePositions[pane.id] ?? {
+            const pos = currentPositions[pane.id] ?? {
                 x: 100 + index * 40,
                 y: 100 + index * 40,
             };
+            const size = currentSizes[pane.id] ?? {width: 450, height: 350};
             return {
                 id: `pane-${pane.id}`,
                 type: "terminal" as const,
@@ -73,49 +84,79 @@ export function CanvasView(props: CanvasViewProps) {
                     onSwapPane: props.onSwapPane,
                     onDetach: props.onDetachSession,
                 },
-                style: {width: 450, height: 350},
+                style: {width: size.width, height: size.height},
             };
         });
-    }, [props.panes, props.activePaneId, nodePositions,
+    }, [props.panes, props.activePaneId,
         props.onFocusPane, props.onSplitVertical, props.onSplitHorizontal,
         props.onToggleZoom, props.onKillPane, props.onRenamePane,
         props.onSwapPane, props.onDetachSession]);
 
-    // タスクからReact Flowエッジを生成
+    // タスクをペアごとに集約し、1ペア=1エッジで React Flow エッジを生成
+    // Y座標に基づいて source/target を決定（ツリーの上→下フロー）
     const edges: Edge[] = useMemo(() => {
         const paneIdSet = new Set(props.panes.map((p) => p.id));
-        return Object.values(taskEdgeMap)
-            .filter((task) =>
-                task.sender_pane_id && task.assignee_pane_id
-                && paneIdSet.has(task.sender_pane_id)
-                && paneIdSet.has(task.assignee_pane_id),
-            )
-            .map((task) => ({
-                id: `task-${task.task_id}`,
-                source: `pane-${task.sender_pane_id}`,
-                target: `pane-${task.assignee_pane_id}`,
+        const aggregated = aggregateTaskEdges(Object.values(taskEdgeMap), paneIdSet);
+        const currentPositions = useCanvasStore.getState().nodePositions;
+
+        return aggregated.map((agg) => {
+            const {sourcePane, targetPane} = determineEdgeDirection(
+                agg.paneA, agg.paneB, currentPositions,
+            );
+            // 方向反転時に表示名を合わせる
+            const flipped = sourcePane !== agg.paneA;
+
+            return {
+                id: `pair-${agg.paneA}-${agg.paneB}`,
+                source: `pane-${sourcePane}`,
+                target: `pane-${targetPane}`,
                 sourceHandle: "output",
                 targetHandle: "input",
                 type: "task" as const,
+                zIndex: 1001,
                 data: {
-                    senderName: task.sender_name,
-                    agentName: task.agent_name,
-                    status: task.status,
-                    sentAt: task.sent_at,
-                },
-            }));
+                    aggregateStatus: agg.aggregateStatus,
+                    totalCount: agg.totalCount,
+                    pendingCount: agg.pendingCount,
+                    completedCount: agg.completedCount,
+                    failedCount: agg.failedCount,
+                    abandonedCount: agg.abandonedCount,
+                    forwardTasks: flipped ? agg.reverseTasks : agg.forwardTasks,
+                    reverseTasks: flipped ? agg.forwardTasks : agg.reverseTasks,
+                    sourceName: flipped ? agg.targetName : agg.sourceName,
+                    targetName: flipped ? agg.sourceName : agg.targetName,
+                } satisfies TaskEdgeData,
+            };
+        });
     }, [taskEdgeMap, props.panes]);
 
-    const [rfNodes, setRfNodes, onNodesChange] = useNodesState(nodes);
-    const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState(edges);
+    const [rfNodes, setRfNodes] = useState<Node[]>(nodes);
+    const [rfEdges, setRfEdges] = useState<Edge[]>(edges);
 
-    // ノード/エッジが変化した場合に同期
-    useEffect(() => setRfNodes(nodes), [nodes, setRfNodes]);
-    useEffect(() => setRfEdges(edges), [edges, setRfEdges]);
+    // ペイン追加/削除/アクティブ変更時にRFノードを同期。
+    // 既存ノードのReactFlow内部メタデータ（measured等）を保持しつつ data/style のみ更新。
+    useEffect(() => {
+        setRfNodes((prev) => {
+            const prevMap = new Map(prev.map((n) => [n.id, n]));
+            return nodes.map((node) => {
+                const existing = prevMap.get(node.id);
+                if (existing) {
+                    // data + style を更新。style は nodeSizes から算出済み。
+                    return {...existing, data: node.data, style: node.style};
+                }
+                return node;
+            });
+        });
+    }, [nodes]);
+
+    // エッジ同期: 内部可変状態なし → 直接置換
+    useEffect(() => {
+        setRfEdges(edges);
+    }, [edges]);
 
     const handleNodesChange = useCallback(
         (changes: NodeChange[]) => {
-            onNodesChange(changes);
+            setRfNodes((nds) => applyNodeChanges(changes, nds));
             // ドラッグ完了時に位置を保存
             for (const change of changes) {
                 if (change.type === "position" && change.dragging === false && change.position) {
@@ -124,13 +165,21 @@ export function CanvasView(props: CanvasViewProps) {
                 }
             }
         },
-        [onNodesChange, setNodePosition],
+        [setNodePosition],
+    );
+
+    const handleEdgesChange = useCallback(
+        (changes: EdgeChange[]) => {
+            setRfEdges((eds) => applyEdgeChanges(changes, eds));
+        },
+        [],
     );
 
     const handleAutoLayout = useCallback(() => {
         const paneIds = props.panes.map((p) => p.id);
         const tasks = Object.values(taskEdgeMap);
-        const positions = computeTreeLayout(paneIds, tasks);
+        const currentSizes = useCanvasStore.getState().nodeSizes;
+        const positions = computeTreeLayout(paneIds, tasks, currentSizes);
         for (const [paneId, pos] of Object.entries(positions)) {
             setNodePosition(paneId, pos);
         }
@@ -145,7 +194,11 @@ export function CanvasView(props: CanvasViewProps) {
                 return node;
             }),
         );
-    }, [props.panes, taskEdgeMap, setNodePosition, setRfNodes]);
+        // レイアウト完了後、ビューポートをアニメーション付きでフィット
+        requestAnimationFrame(() => {
+            fitView({padding: 0.15, duration: 400});
+        });
+    }, [props.panes, taskEdgeMap, setNodePosition, setRfNodes, fitView]);
 
     const getNodeColor = useCallback((node: Node) => {
         const data = node.data as { active?: boolean } | undefined;
@@ -181,9 +234,10 @@ export function CanvasView(props: CanvasViewProps) {
                 nodes={rfNodes}
                 edges={rfEdges}
                 onNodesChange={handleNodesChange}
-                onEdgesChange={onEdgesChange}
+                onEdgesChange={handleEdgesChange}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
+                elevateEdgesOnSelect
                 fitView
                 minZoom={0.1}
                 maxZoom={2}
