@@ -62,12 +62,48 @@ export function DevPanelCommitDiff(arg1, arg2) {
   return window['go']['main']['App']['DevPanelCommitDiff'](arg1, arg2);
 }
 
+export function DevPanelGitCommit(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelGitCommit'](arg1, arg2);
+}
+
+export function DevPanelGitDiscard(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelGitDiscard'](arg1, arg2);
+}
+
+export function DevPanelGitFetch(arg1) {
+  return window['go']['main']['App']['DevPanelGitFetch'](arg1);
+}
+
 export function DevPanelGitLog(arg1, arg2, arg3) {
   return window['go']['main']['App']['DevPanelGitLog'](arg1, arg2, arg3);
 }
 
+export function DevPanelGitPull(arg1) {
+  return window['go']['main']['App']['DevPanelGitPull'](arg1);
+}
+
+export function DevPanelGitPush(arg1) {
+  return window['go']['main']['App']['DevPanelGitPush'](arg1);
+}
+
+export function DevPanelGitStage(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelGitStage'](arg1, arg2);
+}
+
+export function DevPanelGitStageAll(arg1) {
+  return window['go']['main']['App']['DevPanelGitStageAll'](arg1);
+}
+
 export function DevPanelGitStatus(arg1) {
   return window['go']['main']['App']['DevPanelGitStatus'](arg1);
+}
+
+export function DevPanelGitUnstage(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelGitUnstage'](arg1, arg2);
+}
+
+export function DevPanelGitUnstageAll(arg1) {
+  return window['go']['main']['App']['DevPanelGitUnstageAll'](arg1);
 }
 
 export function DevPanelListBranches(arg1) {
@@ -124,6 +160,10 @@ export function GetInputHistoryFilePath() {
 
 export function GetMCPDetail(arg1, arg2) {
   return window['go']['main']['App']['GetMCPDetail'](arg1, arg2);
+}
+
+export function GetOrchestratorTaskDetail(arg1, arg2) {
+  return window['go']['main']['App']['GetOrchestratorTaskDetail'](arg1, arg2);
 }
 
 export function GetPaneEnv(arg1) {

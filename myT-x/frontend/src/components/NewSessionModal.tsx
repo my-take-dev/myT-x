@@ -33,8 +33,11 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
     const [enableAgentTeam, setEnableAgentTeam] = useState(false);
     const [useClaudeEnv, setUseClaudeEnv] = useState(false);
     const [usePaneEnv, setUsePaneEnv] = useState(false);
+    const [useSessionPaneScope, setUseSessionPaneScope] = useState(true);
     const [shimAvailable, setShimAvailable] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [gitCheckLoading, setGitCheckLoading] = useState(false);
+    const [worktreeDataLoading, setWorktreeDataLoading] = useState(false);
     const [error, setError] = useState("");
     const [configLoadFailed, setConfigLoadFailed] = useState(false);
 
@@ -59,7 +62,10 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
         setEnableAgentTeam(false);
         setUseClaudeEnv(false);
         setUsePaneEnv(false);
+        setUseSessionPaneScope(true);
         setLoading(false);
+        setGitCheckLoading(false);
+        setWorktreeDataLoading(false);
         setError("");
         setConfigLoadFailed(false);
     }, []);
@@ -76,8 +82,7 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                 setShimAvailable(false);
             });
         // NOTE: On config load failure, useClaudeEnv / usePaneEnv fall back to false
-        // (conservative default). This may differ from user's default_enabled setting,
-        // but prevents unintended env injection when config state is unknown.
+        // (conservative default). Session pane scope defaults to true independently.
         api.GetConfig()
             .then((cfg) => {
                 setUseClaudeEnv(cfg.claude_env?.default_enabled ?? false);
@@ -91,48 +96,75 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
 
     useEscapeClose(open, onClose);
 
+    // Deferred loading: fetch branch/worktree data only when the user enables
+    // the "Use Git Worktree" checkbox, not eagerly on folder selection.
+    // This reduces folder selection from 10 git subprocesses to 3.
+    useEffect(() => {
+        if (!useWorktree || !isGitRepo || !directory) return;
+        // Skip if data is already loaded for this directory (prevents
+        // redundant refetch on checkbox OFF→ON toggle for same directory).
+        // When directory changes, handlePickDirectory resets these to [].
+        if (branches.length > 0 || worktrees.length > 0) return;
+
+        let cancelled = false;
+        setWorktreeDataLoading(true);
+        Promise.all([
+            api.ListBranches(directory).catch(() => [] as string[]),
+            api.ListWorktreesByRepo(directory).catch(() => [] as git.WorktreeInfo[]),
+        ]).then(([branchList, wtList]) => {
+            if (cancelled) return;
+            setBranches(branchList);
+            setWorktrees(wtList);
+            if (branchList.length > 0) setBaseBranch(branchList[0]);
+        }).finally(() => {
+            if (!cancelled) setWorktreeDataLoading(false);
+        });
+        return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- branches.length/worktrees.length
+    // are intentionally excluded: they serve as a runtime guard against redundant refetch,
+    // not as reactive triggers. directory change resets them via handlePickDirectory.
+    }, [useWorktree, isGitRepo, directory]);
+
     const handlePickDirectory = useCallback(async () => {
         try {
             const dir = await api.PickSessionDirectory();
             if (!dir) return;
             setDirectory(dir);
-            const folderName = dir.split(/[\\/]/).filter(Boolean).pop() || "";
-            setSessionName(folderName);
+            setSessionName(dir.split(/[\\/]/).filter(Boolean).pop() || "");
             setError("");
             setWorktreeSource("new");
             setSelectedWorktree(null);
             setWorktreeConflict("");
+            // Reset worktree data from any previous folder selection
+            setBranches([]);
+            setWorktrees([]);
+            setUseWorktree(false);
 
-            // Check for directory conflict with existing sessions.
+            setGitCheckLoading(true);
             try {
-                const conflict = await api.CheckDirectoryConflict(dir);
-                setDirectoryConflict(conflict);
-            } catch (err) {
-                console.error("[NewSessionModal] CheckDirectoryConflict failed:", err);
-                setDirectoryConflict("");
-            }
-
-            const gitRepo = await api.IsGitRepository(dir);
-            setIsGitRepo(gitRepo);
-            if (gitRepo) {
-                // NOTE: 各 Promise に個別 catch を付与し、部分失敗時もデフォルト値で続行する。
-                // Promise.allSettled は不要（個別 catch で同等の耐障害性を実現済み）。
-                const [branchList, wtList, curBranch] = await Promise.all([
-                    api.ListBranches(dir).catch(() => [] as string[]),
-                    api.ListWorktreesByRepo(dir).catch(() => [] as git.WorktreeInfo[]),
-                    api.GetCurrentBranch(dir).catch(() => ""),
+                // Parallel: CheckDirectoryConflict is in-memory (<1ms),
+                // IsGitRepository is lightweight (1 git subprocess, ~20-50ms)
+                const [conflict, gitRepo] = await Promise.all([
+                    api.CheckDirectoryConflict(dir).catch((err: unknown) => {
+                        console.error("[NewSessionModal] CheckDirectoryConflict failed:", err);
+                        return "";
+                    }),
+                    api.IsGitRepository(dir),
                 ]);
-                setBranches(branchList);
-                setWorktrees(wtList);
-                setCurrentBranch(curBranch);
-                if (branchList.length > 0) {
-                    setBaseBranch(branchList[0]);
+                setDirectoryConflict(conflict);
+                setIsGitRepo(gitRepo);
+
+                if (gitRepo) {
+                    // Only GetCurrentBranch here -- lightweight (2 git subprocesses).
+                    // ListBranches and ListWorktreesByRepo are deferred until
+                    // the user enables the "Use Git Worktree" checkbox.
+                    const curBranch = await api.GetCurrentBranch(dir).catch(() => "");
+                    setCurrentBranch(curBranch);
+                } else {
+                    setCurrentBranch("");
                 }
-            } else {
-                setUseWorktree(false);
-                setBranches([]);
-                setWorktrees([]);
-                setCurrentBranch("");
+            } finally {
+                setGitCheckLoading(false);
             }
         } catch (err) {
             setError(String(err));
@@ -169,6 +201,7 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                             enable_agent_team: enableAgentTeam,
                             use_claude_env: useClaudeEnv,
                             use_pane_env: usePaneEnv,
+                            use_session_pane_scope: useSessionPaneScope,
                         });
                 } else {
                     const opts = {
@@ -178,6 +211,7 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                         enable_agent_team: enableAgentTeam,
                         use_claude_env: useClaudeEnv,
                         use_pane_env: usePaneEnv,
+                        use_session_pane_scope: useSessionPaneScope,
                     };
                     created = await api.CreateSessionWithWorktree(directory, sessionName.trim(), opts);
                 }
@@ -186,6 +220,7 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                     enable_agent_team: enableAgentTeam,
                     use_claude_env: useClaudeEnv,
                     use_pane_env: usePaneEnv,
+                    use_session_pane_scope: useSessionPaneScope,
                 });
             }
             onCreated(created.name);
@@ -195,17 +230,17 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
         } finally {
             setLoading(false);
         }
-    }, [directory, sessionName, useWorktree, isGitRepo, worktreeSource, selectedWorktree, branchName, baseBranch, pullBefore, enableAgentTeam, useClaudeEnv, usePaneEnv, onCreated, onClose]);
+    }, [directory, sessionName, useWorktree, isGitRepo, worktreeSource, selectedWorktree, branchName, baseBranch, pullBefore, enableAgentTeam, useClaudeEnv, usePaneEnv, useSessionPaneScope, onCreated, onClose]);
 
     const canSubmit = useMemo(() => {
-        if (!directory || !sessionName.trim() || loading) return false;
+        if (!directory || !sessionName.trim() || loading || worktreeDataLoading) return false;
         if (!useWorktree) return !directoryConflict;
         if (worktreeSource === "existing") {
             return !!selectedWorktree && !worktreeConflict;
         }
         // new worktree: always requires branch name
         return !!branchName.trim();
-    }, [directory, sessionName, loading, useWorktree, directoryConflict, worktreeSource, selectedWorktree, worktreeConflict, branchName]);
+    }, [directory, sessionName, loading, worktreeDataLoading, useWorktree, directoryConflict, worktreeSource, selectedWorktree, worktreeConflict, branchName]);
 
     if (!open) return null;
 
@@ -250,6 +285,14 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                     : t("newSession.directory.selectButton", "フォルダを選択..."))}
                         </button>
                     </div>
+
+                    {/* Git repository check loading indicator */}
+                    {directory && gitCheckLoading && (
+                        <div className="form-inline-loading">
+                            <span className="form-spinner" />
+                            {isEn ? "Checking repository..." : t("newSession.git.checking", "リポジトリを確認中...")}
+                        </div>
+                    )}
 
                     {/* Session name */}
                     {directory && (
@@ -331,6 +374,23 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                         </div>
                     )}
 
+                    {/* Session pane scope option */}
+                    {directory && (
+                        <div className="form-checkbox-row">
+                            <input
+                                type="checkbox"
+                                id="use-session-pane-scope"
+                                checked={useSessionPaneScope}
+                                onChange={(e) => setUseSessionPaneScope(e.target.checked)}
+                            />
+                            <label htmlFor="use-session-pane-scope">
+                                {isEn
+                                    ? "Use session-based pane management"
+                                    : t("newSession.env.sessionPaneScope", "セッション単位ペイン管理を利用する")}
+                            </label>
+                        </div>
+                    )}
+
                     {/* Git info & worktree options */}
                     {directory && isGitRepo && (
                         <>
@@ -350,13 +410,20 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                                     id="use-worktree"
                                     checked={useWorktree}
                                     onChange={(e) => setUseWorktree(e.target.checked)}
+                                    disabled={gitCheckLoading}
                                 />
                                 <label htmlFor="use-worktree">
                                     {isEn ? "Use Git Worktree" : t("newSession.worktree.enable", "Git Worktree を使用")}
                                 </label>
                             </div>
 
-                            {useWorktree && (
+                            {useWorktree && worktreeDataLoading && (
+                                <div className="form-inline-loading">
+                                    <span className="form-spinner" />
+                                    {isEn ? "Loading branches..." : t("newSession.worktree.loading", "ブランチを読み込み中...")}
+                                </div>
+                            )}
+                            {useWorktree && !worktreeDataLoading && (
                                 <div className="session-mode-selector">
                                     {/* Existing worktree option (only if non-main worktrees exist) */}
                                     {nonMainWorktrees.length > 0 && (

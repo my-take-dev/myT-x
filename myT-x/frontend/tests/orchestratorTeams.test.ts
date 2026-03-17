@@ -18,6 +18,9 @@ describe("orchestrator team helpers", () => {
         const draft = {
             id: "team-1",
             name: " Delivery ",
+            description: "",
+            bootstrapDelayMs: 0,
+            storageLocation: "project" as const,
             members: [
                 {
                     id: "member-1",
@@ -26,6 +29,7 @@ describe("orchestrator team helpers", () => {
                     command: " codex ",
                     argsText: " --sandbox \n workspace-write ",
                     customMessage: " Coordinate the team ",
+                    skills: [],
                 },
             ],
         };
@@ -33,7 +37,10 @@ describe("orchestrator team helpers", () => {
         expect(buildTeamPayload(draft)).toEqual({
             id: "team-1",
             name: "Delivery",
+            description: "",
             order: 0,
+            bootstrap_delay_ms: 0,
+            storage_location: "project",
             members: [
                 {
                     id: "member-1",
@@ -44,6 +51,7 @@ describe("orchestrator team helpers", () => {
                     command: "codex",
                     args: ["--sandbox", "workspace-write"],
                     custom_message: "Coordinate the team",
+                    skills: [],
                 },
             ],
         });

@@ -100,7 +100,7 @@ func createOrchestratorTestSession(t *testing.T, app *App, sessionName, tmpDir s
 }
 
 func TestOrchestratorTaskFieldCount(t *testing.T) {
-	if got := reflect.TypeOf(OrchestratorTask{}).NumField(); got != 8 {
+	if got := reflect.TypeFor[OrchestratorTask]().NumField(); got != 8 {
 		t.Fatalf("OrchestratorTask has %d fields (expected 8). Update ListOrchestratorTasks scan logic and this constant.", got)
 	}
 }

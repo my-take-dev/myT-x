@@ -46,12 +46,13 @@ var executeSetupCommandFn = func(ctx context.Context, shell, shellFlag, script, 
 // (via CreateSessionWithExistingWorktree) are still supported and can be
 // promoted via PromoteWorktreeToBranch.
 type WorktreeSessionOptions struct {
-	BranchName       string `json:"branch_name"`        // required: branch name for the new worktree
-	BaseBranch       string `json:"base_branch"`        // empty = current HEAD
-	PullBeforeCreate bool   `json:"pull_before_create"` // pull latest before creating worktree
-	EnableAgentTeam  bool   `json:"enable_agent_team"`  // set Agent Teams env vars on initial pane
-	UseClaudeEnv     bool   `json:"use_claude_env"`     // apply claude_env config to panes
-	UsePaneEnv       bool   `json:"use_pane_env"`       // apply pane_env config to additional panes
+	BranchName          string `json:"branch_name"`            // required: branch name for the new worktree
+	BaseBranch          string `json:"base_branch"`            // empty = current HEAD
+	PullBeforeCreate    bool   `json:"pull_before_create"`     // pull latest before creating worktree
+	EnableAgentTeam     bool   `json:"enable_agent_team"`      // set Agent Teams env vars on initial pane
+	UseClaudeEnv        bool   `json:"use_claude_env"`         // apply claude_env config to panes
+	UsePaneEnv          bool   `json:"use_pane_env"`           // apply pane_env config to additional panes
+	UseSessionPaneScope bool   `json:"use_session_pane_scope"` // set MYTX_SESSION on panes + scope list-panes
 }
 
 // WorktreeStatus holds the pre-close status of a worktree session.
@@ -161,7 +162,7 @@ func (a *App) CreateSessionWithWorktree(
 	}
 
 	// Set session-level env flags before any additional pane can be created.
-	applySessionEnvFlags(sessions, createdName, opts.UseClaudeEnv, opts.UsePaneEnv)
+	applySessionEnvFlags(sessions, createdName, opts.UseClaudeEnv, opts.UsePaneEnv, opts.UseSessionPaneScope)
 
 	// Store worktree metadata on the session.
 	if err := sessions.SetWorktreeInfo(createdName, &tmux.SessionWorktreeInfo{
@@ -251,7 +252,7 @@ func (a *App) createSessionForDirectory(
 		},
 	}
 	if opts.EnableAgentTeam {
-		req.Env = agentTeamEnvVars(sessionName, sessionName)
+		req.Env = agentTeamEnvVars(sessionName)
 	}
 
 	// Merge claude_env into initial pane env when enabled.
@@ -1409,7 +1410,7 @@ func (a *App) CreateSessionWithExistingWorktree(
 	}
 
 	// Set session-level env flags before any additional pane can be created.
-	applySessionEnvFlags(sessions, createdName, opts.UseClaudeEnv, opts.UsePaneEnv)
+	applySessionEnvFlags(sessions, createdName, opts.UseClaudeEnv, opts.UsePaneEnv, opts.UseSessionPaneScope)
 
 	if err := sessions.SetWorktreeInfo(createdName, &tmux.SessionWorktreeInfo{
 		Path:       worktreePath,

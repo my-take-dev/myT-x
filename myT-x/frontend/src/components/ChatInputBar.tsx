@@ -4,19 +4,28 @@ import {useI18n} from "../i18n";
 import type {PaneSnapshot} from "../types/tmux";
 import {isImeTransitionalEvent} from "../utils/ime";
 
+type AnchorPosition = "bottom" | "top" | "left" | "right";
+
+const ANCHOR_BUTTONS: AnchorPosition[] = ["left", "top", "bottom", "right"];
+const ANCHOR_ARROWS: Record<AnchorPosition, string> = {
+    bottom: "\u2193",
+    right: "\u2192",
+    top: "\u2191",
+    left: "\u2190",
+};
+
 interface ChatInputBarProps {
     activePaneId: string | null;
-    activePaneIndex: number;
     activePaneTitle: string;
     panes: PaneSnapshot[];
     chatOverlayPercentage: number;
 }
 
 const MIN_OVERLAY_HEIGHT_PX = 120;
+const MIN_OVERLAY_WIDTH_PX = 200;
 
 export function ChatInputBar({
                                  activePaneId,
-                                 activePaneIndex,
                                  activePaneTitle,
                                  panes,
                                  chatOverlayPercentage,
@@ -25,17 +34,20 @@ export function ChatInputBar({
     const [text, setText] = useState("");
     const [expanded, setExpanded] = useState(false);
     const [halfHeight, setHalfHeight] = useState(false);
-    const [anchorTop, setAnchorTop] = useState(false);
+    const [autoClose, setAutoClose] = useState(true);
+    const [anchor, setAnchor] = useState<AnchorPosition>("bottom");
     const [sending, setSending] = useState(false);
     const [sendError, setSendError] = useState<string | null>(null);
     const [heightPx, setHeightPx] = useState<number | null>(null);
     const [fullHeightPx, setFullHeightPx] = useState<number | null>(null);
+    const [widthPx, setWidthPx] = useState<number | null>(null);
+    const [fullWidthPx, setFullWidthPx] = useState<number | null>(null);
     const [selectedPaneId, setSelectedPaneId] = useState<string | null>(activePaneId);
     const composingRef = useRef(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const overlayRef = useRef<HTMLDivElement>(null);
     const dragCleanupRef = useRef<(() => void) | null>(null);
-    const anchorTopRef = useRef(false);
+    const anchorRef = useRef<AnchorPosition>("bottom");
 
     // Initialize selectedPaneId once when activePaneId becomes available.
     const initializedRef = useRef(false);
@@ -46,13 +58,18 @@ export function ChatInputBar({
         }
     }, [activePaneId]);
 
-    // Record initial height in px when overlay first renders.
+    const isHorizontal = anchor === "left" || anchor === "right";
+
+    // Record initial dimension in px when overlay first renders or anchor mode changes.
     useEffect(() => {
-        if (expanded && overlayRef.current && fullHeightPx == null) {
-            const h = overlayRef.current.getBoundingClientRect().height;
-            setFullHeightPx(h);
+        if (!expanded || !overlayRef.current) return;
+        const rect = overlayRef.current.getBoundingClientRect();
+        if (isHorizontal) {
+            if (fullWidthPx == null && rect.width > 0) setFullWidthPx(rect.width);
+        } else {
+            if (fullHeightPx == null && rect.height > 0) setFullHeightPx(rect.height);
         }
-    }, [expanded, fullHeightPx]);
+    }, [expanded, isHorizontal, fullHeightPx, fullWidthPx]);
 
     // Auto-focus textarea when expanding.
     useEffect(() => {
@@ -87,14 +104,14 @@ export function ChatInputBar({
         try {
             await api.SendChatMessage(targetPaneId, trimmed);
             setText("");
-            setExpanded(false);
+            if (autoClose) setExpanded(false);
         } catch (err) {
             console.warn("[chat] SendChatMessage failed", err);
             setSendError(String(err));
         } finally {
             setSending(false);
         }
-    }, [text, targetPaneId, sending]);
+    }, [text, targetPaneId, sending, autoClose]);
 
     const handleExpandedKeyDown = useCallback(
         (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -140,15 +157,27 @@ export function ChatInputBar({
         const initialUserSelect = document.body.style.userSelect;
         document.body.style.userSelect = "none";
 
-        const maxHeight = mainContent.getBoundingClientRect().height * 0.95;
+        const currentAnchor = anchorRef.current;
+        const isHoriz = currentAnchor === "left" || currentAnchor === "right";
+        const containerRect = mainContent.getBoundingClientRect();
+        const maxSize = isHoriz
+            ? containerRect.width * 0.95
+            : containerRect.height * 0.95;
+        const minSize = isHoriz ? MIN_OVERLAY_WIDTH_PX : MIN_OVERLAY_HEIGHT_PX;
 
         const onMove = (event: MouseEvent) => {
             const rect = mainContent.getBoundingClientRect();
-            const newHeight = anchorTopRef.current
-                ? event.clientY - rect.top
-                : rect.bottom - event.clientY;
-            const clamped = Math.max(MIN_OVERLAY_HEIGHT_PX, Math.min(maxHeight, newHeight));
-            setHeightPx(clamped);
+            if (isHoriz) {
+                const newWidth = currentAnchor === "left"
+                    ? event.clientX - rect.left
+                    : rect.right - event.clientX;
+                setWidthPx(Math.max(minSize, Math.min(maxSize, newWidth)));
+            } else {
+                const newHeight = currentAnchor === "top"
+                    ? event.clientY - rect.top
+                    : rect.bottom - event.clientY;
+                setHeightPx(Math.max(minSize, Math.min(maxSize, newHeight)));
+            }
         };
 
         const cleanup = () => {
@@ -163,13 +192,18 @@ export function ChatInputBar({
             if (dragCleanupRef.current === cleanup) {
                 dragCleanupRef.current = null;
             }
-            // Update fullHeightPx to current height after drag.
-            // Read the latest heightPx from overlayRef instead of using setState updater side-effects.
             if (overlayRef.current) {
-                const currentHeight = overlayRef.current.getBoundingClientRect().height;
-                if (currentHeight > 0) {
-                    setFullHeightPx(currentHeight);
-                    setHalfHeight(false);
+                const overlayRect = overlayRef.current.getBoundingClientRect();
+                if (isHoriz) {
+                    if (overlayRect.width > 0) {
+                        setFullWidthPx(overlayRect.width);
+                        setHalfHeight(false);
+                    }
+                } else {
+                    if (overlayRect.height > 0) {
+                        setFullHeightPx(overlayRect.height);
+                        setHalfHeight(false);
+                    }
                 }
             }
         };
@@ -183,39 +217,56 @@ export function ChatInputBar({
         window.addEventListener("blur", onUp, {once: true});
     }, []);
 
-    // Toggle half height.
+    // Toggle half size.
     const toggleHalf = useCallback(() => {
-        if (fullHeightPx == null) return;
-        if (halfHeight) {
-            setHeightPx(fullHeightPx);
+        if (isHorizontal) {
+            if (fullWidthPx == null) return;
+            if (halfHeight) {
+                setWidthPx(fullWidthPx);
+            } else {
+                setWidthPx(Math.max(MIN_OVERLAY_WIDTH_PX, Math.round(fullWidthPx / 2)));
+            }
         } else {
-            setHeightPx(Math.max(MIN_OVERLAY_HEIGHT_PX, Math.round(fullHeightPx / 2)));
+            if (fullHeightPx == null) return;
+            if (halfHeight) {
+                setHeightPx(fullHeightPx);
+            } else {
+                setHeightPx(Math.max(MIN_OVERLAY_HEIGHT_PX, Math.round(fullHeightPx / 2)));
+            }
         }
         setHalfHeight((prev) => !prev);
-    }, [fullHeightPx, halfHeight]);
+    }, [isHorizontal, fullWidthPx, fullHeightPx, halfHeight]);
 
-    // Keep anchorTop ref in sync for use inside resize handler.
-    anchorTopRef.current = anchorTop;
+    // Keep anchor ref in sync for use inside resize handler.
+    anchorRef.current = anchor;
 
-    // Toggle anchor position (top / bottom).
-    const toggleAnchor = useCallback(() => {
-        setAnchorTop((prev) => !prev);
+    // Set anchor position directly.
+    const changeAnchor = useCallback((pos: AnchorPosition) => {
+        setAnchor(pos);
+        setHalfHeight(false);
     }, []);
+
+    // Overlay class name based on anchor position.
+    const overlayClassName = useMemo(() => {
+        if (anchor === "bottom") return "chat-overlay";
+        return `chat-overlay chat-overlay--anchor-${anchor}`;
+    }, [anchor]);
 
     // Style: px-based if set, otherwise %-based from config.
     const overlayStyle = useMemo(() => {
-        const h = heightPx != null ? `${heightPx}px` : `${chatOverlayPercentage}%`;
-        if (anchorTop) {
-            return {height: h, top: 0, bottom: "auto"} as const;
+        if (isHorizontal) {
+            const w = widthPx != null ? `${widthPx}px` : `${chatOverlayPercentage}%`;
+            return {width: w};
         }
+        const h = heightPx != null ? `${heightPx}px` : `${chatOverlayPercentage}%`;
         return {height: h};
-    }, [heightPx, chatOverlayPercentage, anchorTop]);
+    }, [isHorizontal, widthPx, heightPx, chatOverlayPercentage]);
 
     if (expanded) {
         return (
             <div
                 ref={overlayRef}
-                className={`chat-overlay${anchorTop ? " chat-overlay--anchor-top" : ""}`}
+                className={overlayClassName}
                 style={overlayStyle}
             >
                 <div
@@ -233,9 +284,9 @@ export function ChatInputBar({
                                 type="button"
                                 className={`chat-overlay-pane-icon${pane.id === targetPaneId ? " selected" : ""}`}
                                 onClick={() => setSelectedPaneId(pane.id)}
-                                title={pane.title || `%${pane.index}`}
+                                title={pane.title || pane.id}
                             >
-                                %{pane.index}
+                                {pane.id}
                                 {pane.title ? ` ${pane.title}` : ""}
                             </button>
                         ))}
@@ -277,25 +328,40 @@ export function ChatInputBar({
                         >
                             &#189;
                         </button>
+                        <div className="chat-overlay-anchor-group">
+                            {ANCHOR_BUTTONS.map((pos) => (
+                                <button
+                                    key={pos}
+                                    type="button"
+                                    className={`chat-overlay-anchor-btn${anchor === pos ? " active" : ""}`}
+                                    onClick={() => changeAnchor(pos)}
+                                    title={ANCHOR_ARROWS[pos]}
+                                >
+                                    {ANCHOR_ARROWS[pos]}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="chat-overlay-send-group">
+                        <label className="chat-overlay-auto-close">
+                            <input
+                                type="checkbox"
+                                checked={autoClose}
+                                onChange={(e) => setAutoClose(e.target.checked)}
+                            />
+                            {t("chat.autoClose", "Auto close")}
+                        </label>
                         <button
                             type="button"
-                            className={`chat-overlay-anchor-btn${anchorTop ? " active" : ""}`}
-                            onClick={toggleAnchor}
-                            title={t("chat.anchorTop", "Toggle top anchor")}
+                            className="chat-overlay-send"
+                            onClick={() => void handleSend()}
+                            disabled={sending || !text.trim()}
                         >
-                            {anchorTop ? "\u2193" : "\u2191"}
+                            {sending
+                                ? t("chat.sending", "Sending...")
+                                : t("chat.send", "Send")}
                         </button>
                     </div>
-                    <button
-                        type="button"
-                        className="chat-overlay-send"
-                        onClick={() => void handleSend()}
-                        disabled={sending || !text.trim()}
-                    >
-                        {sending
-                            ? t("chat.sending", "Sending...")
-                            : t("chat.send", "Send")}
-                    </button>
                 </div>
             </div>
         );
@@ -304,7 +370,7 @@ export function ChatInputBar({
     return (
         <div className="chat-input-bar" onClick={handleBarClick}>
             <span className="chat-input-bar-pane">
-                %{activePaneIndex} {activePaneTitle || ""}
+                {activePaneId || "%0"} {activePaneTitle || ""}
             </span>
             {sendError && (
                 <div className="chat-input-bar-error" onClick={(e) => {

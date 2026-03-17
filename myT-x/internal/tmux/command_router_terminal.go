@@ -155,7 +155,7 @@ func (r *CommandRouter) attachTerminal(pane *TmuxPane, workDir string, env map[s
 	return nil
 }
 
-func addTmuxEnvironment(env map[string]string, pipeName string, hostPID int, sessionIndex int, paneID int, shimAvailable bool) {
+func addTmuxEnvironment(env map[string]string, pipeName string, hostPID int, sessionIndex int, paneID int, shimAvailable bool, sessionName string) {
 	tmuxValue := fmt.Sprintf(`%s,%d,%d`, pipeName, hostPID, sessionIndex)
 	paneValue := fmt.Sprintf("%%%d", paneID)
 
@@ -177,6 +177,10 @@ func addTmuxEnvironment(env map[string]string, pipeName string, hostPID int, ses
 	if username := os.Getenv("USERNAME"); username != "" {
 		env["GO_TMUX_USER"] = username
 	}
+
+	// Session identity: always set so MCP bridge and list-panes can resolve
+	// the owning session without requiring --session flag.
+	env["MYTX_SESSION"] = sessionName
 }
 
 // mergePaneEnvDefaults merges paneEnv entries into env as lowest-priority

@@ -249,6 +249,32 @@
     font-size: 0.86rem;
 }
 
+/* --- Inline loading indicator for form sections --- */
+.form-inline-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    color: var(--fg-dim);
+    padding: 4px 0;
+}
+
+.form-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: form-spin 0.8s linear infinite;
+}
+
+@keyframes form-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 /* --- Radio button row (worktree source selection) --- */
 .form-radio-row {
     display: flex;

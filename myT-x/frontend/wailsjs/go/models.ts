@@ -285,6 +285,7 @@ export namespace main {
 	    enable_agent_team: boolean;
 	    use_claude_env: boolean;
 	    use_pane_env: boolean;
+	    use_session_pane_scope: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateSessionOptions(source);
@@ -295,6 +296,51 @@ export namespace main {
 	        this.enable_agent_team = source["enable_agent_team"];
 	        this.use_claude_env = source["use_claude_env"];
 	        this.use_pane_env = source["use_pane_env"];
+	        this.use_session_pane_scope = source["use_session_pane_scope"];
+	    }
+	}
+	export class DevPanelCommitResult {
+	    hash: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DevPanelCommitResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hash = source["hash"];
+	        this.message = source["message"];
+	    }
+	}
+	export class DevPanelPullResult {
+	    updated: boolean;
+	    summary: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DevPanelPullResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.updated = source["updated"];
+	        this.summary = source["summary"];
+	    }
+	}
+	export class DevPanelPushResult {
+	    remote_name: string;
+	    branch_name: string;
+	    upstream_set: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DevPanelPushResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.remote_name = source["remote_name"];
+	        this.branch_name = source["branch_name"];
+	        this.upstream_set = source["upstream_set"];
 	    }
 	}
 	export class FileContent {
@@ -430,6 +476,8 @@ export namespace main {
 	    status: string;
 	    sent_at: string;
 	    completed_at: string;
+	    message_preview: string;
+	    response_preview: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new OrchestratorTask(source);
@@ -445,6 +493,34 @@ export namespace main {
 	        this.status = source["status"];
 	        this.sent_at = source["sent_at"];
 	        this.completed_at = source["completed_at"];
+	        this.message_preview = source["message_preview"];
+	        this.response_preview = source["response_preview"];
+	    }
+	}
+	export class OrchestratorTaskDetail {
+	    task_id: string;
+	    agent_name: string;
+	    sender_name: string;
+	    status: string;
+	    sent_at: string;
+	    completed_at: string;
+	    message_content: string;
+	    response_content: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrchestratorTaskDetail(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.task_id = source["task_id"];
+	        this.agent_name = source["agent_name"];
+	        this.sender_name = source["sender_name"];
+	        this.status = source["status"];
+	        this.sent_at = source["sent_at"];
+	        this.completed_at = source["completed_at"];
+	        this.message_content = source["message_content"];
+	        this.response_content = source["response_content"];
 	    }
 	}
 	export class OrchestratorTeamMemberSkill {
@@ -742,6 +818,7 @@ export namespace main {
 	    enable_agent_team: boolean;
 	    use_claude_env: boolean;
 	    use_pane_env: boolean;
+	    use_session_pane_scope: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorktreeSessionOptions(source);
@@ -755,6 +832,7 @@ export namespace main {
 	        this.enable_agent_team = source["enable_agent_team"];
 	        this.use_claude_env = source["use_claude_env"];
 	        this.use_pane_env = source["use_pane_env"];
+	        this.use_session_pane_scope = source["use_session_pane_scope"];
 	    }
 	}
 	export class WorktreeStatus {

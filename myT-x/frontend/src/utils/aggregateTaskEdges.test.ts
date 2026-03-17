@@ -12,6 +12,8 @@ function makeTask(overrides: Partial<OrchestratorTask> = {}): OrchestratorTask {
         status: "completed",
         sent_at: "2026-01-01T00:00:00Z",
         completed_at: "2026-01-01T00:01:00Z",
+        message_preview: "",
+        response_preview: "",
         ...overrides,
     };
 }

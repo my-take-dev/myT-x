@@ -36,6 +36,9 @@ make build
 ![Working image](sample4.png)
 **Start a New Session**
 ![Working image](sample5.png)
+**キャンバスモード**
+![作業イメージ画像](sample6.png)
+
 
 **I want to enjoy native Claude Code team development on Windows.**  
 **I want a good GUI. Nothing complicated. I want something visual and easy to understand.**  
@@ -55,8 +58,6 @@ make build
 - Orchestration MCP
 
 ## Orchestration MCP
-
-[Usage details](./orchestrator_EN.md)
 
 - You can handle orchestration from this single app.
 - Connection details are available from the MCP management panel in the right sidebar.

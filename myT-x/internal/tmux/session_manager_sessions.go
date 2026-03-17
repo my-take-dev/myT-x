@@ -150,6 +150,23 @@ func (m *SessionManager) RenameSession(oldName, newName string) error {
 	delete(m.sessions, oldName)
 	session.Name = newName
 	m.sessions[newName] = session
+
+	// Update MYTX_SESSION in all pane environments to match the new session name.
+	// Only update panes that already have MYTX_SESSION set (respects UseSessionPaneScope).
+	for _, w := range session.Windows {
+		if w == nil {
+			continue
+		}
+		for _, p := range w.Panes {
+			if p == nil || p.Env == nil {
+				continue
+			}
+			if _, has := p.Env["MYTX_SESSION"]; has {
+				p.Env["MYTX_SESSION"] = newName
+			}
+		}
+	}
+
 	m.markSessionMapMutationLocked()
 	return nil
 }
@@ -281,17 +298,18 @@ func cloneSessionForRead(session *TmuxSession) *TmuxSession {
 	}
 
 	cloned := &TmuxSession{
-		ID:             session.ID,
-		Name:           session.Name,
-		CreatedAt:      session.CreatedAt,
-		LastActivity:   session.LastActivity,
-		IsIdle:         session.IsIdle,
-		Env:            copyEnvMap(session.Env),
-		IsAgentTeam:    session.IsAgentTeam,
-		RootPath:       session.RootPath,
-		ActiveWindowID: session.ActiveWindowID,
-		UseClaudeEnv:   copyBoolPtr(session.UseClaudeEnv),
-		UsePaneEnv:     copyBoolPtr(session.UsePaneEnv),
+		ID:                  session.ID,
+		Name:                session.Name,
+		CreatedAt:           session.CreatedAt,
+		LastActivity:        session.LastActivity,
+		IsIdle:              session.IsIdle,
+		Env:                 copyEnvMap(session.Env),
+		IsAgentTeam:         session.IsAgentTeam,
+		RootPath:            session.RootPath,
+		ActiveWindowID:      session.ActiveWindowID,
+		UseClaudeEnv:        copyBoolPtr(session.UseClaudeEnv),
+		UsePaneEnv:          copyBoolPtr(session.UsePaneEnv),
+		UseSessionPaneScope: copyBoolPtr(session.UseSessionPaneScope),
 	}
 	if session.Worktree != nil {
 		worktreeCopy := *session.Worktree

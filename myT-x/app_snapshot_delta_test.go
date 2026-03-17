@@ -163,7 +163,7 @@ func TestSnapshotFieldCounts(t *testing.T) {
 		numField int
 		expected int
 	}{
-		{"TmuxSession", reflect.TypeFor[tmux.TmuxSession]().NumField(), 13},
+		{"TmuxSession", reflect.TypeFor[tmux.TmuxSession]().NumField(), 14},
 		{"SessionSnapshot", reflect.TypeFor[tmux.SessionSnapshot]().NumField(), 9},
 		{"SessionWorktreeInfo", reflect.TypeFor[tmux.SessionWorktreeInfo]().NumField(), 5},
 		{"PaneContextSnapshot", reflect.TypeFor[tmux.PaneContextSnapshot]().NumField(), 9},

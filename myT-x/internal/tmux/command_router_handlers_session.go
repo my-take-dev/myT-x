@@ -53,7 +53,7 @@ func (r *CommandRouter) handleNewSession(req ipc.TmuxRequest) ipc.TmuxResponse {
 	// additional panes only (split-window, new-window).
 	// NOTE: new-window now creates a child session, but pane_env still applies
 	// to the child session's initial pane via resolveEnvForPaneCreation.
-	env := r.buildPaneEnvSkipDefaults(req.Env, paneCtx.SessionID, pane.ID)
+	env := r.buildPaneEnvSkipDefaults(req.Env, paneCtx.SessionID, pane.ID, paneCtx.SessionName)
 
 	if err := r.attachPaneTerminal(pane, workDir, env, nil); err != nil {
 		return rollbackSession("attach-terminal", err)

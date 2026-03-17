@@ -14,14 +14,28 @@ import (
 
 // OrchestratorTask はフロントエンドに返すタスク情報。
 type OrchestratorTask struct {
-	TaskID         string `json:"task_id"`
-	AgentName      string `json:"agent_name"`
-	SenderPaneID   string `json:"sender_pane_id"`
-	AssigneePaneID string `json:"assignee_pane_id"`
-	SenderName     string `json:"sender_name"`
-	Status         string `json:"status"`
-	SentAt         string `json:"sent_at"`
-	CompletedAt    string `json:"completed_at"`
+	TaskID          string `json:"task_id"`
+	AgentName       string `json:"agent_name"`
+	SenderPaneID    string `json:"sender_pane_id"`
+	AssigneePaneID  string `json:"assignee_pane_id"`
+	SenderName      string `json:"sender_name"`
+	Status          string `json:"status"`
+	SentAt          string `json:"sent_at"`
+	CompletedAt     string `json:"completed_at"`
+	MessagePreview  string `json:"message_preview"`  // 依頼メッセージ冒頭80文字
+	ResponsePreview string `json:"response_preview"` // 応答メッセージ冒頭80文字
+}
+
+// OrchestratorTaskDetail はタスクの詳細情報（メッセージ全文含む）。
+type OrchestratorTaskDetail struct {
+	TaskID          string `json:"task_id"`
+	AgentName       string `json:"agent_name"`
+	SenderName      string `json:"sender_name"`
+	Status          string `json:"status"`
+	SentAt          string `json:"sent_at"`
+	CompletedAt     string `json:"completed_at"`
+	MessageContent  string `json:"message_content"`
+	ResponseContent string `json:"response_content"`
 }
 
 // OrchestratorAgent はフロントエンドに返すエージェント情報。
@@ -47,9 +61,14 @@ func (a *App) ListOrchestratorTasks(sessionName string) ([]OrchestratorTask, err
 
 	ctx := context.Background()
 	rows, err := db.QueryContext(ctx,
-		`SELECT task_id, agent_name, COALESCE(assignee_pane_id,''), COALESCE(sender_pane_id,''),
-		        COALESCE(sender_name,''), status, sent_at, COALESCE(completed_at,'')
-		 FROM tasks WHERE is_now_session = 1 ORDER BY sent_at DESC`,
+		`SELECT t.task_id, t.agent_name, COALESCE(t.assignee_pane_id,''), COALESCE(t.sender_pane_id,''),
+		        COALESCE(t.sender_name,''), t.status, t.sent_at, COALESCE(t.completed_at,''),
+		        COALESCE(SUBSTR(m.content, 1, 80), ''),
+		        COALESCE(SUBSTR(r.content, 1, 80), '')
+		 FROM tasks t
+		 LEFT JOIN send_messages m ON t.send_message_id = m.id
+		 LEFT JOIN send_responses r ON t.send_response_id = r.id
+		 WHERE t.is_now_session = 1 ORDER BY t.sent_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("[DEBUG-canvas] list tasks: %w", err)
@@ -60,12 +79,45 @@ func (a *App) ListOrchestratorTasks(sessionName string) ([]OrchestratorTask, err
 	for rows.Next() {
 		var t OrchestratorTask
 		if err := rows.Scan(&t.TaskID, &t.AgentName, &t.AssigneePaneID, &t.SenderPaneID,
-			&t.SenderName, &t.Status, &t.SentAt, &t.CompletedAt); err != nil {
+			&t.SenderName, &t.Status, &t.SentAt, &t.CompletedAt,
+			&t.MessagePreview, &t.ResponsePreview); err != nil {
 			return nil, fmt.Errorf("[DEBUG-canvas] scan task: %w", err)
 		}
 		result = append(result, t)
 	}
 	return result, rows.Err()
+}
+
+// GetOrchestratorTaskDetail はタスクの詳細情報（メッセージ全文含む）を返す。
+func (a *App) GetOrchestratorTaskDetail(sessionName, taskID string) (*OrchestratorTaskDetail, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, fmt.Errorf("task ID is required")
+	}
+
+	db, cleanup, err := a.openOrchestratorDB(sessionName)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	ctx := context.Background()
+	row := db.QueryRowContext(ctx,
+		`SELECT t.task_id, t.agent_name, COALESCE(t.sender_name,''), t.status,
+		        t.sent_at, COALESCE(t.completed_at,''),
+		        COALESCE(m.content, ''), COALESCE(r.content, '')
+		 FROM tasks t
+		 LEFT JOIN send_messages m ON t.send_message_id = m.id
+		 LEFT JOIN send_responses r ON t.send_response_id = r.id
+		 WHERE t.task_id = ? AND t.is_now_session = 1`, taskID,
+	)
+
+	var d OrchestratorTaskDetail
+	if err := row.Scan(&d.TaskID, &d.AgentName, &d.SenderName, &d.Status,
+		&d.SentAt, &d.CompletedAt, &d.MessageContent, &d.ResponseContent); err != nil {
+		return nil, fmt.Errorf("[DEBUG-canvas] get task detail: %w", err)
+	}
+	return &d, nil
 }
 
 // ListOrchestratorAgents は現在のセッションの登録エージェント一覧を返す。

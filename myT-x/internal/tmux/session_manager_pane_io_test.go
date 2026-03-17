@@ -16,6 +16,9 @@ func TestTmuxCopyFieldCountGuards(t *testing.T) {
 	if got := reflect.TypeFor[TmuxWindow]().NumField(); got != 6 {
 		t.Fatalf("TmuxWindow field count = %d, want 6. If a field was added, review cloneSessionForRead.", got)
 	}
+	if got := reflect.TypeFor[TmuxSession]().NumField(); got != 14 {
+		t.Fatalf("TmuxSession field count = %d, want 14. If a field was added, review cloneSessionForRead.", got)
+	}
 }
 
 // T-4: copyPaneSlice must deep-copy Env maps so callers cannot mutate

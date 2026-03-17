@@ -232,6 +232,29 @@
     color: var(--accent);
 }
 
+/* ── Send group (auto-close + send button) ── */
+.chat-overlay-send-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.chat-overlay-auto-close {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--fg-dim);
+    font-size: 0.75rem;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.chat-overlay-auto-close input[type="checkbox"] {
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
 .chat-overlay-send {
     padding: 6px 20px;
     border: 1px solid var(--accent);
@@ -260,9 +283,16 @@
     gap: 6px;
 }
 
+/* ── Anchor button group ── */
+.chat-overlay-anchor-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
 /* ── Anchor toggle button ── */
 .chat-overlay-anchor-btn {
-    padding: 5px 12px;
+    padding: 5px 8px;
     border: 1px solid rgba(150, 182, 219, 0.2);
     border-radius: 6px;
     background: rgba(150, 182, 219, 0.05);
@@ -305,6 +335,78 @@
     }
     to {
         transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* ── Left-anchored overlay variant ── */
+.chat-overlay--anchor-left {
+    bottom: 0;
+    top: 0;
+    left: 0;
+    right: auto;
+    border-radius: 0 12px 12px 0;
+    border-top: none;
+    border-right: 1px solid var(--accent);
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.4);
+    animation: chat-overlay-slide-in-left 150ms ease;
+    padding-right: 6px;
+}
+
+.chat-overlay--anchor-left .chat-overlay-resize-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 6px;
+    height: auto;
+    cursor: ew-resize;
+    border-radius: 0 12px 12px 0;
+}
+
+/* ── Right-anchored overlay variant ── */
+.chat-overlay--anchor-right {
+    bottom: 0;
+    top: 0;
+    right: 0;
+    left: auto;
+    border-radius: 12px 0 0 12px;
+    border-top: none;
+    border-left: 1px solid var(--accent);
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
+    animation: chat-overlay-slide-in-right 150ms ease;
+    padding-left: 6px;
+}
+
+.chat-overlay--anchor-right .chat-overlay-resize-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 6px;
+    height: auto;
+    cursor: ew-resize;
+    border-radius: 12px 0 0 12px;
+}
+
+@keyframes chat-overlay-slide-in-left {
+    from {
+        transform: translateX(-20px);
+        opacity: 0.6;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes chat-overlay-slide-in-right {
+    from {
+        transform: translateX(20px);
+        opacity: 0.6;
+    }
+    to {
+        transform: translateX(0);
         opacity: 1;
     }
 }

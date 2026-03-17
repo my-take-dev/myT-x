@@ -9,6 +9,7 @@ describe("settingsReducer INITIAL_FORM guard", () => {
             "agentFrom",
             "agentTo",
             "allowedShells",
+            "chatOverlayPercentage",
             "claudeEnvDefaultEnabled",
             "claudeEnvEntries",
             "defaultSessionDir",

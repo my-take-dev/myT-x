@@ -9,11 +9,19 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"myT-x/internal/config"
 	"myT-x/internal/mcp"
 	"myT-x/internal/mcp/lspmcp/lsppkg"
 	"myT-x/internal/tmux"
+)
+
+// mcpReadinessWaitTimeoutFn and mcpReadinessWaitIntervalFn are test seams for
+// controlling the readiness wait behavior in ResolveMCPStdio.
+var (
+	mcpReadinessWaitTimeoutFn  = func() time.Duration { return 5 * time.Second }
+	mcpReadinessWaitIntervalFn = func() time.Duration { return 100 * time.Millisecond }
 )
 
 var (
@@ -221,13 +229,43 @@ func (a *App) ResolveMCPStdio(sessionName, mcpName string) (tmux.MCPStdioResolut
 			fmt.Errorf("mcp %q is not enabled", mcpID),
 		))
 	}
+
+	// Wait for StatusStarting to transition before returning to reduce CLI
+	// dial retry pressure. The CLI bridge still retries as a safety net.
+	if detail.Status == mcp.StatusStarting {
+		waitTimeout := mcpReadinessWaitTimeoutFn()
+		waitInterval := mcpReadinessWaitIntervalFn()
+		waitStart := time.Now()
+		slog.Debug("[DEBUG-MCP] resolve mcp stdio: waiting for mcp to become ready",
+			"session", sessionName,
+			"mcpID", mcpID,
+			"waitTimeout", waitTimeout,
+		)
+		deadline := time.Now().Add(waitTimeout)
+		for detail.Status == mcp.StatusStarting && time.Now().Before(deadline) {
+			time.Sleep(waitInterval)
+			detail, err = mgr.GetDetail(sessionName, mcpID)
+			if err != nil {
+				return fail(rollbackResolvedMCP(
+					mgr, sessionName, mcpID, rollbackNeeded,
+					fmt.Errorf("get mcp detail %q during readiness wait: %w", mcpID, err),
+				))
+			}
+		}
+		slog.Debug("[DEBUG-MCP] resolve mcp stdio: readiness wait completed",
+			"session", sessionName,
+			"mcpID", mcpID,
+			"finalStatus", detail.Status,
+			"waitDuration", time.Since(waitStart),
+		)
+	}
+
 	switch detail.Status {
 	case mcp.StatusRunning:
 	case mcp.StatusStarting:
-		// StatusStarting is intentionally allowed here. The pipe path is
-		// deterministic, and the CLI bridge performs the bounded wait for
-		// listener readiness instead of blocking this IPC call.
-		slog.Debug("[DEBUG-MCP] resolve mcp stdio: mcp is still starting; cli bridge will dial with timeout",
+		// StatusStarting is still allowed after readiness wait timeout.
+		// The CLI bridge performs bounded retry for listener readiness.
+		slog.Debug("[DEBUG-MCP] resolve mcp stdio: mcp is still starting after readiness wait; cli bridge will dial with retry",
 			"session", sessionName,
 			"mcpID", mcpID,
 		)

@@ -106,15 +106,12 @@ export const useCanvasStore = create<CanvasState>((set) => ({
         }),
 
     resetForSession: (sessionName) =>
-        set((state) => {
-            if (state.activeSessionName === sessionName) return {};
-            return {
-                activeSessionName: sessionName,
-                taskEdgeMap: {},
-                nodePositions: {},
-                nodeSizes: {},
-                agentMap: {},
-                processStatusMap: {},
-            };
-        }),
+        set(() => ({
+            activeSessionName: sessionName,
+            taskEdgeMap: {},
+            nodePositions: {},
+            nodeSizes: {},
+            agentMap: {},
+            processStatusMap: {},
+        })),
 }));

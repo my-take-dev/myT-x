@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -1209,5 +1210,205 @@ func TestHandleListPanesAllSessionsEmpty(t *testing.T) {
 	}
 	if strings.TrimSpace(resp.Stdout) != "" {
 		t.Fatalf("Stdout = %q, want empty", resp.Stdout)
+	}
+}
+
+func TestHandleListPanesFilterByMYTXSession(t *testing.T) {
+	emitter := &captureEmitter{}
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// Create two sessions.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "sess-a", "-x": 80, "-y": 24},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session sess-a failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "sess-b", "-x": 80, "-y": 24},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session sess-b failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	// Verify both sessions' panes have MYTX_SESSION set (injected by addTmuxEnvironment).
+	sessASnap, _ := sessions.GetSession("sess-a")
+	paneA := sessASnap.Windows[0].Panes[0]
+	if paneA.Env["MYTX_SESSION"] != "sess-a" {
+		t.Fatalf("pane in sess-a: MYTX_SESSION = %q, want %q", paneA.Env["MYTX_SESSION"], "sess-a")
+	}
+
+	// list-panes -a with CallerPane from sess-a should only return sess-a's panes.
+	resp = router.Execute(ipc.TmuxRequest{
+		Command:    "list-panes",
+		Flags:      map[string]any{"-a": true, "-F": "#{session_name}"},
+		CallerPane: fmt.Sprintf("%%%d", paneA.ID),
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes -a failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	lines := strings.Split(strings.TrimRight(resp.Stdout, "\n"), "\n")
+	for _, line := range lines {
+		if line != "sess-a" {
+			t.Errorf("list-panes -a returned pane from session %q, want only sess-a", line)
+		}
+	}
+}
+
+func TestHandleListPanesNoFilterWhenNoMYTXSession(t *testing.T) {
+	emitter := &captureEmitter{}
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// Create two sessions.
+	router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "sess-x", "-x": 80, "-y": 24},
+	})
+	router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "sess-y", "-x": 80, "-y": 24},
+	})
+
+	// list-panes -a WITHOUT CallerPane (external call) should return all panes.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "list-panes",
+		Flags:   map[string]any{"-a": true, "-F": "#{session_name}"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes -a failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	lines := strings.Split(strings.TrimRight(resp.Stdout, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("list-panes -a returned %d lines, want at least 2 (both sessions)", len(lines))
+	}
+	sessionNames := map[string]bool{}
+	for _, line := range lines {
+		sessionNames[line] = true
+	}
+	if !sessionNames["sess-x"] || !sessionNames["sess-y"] {
+		t.Fatalf("list-panes -a did not return both sessions: got %v", sessionNames)
+	}
+}
+
+// TestSplitWindowPreservesMYTXSessionWhenScopeEnabled verifies that split panes
+// inherit MYTX_SESSION when UseSessionPaneScope is enabled, and that list-panes -a
+// from the split pane only returns panes from the same session.
+func TestSplitWindowPreservesMYTXSessionWhenScopeEnabled(t *testing.T) {
+	emitter := &captureEmitter{}
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// Create two sessions.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "scope-a", "-x": 80, "-y": 24},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session scope-a failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "scope-b", "-x": 80, "-y": 24},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session scope-b failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	// Enable UseSessionPaneScope on scope-a.
+	if err := sessions.SetUseSessionPaneScope("scope-a", true); err != nil {
+		t.Fatalf("SetUseSessionPaneScope failed: %v", err)
+	}
+
+	// Get initial pane of scope-a.
+	sessASnap, _ := sessions.GetSession("scope-a")
+	initialPane := sessASnap.Windows[0].Panes[0]
+
+	// Split pane in scope-a.
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "split-window",
+		Flags:   map[string]any{"-t": initialPane.IDString(), "-v": true},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("split-window failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	splitPaneID := strings.TrimSpace(resp.Stdout)
+
+	// Verify the split pane has MYTX_SESSION set to the session name.
+	splitCtx, err := sessions.GetPaneContextSnapshot(ParseCallerPane(splitPaneID))
+	if err != nil {
+		t.Fatalf("GetPaneContextSnapshot for split pane failed: %v", err)
+	}
+	if got := splitCtx.Env["MYTX_SESSION"]; got != "scope-a" {
+		t.Errorf("split pane MYTX_SESSION = %q, want %q", got, "scope-a")
+	}
+
+	// list-panes -a from the split pane should only return scope-a's panes.
+	resp = router.Execute(ipc.TmuxRequest{
+		Command:    "list-panes",
+		Flags:      map[string]any{"-a": true, "-F": "#{session_name}"},
+		CallerPane: splitPaneID,
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes -a failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	for line := range strings.SplitSeq(strings.TrimRight(resp.Stdout, "\n"), "\n") {
+		if line != "scope-a" {
+			t.Errorf("list-panes -a from split pane returned session %q, want only scope-a", line)
+		}
+	}
+}
+
+// TestSplitWindowRemovesMYTXSessionWhenScopeDisabled verifies that split panes
+// do NOT have MYTX_SESSION when UseSessionPaneScope is disabled (legacy behavior).
+func TestSplitWindowRemovesMYTXSessionWhenScopeDisabled(t *testing.T) {
+	emitter := &captureEmitter{}
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+
+	// Create a session without enabling UseSessionPaneScope.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "noscope", "-x": 80, "-y": 24},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	// Get initial pane.
+	sessSnap, _ := sessions.GetSession("noscope")
+	initialPane := sessSnap.Windows[0].Panes[0]
+
+	// Split pane.
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "split-window",
+		Flags:   map[string]any{"-t": initialPane.IDString(), "-v": true},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("split-window failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	splitPaneID := strings.TrimSpace(resp.Stdout)
+
+	// Verify the split pane does NOT have MYTX_SESSION (scope disabled).
+	splitCtx, err := sessions.GetPaneContextSnapshot(ParseCallerPane(splitPaneID))
+	if err != nil {
+		t.Fatalf("GetPaneContextSnapshot for split pane failed: %v", err)
+	}
+	if got := splitCtx.Env["MYTX_SESSION"]; got != "" {
+		t.Errorf("split pane MYTX_SESSION = %q, want empty (scope disabled)", got)
 	}
 }

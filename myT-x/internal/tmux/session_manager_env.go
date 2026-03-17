@@ -252,6 +252,22 @@ func (m *SessionManager) SetUsePaneEnv(name string, enabled bool) error {
 	return nil
 }
 
+// SetUseSessionPaneScope sets whether session-scoped pane management (MYTX_SESSION
+// injection and list-panes filtering) is enabled for the named session.
+func (m *SessionManager) SetUseSessionPaneScope(name string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, err := m.getSessionByNameLocked(name)
+	if err != nil {
+		return err
+	}
+	if session.UseSessionPaneScope == nil || *session.UseSessionPaneScope != enabled {
+		m.markStateMutationLocked()
+	}
+	session.UseSessionPaneScope = &enabled
+	return nil
+}
+
 // GetPaneEnv returns a copy of environment variables for the pane identified
 // by paneID (format "%N"). The caller may safely mutate the returned map
 // without affecting internal state.
