@@ -544,6 +544,16 @@ func TestResolveMCPStdio_UsesAliasAndReturnsPipe(t *testing.T) {
 }
 
 func TestResolveMCPStdio_StatusStartingFallsBackToDeterministicPipe(t *testing.T) {
+	// Use short readiness wait so the test doesn't block for 5 seconds.
+	origTimeout := mcpReadinessWaitTimeoutFn
+	origInterval := mcpReadinessWaitIntervalFn
+	mcpReadinessWaitTimeoutFn = func() time.Duration { return 50 * time.Millisecond }
+	mcpReadinessWaitIntervalFn = func() time.Duration { return 10 * time.Millisecond }
+	t.Cleanup(func() {
+		mcpReadinessWaitTimeoutFn = origTimeout
+		mcpReadinessWaitIntervalFn = origInterval
+	})
+
 	workDirStarted := make(chan struct{})
 	releaseWorkDir := make(chan struct{})
 	released := false
@@ -591,6 +601,95 @@ func TestResolveMCPStdio_StatusStartingFallsBackToDeterministicPipe(t *testing.T
 	}
 	if detail.Status != mcp.StatusStarting {
 		t.Fatalf("detail.Status = %q, want %q", detail.Status, mcp.StatusStarting)
+	}
+
+	release()
+}
+
+func TestResolveMCPStdio_ReadinessWaitTransitionsToRunning(t *testing.T) {
+	origTimeout := mcpReadinessWaitTimeoutFn
+	origInterval := mcpReadinessWaitIntervalFn
+	mcpReadinessWaitTimeoutFn = func() time.Duration { return 3 * time.Second }
+	mcpReadinessWaitIntervalFn = func() time.Duration { return 50 * time.Millisecond }
+	t.Cleanup(func() {
+		mcpReadinessWaitTimeoutFn = origTimeout
+		mcpReadinessWaitIntervalFn = origInterval
+	})
+
+	// ResolveWorkDir completes after 200ms, so startInstance transitions to Running.
+	app := newAppWithMCPManagerConfig(t, mcp.ManagerConfig{
+		EmitFn: func(string, any) {},
+		ResolveWorkDir: func(string) (string, error) {
+			time.Sleep(200 * time.Millisecond)
+			return t.TempDir(), nil
+		},
+	}, mcp.MCPDefinition{ID: "lsp-gopls", Name: "Go LSP", Command: "gopls"})
+	t.Cleanup(func() {
+		app.mcpManager.Close()
+	})
+
+	sessionName := "session-readiness-running"
+	resolved, err := app.ResolveMCPStdio(sessionName, "gopls")
+	if err != nil {
+		t.Fatalf("ResolveMCPStdio error = %v", err)
+	}
+
+	wantPipe := mcp.BuildMCPPipeName(sessionName, "lsp-gopls")
+	if resolved.PipePath != wantPipe {
+		t.Fatalf("PipePath = %q, want %q", resolved.PipePath, wantPipe)
+	}
+}
+
+func TestResolveMCPStdio_ReadinessWaitTimesOutReturnsStarting(t *testing.T) {
+	origTimeout := mcpReadinessWaitTimeoutFn
+	origInterval := mcpReadinessWaitIntervalFn
+	mcpReadinessWaitTimeoutFn = func() time.Duration { return 50 * time.Millisecond }
+	mcpReadinessWaitIntervalFn = func() time.Duration { return 10 * time.Millisecond }
+	t.Cleanup(func() {
+		mcpReadinessWaitTimeoutFn = origTimeout
+		mcpReadinessWaitIntervalFn = origInterval
+	})
+
+	releaseWorkDir := make(chan struct{})
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		close(releaseWorkDir)
+	}
+
+	// ResolveWorkDir blocks indefinitely, so status stays Starting.
+	app := newAppWithMCPManagerConfig(t, mcp.ManagerConfig{
+		EmitFn: func(string, any) {},
+		ResolveWorkDir: func(string) (string, error) {
+			<-releaseWorkDir
+			return t.TempDir(), nil
+		},
+	}, mcp.MCPDefinition{ID: "lsp-gopls", Name: "Go LSP", Command: "gopls"})
+	t.Cleanup(func() {
+		release()
+		app.mcpManager.Close()
+	})
+
+	sessionName := "session-readiness-timeout"
+	resolved, err := app.ResolveMCPStdio(sessionName, "gopls")
+	if err != nil {
+		t.Fatalf("ResolveMCPStdio error = %v, want success with StatusStarting fallback", err)
+	}
+
+	wantPipe := mcp.BuildMCPPipeName(sessionName, "lsp-gopls")
+	if resolved.PipePath != wantPipe {
+		t.Fatalf("PipePath = %q, want %q", resolved.PipePath, wantPipe)
+	}
+
+	detail, err := app.mcpManager.GetDetail(sessionName, "lsp-gopls")
+	if err != nil {
+		t.Fatalf("GetDetail error = %v", err)
+	}
+	if detail.Status != mcp.StatusStarting {
+		t.Fatalf("detail.Status = %q, want %q after readiness wait timeout", detail.Status, mcp.StatusStarting)
 	}
 
 	release()

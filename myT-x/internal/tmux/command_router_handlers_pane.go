@@ -595,6 +595,22 @@ func (r *CommandRouter) handleListPanes(req ipc.TmuxRequest) ipc.TmuxResponse {
 	filter := mustString(req.Flags["-f"])
 	callerPaneID := ParseCallerPane(req.CallerPane)
 
+	// Session-scoped filtering: when the caller pane has MYTX_SESSION set,
+	// only include panes from the matching session. This provides automatic
+	// session isolation for MCP tools (Claude Code, etc.).
+	var callerMytxSession string
+	if callerPaneID >= 0 {
+		if callerCtx, ctxErr := r.sessions.GetPaneContextSnapshot(callerPaneID); ctxErr == nil {
+			callerMytxSession = callerCtx.Env["MYTX_SESSION"]
+		}
+	}
+	if callerMytxSession != "" {
+		slog.Debug("[DEBUG-LISTPANES] session filtering applied",
+			"callerPaneID", callerPaneID,
+			"callerMytxSession", callerMytxSession,
+		)
+	}
+
 	// -a: list panes across all sessions (highest precedence).
 	// Pattern follows handleListWindows: ListSessions returns deep clones with
 	// intact Window->Session back-references, enabling format variable expansion
@@ -603,6 +619,9 @@ func (r *CommandRouter) handleListPanes(req ipc.TmuxRequest) ipc.TmuxResponse {
 		sessions := r.sessions.ListSessions()
 		lines := make([]string, 0)
 		for _, session := range sessions {
+			if callerMytxSession != "" && session.Name != callerMytxSession {
+				continue
+			}
 			for _, window := range session.Windows {
 				if window == nil {
 					continue

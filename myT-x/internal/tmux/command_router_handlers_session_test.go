@@ -430,6 +430,47 @@ func TestHandleRenameSession(t *testing.T) {
 	}
 }
 
+func TestRenameSessionUpdatesMYTXSession(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, &captureEmitter{}, RouterOptions{ShimAvailable: true})
+
+	// Create session — addTmuxEnvironment sets MYTX_SESSION on the initial pane.
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "original", "-x": 80, "-y": 24},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	// Verify MYTX_SESSION before rename.
+	sess, ok := sessions.GetSession("original")
+	if !ok {
+		t.Fatal("session 'original' not found")
+	}
+	pane := sess.Windows[0].Panes[0]
+	if got := pane.Env["MYTX_SESSION"]; got != "original" {
+		t.Fatalf("before rename: MYTX_SESSION = %q, want %q", got, "original")
+	}
+
+	// Rename session.
+	if err := sessions.RenameSession("original", "renamed"); err != nil {
+		t.Fatalf("RenameSession() error = %v", err)
+	}
+
+	// Verify MYTX_SESSION is updated to new name.
+	sess, ok = sessions.GetSession("renamed")
+	if !ok {
+		t.Fatal("session 'renamed' not found after rename")
+	}
+	pane = sess.Windows[0].Panes[0]
+	if got := pane.Env["MYTX_SESSION"]; got != "renamed" {
+		t.Fatalf("after rename: MYTX_SESSION = %q, want %q", got, "renamed")
+	}
+}
+
 func TestHandleShowEnvironment(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -888,7 +929,7 @@ func TestHandleSetEnvironmentBlockedKeyFiltering(t *testing.T) {
 			}
 
 			// Step 4: verify that buildPaneEnv filters blocked keys from pane environment.
-			paneEnv := router.buildPaneEnv(env, 0, 0)
+			paneEnv := router.buildPaneEnv(env, 0, 0, "test-session")
 			if tt.isBlocked {
 				if _, exists := paneEnv[tt.envKey]; exists {
 					t.Errorf("blocked key %q should NOT appear in pane env", tt.envKey)
@@ -1075,6 +1116,7 @@ func TestBuildPaneEnvForSessionBlockedKeyFiltering(t *testing.T) {
 				0, 0,       // sessionID, paneID
 				false, // useClaudeEnv
 				false, // usePaneEnv
+				"test-session",
 			)
 
 			if tt.isBlocked {

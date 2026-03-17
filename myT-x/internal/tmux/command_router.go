@@ -238,6 +238,10 @@ func (r *CommandRouter) resolveEnvForPaneCreation(
 		}
 	}
 
+	// Resolve UseSessionPaneScope: nil → false (legacy: no session scoping)
+	useSessionPaneScope := sessionSnap != nil && sessionSnap.UseSessionPaneScope != nil && *sessionSnap.UseSessionPaneScope
+
+	var env map[string]string
 	if sessionSnap != nil && (sessionSnap.UseClaudeEnv != nil || sessionSnap.UsePaneEnv != nil) {
 		// New path: at least one flag was explicitly set.
 		// Nil defaults:
@@ -245,13 +249,20 @@ func (r *CommandRouter) resolveEnvForPaneCreation(
 		//   - UsePaneEnv   nil → true  (fill-only applied; matches legacy behavior)
 		useClaudeEnv := sessionSnap.UseClaudeEnv != nil && *sessionSnap.UseClaudeEnv
 		usePaneEnv := sessionSnap.UsePaneEnv == nil || *sessionSnap.UsePaneEnv
-		return r.buildPaneEnvForSession(inheritedEnv, shimEnv, sessionID, paneID, useClaudeEnv, usePaneEnv)
+		env = r.buildPaneEnvForSession(inheritedEnv, shimEnv, sessionID, paneID, useClaudeEnv, usePaneEnv, sessionName)
+	} else {
+		// Legacy path: existing buildPaneEnv (pane_env always fills via fill-only)
+		mergedReqEnv := copyEnvMap(inheritedEnv)
+		maps.Copy(mergedReqEnv, shimEnv)
+		env = r.buildPaneEnv(mergedReqEnv, sessionID, paneID, sessionName)
 	}
 
-	// Legacy path: existing buildPaneEnv (pane_env always fills via fill-only)
-	mergedReqEnv := copyEnvMap(inheritedEnv)
-	maps.Copy(mergedReqEnv, shimEnv)
-	return r.buildPaneEnv(mergedReqEnv, sessionID, paneID)
+	// When session pane scope is disabled, remove MYTX_SESSION from additional
+	// panes so that list-panes -a is not filtered for this session's agents.
+	if !useSessionPaneScope {
+		delete(env, "MYTX_SESSION")
+	}
+	return env
 }
 
 // buildPaneEnvForSession builds environment for additional panes, respecting
@@ -272,6 +283,7 @@ func (r *CommandRouter) buildPaneEnvForSession(
 	inheritedEnv, shimEnv map[string]string,
 	sessionID, paneID int,
 	useClaudeEnv, usePaneEnv bool,
+	sessionName string,
 ) map[string]string {
 	// Snapshot env views once to avoid redundant RLock/RUnlock and ensure
 	// consistency within a single buildPaneEnvForSession call.
@@ -339,7 +351,7 @@ func (r *CommandRouter) buildPaneEnvForSession(
 	}
 
 	// Layer 5: tmux internal vars (always final)
-	addTmuxEnvironment(env, r.opts.PipeName, r.opts.HostPID, sessionID, paneID, r.ShimAvailable())
+	addTmuxEnvironment(env, r.opts.PipeName, r.opts.HostPID, sessionID, paneID, r.ShimAvailable(), sessionName)
 
 	return env
 }
@@ -468,7 +480,7 @@ func (r *CommandRouter) bestEffortSendKeys(pane *TmuxPane, args []string, append
 // pane env defaults, and tmux-specific variables.
 //
 // TODO: Remove legacy buildPaneEnv when all sessions have explicit env flags.
-func (r *CommandRouter) buildPaneEnv(reqEnv map[string]string, sessionID int, paneID int) map[string]string {
+func (r *CommandRouter) buildPaneEnv(reqEnv map[string]string, sessionID int, paneID int, sessionName string) map[string]string {
 	env := make(map[string]string, len(reqEnv))
 	for k, v := range reqEnv {
 		if isBlockedEnvironmentKey(k) {
@@ -477,14 +489,14 @@ func (r *CommandRouter) buildPaneEnv(reqEnv map[string]string, sessionID int, pa
 		env[k] = v
 	}
 	mergePaneEnvDefaults(env, r.paneEnvView())
-	addTmuxEnvironment(env, r.opts.PipeName, r.opts.HostPID, sessionID, paneID, r.ShimAvailable())
+	addTmuxEnvironment(env, r.opts.PipeName, r.opts.HostPID, sessionID, paneID, r.ShimAvailable(), sessionName)
 	return env
 }
 
 // buildPaneEnvSkipDefaults builds the environment map without merging pane_env
 // config defaults. Used for operator-initiated initial session panes where
 // pane_env settings (effort level, custom env vars) should not be applied.
-func (r *CommandRouter) buildPaneEnvSkipDefaults(reqEnv map[string]string, sessionID int, paneID int) map[string]string {
+func (r *CommandRouter) buildPaneEnvSkipDefaults(reqEnv map[string]string, sessionID int, paneID int, sessionName string) map[string]string {
 	env := make(map[string]string, len(reqEnv))
 	for k, v := range reqEnv {
 		if isBlockedEnvironmentKey(k) {
@@ -494,7 +506,7 @@ func (r *CommandRouter) buildPaneEnvSkipDefaults(reqEnv map[string]string, sessi
 	}
 	// NOTE: mergePaneEnvDefaults is intentionally skipped here.
 	// Operator-initiated panes do not need agent-specific env vars.
-	addTmuxEnvironment(env, r.opts.PipeName, r.opts.HostPID, sessionID, paneID, r.ShimAvailable())
+	addTmuxEnvironment(env, r.opts.PipeName, r.opts.HostPID, sessionID, paneID, r.ShimAvailable(), sessionName)
 	return env
 }
 

@@ -1078,6 +1078,43 @@ func TestCloneSessionSnapshotsNilWorktree(t *testing.T) {
 	}
 }
 
+func TestCloneSessionForReadPreservesUseSessionPaneScope(t *testing.T) {
+	manager := NewSessionManager()
+	t.Cleanup(manager.Close)
+
+	session, _, err := manager.CreateSession("clone-test", "main", 80, 24)
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	// Enable UseSessionPaneScope on the session.
+	if err := manager.SetUseSessionPaneScope("clone-test", true); err != nil {
+		t.Fatalf("SetUseSessionPaneScope failed: %v", err)
+	}
+
+	// Clone via GetSession.
+	cloned, ok := manager.GetSession("clone-test")
+	if !ok {
+		t.Fatal("GetSession returned false")
+	}
+
+	// Cloned session must have UseSessionPaneScope = true.
+	if cloned.UseSessionPaneScope == nil {
+		t.Fatal("cloned UseSessionPaneScope is nil, want non-nil")
+	}
+	if !*cloned.UseSessionPaneScope {
+		t.Fatal("cloned UseSessionPaneScope = false, want true")
+	}
+
+	// Pointer independence: mutating the clone must not affect the original.
+	*cloned.UseSessionPaneScope = false
+	_ = session // suppress unused warning for session pointer
+	cloned2, _ := manager.GetSession("clone-test")
+	if cloned2.UseSessionPaneScope == nil || !*cloned2.UseSessionPaneScope {
+		t.Fatal("mutating cloned pointer affected original session")
+	}
+}
+
 func TestCreateSessionDuplicateNameReturnsError(t *testing.T) {
 	manager := NewSessionManager()
 	_, _, err := manager.CreateSession("duplicate", "main", 120, 40)

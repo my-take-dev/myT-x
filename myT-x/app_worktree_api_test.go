@@ -2957,7 +2957,7 @@ func TestCreateSessionWithWorktreeEnableAgentTeamSetsEnvVars(t *testing.T) {
 		t.Fatalf("CreateSessionWithWorktree() error = %v", err)
 	}
 
-	wantEnv := agentTeamEnvVars(snapshot.Name, snapshot.Name)
+	wantEnv := agentTeamEnvVars(snapshot.Name)
 	if len(capturedReq.Env) != len(wantEnv) {
 		t.Fatalf("captured env count = %d, want %d", len(capturedReq.Env), len(wantEnv))
 	}
@@ -3293,8 +3293,8 @@ func TestCreateSessionWithExistingWorktreeReturnsStatErrorForInvalidPath(t *test
 }
 
 func TestWorktreeStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeFor[WorktreeSessionOptions]().NumField(); got != 6 {
-		t.Fatalf("WorktreeSessionOptions field count = %d, want 6; update tests for new fields", got)
+	if got := reflect.TypeFor[WorktreeSessionOptions]().NumField(); got != 7 {
+		t.Fatalf("WorktreeSessionOptions field count = %d, want 7; update tests for new fields", got)
 	}
 	if got := reflect.TypeFor[WorktreeStatus]().NumField(); got != 5 {
 		t.Fatalf("WorktreeStatus field count = %d, want 5; update tests for new fields", got)
@@ -3449,7 +3449,7 @@ func TestCreateSessionWithExistingWorktreeEnableAgentTeamSetsEnvVars(t *testing.
 		t.Fatalf("CreateSessionWithExistingWorktree() error = %v", err)
 	}
 
-	wantEnv := agentTeamEnvVars(snapshot.Name, snapshot.Name)
+	wantEnv := agentTeamEnvVars(snapshot.Name)
 	if len(capturedReq.Env) != len(wantEnv) {
 		t.Fatalf("captured env count = %d, want %d", len(capturedReq.Env), len(wantEnv))
 	}

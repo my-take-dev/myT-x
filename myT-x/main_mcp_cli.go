@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"runtime"
@@ -17,7 +18,12 @@ import (
 	"myT-x/internal/ipc"
 )
 
-const defaultMCPStdioDialTimeout = 3 * time.Second
+const (
+	defaultMCPStdioDialTimeout = 8 * time.Second
+
+	ipcResolveMaxRetries    = 3
+	ipcResolveRetryInterval = 500 * time.Millisecond
+)
 
 type mcpStdioCLIConfig struct {
 	sessionName string
@@ -155,18 +161,39 @@ func parseMCPStdioCLI(args []string) (mcpStdioCLIConfig, error) {
 }
 
 func resolveMCPStdioViaIPC(sessionName, mcpName string) (ipc.MCPStdioResolvePayload, error) {
-	resp, err := sendIPCRequestFn(mcpCLIPipeNameFn(), ipc.TmuxRequest{
-		Command: "mcp-resolve-stdio",
-		Flags: map[string]any{
-			"session": sessionName,
-			"mcp":     mcpName,
-		},
-	})
-	if err != nil {
-		if ipc.IsConnectionError(err) {
-			return ipc.MCPStdioResolvePayload{}, fmt.Errorf("myT-x IPC is unavailable. Start myT-x GUI first")
+	var resp ipc.TmuxResponse
+	var sendErr error
+	for attempt := 1; attempt <= ipcResolveMaxRetries; attempt++ {
+		resp, sendErr = sendIPCRequestFn(mcpCLIPipeNameFn(), ipc.TmuxRequest{
+			Command: "mcp-resolve-stdio",
+			Flags: map[string]any{
+				"session": sessionName,
+				"mcp":     mcpName,
+			},
+		})
+		if sendErr == nil {
+			if attempt > 1 {
+				slog.Debug("[DEBUG-MCP-CLI] ipc resolved after retry",
+					"session", sessionName,
+					"mcp", mcpName,
+					"attempts", attempt,
+				)
+			}
+			break
 		}
-		return ipc.MCPStdioResolvePayload{}, fmt.Errorf("ipc request failed: %w", err)
+		if !ipc.IsConnectionError(sendErr) {
+			return ipc.MCPStdioResolvePayload{}, fmt.Errorf("ipc request failed: %w", sendErr)
+		}
+		if attempt == ipcResolveMaxRetries {
+			return ipc.MCPStdioResolvePayload{}, fmt.Errorf(
+				"myT-x IPC is unavailable after %d attempts. Start myT-x GUI first", ipcResolveMaxRetries)
+		}
+		slog.Debug("[DEBUG-MCP-CLI] ipc connection failed, retrying",
+			"attempt", attempt,
+			"maxRetries", ipcResolveMaxRetries,
+			"error", sendErr,
+		)
+		time.Sleep(ipcResolveRetryInterval)
 	}
 	if resp.ExitCode != 0 {
 		message := strings.TrimSpace(resp.Stderr)

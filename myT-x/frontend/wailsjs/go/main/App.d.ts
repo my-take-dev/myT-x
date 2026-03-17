@@ -38,9 +38,27 @@ export function DetachSession(arg1:string):Promise<void>;
 
 export function DevPanelCommitDiff(arg1:string,arg2:string):Promise<string>;
 
+export function DevPanelGitCommit(arg1:string,arg2:string):Promise<main.DevPanelCommitResult>;
+
+export function DevPanelGitDiscard(arg1:string,arg2:string):Promise<void>;
+
+export function DevPanelGitFetch(arg1:string):Promise<void>;
+
 export function DevPanelGitLog(arg1:string,arg2:number,arg3:boolean):Promise<Array<main.GitGraphCommit>>;
 
+export function DevPanelGitPull(arg1:string):Promise<main.DevPanelPullResult>;
+
+export function DevPanelGitPush(arg1:string):Promise<main.DevPanelPushResult>;
+
+export function DevPanelGitStage(arg1:string,arg2:string):Promise<void>;
+
+export function DevPanelGitStageAll(arg1:string):Promise<void>;
+
 export function DevPanelGitStatus(arg1:string):Promise<main.GitStatusResult>;
+
+export function DevPanelGitUnstage(arg1:string,arg2:string):Promise<void>;
+
+export function DevPanelGitUnstageAll(arg1:string):Promise<void>;
 
 export function DevPanelListBranches(arg1:string):Promise<Array<string>>;
 
@@ -69,6 +87,8 @@ export function GetInputHistory():Promise<Array<main.InputHistoryEntry>>;
 export function GetInputHistoryFilePath():Promise<string>;
 
 export function GetMCPDetail(arg1:string,arg2:string):Promise<mcp.Snapshot>;
+
+export function GetOrchestratorTaskDetail(arg1:string,arg2:string):Promise<main.OrchestratorTaskDetail>;
 
 export function GetPaneEnv(arg1:string):Promise<Record<string, string>>;
 

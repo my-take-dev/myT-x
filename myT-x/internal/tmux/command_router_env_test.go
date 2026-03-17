@@ -598,6 +598,7 @@ func TestBuildPaneEnvForSession(t *testing.T) {
 				tt.paneID,
 				tt.useClaudeEnv,
 				tt.usePaneEnv,
+				"test-session",
 			)
 
 			tt.verify(t, env)
@@ -706,6 +707,7 @@ func TestBuildPaneEnvForSessionNilClaudeEnv(t *testing.T) {
 				1, // paneID
 				tt.useClaudeEnv,
 				tt.usePaneEnv,
+				"test-session",
 			)
 
 			tt.verify(t, env)

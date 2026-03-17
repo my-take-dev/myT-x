@@ -35,17 +35,17 @@ const tokenCache = new Map<string, TokenCacheEntry>();
 /** Max cached highlight results. Sized for typical browsing session (10-20 open tabs + buffer). */
 const CACHE_ENTRY_MAX = 24;
 // Keep this above MAX_HIGHLIGHT_SIZE so at least one max-size source can be cached.
-const CACHE_SOURCE_CHAR_BUDGET = 200_000;
+const CACHE_SOURCE_CHAR_BUDGET = 500_000;
 let cachedSourceChars = 0;
 
 // ── Size guard ──
 
 /** Max source size (chars) for highlighting. Above this, show plain text to keep the UI responsive. */
-export const MAX_HIGHLIGHT_SIZE = 20_000;
+export const MAX_HIGHLIGHT_SIZE = 100_000;
 /** Max line count for highlighting. Limits tokenizer cost on deeply structured files. */
-const MAX_HIGHLIGHT_LINE_COUNT = 1_200;
+const MAX_HIGHLIGHT_LINE_COUNT = 5_000;
 /** Max single-line length. Prevents regex backtracking on minified/generated code. */
-const MAX_HIGHLIGHT_LINE_LENGTH = 2_000;
+const MAX_HIGHLIGHT_LINE_LENGTH = 10_000;
 
 export type HighlightSkipReason = "size-limit" | "line-count-limit" | "line-length-limit";
 

@@ -69,7 +69,7 @@ func TestCreateSessionOptionsFieldCountGuard(t *testing.T) {
 	//   - WorktreeSessionOptions in app_worktree_api.go
 	//   - the mapping in createSessionForDirectory / applySessionEnvFlags
 	//   - frontend models.ts CreateSessionOptions class
-	const expectedFieldCount = 3
+	const expectedFieldCount = 4
 	if got := reflect.TypeFor[CreateSessionOptions]().NumField(); got != expectedFieldCount {
 		t.Fatalf("CreateSessionOptions field count = %d, want %d; "+
 			"update WorktreeSessionOptions mapping, applySessionEnvFlags callers, and frontend models.ts",
@@ -125,7 +125,7 @@ func TestApplySessionEnvFlagsSetsSessionFlags(t *testing.T) {
 				t.Fatalf("CreateSession() error = %v", err)
 			}
 
-			applySessionEnvFlags(sessions, "test-session", tt.useClaudeEnv, tt.usePaneEnv)
+			applySessionEnvFlags(sessions, "test-session", tt.useClaudeEnv, tt.usePaneEnv, false)
 
 			session, ok := sessions.GetSession("test-session")
 			if !ok {
@@ -362,7 +362,7 @@ func TestCreateSessionWithAgentTeamEnvVars(t *testing.T) {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
 
-	want := agentTeamEnvVars("team-session", "team-session")
+	want := agentTeamEnvVars("team-session")
 	if len(capturedReq.Env) != len(want) {
 		t.Fatalf("CreateSession() env count = %d, want %d", len(capturedReq.Env), len(want))
 	}
@@ -373,12 +373,12 @@ func TestCreateSessionWithAgentTeamEnvVars(t *testing.T) {
 	}
 }
 
-func TestAgentTeamEnvVarsContainsMYTXSession(t *testing.T) {
-	env := agentTeamEnvVars("team-name", "session-name")
-	if got, ok := env["MYTX_SESSION"]; !ok {
-		t.Fatal("MYTX_SESSION key not found in agentTeamEnvVars")
-	} else if got != "session-name" {
-		t.Fatalf("MYTX_SESSION = %q, want %q", got, "session-name")
+func TestAgentTeamEnvVarsDoesNotContainMYTXSession(t *testing.T) {
+	// MYTX_SESSION is now universally injected by addTmuxEnvironment (Layer 5),
+	// so agentTeamEnvVars must NOT include it.
+	env := agentTeamEnvVars("team-name")
+	if _, ok := env["MYTX_SESSION"]; ok {
+		t.Fatal("MYTX_SESSION must not be in agentTeamEnvVars (managed by addTmuxEnvironment)")
 	}
 	// Team name should still be set correctly.
 	if got := env["CLAUDE_CODE_TEAM_NAME"]; got != "team-name" {
@@ -2149,7 +2149,7 @@ func TestCreateSessionForDirectoryFillOnlyPriority(t *testing.T) {
 			verifyEnv: func(t *testing.T, capturedEnv map[string]string) {
 				t.Helper()
 				// Agent team vars must retain their original values (not overwritten by claude_env).
-				agentVars := agentTeamEnvVars("test-session", "test-session")
+				agentVars := agentTeamEnvVars("test-session")
 				for key, wantValue := range agentVars {
 					if got := capturedEnv[key]; got != wantValue {
 						t.Errorf("env[%q] = %q, want %q (agent team env must take priority)", key, got, wantValue)
@@ -2188,7 +2188,7 @@ func TestCreateSessionForDirectoryFillOnlyPriority(t *testing.T) {
 			},
 			verifyEnv: func(t *testing.T, capturedEnv map[string]string) {
 				t.Helper()
-				agentVars := agentTeamEnvVars("test-session", "test-session")
+				agentVars := agentTeamEnvVars("test-session")
 				for key, wantValue := range agentVars {
 					if got := capturedEnv[key]; got != wantValue {
 						t.Errorf("env[%q] = %q, want %q", key, got, wantValue)

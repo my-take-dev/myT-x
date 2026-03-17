@@ -400,7 +400,13 @@ func (a *App) DevPanelGitStatus(sessionName string) (GitStatusResult, error) {
 	}
 
 	// Get status (porcelain format).
-	statusOutput, statusErr := gitpkg.RunGitCLIPublic(workDir, []string{"status", "--porcelain", "-b"})
+	// Use core.quotepath=false so non-ASCII paths (e.g. Japanese) are output
+	// as real UTF-8 instead of octal-escaped sequences. This keeps paths
+	// consistent with DevPanelWorkingDiff which also uses quotepath=false.
+	statusOutput, statusErr := gitpkg.RunGitCLIPublic(workDir, []string{
+		"-c", "core.quotepath=false",
+		"status", "--porcelain", "-b",
+	})
 	if statusErr != nil {
 		return result, fmt.Errorf("git status failed: %w", statusErr)
 	}
@@ -415,7 +421,14 @@ func (a *App) DevPanelGitStatus(sessionName string) (GitStatusResult, error) {
 		}
 		indexStatus := line[0]
 		workTreeStatus := line[1]
-		filePath := strings.TrimSpace(line[3:])
+		// Git still quotes paths containing spaces, tabs, or backslashes.
+		// decodeGitPathLiteral strips quotes and decodes escape sequences.
+		rawPath := strings.TrimSpace(line[3:])
+		filePath, ok := decodeGitPathLiteral(rawPath)
+		if !ok {
+			slog.Debug("[DEVPANEL] skipping malformed git status path", "raw", rawPath)
+			continue
+		}
 
 		// Staged changes.
 		if indexStatus != ' ' && indexStatus != '?' {

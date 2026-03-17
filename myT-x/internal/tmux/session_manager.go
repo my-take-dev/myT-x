@@ -38,6 +38,10 @@ type TmuxSession struct {
 	// UsePaneEnv controls whether pane_env config is applied to additional panes.
 	// nil = legacy session (pane_env always fills, backward compatible).
 	UsePaneEnv *bool `json:"use_pane_env,omitempty"`
+	// UseSessionPaneScope controls whether MYTX_SESSION is set on additional panes
+	// and list-panes -a is scoped to the caller's session.
+	// nil = legacy session (no session scoping, backward compatible).
+	UseSessionPaneScope *bool `json:"use_session_pane_scope,omitempty"`
 }
 
 // SessionWorktreeInfo is frontend-safe git/worktree metadata for a session.

@@ -159,7 +159,7 @@ func TestAddTmuxEnvironmentAlwaysSetsTMUX(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			env := map[string]string{}
-			addTmuxEnvironment(env, `\\.\pipe\test`, 12345, 0, 1, tt.shimAvailable)
+			addTmuxEnvironment(env, `\\.\pipe\test`, 12345, 0, 1, tt.shimAvailable, "test-session")
 
 			wantTmuxVal := `\\.\pipe\test,12345,0`
 
@@ -178,6 +178,11 @@ func TestAddTmuxEnvironmentAlwaysSetsTMUX(t *testing.T) {
 			}
 			if got := env["TMUX_PANE"]; got != "%1" {
 				t.Errorf("TMUX_PANE = %q, want %%1", got)
+			}
+
+			// MYTX_SESSION は常に設定される
+			if got := env["MYTX_SESSION"]; got != "test-session" {
+				t.Errorf("MYTX_SESSION = %q, want %q", got, "test-session")
 			}
 		})
 	}

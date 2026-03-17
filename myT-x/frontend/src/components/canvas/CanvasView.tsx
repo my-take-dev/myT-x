@@ -24,6 +24,7 @@ import {determineEdgeDirection} from "../../utils/edgeRouting";
 import {CanvasTerminalNode} from "./CanvasTerminalNode";
 import {TaskEdge} from "./TaskEdge";
 import type {TaskEdgeData} from "./TaskEdge";
+import {TaskTimelinePanel} from "./TaskTimelinePanel";
 import {useI18n} from "../../i18n";
 import "../../styles/canvas.css";
 
@@ -49,6 +50,7 @@ export function CanvasView(props: CanvasViewProps) {
     const {fitView} = useReactFlow();
     const setNodePosition = useCanvasStore((s) => s.setNodePosition);
     const taskEdgeMap = useCanvasStore((s) => s.taskEdgeMap);
+    const [timelinePanelOpen, setTimelinePanelOpen] = useState(false);
 
     // 3秒ポーリング
     useCanvasTaskSync(props.sessionName);
@@ -229,29 +231,50 @@ export function CanvasView(props: CanvasViewProps) {
                         {language === "en" ? "Tree" : t("canvas.tree", "Tree")}
                     </span>
                 </button>
+                <button
+                    type="button"
+                    className={`terminal-toolbar-btn canvas-timeline-toggle-btn ${timelinePanelOpen ? "canvas-active" : ""}`}
+                    title="タスクタイムライン"
+                    onClick={() => setTimelinePanelOpen((p) => !p)}
+                >
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4">
+                        <rect x="1" y="1" width="12" height="3" rx="0.5"/>
+                        <rect x="1" y="5.5" width="8" height="3" rx="0.5"/>
+                        <rect x="1" y="10" width="10" height="3" rx="0.5"/>
+                    </svg>
+                    <span>Timeline</span>
+                </button>
             </div>
-            <ReactFlow
-                nodes={rfNodes}
-                edges={rfEdges}
-                onNodesChange={handleNodesChange}
-                onEdgesChange={handleEdgesChange}
-                nodeTypes={nodeTypes}
-                edgeTypes={edgeTypes}
-                elevateEdgesOnSelect
-                fitView
-                minZoom={0.1}
-                maxZoom={2}
-                snapToGrid
-                snapGrid={[20, 20]}
-                proOptions={{hideAttribution: true}}
-            >
-                <Background variant={BackgroundVariant.Dots} gap={20} size={1}/>
-                <Controls/>
-                <MiniMap
-                    nodeColor={getNodeColor}
-                    maskColor="rgba(0, 0, 0, 0.7)"
-                />
-            </ReactFlow>
+            <div className="canvas-content">
+                <ReactFlow
+                    nodes={rfNodes}
+                    edges={rfEdges}
+                    onNodesChange={handleNodesChange}
+                    onEdgesChange={handleEdgesChange}
+                    nodeTypes={nodeTypes}
+                    edgeTypes={edgeTypes}
+                    elevateEdgesOnSelect
+                    fitView
+                    minZoom={0.1}
+                    maxZoom={2}
+                    snapToGrid
+                    snapGrid={[20, 20]}
+                    proOptions={{hideAttribution: true}}
+                >
+                    <Background variant={BackgroundVariant.Dots} gap={20} size={1}/>
+                    <Controls/>
+                    <MiniMap
+                        nodeColor={getNodeColor}
+                        maskColor="rgba(0, 0, 0, 0.7)"
+                    />
+                </ReactFlow>
+                {timelinePanelOpen && (
+                    <TaskTimelinePanel
+                        sessionName={props.sessionName}
+                        onClose={() => setTimelinePanelOpen(false)}
+                    />
+                )}
+            </div>
         </div>
     );
 }

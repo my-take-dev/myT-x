@@ -101,7 +101,6 @@ function App() {
                     <SessionView session={current}/>
                     <ChatInputBar
                         activePaneId={activePaneId}
-                        activePaneIndex={activePane?.index ?? 0}
                         activePaneTitle={activePane?.title ?? ""}
                         panes={activeWindow?.panes ?? []}
                         chatOverlayPercentage={config?.chat_overlay_percentage ?? 80}

@@ -50,11 +50,11 @@ describe("pathToShikiLang", () => {
 
 describe("getHighlightSkipInfo", () => {
     it("allows content exactly at configured limits", () => {
-        const maxSizeLines = Array.from({length: 10}, () => "x".repeat(1_999));
+        const maxSizeLines = Array.from({length: 10}, () => "x".repeat(9_999));
         maxSizeLines[maxSizeLines.length - 1] = `${maxSizeLines[maxSizeLines.length - 1]}x`;
         const maxSize = maxSizeLines.join("\n");
-        const maxLines = Array.from({length: 1_200}, () => "x").join("\n");
-        const maxLineLength = "x".repeat(2_000);
+        const maxLines = Array.from({length: 5_000}, () => "x").join("\n");
+        const maxLineLength = "x".repeat(10_000);
 
         expect(getHighlightSkipInfo(maxSize)).toBeNull();
         expect(getHighlightSkipInfo(maxLines)).toBeNull();
@@ -62,47 +62,47 @@ describe("getHighlightSkipInfo", () => {
     });
 
     it("skips oversized content", () => {
-        const oversized = "x".repeat(20_001);
+        const oversized = "x".repeat(100_001);
         expect(getHighlightSkipInfo(oversized)).toEqual({
             reason: "size-limit",
-            limit: 20_000,
-            actual: 20_001,
+            limit: 100_000,
+            actual: 100_001,
         });
     });
 
     it("skips when line count is too large", () => {
-        const manyLines = Array.from({length: 1_201}, () => "x").join("\n");
+        const manyLines = Array.from({length: 5_001}, () => "x").join("\n");
         expect(getHighlightSkipInfo(manyLines)).toEqual({
             reason: "line-count-limit",
-            limit: 1_200,
-            actual: 1_201,
+            limit: 5_000,
+            actual: 5_001,
         });
     });
 
     it("skips when a line is too long", () => {
-        const longLine = "x".repeat(2_001);
+        const longLine = "x".repeat(10_001);
         expect(getHighlightSkipInfo(longLine)).toEqual({
             reason: "line-length-limit",
-            limit: 2_000,
-            actual: 2_001,
+            limit: 10_000,
+            actual: 10_001,
         });
     });
 
     it("counts CRLF lines correctly and ignores carriage returns for line-length", () => {
-        const crlfWithinLimit = Array.from({length: 1_200}, () => "x").join("\r\n");
-        const crlfOverLimit = Array.from({length: 1_201}, () => "x").join("\r\n");
-        const crlfLongLine = `${"x".repeat(2_001)}\r\nok`;
+        const crlfWithinLimit = Array.from({length: 5_000}, () => "x").join("\r\n");
+        const crlfOverLimit = Array.from({length: 5_001}, () => "x").join("\r\n");
+        const crlfLongLine = `${"x".repeat(10_001)}\r\nok`;
 
         expect(getHighlightSkipInfo(crlfWithinLimit)).toBeNull();
         expect(getHighlightSkipInfo(crlfOverLimit)).toEqual({
             reason: "line-count-limit",
-            limit: 1_200,
-            actual: 1_201,
+            limit: 5_000,
+            actual: 5_001,
         });
         expect(getHighlightSkipInfo(crlfLongLine)).toEqual({
             reason: "line-length-limit",
-            limit: 2_000,
-            actual: 2_001,
+            limit: 10_000,
+            actual: 10_001,
         });
     });
 

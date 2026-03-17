@@ -18,23 +18,24 @@ import (
 // This struct replaces consecutive bool parameters (enableAgentTeam, useClaudeEnv,
 // usePaneEnv) to eliminate argument-ordering mistakes at call sites.
 type CreateSessionOptions struct {
-	EnableAgentTeam bool `json:"enable_agent_team"` // set Agent Teams env vars on initial pane
-	UseClaudeEnv    bool `json:"use_claude_env"`    // apply claude_env config to panes
-	UsePaneEnv      bool `json:"use_pane_env"`      // apply pane_env config to additional panes
+	EnableAgentTeam     bool `json:"enable_agent_team"`      // set Agent Teams env vars on initial pane
+	UseClaudeEnv        bool `json:"use_claude_env"`         // apply claude_env config to panes
+	UsePaneEnv          bool `json:"use_pane_env"`           // apply pane_env config to additional panes
+	UseSessionPaneScope bool `json:"use_session_pane_scope"` // set MYTX_SESSION on panes + scope list-panes
 }
 
 // agentTeamEnvVars returns the environment variables that signal Claude Code
 // to enable Agent Teams mode. The caller is responsible for passing these
 // through the IPC request's Env field.
-// sessionName is set as MYTX_SESSION so that MCP bridge processes can
-// automatically resolve which session they belong to.
-func agentTeamEnvVars(teamName, sessionName string) map[string]string {
+//
+// NOTE: MYTX_SESSION is NOT included here — it is universally injected by
+// addTmuxEnvironment (Layer 5) for ALL panes, not just Agent Teams panes.
+func agentTeamEnvVars(teamName string) map[string]string {
 	return map[string]string{
 		"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
 		"CLAUDE_CODE_TEAM_NAME":                teamName,
 		"CLAUDE_CODE_AGENT_ID":                 "lead",
 		"CLAUDE_CODE_AGENT_TYPE":               "lead",
-		"MYTX_SESSION":                         sessionName,
 	}
 }
 
@@ -192,7 +193,7 @@ func (a *App) CreateSession(rootPath string, sessionName string, opts CreateSess
 	sessionMayExist = true
 
 	// Set session-level env flags before any additional pane can be created.
-	applySessionEnvFlags(sessions, createdName, opts.UseClaudeEnv, opts.UsePaneEnv)
+	applySessionEnvFlags(sessions, createdName, opts.UseClaudeEnv, opts.UsePaneEnv, opts.UseSessionPaneScope)
 
 	// Store git branch metadata for display in the sidebar.
 	// NOTE: This enrichment is best-effort. Session creation must continue even if
@@ -472,7 +473,7 @@ func (a *App) GetSessionEnv(sessionName string) (map[string]string, error) {
 // Aborting the entire session creation for a flag-storage failure would be
 // disproportionate; the session remains fully functional without these flags
 // (additional panes simply won't inherit the configured env).
-func applySessionEnvFlags(sm *tmux.SessionManager, sessionName string, useClaudeEnv, usePaneEnv bool) {
+func applySessionEnvFlags(sm *tmux.SessionManager, sessionName string, useClaudeEnv, usePaneEnv, useSessionPaneScope bool) {
 	if useClaudeEnv {
 		if setErr := sm.SetUseClaudeEnv(sessionName, useClaudeEnv); setErr != nil {
 			slog.Warn("[WARN-ENV] failed to set UseClaudeEnv flag", "session", sessionName, "error", setErr)
@@ -481,6 +482,11 @@ func applySessionEnvFlags(sm *tmux.SessionManager, sessionName string, useClaude
 	if usePaneEnv {
 		if setErr := sm.SetUsePaneEnv(sessionName, usePaneEnv); setErr != nil {
 			slog.Warn("[WARN-ENV] failed to set UsePaneEnv flag", "session", sessionName, "error", setErr)
+		}
+	}
+	if useSessionPaneScope {
+		if setErr := sm.SetUseSessionPaneScope(sessionName, useSessionPaneScope); setErr != nil {
+			slog.Warn("[WARN-ENV] failed to set UseSessionPaneScope flag", "session", sessionName, "error", setErr)
 		}
 	}
 }

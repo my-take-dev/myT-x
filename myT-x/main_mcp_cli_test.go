@@ -39,8 +39,8 @@ func TestParseMCPStdioCLI_DefaultDialTimeout(t *testing.T) {
 	if cfg.dialTimeout != defaultMCPStdioDialTimeout {
 		t.Fatalf("dialTimeout = %v, want %v", cfg.dialTimeout, defaultMCPStdioDialTimeout)
 	}
-	if cfg.dialTimeout >= 8*time.Second {
-		t.Fatalf("dialTimeout = %v, should remain below the previous resolve-timeout coupling", cfg.dialTimeout)
+	if cfg.dialTimeout != 8*time.Second {
+		t.Fatalf("dialTimeout = %v, want 8s for retry budget", cfg.dialTimeout)
 	}
 }
 
@@ -214,7 +214,9 @@ func TestResolveMCPStdioViaIPC_ConnectionErrorShowsGUIHint(t *testing.T) {
 	t.Cleanup(func() {
 		sendIPCRequestFn = originalSend
 	})
+	callCount := 0
 	sendIPCRequestFn = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+		callCount++
 		return ipc.TmuxResponse{}, &net.OpError{Op: "dial", Err: errors.New("pipe unavailable")}
 	}
 
@@ -222,8 +224,61 @@ func TestResolveMCPStdioViaIPC_ConnectionErrorShowsGUIHint(t *testing.T) {
 	if err == nil {
 		t.Fatal("resolveMCPStdioViaIPC should fail when IPC is unavailable")
 	}
-	if !strings.Contains(err.Error(), "myT-x IPC is unavailable. Start myT-x GUI first") {
+	if !strings.Contains(err.Error(), "myT-x IPC is unavailable") {
 		t.Fatalf("error = %v, want GUI startup hint", err)
+	}
+	if callCount != ipcResolveMaxRetries {
+		t.Fatalf("sendIPCRequestFn called %d times, want %d (all retries exhausted)", callCount, ipcResolveMaxRetries)
+	}
+}
+
+func TestResolveMCPStdioViaIPC_ConnectionErrorRetriesAndSucceeds(t *testing.T) {
+	originalSend := sendIPCRequestFn
+	t.Cleanup(func() {
+		sendIPCRequestFn = originalSend
+	})
+	callCount := 0
+	sendIPCRequestFn = func(_ string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+		callCount++
+		if callCount <= 2 {
+			return ipc.TmuxResponse{}, &net.OpError{Op: "dial", Err: errors.New("pipe unavailable")}
+		}
+		payload := `{"session_name":"s1","mcp_id":"gopls","pipe_path":"\\\\.\\pipe\\test"}`
+		return ipc.TmuxResponse{ExitCode: 0, Stdout: payload}, nil
+	}
+
+	resolved, err := resolveMCPStdioViaIPC("s1", "gopls")
+	if err != nil {
+		t.Fatalf("resolveMCPStdioViaIPC error = %v, want success after retry", err)
+	}
+	if resolved.PipePath != `\\.\pipe\test` {
+		t.Fatalf("PipePath = %q, want %q", resolved.PipePath, `\\.\pipe\test`)
+	}
+	if callCount != 3 {
+		t.Fatalf("sendIPCRequestFn called %d times, want 3 (2 failures + 1 success)", callCount)
+	}
+}
+
+func TestResolveMCPStdioViaIPC_NonConnectionErrorDoesNotRetry(t *testing.T) {
+	originalSend := sendIPCRequestFn
+	t.Cleanup(func() {
+		sendIPCRequestFn = originalSend
+	})
+	callCount := 0
+	sendIPCRequestFn = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+		callCount++
+		return ipc.TmuxResponse{}, errors.New("protocol error")
+	}
+
+	_, err := resolveMCPStdioViaIPC("s1", "gopls")
+	if err == nil {
+		t.Fatal("resolveMCPStdioViaIPC should fail for non-connection errors")
+	}
+	if !strings.Contains(err.Error(), "ipc request failed") {
+		t.Fatalf("error = %v, want ipc request failed error", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("sendIPCRequestFn called %d times, want 1 (no retry for non-connection errors)", callCount)
 	}
 }
 

@@ -699,13 +699,13 @@ func TestTaskSenderInstanceIDRoundTrip(t *testing.T) {
 }
 
 func TestDomainAgentFieldCount(t *testing.T) {
-	if got := reflect.TypeOf(domain.Agent{}).NumField(); got != 6 {
+	if got := reflect.TypeFor[domain.Agent]().NumField(); got != 6 {
 		t.Fatalf("domain.Agent has %d fields (expected 6). Update UpsertAgent/GetAgent/ListAgents scan logic and this constant.", got)
 	}
 }
 
 func TestDomainTaskFieldCount(t *testing.T) {
-	if got := reflect.TypeOf(domain.Task{}).NumField(); got != 12 {
+	if got := reflect.TypeFor[domain.Task]().NumField(); got != 12 {
 		t.Fatalf("domain.Task has %d fields (expected 12). Update GetTask/ListTasks scan logic and this constant.", got)
 	}
 }

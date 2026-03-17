@@ -261,7 +261,7 @@ func TestBuildPaneEnvSkipDefaults(t *testing.T) {
 		},
 	})
 
-	env := router.buildPaneEnvSkipDefaults(map[string]string{"REQ_KEY": "req-val"}, 0, 0)
+	env := router.buildPaneEnvSkipDefaults(map[string]string{"REQ_KEY": "req-val"}, 0, 0, "test-session")
 
 	// Request key is preserved.
 	if env["REQ_KEY"] != "req-val" {
@@ -293,7 +293,7 @@ func TestBuildPaneEnvWithDefaults(t *testing.T) {
 		},
 	})
 
-	env := router.buildPaneEnv(map[string]string{"REQ_KEY": "req-val"}, 0, 0)
+	env := router.buildPaneEnv(map[string]string{"REQ_KEY": "req-val"}, 0, 0, "test-session")
 
 	// Request key is preserved.
 	if env["REQ_KEY"] != "req-val" {
