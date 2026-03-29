@@ -31,11 +31,56 @@ type mcpStdioCLIConfig struct {
 	dialTimeout time.Duration
 }
 
-var sendIPCRequestFn = ipc.Send
-var mcpStdioPlatformSupportedFn = func() bool { return runtime.GOOS == "windows" }
+// mcpCLIDeps holds injectable functions for MCP CLI operations.
+// Tests create custom instances instead of mutating package-level state.
+type mcpCLIDeps struct {
+	// sendIPCRequest sends an IPC request to the named pipe and returns the response.
+	sendIPCRequest func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error)
+	// platformSupported returns true if the current platform supports MCP stdio.
+	platformSupported func() bool
+	// pipeName returns the named pipe path for IPC communication.
+	pipeName func() string
+	// resolveSessionByEnv returns the session name from the MYTX_SESSION env var.
+	resolveSessionByEnv func() string
+	// resolveSessionByCwd resolves the session name via IPC using the given cwd.
+	resolveSessionByCwd func(pipeName, cwd string) (string, error)
+	// getwd returns the current working directory.
+	getwd func() (string, error)
+}
 
-// mcpCLIPipeNameFn is a test seam for overriding the default pipe name in unit tests.
-var mcpCLIPipeNameFn = ipc.DefaultPipeName
+func defaultMCPCLIDeps() mcpCLIDeps {
+	d := mcpCLIDeps{
+		sendIPCRequest:    ipc.Send,
+		platformSupported: func() bool { return runtime.GOOS == "windows" },
+		pipeName:          ipc.DefaultPipeName,
+		resolveSessionByEnv: func() string {
+			return strings.TrimSpace(os.Getenv("MYTX_SESSION"))
+		},
+		getwd: os.Getwd,
+	}
+	d.resolveSessionByCwd = func(pipeName, cwd string) (string, error) {
+		resp, err := d.sendIPCRequest(pipeName, ipc.TmuxRequest{
+			Command: "resolve-session-by-cwd",
+			Flags:   map[string]any{"cwd": cwd},
+		})
+		if err != nil {
+			return "", fmt.Errorf("ipc request failed: %w", err)
+		}
+		if resp.ExitCode != 0 {
+			msg := strings.TrimSpace(resp.Stderr)
+			if msg == "" {
+				msg = "session not found"
+			}
+			return "", errors.New(msg)
+		}
+		resolved := strings.TrimSpace(resp.Stdout)
+		if resolved == "" {
+			return "", errors.New("ipc returned empty session name")
+		}
+		return resolved, nil
+	}
+	return d
+}
 
 func runMCPCLIMode(args []string) (bool, int) {
 	if len(args) == 0 {
@@ -44,10 +89,10 @@ func runMCPCLIMode(args []string) (bool, int) {
 	if !strings.EqualFold(strings.TrimSpace(args[0]), "mcp") {
 		return false, 0
 	}
-	return true, executeMCPCLI(args[1:], os.Stdin, os.Stdout, os.Stderr)
+	return true, defaultMCPCLIDeps().executeMCPCLIWith(args[1:], os.Stdin, os.Stdout, os.Stderr)
 }
 
-func executeMCPCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func (d mcpCLIDeps) executeMCPCLIWith(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		printMCPCLIUsage(stderr)
 		return 2
@@ -55,17 +100,17 @@ func executeMCPCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case "stdio":
-		cfg, err := parseMCPStdioCLI(args[1:])
+		cfg, err := d.parseMCPStdioCLI(args[1:])
 		if err != nil {
 			fmt.Fprintf(stderr, "mcp stdio: %v\n", err)
 			printMCPCLIUsage(stderr)
 			return 2
 		}
-		if !mcpStdioPlatformSupportedFn() {
+		if !d.platformSupported() {
 			fmt.Fprintln(stderr, "mcp stdio: mcp stdio mode is supported only on Windows")
 			return 1
 		}
-		resolved, err := resolveMCPStdioViaIPC(cfg.sessionName, cfg.mcpName)
+		resolved, err := d.resolveMCPStdioViaIPC(cfg.sessionName, cfg.mcpName)
 		if err != nil {
 			fmt.Fprintf(stderr, "mcp stdio: %v\n", err)
 			return 1
@@ -73,7 +118,7 @@ func executeMCPCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := bridgeMCPStdio(ctx, resolved.PipePath, cfg.dialTimeout, stdin, stdout); err != nil && !errors.Is(err, context.Canceled) {
+		if err := bridgeMCPStdio(ctx, resolved.PipePath, cfg.dialTimeout, stdin, stdout, dialPipe); err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(stderr, "mcp stdio: %v\n", err)
 			return 1
 		}
@@ -85,38 +130,7 @@ func executeMCPCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	}
 }
 
-// resolveSessionByEnvFn is a test seam for reading $MYTX_SESSION.
-var resolveSessionByEnvFn = func() string {
-	return strings.TrimSpace(os.Getenv("MYTX_SESSION"))
-}
-
-// resolveSessionByCwdFn is a test seam for IPC-based session resolution.
-var resolveSessionByCwdFn = func(pipeName, cwd string) (string, error) {
-	resp, err := sendIPCRequestFn(pipeName, ipc.TmuxRequest{
-		Command: "resolve-session-by-cwd",
-		Flags:   map[string]any{"cwd": cwd},
-	})
-	if err != nil {
-		return "", fmt.Errorf("ipc request failed: %w", err)
-	}
-	if resp.ExitCode != 0 {
-		msg := strings.TrimSpace(resp.Stderr)
-		if msg == "" {
-			msg = "session not found"
-		}
-		return "", errors.New(msg)
-	}
-	resolved := strings.TrimSpace(resp.Stdout)
-	if resolved == "" {
-		return "", errors.New("ipc returned empty session name")
-	}
-	return resolved, nil
-}
-
-// getwdFn is a test seam for os.Getwd.
-var getwdFn = os.Getwd
-
-func parseMCPStdioCLI(args []string) (mcpStdioCLIConfig, error) {
+func (d mcpCLIDeps) parseMCPStdioCLI(args []string) (mcpStdioCLIConfig, error) {
 	fs := flag.NewFlagSet("mcp stdio", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -131,13 +145,17 @@ func parseMCPStdioCLI(args []string) (mcpStdioCLIConfig, error) {
 	// 3-stage fallback: --session flag > $MYTX_SESSION > IPC resolve-session-by-cwd
 	session := strings.TrimSpace(*sessionName)
 	if session == "" {
-		session = resolveSessionByEnvFn()
+		session = d.resolveSessionByEnv()
 	}
 	if session == "" {
-		cwd, cwdErr := getwdFn()
-		if cwdErr == nil && cwd != "" {
-			resolved, resolveErr := resolveSessionByCwdFn(mcpCLIPipeNameFn(), cwd)
-			if resolveErr == nil {
+		cwd, cwdErr := d.getwd()
+		if cwdErr != nil {
+			slog.Debug("[DEBUG-MCP-CLI] getwd failed during session resolution", "error", cwdErr)
+		} else if cwd != "" {
+			resolved, resolveErr := d.resolveSessionByCwd(d.pipeName(), cwd)
+			if resolveErr != nil {
+				slog.Debug("[DEBUG-MCP-CLI] resolve-session-by-cwd failed", "cwd", cwd, "error", resolveErr)
+			} else {
 				session = resolved
 			}
 		}
@@ -160,11 +178,11 @@ func parseMCPStdioCLI(args []string) (mcpStdioCLIConfig, error) {
 	}, nil
 }
 
-func resolveMCPStdioViaIPC(sessionName, mcpName string) (ipc.MCPStdioResolvePayload, error) {
+func (d mcpCLIDeps) resolveMCPStdioViaIPC(sessionName, mcpName string) (ipc.MCPStdioResolvePayload, error) {
 	var resp ipc.TmuxResponse
 	var sendErr error
 	for attempt := 1; attempt <= ipcResolveMaxRetries; attempt++ {
-		resp, sendErr = sendIPCRequestFn(mcpCLIPipeNameFn(), ipc.TmuxRequest{
+		resp, sendErr = d.sendIPCRequest(d.pipeName(), ipc.TmuxRequest{
 			Command: "mcp-resolve-stdio",
 			Flags: map[string]any{
 				"session": sessionName,

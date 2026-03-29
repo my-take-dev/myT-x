@@ -1,8 +1,5 @@
-import {useEffect, useRef, useState} from "react";
 import {useI18n} from "../../../../i18n";
 import type {MCPSnapshot} from "../../../../types/mcp";
-import {writeClipboardText} from "../../../../utils/clipboardUtils";
-import {notifyClipboardFailure} from "../../../../utils/notifyUtils";
 import {
     buildCliExamples,
     buildOrchMcpLaunchRecommendation,
@@ -11,6 +8,9 @@ import {
     orchMcpConfigServerName,
     resolveBridgeCommand,
 } from "./mcpConfigSnippets";
+import {useClipboardCopyFeedback} from "./useClipboardCopyFeedback";
+
+type OrchCopiedKey = CliExampleID | "session";
 
 interface OrchestratorDetailPanelProps {
     representativeMCP: MCPSnapshot | null;
@@ -168,49 +168,17 @@ Pane IDs always use the current value at execution time.`,
             </div>
 
             <div className="mcp-detail-right">
-                <OrchCliExamplePanel examples={cliExamples} bridgeReady={bridgeRecommendation != null}/>
+                <OrchCliExamplePanel examples={cliExamples} bridgeReady={bridgeRecommendation != null} sessionName={normalizedSession}/>
             </div>
         </div>
     );
 }
 
-function OrchCliExamplePanel({examples, bridgeReady}: {examples: CliExample[]; bridgeReady: boolean}) {
+function OrchCliExamplePanel({examples, bridgeReady, sessionName}: {examples: CliExample[]; bridgeReady: boolean; sessionName: string}) {
     const {language, t} = useI18n();
     const tr = (key: string, jaText: string, enText: string) =>
         t(key, language === "ja" ? jaText : enText);
-    const [copiedKey, setCopiedKey] = useState<CliExampleID | null>(null);
-    const isMountedRef = useRef(true);
-    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        isMountedRef.current = true;
-        return () => {
-            isMountedRef.current = false;
-            if (timerRef.current != null) {
-                clearTimeout(timerRef.current);
-                timerRef.current = null;
-            }
-        };
-    }, []);
-
-    function handleCopy(value: string, key: CliExampleID) {
-        void writeClipboardText(value).then(() => {
-            if (!isMountedRef.current) {
-                return;
-            }
-            setCopiedKey(key);
-            if (timerRef.current != null) {
-                clearTimeout(timerRef.current);
-            }
-            timerRef.current = setTimeout(() => setCopiedKey(null), 2000);
-        }).catch((err: unknown) => {
-            if (!isMountedRef.current) {
-                return;
-            }
-            notifyClipboardFailure();
-            console.warn("[orch-detail] clipboard write failed", err);
-        });
-    }
+    const {copiedKey, handleCopy} = useClipboardCopyFeedback<OrchCopiedKey>("orch-detail");
 
     return (
         <div className="mcp-connection-info">
@@ -235,6 +203,39 @@ function OrchCliExamplePanel({examples, bridgeReady}: {examples: CliExample[]; b
                         )}
                     </div>
                 )}
+            </div>
+            <div className="mcp-connection-section">
+                <div className="mcp-pipe-path-row">
+                    <h4 className="mcp-detail-section-title mcp-cli-example-title">--session</h4>
+                    <button
+                        className="mcp-copy-btn"
+                        onClick={() => handleCopy(`"--session", "${sessionName}"`, "session")}
+                        title={tr(
+                            "viewer.orchDetail.copySessionTitle",
+                            "--session 引数をコピー",
+                            "Copy --session args",
+                        )}
+                        aria-label={tr(
+                            "viewer.orchDetail.copySessionAria",
+                            "--session 引数をコピー",
+                            "Copy --session args",
+                        )}
+                    >
+                        {copiedKey === "session"
+                            ? tr("viewer.orchDetail.copied", "コピー済", "Copied")
+                            : tr("viewer.orchDetail.copy", "コピー", "Copy")}
+                    </button>
+                </div>
+                <div className="mcp-connection-hint">
+                    {tr(
+                        "viewer.orchDetail.sessionHint",
+                        "必要に応じてスニペットの args に追加してください。",
+                        "Add to snippet args if required by your tool.",
+                    )}
+                </div>
+                <pre className="mcp-detail-usage-pre">
+                    <code>{`"--session", "${sessionName}"`}</code>
+                </pre>
             </div>
             {examples.map((example) => (
                 <div className="mcp-connection-section" key={example.id}>

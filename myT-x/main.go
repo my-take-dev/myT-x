@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"myT-x/internal/ipc"
 	"myT-x/internal/singleinstance"
@@ -12,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 //go:embed all:frontend/dist
@@ -50,8 +52,21 @@ func run() int {
 
 	app := NewApp()
 
+	// Isolate the WebView2 browser process from Edge and other WebView2 apps.
+	// Each unique WebviewUserDataPath creates a separate process group with its
+	// own TSF (Text Services Framework) context, preventing process-level IME
+	// state corruption that causes Japanese IME conversion failure.
+	var windowsOpts *windows.Options
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		windowsOpts = &windows.Options{
+			WebviewUserDataPath: filepath.Join(appData, "myT-x", "WebView2"),
+		}
+	} else {
+		slog.Error("[ERROR-IME] APPDATA not set, WebView2 process isolation disabled")
+	}
+
 	err = wails.Run(&options.App{
-		Title:     "myT-x v1.0.0",
+		Title:     "myT-x v1.0.1",
 		Width:     1440,
 		Height:    900,
 		MinWidth:  980,
@@ -63,6 +78,7 @@ func run() int {
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop: true,
 		},
+		Windows:    windowsOpts,
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
 		Bind: []any{

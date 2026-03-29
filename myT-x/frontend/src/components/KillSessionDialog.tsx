@@ -2,6 +2,7 @@ import {useCallback, useEffect, useState} from "react";
 import {api} from "../api";
 import {useEscapeClose} from "../hooks/useEscapeClose";
 import {useI18n} from "../i18n";
+import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
 
 /**
  * Invariant: when has_worktree is false, the other fields are meaningless
@@ -60,6 +61,7 @@ export function KillSessionDialog({open, sessionName, onClose, onKilled}: KillSe
                         : t("killSession.error.statusFetchFailedSafeMode", "ワークツリー状態の取得に失敗しました（安全のため未保存変更ありとして扱います）: {error}", {error: raw}),
                 );
                 console.warn("[worktree] CheckWorktreeStatus failed:", err);
+                logFrontendEventSafe("warn", `CheckWorktreeStatus failed: ${String(err)}`, "KillSessionDialog");
             });
         // NOTE: isEn and t are intentionally omitted — they are used only for error
         // formatting and t is a stable reference (useCallback in useI18n).

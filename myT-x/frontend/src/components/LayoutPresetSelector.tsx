@@ -1,5 +1,6 @@
 import {api} from "../api";
 import {useI18n} from "../i18n";
+import {notifyAndLog} from "../utils/notifyUtils";
 
 interface LayoutPresetSelectorProps {
     sessionName: string;
@@ -83,6 +84,7 @@ export function LayoutPresetSelector({sessionName, paneCount}: LayoutPresetSelec
                             onClick={() => {
                                 void api.ApplyLayoutPreset(sessionName, preset.id).catch((err) => {
                                     console.warn("[layout-preset] ApplyLayoutPreset failed", err);
+                                    notifyAndLog("Apply layout preset", "warn", err, "LayoutPresetSelector");
                                 });
                             }}
                         >

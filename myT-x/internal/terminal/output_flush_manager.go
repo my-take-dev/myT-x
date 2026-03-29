@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"bytes"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -118,6 +119,21 @@ func (m *OutputFlushManager) nextInterval(flushed int) time.Duration {
 		return m.interval * 2
 	}
 	return m.interval
+}
+
+// IsPaneQuiet returns true when the pane has had no output for at least the
+// given threshold duration, indicating it is likely waiting for user input.
+// Returns true if the pane has never produced output (no state tracked).
+func (m *OutputFlushManager) IsPaneQuiet(paneID string, threshold time.Duration) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state := m.panes[paneID]
+	if state == nil {
+		slog.Debug("[DEBUG-FLUSH] IsPaneQuiet: no state for pane, treating as quiet", "paneID", paneID)
+		return true // no output tracked → treat as quiet
+	}
+	return time.Since(state.lastWriteAt) >= threshold
 }
 
 // Write appends output for one pane.

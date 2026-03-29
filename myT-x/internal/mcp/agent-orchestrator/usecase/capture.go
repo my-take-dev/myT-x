@@ -61,6 +61,16 @@ func (s *CaptureService) Capture(ctx context.Context, cmd CapturePaneCmd) (Captu
 	}
 	logf(s.logger, "capture_pane target resolved agent=%s pane_id=%s", agent.Name, agent.PaneID)
 
+	if domain.IsVirtualPaneID(agent.PaneID) {
+		logf(s.logger, "capture_pane skip virtual pane agent=%s pane_id=%s", agent.Name, agent.PaneID)
+		return CapturePaneResult{
+			AgentName: cmd.AgentName,
+			PaneID:    agent.PaneID,
+			Lines:     cmd.Lines,
+			Warning:   "virtual pane cannot be captured",
+		}, nil
+	}
+
 	content, err := s.capturer.CapturePaneOutput(ctx, agent.PaneID, cmd.Lines)
 	if err != nil {
 		warning := "pane capture failed"

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"myT-x/internal/config"
 	"myT-x/internal/tmux"
 
 	_ "modernc.org/sqlite"
@@ -17,12 +18,12 @@ func newOrchestratorTaskTestApp(t *testing.T) *App {
 	t.Helper()
 
 	app := NewApp()
-	app.configPath = filepath.Join(t.TempDir(), "config.yaml")
+	app.configState.Initialize(filepath.Join(t.TempDir(), "config.yaml"), config.DefaultConfig())
 	app.sessions = tmux.NewSessionManager()
 	return app
 }
 
-// createOrchestratorTaskTestDB creates a temporary SQLite database with agents and tasks tables.
+// createOrchestratorTaskTestDB creates a temporary SQLite database with orchestrator tables.
 // Returns the database path.
 func createOrchestratorTaskTestDB(t *testing.T) (*sql.DB, string) {
 	t.Helper()
@@ -51,9 +52,21 @@ func createOrchestratorTaskTestDB(t *testing.T) (*sql.DB, string) {
 			mcp_instance_id TEXT,
 			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
+		`CREATE TABLE send_messages (
+			id         TEXT PRIMARY KEY,
+			content    TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE send_responses (
+			id         TEXT PRIMARY KEY,
+			content    TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
 		`CREATE TABLE tasks (
 			task_id           TEXT PRIMARY KEY,
 			agent_name        TEXT NOT NULL REFERENCES agents(name),
+			send_message_id   TEXT REFERENCES send_messages(id),
+			send_response_id  TEXT REFERENCES send_responses(id),
 			assignee_pane_id  TEXT,
 			sender_pane_id    TEXT,
 			sender_name       TEXT,
@@ -99,9 +112,41 @@ func createOrchestratorTestSession(t *testing.T, app *App, sessionName, tmpDir s
 	}
 }
 
+func insertTestContent(t *testing.T, db *sql.DB, table, id, content string) {
+	t.Helper()
+
+	if strings.TrimSpace(id) == "" {
+		t.Fatalf("insertTestContent(%s): id must not be empty", table)
+	}
+
+	switch table {
+	case "send_messages", "send_responses":
+	default:
+		t.Fatalf("insertTestContent: unsupported table %q", table)
+	}
+
+	_, err := db.Exec("INSERT INTO "+table+" (id, content) VALUES (?, ?)", id, content)
+	if err != nil {
+		t.Fatalf("insert %s error: %v", table, err)
+	}
+}
+
+func nullableID(id string) any {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+	return id
+}
+
 func TestOrchestratorTaskFieldCount(t *testing.T) {
-	if got := reflect.TypeFor[OrchestratorTask]().NumField(); got != 8 {
-		t.Fatalf("OrchestratorTask has %d fields (expected 8). Update ListOrchestratorTasks scan logic and this constant.", got)
+	if got := reflect.TypeFor[OrchestratorTask]().NumField(); got != 10 {
+		t.Fatalf("OrchestratorTask has %d fields (expected 10). Update ListOrchestratorTasks scan logic and this constant.", got)
+	}
+}
+
+func TestOrchestratorTaskDetailFieldCount(t *testing.T) {
+	if got := reflect.TypeFor[OrchestratorTaskDetail]().NumField(); got != 8 {
+		t.Fatalf("OrchestratorTaskDetail has %d fields (expected 8). Update GetOrchestratorTaskDetail scan logic and this constant.", got)
 	}
 }
 
@@ -208,96 +253,65 @@ func TestOpenOrchestratorDB(t *testing.T) {
 }
 
 func TestListOrchestratorTasks(t *testing.T) {
+	type taskFixture struct {
+		taskID          string
+		assigneePaneID  string
+		senderPaneID    string
+		senderName      string
+		status          string
+		sentAt          string
+		completedAt     string
+		isNowSession    int
+		sendMessageID   string
+		sendResponseID  string
+		messageContent  string
+		responseContent string
+	}
+
+	type agentFixture struct {
+		agentName string
+		tasks     []taskFixture
+	}
+
 	tests := []struct {
 		name        string
 		sessionName string
-		setupData   []struct {
-			agentName string
-			tasks     []struct {
-				taskID         string
-				assigneePaneID string
-				senderPaneID   string
-				senderName     string
-				status         string
-				sentAt         string
-				completedAt    string
-				isNowSession   int
-			}
-		}
-		wantCount  int
-		wantErr    bool
-		checkTasks func(t *testing.T, tasks []OrchestratorTask)
+		setupData   []agentFixture
+		wantCount   int
+		wantErr     bool
+		checkTasks  func(t *testing.T, tasks []OrchestratorTask)
 	}{
 		{
 			name:        "empty tasks table",
 			sessionName: "empty-session",
-			setupData: []struct {
-				agentName string
-				tasks     []struct {
-					taskID         string
-					assigneePaneID string
-					senderPaneID   string
-					senderName     string
-					status         string
-					sentAt         string
-					completedAt    string
-					isNowSession   int
-				}
-			}{
+			setupData: []agentFixture{
 				{
 					agentName: "agent1",
-					tasks: []struct {
-						taskID         string
-						assigneePaneID string
-						senderPaneID   string
-						senderName     string
-						status         string
-						sentAt         string
-						completedAt    string
-						isNowSession   int
-					}{},
+					tasks:     nil,
 				},
 			},
 			wantCount: 0,
 			wantErr:   false,
 		},
 		{
-			name:        "single task with is_now_session = 1",
+			name:        "single task with join previews",
 			sessionName: "single-task-session",
-			setupData: []struct {
-				agentName string
-				tasks     []struct {
-					taskID         string
-					assigneePaneID string
-					senderPaneID   string
-					senderName     string
-					status         string
-					sentAt         string
-					completedAt    string
-					isNowSession   int
-				}
-			}{
+			setupData: []agentFixture{
 				{
 					agentName: "agent1",
-					tasks: []struct {
-						taskID         string
-						assigneePaneID string
-						senderPaneID   string
-						senderName     string
-						status         string
-						sentAt         string
-						completedAt    string
-						isNowSession   int
-					}{
+					tasks: []taskFixture{
 						{
-							taskID:         "task-1",
-							assigneePaneID: "%1",
-							senderPaneID:   "%2",
-							senderName:     "sender1",
-							status:         "pending",
-							sentAt:         "2024-01-01T10:00:00Z",
-							completedAt:    "",
-							isNowSession:   1,
+							taskID:          "task-1",
+							assigneePaneID:  "%1",
+							senderPaneID:    "%2",
+							senderName:      "sender1",
+							status:          "pending",
+							sentAt:          "2024-01-01T10:00:00Z",
+							isNowSession:    1,
+							sendMessageID:   "msg-task-1",
+							sendResponseID:  "resp-task-1",
+							messageContent:  "request message 1",
+							responseContent: "response message 1",
 						},
 					},
 				},
@@ -314,36 +328,21 @@ func TestListOrchestratorTasks(t *testing.T) {
 				if tasks[0].SenderName != "sender1" {
 					t.Fatalf("SenderName = %q, want sender1", tasks[0].SenderName)
 				}
+				if tasks[0].MessagePreview != "request message 1" {
+					t.Fatalf("MessagePreview = %q, want request message 1", tasks[0].MessagePreview)
+				}
+				if tasks[0].ResponsePreview != "response message 1" {
+					t.Fatalf("ResponsePreview = %q, want response message 1", tasks[0].ResponsePreview)
+				}
 			},
 		},
 		{
 			name:        "multiple tasks ordered by sent_at descending",
 			sessionName: "multi-task-session",
-			setupData: []struct {
-				agentName string
-				tasks     []struct {
-					taskID         string
-					assigneePaneID string
-					senderPaneID   string
-					senderName     string
-					status         string
-					sentAt         string
-					completedAt    string
-					isNowSession   int
-				}
-			}{
+			setupData: []agentFixture{
 				{
 					agentName: "agent1",
-					tasks: []struct {
-						taskID         string
-						assigneePaneID string
-						senderPaneID   string
-						senderName     string
-						status         string
-						sentAt         string
-						completedAt    string
-						isNowSession   int
-					}{
+					tasks: []taskFixture{
 						{
 							taskID:         "task-1",
 							assigneePaneID: "%1",
@@ -351,7 +350,6 @@ func TestListOrchestratorTasks(t *testing.T) {
 							senderName:     "sender1",
 							status:         "pending",
 							sentAt:         "2024-01-01T10:00:00Z",
-							completedAt:    "",
 							isNowSession:   1,
 						},
 						{
@@ -371,7 +369,6 @@ func TestListOrchestratorTasks(t *testing.T) {
 							senderName:     "sender3",
 							status:         "pending",
 							sentAt:         "2024-01-01T09:00:00Z",
-							completedAt:    "",
 							isNowSession:   1,
 						},
 					},
@@ -383,7 +380,6 @@ func TestListOrchestratorTasks(t *testing.T) {
 				if len(tasks) != 3 {
 					t.Fatalf("expected 3 tasks, got %d", len(tasks))
 				}
-				// Must be ordered DESC by sent_at
 				if tasks[0].TaskID != "task-2" {
 					t.Fatalf("first task = %q, want task-2 (latest sent_at)", tasks[0].TaskID)
 				}
@@ -398,31 +394,10 @@ func TestListOrchestratorTasks(t *testing.T) {
 		{
 			name:        "tasks with is_now_session filter",
 			sessionName: "filter-session",
-			setupData: []struct {
-				agentName string
-				tasks     []struct {
-					taskID         string
-					assigneePaneID string
-					senderPaneID   string
-					senderName     string
-					status         string
-					sentAt         string
-					completedAt    string
-					isNowSession   int
-				}
-			}{
+			setupData: []agentFixture{
 				{
 					agentName: "agent1",
-					tasks: []struct {
-						taskID         string
-						assigneePaneID string
-						senderPaneID   string
-						senderName     string
-						status         string
-						sentAt         string
-						completedAt    string
-						isNowSession   int
-					}{
+					tasks: []taskFixture{
 						{
 							taskID:         "task-now-1",
 							assigneePaneID: "%1",
@@ -430,7 +405,6 @@ func TestListOrchestratorTasks(t *testing.T) {
 							senderName:     "sender1",
 							status:         "pending",
 							sentAt:         "2024-01-01T10:00:00Z",
-							completedAt:    "",
 							isNowSession:   1,
 						},
 						{
@@ -440,7 +414,6 @@ func TestListOrchestratorTasks(t *testing.T) {
 							senderName:     "sender2",
 							status:         "pending",
 							sentAt:         "2024-01-01T10:01:00Z",
-							completedAt:    "",
 							isNowSession:   0,
 						},
 						{
@@ -450,7 +423,6 @@ func TestListOrchestratorTasks(t *testing.T) {
 							senderName:     "sender3",
 							status:         "pending",
 							sentAt:         "2024-01-01T10:02:00Z",
-							completedAt:    "",
 							isNowSession:   1,
 						},
 					},
@@ -470,42 +442,94 @@ func TestListOrchestratorTasks(t *testing.T) {
 			},
 		},
 		{
-			name:        "tasks with null fields",
-			sessionName: "null-fields-session",
-			setupData: []struct {
-				agentName string
-				tasks     []struct {
-					taskID         string
-					assigneePaneID string
-					senderPaneID   string
-					senderName     string
-					status         string
-					sentAt         string
-					completedAt    string
-					isNowSession   int
-				}
-			}{
+			name:        "tasks with partial join data",
+			sessionName: "partial-join-session",
+			setupData: []agentFixture{
 				{
 					agentName: "agent1",
-					tasks: []struct {
-						taskID         string
-						assigneePaneID string
-						senderPaneID   string
-						senderName     string
-						status         string
-						sentAt         string
-						completedAt    string
-						isNowSession   int
-					}{
+					tasks: []taskFixture{
 						{
-							taskID:         "task-1",
-							assigneePaneID: "",
-							senderPaneID:   "",
-							senderName:     "",
+							taskID:          "task-both",
+							assigneePaneID:  "%1",
+							senderPaneID:    "%2",
+							senderName:      "sender-both",
+							status:          "pending",
+							sentAt:          "2024-01-01T10:00:00Z",
+							isNowSession:    1,
+							sendMessageID:   "msg-both",
+							sendResponseID:  "resp-both",
+							messageContent:  "message both",
+							responseContent: "response both",
+						},
+						{
+							taskID:         "task-message-only",
+							assigneePaneID: "%1",
+							senderPaneID:   "%2",
+							senderName:     "sender-message",
 							status:         "pending",
-							sentAt:         "2024-01-01T10:00:00Z",
-							completedAt:    "",
+							sentAt:         "2024-01-01T10:01:00Z",
 							isNowSession:   1,
+							sendMessageID:  "msg-only",
+							messageContent: "message only",
+						},
+						{
+							taskID:          "task-response-only",
+							assigneePaneID:  "%1",
+							senderPaneID:    "%2",
+							senderName:      "sender-response",
+							status:          "pending",
+							sentAt:          "2024-01-01T10:02:00Z",
+							isNowSession:    1,
+							sendResponseID:  "resp-only",
+							responseContent: "response only",
+						},
+					},
+				},
+			},
+			wantCount: 3,
+			wantErr:   false,
+			checkTasks: func(t *testing.T, tasks []OrchestratorTask) {
+				if len(tasks) != 3 {
+					t.Fatalf("expected 3 tasks, got %d", len(tasks))
+				}
+
+				byTaskID := make(map[string]OrchestratorTask, len(tasks))
+				for _, task := range tasks {
+					byTaskID[task.TaskID] = task
+				}
+
+				if byTaskID["task-both"].MessagePreview != "message both" {
+					t.Fatalf("task-both MessagePreview = %q, want message both", byTaskID["task-both"].MessagePreview)
+				}
+				if byTaskID["task-both"].ResponsePreview != "response both" {
+					t.Fatalf("task-both ResponsePreview = %q, want response both", byTaskID["task-both"].ResponsePreview)
+				}
+				if byTaskID["task-message-only"].MessagePreview != "message only" {
+					t.Fatalf("task-message-only MessagePreview = %q, want message only", byTaskID["task-message-only"].MessagePreview)
+				}
+				if byTaskID["task-message-only"].ResponsePreview != "" {
+					t.Fatalf("task-message-only ResponsePreview = %q, want empty", byTaskID["task-message-only"].ResponsePreview)
+				}
+				if byTaskID["task-response-only"].MessagePreview != "" {
+					t.Fatalf("task-response-only MessagePreview = %q, want empty", byTaskID["task-response-only"].MessagePreview)
+				}
+				if byTaskID["task-response-only"].ResponsePreview != "response only" {
+					t.Fatalf("task-response-only ResponsePreview = %q, want response only", byTaskID["task-response-only"].ResponsePreview)
+				}
+			},
+		},
+		{
+			name:        "tasks with null fields",
+			sessionName: "null-fields-session",
+			setupData: []agentFixture{
+				{
+					agentName: "agent1",
+					tasks: []taskFixture{
+						{
+							taskID:       "task-1",
+							status:       "pending",
+							sentAt:       "2024-01-01T10:00:00Z",
+							isNowSession: 1,
 						},
 					},
 				},
@@ -526,25 +550,19 @@ func TestListOrchestratorTasks(t *testing.T) {
 				if task.SenderName != "" {
 					t.Fatalf("SenderName should be empty, got %q", task.SenderName)
 				}
+				if task.MessagePreview != "" {
+					t.Fatalf("MessagePreview should be empty, got %q", task.MessagePreview)
+				}
+				if task.ResponsePreview != "" {
+					t.Fatalf("ResponsePreview should be empty, got %q", task.ResponsePreview)
+				}
 			},
 		},
 		{
 			name:        "missing session",
 			sessionName: "nonexistent-session",
-			setupData: []struct {
-				agentName string
-				tasks     []struct {
-					taskID         string
-					assigneePaneID string
-					senderPaneID   string
-					senderName     string
-					status         string
-					sentAt         string
-					completedAt    string
-					isNowSession   int
-				}
-			}{},
-			wantErr: true,
+			setupData:   nil,
+			wantErr:     true,
 		},
 	}
 
@@ -552,16 +570,15 @@ func TestListOrchestratorTasks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			app := newOrchestratorTaskTestApp(t)
 
-			// Setup database and session
 			db, tmpDir := createOrchestratorTaskTestDB(t)
 			defer db.Close()
 
-			// Only create session if not an error test case
 			if !tt.wantErr {
 				createOrchestratorTestSession(t, app, tt.sessionName, tmpDir)
 			}
 
-			// Insert test data
+			insertedMessages := make(map[string]struct{})
+			insertedResponses := make(map[string]struct{})
 			for _, agentData := range tt.setupData {
 				_, err := db.Exec(
 					"INSERT INTO agents (name, pane_id, role) VALUES (?, ?, ?)",
@@ -572,11 +589,29 @@ func TestListOrchestratorTasks(t *testing.T) {
 				}
 
 				for _, task := range agentData.tasks {
+					if task.sendMessageID != "" {
+						if _, exists := insertedMessages[task.sendMessageID]; !exists {
+							insertTestContent(t, db, "send_messages", task.sendMessageID, task.messageContent)
+							insertedMessages[task.sendMessageID] = struct{}{}
+						}
+					}
+					if task.sendResponseID != "" {
+						if _, exists := insertedResponses[task.sendResponseID]; !exists {
+							insertTestContent(t, db, "send_responses", task.sendResponseID, task.responseContent)
+							insertedResponses[task.sendResponseID] = struct{}{}
+						}
+					}
+
 					_, err := db.Exec(
-						`INSERT INTO tasks (task_id, agent_name, assignee_pane_id, sender_pane_id, sender_name, status, sent_at, completed_at, is_now_session)
-						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						`INSERT INTO tasks (
+							task_id, agent_name, send_message_id, send_response_id,
+							assignee_pane_id, sender_pane_id, sender_name,
+							status, sent_at, completed_at, is_now_session
+						) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 						task.taskID,
 						agentData.agentName,
+						nullableID(task.sendMessageID),
+						nullableID(task.sendResponseID),
 						task.assigneePaneID,
 						task.senderPaneID,
 						task.senderName,
@@ -592,9 +627,7 @@ func TestListOrchestratorTasks(t *testing.T) {
 			}
 			db.Close()
 
-			// Call the function
 			tasks, err := app.ListOrchestratorTasks(tt.sessionName)
-
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ListOrchestratorTasks() error = %v, wantErr = %v", err, tt.wantErr)
 			}
@@ -846,11 +879,16 @@ func TestListOrchestratorTasksColumnsCorrect(t *testing.T) {
 		t.Fatalf("insert agent error: %v", err)
 	}
 
+	messageID := "msg-task-1"
+	responseID := "resp-task-1"
+	insertTestContent(t, db, "send_messages", messageID, "request message body")
+	insertTestContent(t, db, "send_responses", responseID, "response message body")
+
 	// Insert task with all fields populated
 	_, err = db.Exec(
-		`INSERT INTO tasks (task_id, agent_name, assignee_pane_id, sender_pane_id, sender_name, status, sent_at, completed_at, is_now_session)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"task-1", "test-agent", "%assignee", "%sender", "sender-name", "completed", "2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", 1,
+		`INSERT INTO tasks (task_id, agent_name, send_message_id, send_response_id, assignee_pane_id, sender_pane_id, sender_name, status, sent_at, completed_at, is_now_session)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"task-1", "test-agent", messageID, responseID, "%assignee", "%sender", "sender-name", "completed", "2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", 1,
 	)
 	if err != nil {
 		t.Fatalf("insert task error: %v", err)
@@ -890,6 +928,160 @@ func TestListOrchestratorTasksColumnsCorrect(t *testing.T) {
 	}
 	if task.CompletedAt != "2024-01-01T11:00:00Z" {
 		t.Fatalf("CompletedAt = %q, want 2024-01-01T11:00:00Z", task.CompletedAt)
+	}
+	if task.MessagePreview != "request message body" {
+		t.Fatalf("MessagePreview = %q, want request message body", task.MessagePreview)
+	}
+	if task.ResponsePreview != "response message body" {
+		t.Fatalf("ResponsePreview = %q, want response message body", task.ResponsePreview)
+	}
+}
+
+func TestGetOrchestratorTaskDetail(t *testing.T) {
+	tests := []struct {
+		name         string
+		taskID       string
+		setup        func(t *testing.T, db *sql.DB)
+		wantErr      bool
+		wantErrMatch string
+		checkDetail  func(t *testing.T, detail *OrchestratorTaskDetail)
+	}{
+		{
+			name:   "returns full detail with message and response content",
+			taskID: "task-detail-1",
+			setup: func(t *testing.T, db *sql.DB) {
+				_, err := db.Exec(
+					"INSERT INTO agents (name, pane_id, role) VALUES (?, ?, ?)",
+					"detail-agent", "%pane-detail", "developer",
+				)
+				if err != nil {
+					t.Fatalf("insert agent error: %v", err)
+				}
+				insertTestContent(t, db, "send_messages", "msg-detail-1", "request detail content")
+				insertTestContent(t, db, "send_responses", "resp-detail-1", "response detail content")
+
+				_, err = db.Exec(
+					`INSERT INTO tasks (
+						task_id, agent_name, send_message_id, send_response_id,
+						assignee_pane_id, sender_pane_id, sender_name,
+						status, sent_at, completed_at, is_now_session
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					"task-detail-1", "detail-agent", "msg-detail-1", "resp-detail-1",
+					"%1", "%2", "sender-detail", "completed", "2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", 1,
+				)
+				if err != nil {
+					t.Fatalf("insert task error: %v", err)
+				}
+			},
+			checkDetail: func(t *testing.T, detail *OrchestratorTaskDetail) {
+				if detail.TaskID != "task-detail-1" {
+					t.Fatalf("TaskID = %q, want task-detail-1", detail.TaskID)
+				}
+				if detail.AgentName != "detail-agent" {
+					t.Fatalf("AgentName = %q, want detail-agent", detail.AgentName)
+				}
+				if detail.SenderName != "sender-detail" {
+					t.Fatalf("SenderName = %q, want sender-detail", detail.SenderName)
+				}
+				if detail.Status != "completed" {
+					t.Fatalf("Status = %q, want completed", detail.Status)
+				}
+				if detail.SentAt != "2024-01-01T10:00:00Z" {
+					t.Fatalf("SentAt = %q, want 2024-01-01T10:00:00Z", detail.SentAt)
+				}
+				if detail.CompletedAt != "2024-01-01T11:00:00Z" {
+					t.Fatalf("CompletedAt = %q, want 2024-01-01T11:00:00Z", detail.CompletedAt)
+				}
+				if detail.MessageContent != "request detail content" {
+					t.Fatalf("MessageContent = %q, want request detail content", detail.MessageContent)
+				}
+				if detail.ResponseContent != "response detail content" {
+					t.Fatalf("ResponseContent = %q, want response detail content", detail.ResponseContent)
+				}
+			},
+		},
+		{
+			name:   "returns empty message content when send_message_id is null",
+			taskID: "task-detail-null-message",
+			setup: func(t *testing.T, db *sql.DB) {
+				_, err := db.Exec(
+					"INSERT INTO agents (name, pane_id, role) VALUES (?, ?, ?)",
+					"detail-agent", "%pane-detail", "developer",
+				)
+				if err != nil {
+					t.Fatalf("insert agent error: %v", err)
+				}
+				insertTestContent(t, db, "send_responses", "resp-detail-2", "response only content")
+				_, err = db.Exec(
+					`INSERT INTO tasks (
+						task_id, agent_name, send_message_id, send_response_id,
+						assignee_pane_id, sender_pane_id, sender_name,
+						status, sent_at, completed_at, is_now_session
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					"task-detail-null-message", "detail-agent", nil, "resp-detail-2",
+					"%1", "%2", "sender-detail", "pending", "2024-01-01T12:00:00Z", "", 1,
+				)
+				if err != nil {
+					t.Fatalf("insert task error: %v", err)
+				}
+			},
+			checkDetail: func(t *testing.T, detail *OrchestratorTaskDetail) {
+				if detail.TaskID != "task-detail-null-message" {
+					t.Fatalf("TaskID = %q, want task-detail-null-message", detail.TaskID)
+				}
+				if detail.MessageContent != "" {
+					t.Fatalf("MessageContent = %q, want empty", detail.MessageContent)
+				}
+				if detail.ResponseContent != "response only content" {
+					t.Fatalf("ResponseContent = %q, want response only content", detail.ResponseContent)
+				}
+			},
+		},
+		{
+			name:         "returns error for empty task id",
+			taskID:       "   ",
+			wantErr:      true,
+			wantErrMatch: "task ID is required",
+		},
+		{
+			name:         "returns error when task does not exist",
+			taskID:       "missing-task",
+			setup:        func(t *testing.T, db *sql.DB) {},
+			wantErr:      true,
+			wantErrMatch: "no rows",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newOrchestratorTaskTestApp(t)
+			db, tmpDir := createOrchestratorTaskTestDB(t)
+			defer db.Close()
+
+			createOrchestratorTestSession(t, app, "detail-test-session", tmpDir)
+
+			if tt.setup != nil {
+				tt.setup(t, db)
+			}
+			db.Close()
+
+			detail, err := app.GetOrchestratorTaskDetail("detail-test-session", tt.taskID)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetOrchestratorTaskDetail() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if tt.wantErrMatch != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErrMatch)) {
+					t.Fatalf("GetOrchestratorTaskDetail() error = %v, want to contain %q", err, tt.wantErrMatch)
+				}
+				return
+			}
+			if detail == nil {
+				t.Fatal("GetOrchestratorTaskDetail() returned nil detail")
+			}
+			if tt.checkDetail != nil {
+				tt.checkDetail(t, detail)
+			}
+		})
 	}
 }
 

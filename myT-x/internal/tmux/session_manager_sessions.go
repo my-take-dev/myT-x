@@ -53,18 +53,7 @@ func (m *SessionManager) Close() {
 	}
 }
 
-// CreateSession creates a session with one window and one pane.
-func (m *SessionManager) CreateSession(name string, windowName string, width, height int) (*TmuxSession, *TmuxPane, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = m.nextAutoSessionNameLocked()
-	}
-	if _, exists := m.sessions[name]; exists {
-		return nil, nil, fmt.Errorf("session already exists: %s", name)
-	}
+func (m *SessionManager) createInitialWindowAndPaneLocked(session *TmuxSession, windowName string, width, height int) (*TmuxWindow, *TmuxPane) {
 	if width <= 0 {
 		width = DefaultTerminalCols
 	}
@@ -74,16 +63,6 @@ func (m *SessionManager) CreateSession(name string, windowName string, width, he
 	if strings.TrimSpace(windowName) == "" {
 		windowName = "0"
 	}
-	now := m.now()
-
-	session := &TmuxSession{
-		ID:           m.nextSessionID,
-		Name:         name,
-		CreatedAt:    now,
-		LastActivity: now,
-		Env:          map[string]string{},
-	}
-	m.nextSessionID++
 
 	window := &TmuxWindow{
 		ID:       m.nextWindowID,
@@ -94,6 +73,7 @@ func (m *SessionManager) CreateSession(name string, windowName string, width, he
 	}
 	session.ActiveWindowID = window.ID
 	m.nextWindowID++
+
 	pane := &TmuxPane{
 		ID:       m.nextPaneID,
 		idString: fmt.Sprintf("%%%d", m.nextPaneID),
@@ -108,11 +88,72 @@ func (m *SessionManager) CreateSession(name string, windowName string, width, he
 
 	window.Panes = []*TmuxPane{pane}
 	window.Layout = newLeafLayout(pane.ID)
+	return window, pane
+}
+
+// CreateSession creates a session with one window and one pane.
+func (m *SessionManager) CreateSession(name string, windowName string, width, height int) (*TmuxSession, *TmuxPane, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = m.nextAutoSessionNameLocked()
+	}
+	if _, exists := m.sessions[name]; exists {
+		return nil, nil, fmt.Errorf("session already exists: %s", name)
+	}
+	now := m.now()
+
+	session := &TmuxSession{
+		ID:           m.nextSessionID,
+		Name:         name,
+		CreatedAt:    now,
+		LastActivity: now,
+		Env:          map[string]string{},
+	}
+	m.nextSessionID++
+
+	window, pane := m.createInitialWindowAndPaneLocked(session, windowName, width, height)
 	session.Windows = []*TmuxWindow{window}
 
 	m.sessions[session.Name] = session
 	m.panes[pane.ID] = pane
 	m.markSessionMapMutationLocked()
+	return session, pane, nil
+}
+
+// CreatePaneInEmptySession creates a new window and initial pane for a session
+// that currently has no windows. Empty sessions are retained after the last pane
+// is closed so they can be reused without recreating the session object.
+func (m *SessionManager) CreatePaneInEmptySession(sessionName string, width, height int) (*TmuxSession, *TmuxPane, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, err := m.getSessionByNameLocked(sessionName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Count non-nil windows; in normal flow an empty session has Windows==[], but
+	// defensive nil-check protects against any data inconsistency.
+	liveWindows := 0
+	for _, window := range session.Windows {
+		if window != nil {
+			liveWindows++
+		}
+	}
+	if liveWindows > 0 {
+		return nil, nil, fmt.Errorf("session %s already has windows; use SplitPane instead", session.Name)
+	}
+	if len(session.Windows) > 0 {
+		session.Windows = session.Windows[:0]
+	}
+
+	window, pane := m.createInitialWindowAndPaneLocked(session, "0", width, height)
+	session.Windows = []*TmuxWindow{window}
+	m.panes[pane.ID] = pane
+	m.markTopologyMutationLocked()
 	return session, pane, nil
 }
 

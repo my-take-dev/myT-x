@@ -219,4 +219,114 @@ describe("computeTreeLayout", () => {
             expect(result["%0"]).toHaveProperty("y");
         });
     });
+
+    describe("improved tree layout", () => {
+        it("bidirectional pair forms a tree, not a horizontal line", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%1", assignee_pane_id: "%0"}),
+            ];
+            const result = computeTreeLayout(["%0", "%1"], tasks);
+
+            // 双方向でも横一列にならず、異なるY座標に配置される
+            expect(result["%0"].y).not.toBe(result["%1"].y);
+        });
+
+        it("star topology places hub at top", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%0", assignee_pane_id: "%2"}),
+                makeTask({task_id: "t-3", sender_pane_id: "%0", assignee_pane_id: "%3"}),
+                makeTask({task_id: "t-4", sender_pane_id: "%0", assignee_pane_id: "%4"}),
+                makeTask({task_id: "t-5", sender_pane_id: "%0", assignee_pane_id: "%5"}),
+            ];
+            const result = computeTreeLayout(["%0", "%1", "%2", "%3", "%4", "%5"], tasks);
+
+            // Hub(%0) が最上位
+            for (const id of ["%1", "%2", "%3", "%4", "%5"]) {
+                expect(result["%0"].y).toBeLessThan(result[id].y);
+            }
+            // 全リーフが同じレベル
+            for (const id of ["%2", "%3", "%4", "%5"]) {
+                expect(result[id].y).toBe(result["%1"].y);
+            }
+        });
+
+        it("children are centered under parent", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%0", assignee_pane_id: "%2"}),
+            ];
+            const result = computeTreeLayout(["%0", "%1", "%2"], tasks);
+
+            // 親の中心X座標は、2つの子の中心X座標の間にある
+            const parentCenterX = result["%0"].x + 450 / 2;
+            const child1CenterX = result["%1"].x + 450 / 2;
+            const child2CenterX = result["%2"].x + 450 / 2;
+            const childrenMidpoint = (child1CenterX + child2CenterX) / 2;
+            expect(parentCenterX).toBeCloseTo(childrenMidpoint, 0);
+        });
+
+        it("disconnected components are both laid out as trees", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%2", assignee_pane_id: "%3"}),
+            ];
+            const result = computeTreeLayout(["%0", "%1", "%2", "%3"], tasks);
+
+            // 両方のルートが最上位 (y=0)
+            expect(result["%0"].y).toBe(0);
+            expect(result["%2"].y).toBe(0);
+            // 各チェーンで親が子より上
+            expect(result["%0"].y).toBeLessThan(result["%1"].y);
+            expect(result["%2"].y).toBeLessThan(result["%3"].y);
+            // 2つのツリーがX方向で重ならない
+            const tree1Right = Math.max(result["%0"].x + 450, result["%1"].x + 450);
+            const tree2Left = Math.min(result["%2"].x, result["%3"].x);
+            expect(tree2Left).toBeGreaterThan(tree1Right);
+        });
+
+        it("fully connected graph produces a tree, not a flat row", () => {
+            // 4ノード全結合 (全ペア双方向)
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%1", assignee_pane_id: "%0"}),
+                makeTask({task_id: "t-3", sender_pane_id: "%0", assignee_pane_id: "%2"}),
+                makeTask({task_id: "t-4", sender_pane_id: "%2", assignee_pane_id: "%0"}),
+                makeTask({task_id: "t-5", sender_pane_id: "%0", assignee_pane_id: "%3"}),
+                makeTask({task_id: "t-6", sender_pane_id: "%3", assignee_pane_id: "%0"}),
+                makeTask({task_id: "t-7", sender_pane_id: "%1", assignee_pane_id: "%2"}),
+                makeTask({task_id: "t-8", sender_pane_id: "%2", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-9", sender_pane_id: "%1", assignee_pane_id: "%3"}),
+                makeTask({task_id: "t-10", sender_pane_id: "%3", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-11", sender_pane_id: "%2", assignee_pane_id: "%3"}),
+                makeTask({task_id: "t-12", sender_pane_id: "%3", assignee_pane_id: "%2"}),
+            ];
+            const result = computeTreeLayout(["%0", "%1", "%2", "%3"], tasks);
+
+            // 全ノードが配置される
+            expect(Object.keys(result)).toHaveLength(4);
+            // 横一列にならない (少なくとも2つの異なるY座標が存在)
+            const uniqueY = new Set(Object.values(result).map(p => p.y));
+            expect(uniqueY.size).toBeGreaterThanOrEqual(2);
+        });
+
+        it("bidirectional triangle produces a tree shape", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%1", assignee_pane_id: "%0"}),
+                makeTask({task_id: "t-3", sender_pane_id: "%1", assignee_pane_id: "%2"}),
+                makeTask({task_id: "t-4", sender_pane_id: "%2", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-5", sender_pane_id: "%0", assignee_pane_id: "%2"}),
+                makeTask({task_id: "t-6", sender_pane_id: "%2", assignee_pane_id: "%0"}),
+            ];
+            const result = computeTreeLayout(["%0", "%1", "%2"], tasks);
+
+            // 全ノード配置
+            expect(Object.keys(result)).toHaveLength(3);
+            // ツリー形状: ルートが最上位、残りが下のレベル
+            const uniqueY = new Set(Object.values(result).map(p => p.y));
+            expect(uniqueY.size).toBeGreaterThanOrEqual(2);
+        });
+    });
 });

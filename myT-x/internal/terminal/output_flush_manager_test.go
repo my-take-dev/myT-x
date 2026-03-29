@@ -237,3 +237,78 @@ func TestOutputFlushManagerThresholdBoundary(t *testing.T) {
 		})
 	}
 }
+
+// ------------------------------------------------------------
+// IsPaneQuiet tests
+// ------------------------------------------------------------
+
+func TestIsPaneQuiet(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(m *OutputFlushManager)
+		paneID    string
+		threshold time.Duration
+		want      bool
+	}{
+		{
+			name:      "no output tracked returns quiet",
+			setup:     func(m *OutputFlushManager) {},
+			paneID:    "%1",
+			threshold: time.Second,
+			want:      true,
+		},
+		{
+			name: "recent output returns not quiet",
+			setup: func(m *OutputFlushManager) {
+				m.Write("%1", []byte("hello"))
+			},
+			paneID:    "%1",
+			threshold: 10 * time.Second,
+			want:      false,
+		},
+		{
+			name: "old output returns quiet",
+			setup: func(m *OutputFlushManager) {
+				// Manually set lastWriteAt to the past.
+				m.mu.Lock()
+				m.panes["%1"] = &paneOutputState{
+					lastWriteAt: time.Now().Add(-5 * time.Second),
+				}
+				m.mu.Unlock()
+			},
+			paneID:    "%1",
+			threshold: 3 * time.Second,
+			want:      true,
+		},
+		{
+			name: "different pane returns quiet",
+			setup: func(m *OutputFlushManager) {
+				m.Write("%2", []byte("hello"))
+			},
+			paneID:    "%1",
+			threshold: time.Second,
+			want:      true,
+		},
+		{
+			name:      "empty pane ID returns quiet",
+			setup:     func(m *OutputFlushManager) {},
+			paneID:    "",
+			threshold: time.Second,
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewOutputFlushManager(time.Hour, 1024*1024, func(string, []byte) {})
+			m.Start()
+			defer m.Stop()
+
+			tt.setup(m)
+			got := m.IsPaneQuiet(tt.paneID, tt.threshold)
+			if got != tt.want {
+				t.Errorf("IsPaneQuiet(%q, %v) = %v, want %v", tt.paneID, tt.threshold, got, tt.want)
+			}
+		})
+	}
+}

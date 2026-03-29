@@ -12,7 +12,7 @@ function makeEntry(overrides: Partial<SchedulerEntry> = {}): SchedulerEntry {
         title: "Nightly",
         pane_id: "%3",
         message: "run sync",
-        interval_minutes: 15,
+        interval_seconds: 15,
         max_count: 4,
         current_count: 1,
         running: true,
@@ -25,7 +25,7 @@ function makeValues(overrides: Partial<SchedulerStartValues> = {}): SchedulerSta
         title: "Nightly",
         paneID: "%3",
         message: "run sync",
-        intervalMinutes: 15,
+        intervalSeconds: 15,
         maxCount: 4,
         ...overrides,
     };
@@ -41,7 +41,7 @@ describe("pane scheduler editing helpers", () => {
             title: "Nightly",
             paneID: "%3",
             message: "run sync",
-            intervalMinutes: 15,
+            intervalSeconds: 15,
             maxCount: 4,
         });
     });
@@ -74,12 +74,12 @@ describe("pane scheduler editing helpers", () => {
             start,
             stop,
             remove,
-            makeValues({intervalMinutes: 30}),
+            makeValues({intervalSeconds: 30}),
             createSchedulerEditDraft(makeEntry()),
         );
 
         expect(stop).toHaveBeenCalledWith("scheduler-1");
-        expect(start).toHaveBeenCalledWith(makeValues({intervalMinutes: 30}));
+        expect(start).toHaveBeenCalledWith(makeValues({intervalSeconds: 30}));
         expect(remove).toHaveBeenCalledWith("scheduler-1");
         expect(calls).toEqual(["stop", "start", "delete"]);
     });
@@ -100,12 +100,12 @@ describe("pane scheduler editing helpers", () => {
             start,
             stop,
             remove,
-            makeValues({intervalMinutes: 30}),
+            makeValues({intervalSeconds: 30}),
             createSchedulerEditDraft(makeEntry({running: false})),
         );
 
         expect(stop).not.toHaveBeenCalled();
-        expect(start).toHaveBeenCalledWith(makeValues({intervalMinutes: 30}));
+        expect(start).toHaveBeenCalledWith(makeValues({intervalSeconds: 30}));
         expect(remove).toHaveBeenCalledWith("scheduler-1");
         expect(calls).toEqual(["start", "delete"]);
     });

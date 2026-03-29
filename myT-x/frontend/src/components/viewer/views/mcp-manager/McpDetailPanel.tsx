@@ -1,8 +1,5 @@
-import {useEffect, useRef, useState} from "react";
 import {useI18n} from "../../../../i18n";
-import type {MCPStatus, MCPSnapshot} from "../../../../types/mcp";
-import {writeClipboardText} from "../../../../utils/clipboardUtils";
-import {notifyClipboardFailure} from "../../../../utils/notifyUtils";
+import type {MCPSnapshot} from "../../../../types/mcp";
 import {
     buildCliExamples,
     buildLspMcpLaunchRecommendation,
@@ -12,18 +9,17 @@ import {
     lspMcpNamePlaceholder,
     resolveBridgeCommand,
 } from "./mcpConfigSnippets";
+import {useClipboardCopyFeedback} from "./useClipboardCopyFeedback";
 
 interface McpDetailPanelProps {
     representativeMCP: MCPSnapshot | null;
     activeSession: string | null;
-    aggregateStatus: MCPStatus | null;
     totalLspCount: number;
 }
 
 export function McpDetailPanel({
     representativeMCP,
     activeSession,
-    aggregateStatus,
     totalLspCount,
 }: McpDetailPanelProps) {
     const {language, t} = useI18n();
@@ -42,7 +38,7 @@ export function McpDetailPanel({
             </div>
         );
     }
-    if (aggregateStatus == null) {
+    if (totalLspCount === 0) {
         return (
             <div className="mcp-detail-empty">
                 {tr(
@@ -56,17 +52,11 @@ export function McpDetailPanel({
 
     const bridgeRecommendation = buildLspMcpLaunchRecommendation(resolveBridgeCommand(representativeMCP));
     const cliExamples = bridgeRecommendation == null ? [] : buildCliExamples(bridgeRecommendation);
-    const statusDetail = describeAggregateStatus(aggregateStatus, tr);
 
     return (
         <div className="mcp-detail-panel">
             <div className="mcp-detail-left">
                 <h3 className="mcp-detail-title">LSP-MCP</h3>
-                <div className="mcp-connection-status-row">
-                    <span className={`mcp-status-dot ${aggregateStatus}`} title={aggregateStatus}/>
-                    <span className="mcp-connection-label">{aggregateStatus}</span>
-                    <span className="mcp-connection-hint">{normalizedSession}</span>
-                </div>
                 <p className="mcp-detail-description">
                     {tr(
                         "viewer.mcpDetail.description.runtime",
@@ -85,9 +75,6 @@ export function McpDetailPanel({
                     <h4 className="mcp-detail-section-title">
                         {tr("viewer.mcpDetail.section.sessionBehavior", "セッション動作", "Session behavior")}
                     </h4>
-                    <p className="mcp-detail-description">
-                        {tr("viewer.mcpDetail.statusSummary", "ステータス概要", "Status summary")}: <code>{statusDetail}</code>
-                    </p>
                     <p className="mcp-detail-description">
                         {tr(
                             "viewer.mcpDetail.registeredBuiltinProfiles",
@@ -164,72 +151,11 @@ If a language server is not found, add the command to PATH and restart myT-x.`,
     );
 }
 
-function describeAggregateStatus(
-    status: MCPStatus,
-    tr: (key: string, jaText: string, enText: string) => string,
-): string {
-    switch (status) {
-        case "running":
-            return tr("viewer.mcpDetail.aggregateStatus.running", "少なくとも1つのLSP-MCPが実行中です", "At least one LSP-MCP is running.");
-        case "starting":
-            return tr("viewer.mcpDetail.aggregateStatus.starting", "LSP-MCPを起動中です", "LSP-MCP is starting.");
-        case "error":
-            return tr("viewer.mcpDetail.aggregateStatus.error", "直近のLSP-MCP起動でエラーが発生しました", "The most recent LSP-MCP startup failed.");
-        case "stopped":
-            return tr(
-                "viewer.mcpDetail.aggregateStatus.stopped",
-                "クライアント接続時に要求されたLSP-MCPが起動されます",
-                "Requested LSP-MCP will start when a client connects.",
-            );
-        default: {
-            const _: never = status;
-            void _;
-            return tr(
-                "viewer.mcpDetail.aggregateStatus.default",
-                "クライアント接続時に要求されたLSP-MCPが起動されます",
-                "Requested LSP-MCP will start when a client connects.",
-            );
-        }
-    }
-}
-
 function McpCliExamplePanel({examples, bridgeReady}: {examples: CliExample[]; bridgeReady: boolean}) {
     const {language, t} = useI18n();
     const tr = (key: string, jaText: string, enText: string) =>
         t(key, language === "ja" ? jaText : enText);
-    const [copiedKey, setCopiedKey] = useState<CliExampleID | null>(null);
-    const isMountedRef = useRef(true);
-    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        isMountedRef.current = true;
-        return () => {
-            isMountedRef.current = false;
-            if (timerRef.current != null) {
-                clearTimeout(timerRef.current);
-                timerRef.current = null;
-            }
-        };
-    }, []);
-
-    function handleCopy(value: string, key: CliExampleID) {
-        void writeClipboardText(value).then(() => {
-            if (!isMountedRef.current) {
-                return;
-            }
-            setCopiedKey(key);
-            if (timerRef.current != null) {
-                clearTimeout(timerRef.current);
-            }
-            timerRef.current = setTimeout(() => setCopiedKey(null), 2000);
-        }).catch((err: unknown) => {
-            if (!isMountedRef.current) {
-                return;
-            }
-            notifyClipboardFailure();
-            console.warn("[mcp-detail] clipboard write failed", err);
-        });
-    }
+    const {copiedKey, handleCopy} = useClipboardCopyFeedback<CliExampleID>("mcp-detail");
 
     return (
         <div className="mcp-connection-info">

@@ -155,6 +155,99 @@
     font-weight: 700;
 }
 
+/* --- Auto Enter --- */
+
+.terminal-toolbar-btn-auto-active {
+    border-color: var(--accent);
+    background: rgba(246, 211, 101, 0.25);
+    color: var(--accent);
+}
+
+.auto-enter-popover {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    z-index: 10;
+    background: rgba(15, 29, 47, 0.98);
+    border: 1px solid rgba(150, 182, 219, 0.42);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 160px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.auto-enter-popover-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--fg-main);
+}
+
+.auto-enter-popover-desc {
+    font-size: 0.72rem;
+    color: var(--fg-dim);
+    line-height: 1.4;
+}
+
+.auto-enter-popover-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.auto-enter-popover-label {
+    font-size: 0.76rem;
+    color: var(--fg-dim);
+    white-space: nowrap;
+}
+
+.auto-enter-popover-input {
+    width: 60px;
+    height: 26px;
+    border: 1px solid rgba(150, 182, 219, 0.35);
+    border-radius: 6px;
+    background: rgba(15, 29, 47, 0.9);
+    color: var(--fg-main);
+    font-size: 0.82rem;
+    padding: 2px 6px;
+    outline: none;
+    text-align: center;
+}
+
+.auto-enter-popover-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-22);
+}
+
+.auto-enter-popover-unit {
+    font-size: 0.76rem;
+    color: var(--fg-dim);
+}
+
+.auto-enter-popover-start-btn {
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #0a111a;
+    cursor: pointer;
+    text-align: center;
+}
+
+.auto-enter-popover-start-btn:hover {
+    opacity: 0.9;
+}
+
+.auto-enter-popover-start-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .status-bar {
     border-top: 1px solid var(--line);
     background: rgba(10, 17, 26, 0.98);

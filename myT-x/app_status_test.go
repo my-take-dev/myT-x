@@ -25,7 +25,7 @@ func TestBuildStatusLine(t *testing.T) {
 		if _, _, err := app.sessions.CreateSession("alpha", "0", 120, 40); err != nil {
 			t.Fatalf("CreateSession() error = %v", err)
 		}
-		app.setActiveSessionName("alpha")
+		app.sessionService.SetActiveSessionName("alpha")
 
 		line := app.BuildStatusLine()
 		if !strings.Contains(line, "[alpha]") {
@@ -39,11 +39,11 @@ func TestBuildStatusLine(t *testing.T) {
 		if _, _, err := app.sessions.CreateSession("alpha", "0", 120, 40); err != nil {
 			t.Fatalf("CreateSession() error = %v", err)
 		}
-		app.setActiveSessionName("missing")
+		app.sessionService.SetActiveSessionName("missing")
 
 		_ = app.BuildStatusLine()
 
-		if got := app.getActiveSessionName(); got != "missing" {
+		if got := app.sessionService.GetActiveSessionName(); got != "missing" {
 			t.Fatalf("active session = %q, want %q", got, "missing")
 		}
 	})
@@ -63,7 +63,7 @@ func TestBuildStatusLine(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("SetWorktreeInfo() error = %v", err)
 		}
-		app.setActiveSessionName("alpha")
+		app.sessionService.SetActiveSessionName("alpha")
 
 		line := app.BuildStatusLine()
 		if !strings.Contains(line, "[alpha]") {
@@ -84,7 +84,7 @@ func TestBuildStatusLine(t *testing.T) {
 		if _, err := app.sessions.RenamePane(pane.IDString(), "editor"); err != nil {
 			t.Fatalf("RenamePane() error = %v", err)
 		}
-		app.setActiveSessionName("alpha")
+		app.sessionService.SetActiveSessionName("alpha")
 
 		line := app.BuildStatusLine()
 		if !strings.Contains(line, "<0>") {

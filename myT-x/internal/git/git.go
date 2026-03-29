@@ -1,8 +1,10 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -68,6 +70,25 @@ func (r *Repository) CurrentBranch() (string, error) {
 		return "", nil // detached HEAD
 	}
 	return output, nil
+}
+
+// IsDetachedHead returns true if the repository is in detached HEAD state.
+// Uses "git symbolic-ref" which fails (exit code 1) when HEAD is not a symbolic
+// reference, indicating detached HEAD. A follow-up "git rev-parse HEAD" verifies
+// that the repository is functional, distinguishing detached HEAD from real errors
+// (disk I/O, permission denied, corrupt repository).
+func (r *Repository) IsDetachedHead() (bool, error) {
+	_, err := r.runGitCommand("symbolic-ref", "--short", "-q", "HEAD")
+	if err != nil {
+		// symbolic-ref fails for both detached HEAD and real errors.
+		// Verify the repository is functional by checking if HEAD resolves.
+		if _, verifyErr := r.runGitCommand("rev-parse", "HEAD"); verifyErr != nil {
+			return false, fmt.Errorf("failed to determine HEAD state: %w", err)
+		}
+		// HEAD resolves but is not a symbolic ref → detached HEAD.
+		return true, nil
+	}
+	return false, nil
 }
 
 // ListBranches returns all local branch names.
@@ -404,12 +425,50 @@ func (r *Repository) CommitAll(message string) error {
 	return nil
 }
 
-// Push pushes the current branch to origin.
+// Push pushes the current branch to its configured remote (defaults to "origin").
 func (r *Repository) Push() error {
-	if _, err := r.runGitCommand("push", "origin", "HEAD"); err != nil {
-		return fmt.Errorf("git push origin HEAD failed: %w", err)
+	remoteName, err := r.resolveRemoteName()
+	if err != nil {
+		return fmt.Errorf("git push failed: %w", err)
+	}
+	if _, err := r.runGitCommand("push", remoteName, "HEAD"); err != nil {
+		return fmt.Errorf("git push %s HEAD failed: %w", remoteName, err)
 	}
 	return nil
+}
+
+// ResolveRemoteName returns the configured remote for the given branch.
+// Falls back to "origin" when no remote is explicitly configured (git config
+// key not found — exit code 1). Returns an error for unexpected failures
+// (I/O, permissions, corrupt config) so the caller can abort instead of
+// silently pushing to a wrong remote.
+func ResolveRemoteName(workDir, branch string) (string, error) {
+	output, err := RunGitCLIPublic(workDir, []string{
+		"config", fmt.Sprintf("branch.%s.remote", branch),
+	})
+	if err == nil {
+		if name := strings.TrimSpace(string(output)); name != "" {
+			return name, nil
+		}
+		// Config returned successfully but with empty value — fall back to "origin".
+		return "origin", nil
+	}
+	// git config returns exit code 1 when key is not found — this is expected.
+	if IsGitConfigKeyNotFound(err) {
+		return "origin", nil
+	}
+	// Other errors (I/O, permissions, corrupt config) must be propagated
+	// to prevent pushing to an incorrect remote.
+	return "", fmt.Errorf("failed to resolve remote name for branch %q: %w", branch, err)
+}
+
+// resolveRemoteName resolves the remote for the Repository's current branch.
+func (r *Repository) resolveRemoteName() (string, error) {
+	branchOutput, err := r.runGitCommand("rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("failed to determine current branch: %w", err)
+	}
+	return ResolveRemoteName(r.path, strings.TrimSpace(string(branchOutput)))
 }
 
 // HasUnpushedCommits checks if local has commits not yet pushed to upstream.
@@ -425,9 +484,11 @@ func (r *Repository) HasUnpushedCommits() (bool, error) {
 		//   - "fatal: HEAD does not point to a branch" (detached HEAD)
 		// This intentionally avoids matching generic "not a valid ref" without
 		// upstream tokens to prevent masking unrelated repository errors.
-		// NOTE: Future enhancement — extract exit code from *exec.ExitError
-		// to reduce dependence on locale-specific error message strings.
-		if isNoUpstreamTrackingError(err.Error()) {
+		// NOTE: Exit code extraction (as done in IsGitConfigKeyNotFound) could
+		// reduce dependence on locale-specific strings here, but upstream errors
+		// share exit code 128 with other fatal errors, so message matching remains
+		// the most reliable approach for this specific case.
+		if IsNoUpstreamError(err.Error()) {
 			slog.Debug("[DEBUG-GIT] HasUnpushedCommits: no upstream tracking branch",
 				"path", r.path, "error", err)
 			return false, nil
@@ -438,19 +499,35 @@ func (r *Repository) HasUnpushedCommits() (bool, error) {
 	return strings.TrimSpace(output) != "", nil
 }
 
-func isNoUpstreamTrackingError(errMsg string) bool {
-	lowerErrMsg := strings.ToLower(errMsg)
-	if strings.Contains(lowerErrMsg, "no upstream configured") {
+// IsNoUpstreamError reports whether errMsg indicates that no upstream branch
+// is configured. All upstream-missing detection patterns are consolidated here
+// to avoid scattered string-matching across the codebase (DRY).
+//
+// Known git error patterns (version/locale dependent), in switch-case order:
+//  1. "no upstream configured for branch 'xxx'"
+//  2. "no upstream branch"
+//  3. "has no upstream"
+//  4. "set the remote as upstream"
+//  5. "does not point to a branch" (detached HEAD)
+//  6. "does not point to a commit" (rev-list @{u} with no upstream)
+//  7. "no such ref" / "not a valid ref" AND contains @{u}/@{upstream} token
+//     (AND condition prevents false positives on unrelated ref errors)
+func IsNoUpstreamError(errMsg string) bool {
+	lower := strings.ToLower(errMsg)
+	switch {
+	case strings.Contains(lower, "no upstream configured"),
+		strings.Contains(lower, "no upstream branch"),
+		strings.Contains(lower, "has no upstream"),
+		strings.Contains(lower, "set the remote as upstream"),
+		strings.Contains(lower, "does not point to a branch"),
+		strings.Contains(lower, "does not point to a commit"):
 		return true
-	}
-	if strings.Contains(lowerErrMsg, "does not point to a branch") {
+	case containsUpstreamToken(lower) &&
+		(strings.Contains(lower, "no such ref") || strings.Contains(lower, "not a valid ref")):
 		return true
+	default:
+		return false
 	}
-	if containsUpstreamToken(lowerErrMsg) &&
-		(strings.Contains(lowerErrMsg, "no such ref") || strings.Contains(lowerErrMsg, "not a valid ref")) {
-		return true
-	}
-	return false
 }
 
 func containsUpstreamToken(lowerErrMsg string) bool {
@@ -458,4 +535,31 @@ func containsUpstreamToken(lowerErrMsg string) bool {
 	// errors that happen to include the word "upstream".
 	// Caller must pass an already-lowercased message.
 	return strings.Contains(lowerErrMsg, "@{u}") || strings.Contains(lowerErrMsg, "@{upstream}")
+}
+
+// IsGitConfigKeyNotFound returns true when the error is a git config
+// "key not found" exit (exit code 1). This distinguishes the normal
+// "no config entry" case from unexpected failures (I/O, permissions).
+//
+// IMPORTANT: This function should only be called on errors from "git config"
+// commands. Exit code 1 has different meanings for other git subcommands
+// (e.g., git diff uses exit code 1 to indicate differences exist). Using
+// this function on non-config errors will produce incorrect results.
+//
+// Checks both the unwrapped *exec.ExitError (primary path via %w chain)
+// and the string representation as a defensive fallback.
+func IsGitConfigKeyNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode() == 1
+	}
+	// runGitCLI now wraps errors with %w, so errors.As should unwrap
+	// *exec.ExitError in the primary path above. This string fallback
+	// covers edge cases where the error chain might be reconstructed
+	// without %w (e.g., by third-party wrappers or serialization).
+	msg := err.Error()
+	return strings.HasSuffix(msg, "exit status 1")
 }

@@ -1,5 +1,5 @@
-import {memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement} from "react";
-import {FixedSizeList, type ListChildComponentProps} from "react-window";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {FixedSizeList} from "react-window";
 import {api} from "../api";
 import {makeScrollStableOuter} from "./viewer/views/shared/TreeOuter";
 import {useContainerHeight} from "../hooks/useContainerHeight";
@@ -7,149 +7,18 @@ import {useNotificationStore} from "../stores/notificationStore";
 import {useTmuxStore} from "../stores/tmuxStore";
 import type {SessionSnapshot} from "../types/tmux";
 import {useI18n} from "../i18n";
+import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
+
 import {KillSessionDialog} from "./KillSessionDialog";
 import {NewSessionModal} from "./NewSessionModal";
 import {PromoteBranchModal} from "./PromoteBranchModal";
+import {SidebarHeader} from "./SidebarHeader";
+import {SessionRow, sessionRowHeight, type SessionRowData, type SessionVisualState} from "./SidebarSessionItem";
 
 interface SidebarProps {
     sessions: SessionSnapshot[];
     activeSession: string | null;
 }
-
-type SessionVisualState = "running" | "idle" | "selected";
-
-function SessionBadges({session}: { session: SessionSnapshot }) {
-    const {language, t} = useI18n();
-    const worktree = session.worktree;
-    if (!worktree) return null;
-    const repoPath = worktree.repo_path?.trim() ?? "";
-    const repoName = repoPath.split(/[\\/]/).filter(Boolean).pop();
-    const hasBranchInfo = Boolean(worktree.base_branch || worktree.branch_name || worktree.is_detached);
-    if (!repoPath && !hasBranchInfo) {
-        return null;
-    }
-    return (
-        <>
-            {repoPath && (
-                <span className="worktree-repo-badge" title={repoPath}>
-                    {repoName || repoPath}
-                </span>
-            )}
-            {worktree.base_branch && (
-                <span
-                    className="worktree-base-branch-badge"
-                    title={`${
-                        language === "en"
-                            ? "Base branch"
-                            : t("sidebar.worktree.baseBranchFrom", "分岐元")
-                    }: ${worktree.base_branch}`}
-                >
-                    {worktree.base_branch}
-                </span>
-            )}
-            {worktree.base_branch && (worktree.branch_name || worktree.is_detached) && (
-                <span className="worktree-branch-arrow">{"\u2192"}</span>
-            )}
-            {(worktree.branch_name || worktree.is_detached) && (
-                <span className={`worktree-branch-badge${worktree.is_detached ? " detached" : ""}`}>
-                    {worktree.is_detached
-                        ? (language === "en" ? "detached" : t("sidebar.worktree.detached", "detached"))
-                        : worktree.branch_name}
-                </span>
-            )}
-        </>
-    );
-}
-
-function resolveSessionState(activeSession: string | null, session: SessionSnapshot): SessionVisualState {
-    if (activeSession === session.name) {
-        return "selected";
-    }
-    if (session.is_idle) {
-        return "idle";
-    }
-    return "running";
-}
-
-const sessionRowHeight = 80;
-
-interface SessionRowData {
-    sessions: SessionSnapshot[];
-    activeSession: string | null;
-    editingSession: string | null;
-    renderSession: (session: SessionSnapshot, isEditing: boolean, sessionState: SessionVisualState) => ReactElement;
-    onReorder: (fromIndex: number, toIndex: number) => void;
-}
-
-// memo with custom areEqual: the `rowData` object reference changes whenever
-// `editingSession` changes (since useMemo regenerates it), so default shallow
-// comparison of `data` would cause ALL rows to re-render. The custom comparator
-// checks individual `data` properties, so rows where no property actually changed
-// (e.g. `isEditing` stays false) truly skip re-rendering.
-const SessionRow = memo(function SessionRow({index, style, data}: ListChildComponentProps<SessionRowData>) {
-    const session = data.sessions[index];
-    if (!session) {
-        return null;
-    }
-    const isEditing = data.editingSession === session.name;
-    const sessionState = resolveSessionState(data.activeSession, session);
-    return (
-        <div
-            style={style}
-            draggable
-            onDragStart={(e) => {
-                e.dataTransfer.setData("text/session-index", String(index));
-                e.dataTransfer.effectAllowed = "move";
-            }}
-            onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-                const rect = e.currentTarget.getBoundingClientRect();
-                const midY = rect.top + rect.height / 2;
-                e.currentTarget.classList.toggle("drop-above", e.clientY < midY);
-                e.currentTarget.classList.toggle("drop-below", e.clientY >= midY);
-            }}
-            onDragLeave={(e) => {
-                if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) {
-                    return;
-                }
-                e.currentTarget.classList.remove("drop-above", "drop-below");
-            }}
-            onDrop={(e) => {
-                e.preventDefault();
-                e.currentTarget.classList.remove("drop-above", "drop-below");
-                const fromIndex = parseInt(e.dataTransfer.getData("text/session-index"), 10);
-                if (!isNaN(fromIndex) && fromIndex !== index) {
-                    data.onReorder(fromIndex, index);
-                }
-            }}
-            onDragEnd={(e) => {
-                e.currentTarget.classList.remove("drop-above", "drop-below");
-            }}
-        >
-            <div className="session-row">{data.renderSession(session, isEditing, sessionState)}</div>
-        </div>
-    );
-}, (prev, next) => {
-    if (prev.index !== next.index) return false;
-    // NOTE: react-window's FixedSizeList provides referentially stable style objects
-    // for each visible index (reused across renders). If migrating to VariableSizeList,
-    // verify style stability or switch to top/height value comparison.
-    if (prev.style !== next.style) return false;
-    const pd = prev.data;
-    const nd = next.data;
-    return (
-        // NOTE: sessions array reference is stable from Zustand store (only replaced on actual change).
-        pd.sessions === nd.sessions &&
-        // Re-render only rows whose active-status relation changed.
-        (pd.activeSession === pd.sessions[prev.index]?.name) === (nd.activeSession === nd.sessions[next.index]?.name) &&
-        // Compare whether editingSession affects THIS specific row, not the global value.
-        // This ensures only the previously-editing row and the newly-editing row re-render.
-        (pd.editingSession === pd.sessions[prev.index]?.name) === (nd.editingSession === nd.sessions[next.index]?.name) &&
-        pd.renderSession === nd.renderSession &&
-        pd.onReorder === nd.onReorder
-    );
-});
 
 export function Sidebar(props: SidebarProps) {
     const {language, t} = useI18n();
@@ -157,8 +26,6 @@ export function Sidebar(props: SidebarProps) {
     const reorderSession = useTmuxStore((s) => s.reorderSession);
     const addNotification = useNotificationStore((s) => s.addNotification);
     const [editingSession, setEditingSession] = useState<string | null>(null);
-    const editValueRef = useRef("");
-    const inputRef = useRef<HTMLInputElement>(null);
     const listHostRef = useRef<HTMLDivElement | null>(null);
     // Reserve at least one row height as floor so the list never collapses to zero
     // before ResizeObserver reports. noiseThresholdPx: 1 suppresses ±1px RO churn
@@ -199,12 +66,6 @@ export function Sidebar(props: SidebarProps) {
         activeSessionRef.current = props.activeSession;
     }, [props.activeSession]);
 
-    const startRename = useCallback((sessionName: string) => {
-        editValueRef.current = sessionName;
-        setEditingSession(sessionName);
-        requestAnimationFrame(() => inputRef.current?.select());
-    }, []);
-
     const activateSession = useCallback(
         async (sessionName: string) => {
             try {
@@ -218,19 +79,21 @@ export function Sidebar(props: SidebarProps) {
                         : t("sidebar.error.activateFailed", "Failed to activate session \"{sessionName}\".", {sessionName}),
                     "warn",
                 );
+                logFrontendEventSafe("warn", `SetActiveSession failed: ${String(error)}`, "Sidebar");
             }
         },
         [addNotification, language, setActiveSession, t],
     );
 
+    const startRename = useCallback((sessionName: string) => {
+        setEditingSession(sessionName);
+    }, []);
+
     const commitRename = useCallback(
-        async (oldName: string) => {
+        async (oldName: string, newName: string) => {
             if (renameInFlightRef.current.has(oldName)) {
                 return;
             }
-            const newName = editValueRef.current.trim();
-            // Prevent Enter + blur double-submit from sending two rename requests.
-            editValueRef.current = oldName;
             setEditingSession(null);
             if (!newName || newName === oldName) {
                 return;
@@ -249,6 +112,7 @@ export function Sidebar(props: SidebarProps) {
                         : t("sidebar.error.renameFailed", "Failed to rename session \"{oldName}\".", {oldName}),
                     "warn",
                 );
+                logFrontendEventSafe("warn", `RenameSession failed: ${String(error)}`, "Sidebar");
             } finally {
                 renameInFlightRef.current.delete(oldName);
             }
@@ -268,6 +132,26 @@ export function Sidebar(props: SidebarProps) {
         setShowNewSession(true);
     }, []);
 
+    const handleOpenDirectory = useCallback(
+        (sessionName: string) => {
+            void api.OpenDirectoryInExplorer(sessionName).catch((err) => {
+                console.warn("[sidebar] OpenDirectoryInExplorer failed", err);
+                addNotification(
+                    language === "en"
+                        ? `Could not open directory: ${sessionName}`
+                        : t("sidebar.error.openDirectoryFailed", "ディレクトリを開けませんでした: {sessionName}", {sessionName}),
+                    "warn",
+                );
+                logFrontendEventSafe("warn", `OpenDirectoryInExplorer failed (${sessionName}): ${String(err)}`, "Sidebar");
+            });
+        },
+        [addNotification, language, t],
+    );
+
+    const handlePromote = useCallback((sessionName: string) => {
+        setPromoteTarget(sessionName);
+    }, []);
+
     const handleKillDone = useCallback(() => {
         const killed = killTarget;
         setKillTarget(null);
@@ -282,180 +166,27 @@ export function Sidebar(props: SidebarProps) {
         }
     }, [activateSession, killTarget, props.activeSession, props.sessions, setActiveSession]);
 
-    const renderSession = useCallback(
-        (session: SessionSnapshot, isEditing: boolean, sessionState: SessionVisualState) => {
-            return (
-                <div
-                    role="button"
-                    tabIndex={0}
-                    className={`session-item ${sessionState}`}
-                    onClick={() => {
-                        if (isEditing) {
-                            return;
-                        }
-                        void activateSession(session.name);
-                    }}
-                    onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            if (isEditing) {
-                                return;
-                            }
-                            void activateSession(session.name);
-                            return;
-                        }
-                        if (e.key === "F2") {
-                            e.preventDefault();
-                            if (!isEditing) {
-                                startRename(session.name);
-                            }
-                        }
-                    }}
-                    onDoubleClick={() => startRename(session.name)}
-                >
-                    <div className="session-item-row">
-                        <span className={`session-type-mark ${session.is_agent_team ? "agent" : "session"}`}>
-                            {session.is_agent_team ? "A" : "S"}
-                        </span>
-                        {isEditing ? (
-                            <input
-                                key={session.name}
-                                ref={inputRef}
-                                className="session-name-input"
-                                defaultValue={session.name}
-                                onChange={(e) => {
-                                    editValueRef.current = e.target.value;
-                                }}
-                                onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                        void commitRename(session.name);
-                                    } else if (e.key === "Escape") {
-                                        editValueRef.current = session.name;
-                                        setEditingSession(null);
-                                    }
-                                }}
-                                onBlur={() => void commitRename(session.name)}
-                                onClick={(e) => e.stopPropagation()}
-                            />
-                        ) : (
-                            <span className="session-name">{session.name}</span>
-                        )}
-                        <span className={`session-state ${sessionState}`}>
-                            {labelForSessionState(sessionState)}
-                        </span>
-                    </div>
-                    {(session.worktree?.repo_path || session.worktree?.is_detached) && (
-                        <span className="session-meta">
-                            <SessionBadges session={session}/>
-                            {session.worktree?.is_detached && Boolean(session.worktree?.path?.trim()) && (
-                                <button
-                                    type="button"
-                                    className="modal-btn session-promote-btn"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setPromoteTarget(session.name);
-                                    }}
-                                    title={
-                                        language === "en"
-                                            ? "Promote to branch"
-                                            : t("sidebar.action.promoteBranch.title", "ブランチに昇格")
-                                    }
-                                >
-                                    {language === "en"
-                                        ? "Promote"
-                                        : t("sidebar.action.promoteBranch.button", "Promote")}
-                                </button>
-                            )}
-                        </span>
-                    )}
-                    {(session.root_path?.trim() || session.worktree?.path?.trim()) && (
-                        <button
-                            type="button"
-                            className="session-explorer"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                void api.OpenDirectoryInExplorer(session.name).catch((err) => {
-                                    console.warn("[sidebar] OpenDirectoryInExplorer failed", err);
-                                    addNotification(
-                                        language === "en"
-                                            ? `Could not open directory: ${session.name}`
-                                            : t("sidebar.error.openDirectoryFailed", "ディレクトリを開けませんでした: {sessionName}", {
-                                                sessionName: session.name,
-                                            }),
-                                        "warn",
-                                    );
-                                });
-                            }}
-                            title={
-                                language === "en"
-                                    ? "Open in Explorer"
-                                    : t("sidebar.action.openInExplorer.title", "エクスプローラーで開く")
-                            }
-                            aria-label={
-                                language === "en"
-                                    ? `Open directory for ${session.name}`
-                                    : t("sidebar.action.openInExplorer.aria", "Open directory for {sessionName}", {
-                                        sessionName: session.name,
-                                    })
-                            }
-                        >
-                            {"\u21D7"}
-                        </button>
-                    )}
-                    <button
-                        type="button"
-                        className="session-close"
-                        onClick={(e) => handleKillClick(e, session.name)}
-                        title={language === "en" ? "Close session" : t("sidebar.action.closeSession.title", "セッションを閉じる")}
-                        aria-label={
-                            language === "en"
-                                ? `Close session ${session.name}`
-                                : t("sidebar.action.closeSession.aria", "Close session {sessionName}", {
-                                    sessionName: session.name,
-                                })
-                        }
-                    >
-                        ×
-                    </button>
-                </div>
-            );
-        },
-        [activateSession, addNotification, commitRename, handleKillClick, labelForSessionState, language, startRename, t],
-    );
-
     const rowData = useMemo<SessionRowData>(
         () => ({
             sessions: props.sessions,
             activeSession: props.activeSession,
             editingSession,
-            renderSession,
+            onActivate: activateSession,
+            onStartRename: startRename,
+            onCommitRename: commitRename,
+            onKill: handleKillClick,
+            onPromote: handlePromote,
+            onOpenDirectory: handleOpenDirectory,
+            labelForSessionState,
             onReorder: reorderSession,
         }),
-        [props.sessions, props.activeSession, editingSession, renderSession, reorderSession],
+        [props.sessions, props.activeSession, editingSession, activateSession, startRename,
+            commitRename, handleKillClick, handlePromote, handleOpenDirectory, labelForSessionState, reorderSession],
     );
 
     return (
         <aside className="sidebar">
-            <div className="sidebar-header">
-                <h1>myT-x</h1>
-                <p>
-                    {language === "en"
-                        ? "Terminal Multiplexer"
-                        : t("sidebar.subtitle", "ターミナルマルチプレクサ")}
-                </p>
-            </div>
-
-            <div className="sidebar-actions">
-                <button
-                    type="button"
-                    className="primary"
-                    onClick={handleNewSession}
-                >
-                    {language === "en"
-                        ? "+ New Session"
-                        : t("sidebar.action.newSession", "+ 新規セッション")}
-                </button>
-            </div>
+            <SidebarHeader onNewSession={handleNewSession}/>
 
             <div className="session-list" ref={listHostRef}>
                 {/* NOTE: height starts at 0 until ResizeObserver reports; guard prevents empty FixedSizeList render. */}

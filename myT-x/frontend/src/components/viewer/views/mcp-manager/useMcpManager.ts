@@ -3,15 +3,20 @@ import {api} from "../../../../api";
 import {useMCPStore} from "../../../../stores/mcpStore";
 import {useNotificationStore} from "../../../../stores/notificationStore";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
-import type {MCPStatus, MCPSnapshot} from "../../../../types/mcp";
+import type {MCPSnapshot} from "../../../../types/mcp";
 import {logFrontendEventSafe} from "../../../../utils/logFrontendEventSafe";
+import {createConsecutiveFailureCounter} from "../../../../utils/notifyUtils";
+
+// Module-level consecutive failure counter for MCP manager load operations.
+// Gates toast + error log notifications; inline error display via Zustand
+// store remains immediate regardless of counter state.
+const mcpManagerFailureCounter = createConsecutiveFailureCounter(3);
 
 interface UseMcpManagerResult {
     lspMcpList: MCPSnapshot[];
     orchMcpList: MCPSnapshot[];
     representativeMCP: MCPSnapshot | null;
     orchRepresentativeMCP: MCPSnapshot | null;
-    aggregateStatus: MCPStatus | null;
     isLoading: boolean;
     error: string | null;
     activeSession: string | null;
@@ -42,24 +47,6 @@ export function isOrchMcp(snapshot: MCPSnapshot): boolean {
 
 export function selectRepresentativeLspMcp(snapshots: readonly MCPSnapshot[]): MCPSnapshot | null {
     return snapshots.find((snapshot) => (snapshot.bridge_command?.trim() ?? "") !== "") ?? snapshots[0] ?? null;
-}
-
-/**
- * Compute aggregate status from LSP-MCP snapshots.
- * Priority: running > error > starting > stopped.
- * Precondition: snapshots must be non-empty (caller guards with length check).
- */
-export function aggregateLspMcpStatus(snapshots: readonly MCPSnapshot[]): MCPStatus {
-    if (snapshots.some((snapshot) => snapshot.status === "running")) {
-        return "running";
-    }
-    if (snapshots.some((snapshot) => snapshot.status === "error")) {
-        return "error";
-    }
-    if (snapshots.some((snapshot) => snapshot.status === "starting")) {
-        return "starting";
-    }
-    return "stopped";
 }
 
 export function useMcpManager(): UseMcpManagerResult {
@@ -103,14 +90,17 @@ export function useMcpManager(): UseMcpManagerResult {
                     return;
                 }
                 setSnapshots(sessionName, result ?? []);
+                mcpManagerFailureCounter.recordSuccess();
             } catch (err: unknown) {
                 if (!isMountedRef.current || loadTokenRef.current !== token) {
                     return;
                 }
                 const message = err instanceof Error ? err.message : String(err);
                 setSessionError(sessionName, message);
-                notifyWarn(`Failed to load MCP servers (${sessionName}): ${message}`);
-                logFrontendEventSafe("warn", `ListMCPServers failed (${sessionName}): ${message}`, "frontend/mcp");
+                mcpManagerFailureCounter.recordFailure(() => {
+                    notifyWarn(`Failed to load MCP servers (${sessionName}): ${message}`);
+                    logFrontendEventSafe("warn", `ListMCPServers failed (${sessionName}): ${message}`, "frontend/mcp");
+                });
                 if (import.meta.env.DEV) {
                     console.warn("[mcp-manager] ListMCPServers failed:", err);
                 }
@@ -151,11 +141,6 @@ export function useMcpManager(): UseMcpManagerResult {
         [orchMcpList],
     );
 
-    const aggregateStatus = useMemo(
-        () => (lspMcpList.length === 0 ? null : aggregateLspMcpStatus(lspMcpList)),
-        [lspMcpList],
-    );
-
     useEffect(() => {
         if (lspMcpList.length > 0 && (representativeMCP?.bridge_command?.trim() ?? "") === "") {
             console.warn("[mcp-manager] All LSP-MCP snapshots lack bridge_command");
@@ -192,7 +177,6 @@ export function useMcpManager(): UseMcpManagerResult {
         orchMcpList,
         representativeMCP,
         orchRepresentativeMCP,
-        aggregateStatus,
         isLoading,
         error,
         activeSession,

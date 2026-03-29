@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -11,7 +12,6 @@ import (
 	"myT-x/internal/install"
 	"myT-x/internal/ipc"
 	"myT-x/internal/panestate"
-	"myT-x/internal/terminal"
 	"myT-x/internal/tmux"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -46,7 +46,7 @@ func (l lifecycleTestLogger) Errorf(ctx context.Context, message string, args ..
 	}
 }
 
-func restoreShimLifecycleHooks() {
+func restoreAllLifecycleHooks() {
 	cleanupLegacyShimInstallsFn = install.CleanupLegacyShimInstalls
 	needsShimInstallFn = install.NeedsShimInstall
 	ensureShimInstalledFn = install.EnsureShimInstalled
@@ -70,7 +70,7 @@ func newLifecycleTestApp() *App {
 }
 
 func TestEnsureShimReadyCallsLegacyCleanup(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -102,7 +102,7 @@ func TestEnsureShimReadyCallsLegacyCleanup(t *testing.T) {
 }
 
 func TestEnsureShimReadyAlwaysRunsStartupSync(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -147,7 +147,7 @@ func TestEnsureShimReadyAlwaysRunsStartupSync(t *testing.T) {
 }
 
 func TestEnsureShimReadyEmitsInstallEventWhenPreviouslyMissing(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -188,7 +188,7 @@ func TestEnsureShimReadyEmitsInstallEventWhenPreviouslyMissing(t *testing.T) {
 }
 
 func TestEnsureShimReadySkipsPathMutationWhenInstallDirResolutionFails(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -226,7 +226,7 @@ func TestEnsureShimReadySkipsPathMutationWhenInstallDirResolutionFails(t *testin
 }
 
 func TestEnsureShimReadyMarksShimUnavailableWhenPostCheckFails(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -254,7 +254,7 @@ func TestEnsureShimReadyMarksShimUnavailableWhenPostCheckFails(t *testing.T) {
 }
 
 func TestEnsureShimReadyMarksShimUnavailableWhenPostCheckErrors(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -290,7 +290,7 @@ func TestEnsureShimReadyMarksShimUnavailableWhenPostCheckErrors(t *testing.T) {
 }
 
 func TestEnsureShimReadyAddsStartupWarningWhenInstallFails(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -319,7 +319,7 @@ func TestEnsureShimReadyAddsStartupWarningWhenInstallFails(t *testing.T) {
 }
 
 func TestStartupAddsWarningWhenPipeServerStartFails(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -377,6 +377,8 @@ func TestStartupAddsWarningWhenPipeServerStartFails(t *testing.T) {
 }
 
 func TestShutdownReleasesInMemoryResources(t *testing.T) {
+	stubRuntimeEventsEmit(t)
+
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
 	app.sessions = tmux.NewSessionManager()
@@ -387,42 +389,23 @@ func TestShutdownReleasesInMemoryResources(t *testing.T) {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
 	app.paneStates.EnsurePane("%1", 120, 40)
-	app.snapshotCache["session-a"] = tmux.SessionSnapshot{Name: "session-a"}
-	app.snapshotPrimed = true
 
-	flusher := terminal.NewOutputFlushManager(16*time.Millisecond, 1024, func(string, []byte) {})
-	flusher.Start()
-	flusher.Write("%1", []byte("pending"))
-	app.outputFlusher = flusher
+	// Prime the snapshot pipeline via the service.
+	app.snapshotService.RequestSnapshot(true)
 
-	app.startPaneFeedWorker(context.Background())
+	app.snapshotService.StartPaneFeedWorker(context.Background())
 	app.startIdleMonitor(context.Background())
-	if app.paneFeedStop == nil {
-		t.Fatal("paneFeedStop should be initialized before shutdown")
-	}
 	if app.idleCancel == nil {
 		t.Fatal("idleCancel should be initialized before shutdown")
 	}
 
 	app.shutdown(context.Background())
 
-	if app.paneFeedStop != nil {
-		t.Fatal("paneFeedStop should be nil after shutdown")
-	}
 	if app.idleCancel != nil {
 		t.Fatal("idleCancel should be nil after shutdown")
 	}
-	if app.outputFlusher != nil {
-		t.Fatal("outputFlusher should be nil after shutdown")
-	}
 	if app.paneStates.Snapshot("%1") != "" {
 		t.Fatal("paneStates should be reset after shutdown")
-	}
-	if len(app.snapshotCache) != 0 {
-		t.Fatalf("snapshotCache length = %d, want 0", len(app.snapshotCache))
-	}
-	if app.snapshotPrimed {
-		t.Fatal("snapshotPrimed should be false after shutdown")
 	}
 	if got := len(app.sessions.Snapshot()); got != 0 {
 		t.Fatalf("session count = %d, want 0 after shutdown", got)
@@ -455,22 +438,12 @@ func TestShutdownWaitsForTrackedSetupGoroutines(t *testing.T) {
 	}
 }
 
-func TestShutdownStopsOutputBuffersOutsideOutputLock(t *testing.T) {
+// TestShutdownCompletesWithoutDeadlock verifies that shutdown() completes within
+// a reasonable timeout. The output buffer deadlock test (outputMu ↔ Stop callback)
+// is covered in internal/snapshot/service_test.go at the Service level.
+func TestShutdownCompletesWithoutDeadlock(t *testing.T) {
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-
-	callbackRan := make(chan struct{}, 1)
-	flusher := terminal.NewOutputFlushManager(16*time.Millisecond, 1024, func(_ string, _ []byte) {
-		app.outputMu.Lock()
-		app.outputMu.Unlock()
-		select {
-		case callbackRan <- struct{}{}:
-		default:
-		}
-	})
-	flusher.Start()
-	flusher.Write("%1", []byte("pending"))
-	app.outputFlusher = flusher
 
 	done := make(chan struct{})
 	go func() {
@@ -480,14 +453,8 @@ func TestShutdownStopsOutputBuffersOutsideOutputLock(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("shutdown() timed out; possible outputMu -> Stop callback deadlock")
-	}
-
-	select {
-	case <-callbackRan:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("output buffer callback did not run during shutdown()")
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown() timed out; possible deadlock")
 	}
 }
 
@@ -506,6 +473,24 @@ func TestConfigureGlobalHotkeyLogsWhenManagerUnavailable(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "[HOTKEY] hotkey backend unavailable, skipping registration") {
 		t.Fatalf("expected hotkey-backend-unavailable debug log, output=%q", buf.String())
+	}
+}
+
+func TestConfigureGlobalHotkeyLogsWhenQuakeModeDisabled(t *testing.T) {
+	app := NewApp()
+	// hotkeys is non-nil but QuakeMode is false (default).
+
+	var buf bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(originalLogger)
+	})
+
+	app.configureGlobalHotkey()
+
+	if !strings.Contains(buf.String(), "[HOTKEY] quake-mode disabled, skipping global hotkey registration") {
+		t.Fatalf("expected quake-mode-disabled debug log, output=%q", buf.String())
 	}
 }
 
@@ -542,7 +527,7 @@ func TestDefaultRecoveryOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("OnPanic skips emit when runtimeContext is nil", func(t *testing.T) {
+	t.Run("OnPanic falls back to slog.Error when runtimeContext is nil", func(t *testing.T) {
 		origEmit := runtimeEventsEmitFn
 		t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -551,15 +536,27 @@ func TestDefaultRecoveryOptions(t *testing.T) {
 			emitted = true
 		}
 
+		var logBuf bytes.Buffer
+		originalLogger := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+		t.Cleanup(func() { slog.SetDefault(originalLogger) })
+
 		app := NewApp()
 		// runtimeContext is nil by default.
 		opts := app.defaultRecoveryOptions()
 
-		// Must not panic and must not emit.
+		// Must not panic and must not emit via runtime events.
 		opts.OnPanic("test-worker", 1)
 
 		if emitted {
-			t.Fatal("OnPanic should not emit when runtimeContext is nil")
+			t.Fatal("OnPanic should not emit via runtime events when runtimeContext is nil")
+		}
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "[WORKER] panic event dropped: runtime context nil") {
+			t.Fatalf("expected slog.Error fallback log, got %q", logOutput)
+		}
+		if !strings.Contains(logOutput, "test-worker") {
+			t.Fatalf("expected worker name in log, got %q", logOutput)
 		}
 	})
 
@@ -595,7 +592,7 @@ func TestDefaultRecoveryOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("OnFatal skips emit when runtimeContext is nil", func(t *testing.T) {
+	t.Run("OnFatal falls back to slog.Error when runtimeContext is nil", func(t *testing.T) {
 		origEmit := runtimeEventsEmitFn
 		t.Cleanup(func() { runtimeEventsEmitFn = origEmit })
 
@@ -604,13 +601,25 @@ func TestDefaultRecoveryOptions(t *testing.T) {
 			emitted = true
 		}
 
+		var logBuf bytes.Buffer
+		originalLogger := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+		t.Cleanup(func() { slog.SetDefault(originalLogger) })
+
 		app := NewApp()
 		opts := app.defaultRecoveryOptions()
 
 		opts.OnFatal("test-worker", 10)
 
 		if emitted {
-			t.Fatal("OnFatal should not emit when runtimeContext is nil")
+			t.Fatal("OnFatal should not emit via runtime events when runtimeContext is nil")
+		}
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "[WORKER] fatal event dropped: runtime context nil") {
+			t.Fatalf("expected slog.Error fallback log, got %q", logOutput)
+		}
+		if !strings.Contains(logOutput, "test-worker") {
+			t.Fatalf("expected worker name in log, got %q", logOutput)
 		}
 	})
 
@@ -659,7 +668,7 @@ func TestWaitWithTimeout(t *testing.T) {
 }
 
 func TestToggleQuakeWindowRejectsConcurrentToggle(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
@@ -705,7 +714,7 @@ func TestToggleQuakeWindowRejectsConcurrentToggle(t *testing.T) {
 }
 
 func TestToggleQuakeWindowShowsHiddenWindow(t *testing.T) {
-	t.Cleanup(restoreShimLifecycleHooks)
+	t.Cleanup(restoreAllLifecycleHooks)
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
@@ -734,6 +743,13 @@ func TestToggleQuakeWindowShowsHiddenWindow(t *testing.T) {
 }
 
 func TestToggleQuakeWindowSkipsWhenContextNil(t *testing.T) {
+	var logBuf bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() {
+		slog.SetDefault(originalLogger)
+	})
+
 	app := NewApp()
 	// runtimeContext is nil by default
 
@@ -743,6 +759,11 @@ func TestToggleQuakeWindowSkipsWhenContextNil(t *testing.T) {
 	// Verify the CAS guard was properly released.
 	if app.windowToggling.Load() {
 		t.Fatal("windowToggling should be false after toggle with nil context")
+	}
+
+	// Verify the warning log was emitted.
+	if !strings.Contains(logBuf.String(), "toggleQuakeWindow dropped because runtime context is nil") {
+		t.Fatalf("log output = %q, want toggleQuakeWindow nil-context warning", logBuf.String())
 	}
 }
 
@@ -755,7 +776,10 @@ func TestBringWindowToFrontSkipsWhenContextNil(t *testing.T) {
 	})
 
 	app := NewApp()
-	app.bringWindowToFront()
+	err := app.bringWindowToFront()
+	if !errors.Is(err, errRuntimeContextNil) {
+		t.Fatalf("bringWindowToFront() error = %v, want %v", err, errRuntimeContextNil)
+	}
 
 	logOutput := logBuf.String()
 	if !strings.Contains(logOutput, "bringWindowToFront dropped because runtime context is nil") {

@@ -44,14 +44,13 @@ func (c *stubConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *stubConn) SetWriteDeadline(time.Time) error { return nil }
 
 func TestBridgeMCPStdio_RetriesUntilSuccess(t *testing.T) {
-	original := dialPipeFn
-	t.Cleanup(func() { dialPipeFn = original })
+	t.Parallel()
 
 	attempts := 0
 	conn := newStubConn()
 	// Simulate pipe not ready twice, then succeed.
 	// Write EOF to readBuf so Bridge returns immediately after connect.
-	dialPipeFn = func(path string, timeout *time.Duration) (net.Conn, error) {
+	dialFn := func(path string, timeout *time.Duration) (net.Conn, error) {
 		attempts++
 		if attempts <= 2 {
 			return nil, errors.New("pipe not found")
@@ -59,7 +58,7 @@ func TestBridgeMCPStdio_RetriesUntilSuccess(t *testing.T) {
 		return conn, nil
 	}
 
-	err := bridgeMCPStdio(context.Background(), `\\.\pipe\test-retry`, 5*time.Second, &bytes.Buffer{}, io.Discard)
+	err := bridgeMCPStdio(context.Background(), `\\.\pipe\test-retry`, 5*time.Second, &bytes.Buffer{}, io.Discard, dialFn)
 	// Bridge will get io.EOF from empty readBuf and return nil.
 	if err != nil {
 		t.Fatalf("bridgeMCPStdio error = %v, want nil", err)
@@ -70,16 +69,15 @@ func TestBridgeMCPStdio_RetriesUntilSuccess(t *testing.T) {
 }
 
 func TestBridgeMCPStdio_ExhaustsRetryBudget(t *testing.T) {
-	original := dialPipeFn
-	t.Cleanup(func() { dialPipeFn = original })
+	t.Parallel()
 
 	attempts := 0
-	dialPipeFn = func(path string, timeout *time.Duration) (net.Conn, error) {
+	dialFn := func(path string, timeout *time.Duration) (net.Conn, error) {
 		attempts++
 		return nil, errors.New("pipe not found")
 	}
 
-	err := bridgeMCPStdio(context.Background(), `\\.\pipe\test-exhaust`, 1*time.Second, &bytes.Buffer{}, io.Discard)
+	err := bridgeMCPStdio(context.Background(), `\\.\pipe\test-exhaust`, 1*time.Second, &bytes.Buffer{}, io.Discard, dialFn)
 	if err == nil {
 		t.Fatal("bridgeMCPStdio should fail when all retries exhausted")
 	}
@@ -95,10 +93,9 @@ func TestBridgeMCPStdio_ExhaustsRetryBudget(t *testing.T) {
 }
 
 func TestBridgeMCPStdio_ContextCancelledDuringBackoff(t *testing.T) {
-	original := dialPipeFn
-	t.Cleanup(func() { dialPipeFn = original })
+	t.Parallel()
 
-	dialPipeFn = func(path string, timeout *time.Duration) (net.Conn, error) {
+	dialFn := func(path string, timeout *time.Duration) (net.Conn, error) {
 		return nil, errors.New("pipe not found")
 	}
 
@@ -109,25 +106,24 @@ func TestBridgeMCPStdio_ContextCancelledDuringBackoff(t *testing.T) {
 		cancel()
 	}()
 
-	err := bridgeMCPStdio(ctx, `\\.\pipe\test-cancel`, 10*time.Second, &bytes.Buffer{}, io.Discard)
+	err := bridgeMCPStdio(ctx, `\\.\pipe\test-cancel`, 10*time.Second, &bytes.Buffer{}, io.Discard, dialFn)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
 
 func TestBridgeMCPStdio_ImmediateSuccess(t *testing.T) {
-	original := dialPipeFn
-	t.Cleanup(func() { dialPipeFn = original })
+	t.Parallel()
 
 	attempts := 0
 	conn := newStubConn()
-	dialPipeFn = func(path string, timeout *time.Duration) (net.Conn, error) {
+	dialFn := func(path string, timeout *time.Duration) (net.Conn, error) {
 		attempts++
 		return conn, nil
 	}
 
 	start := time.Now()
-	err := bridgeMCPStdio(context.Background(), `\\.\pipe\test-immediate`, 5*time.Second, &bytes.Buffer{}, io.Discard)
+	err := bridgeMCPStdio(context.Background(), `\\.\pipe\test-immediate`, 5*time.Second, &bytes.Buffer{}, io.Discard, dialFn)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -142,7 +138,13 @@ func TestBridgeMCPStdio_ImmediateSuccess(t *testing.T) {
 }
 
 func TestBridgeMCPStdio_InvalidPipePath(t *testing.T) {
-	err := bridgeMCPStdio(context.Background(), `not-a-pipe-path`, 3*time.Second, &bytes.Buffer{}, io.Discard)
+	t.Parallel()
+
+	dialFn := func(path string, timeout *time.Duration) (net.Conn, error) {
+		t.Fatal("dialFn should not be called for invalid pipe path")
+		return nil, nil
+	}
+	err := bridgeMCPStdio(context.Background(), `not-a-pipe-path`, 3*time.Second, &bytes.Buffer{}, io.Discard, dialFn)
 	if err == nil {
 		t.Fatal("bridgeMCPStdio should fail for invalid pipe path")
 	}

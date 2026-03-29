@@ -1,0 +1,693 @@
+/* ── Diff rendering primitives (shared by git-graph and diff-view) ──
+   These selectors are consumed by DiffHunkSection, DiffLineRow (shared/),
+   DiffViewer (git-graph/), and DiffContentViewer (diff-view/).
+   This file MUST be imported before git-graph.css in style.css. ── */
+.diff-viewer {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.5;
+}
+
+.diff-file-header {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 4px 12px;
+    background: var(--bg-elev);
+    border-top: 1px solid var(--line);
+    border-right: none;
+    border-bottom: none;
+    border-left: none;
+    color: var(--fg-main);
+    font-weight: 600;
+    font-size: 0.78rem;
+    cursor: pointer;
+    user-select: none;
+    text-align: left;
+}
+
+.diff-file-toggle {
+    display: inline-block;
+    width: 1em;
+    margin-right: 4px;
+    font-size: 0.65em;
+    text-align: center;
+    /* Prevent layout shift between ▶ and ▼ glyphs */
+    flex-shrink: 0;
+}
+
+.diff-file-header:hover {
+    background: var(--accent-06);
+}
+
+.diff-file-header:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.diff-hunk-header {
+    padding: 2px 12px;
+    background: var(--accent-10);
+    color: var(--accent);
+    font-size: 0.72rem;
+}
+
+.diff-line {
+    display: flex;
+    padding: 0 12px;
+    min-height: 1.5em;
+}
+
+.diff-line.added {
+    background: var(--diff-added-bg);
+}
+
+.diff-line.removed {
+    background: var(--danger-08);
+}
+
+.diff-line-number {
+    width: 40px;
+    flex-shrink: 0;
+    text-align: right;
+    padding-right: 8px;
+    color: var(--fg-dim);
+    user-select: none;
+    opacity: 0.5;
+}
+
+.diff-line-content {
+    flex: 1;
+    min-width: 0;
+    white-space: pre;
+}
+
+/* ── Diff View ── */
+.diff-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.diff-view-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.diff-view-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.diff-header-stats {
+    font-size: 0.82rem;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
+.diff-header-file-count {
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+    white-space: nowrap;
+}
+
+.diff-header-truncated {
+    color: var(--warning);
+    font-size: 0.82rem;
+}
+
+.diff-tree-stats {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+    margin-left: 8px;
+    white-space: nowrap;
+}
+
+.diff-tree-additions {
+    color: var(--git-staged);
+}
+
+.diff-tree-deletions {
+    color: var(--danger);
+}
+
+/* ── Diff Action Bar (dedicated button row below ViewerHeader) ── */
+.diff-action-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+    flex-shrink: 0;
+}
+.diff-action-bar-title {
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--fg-main);
+}
+.diff-action-bar-spacer {
+    flex: 1;
+    min-width: 0;
+}
+
+/* ── Diff Subbar (stats + mode toggle) ── */
+.diff-subbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+    font-size: 0.82rem;
+    flex-shrink: 0;
+}
+
+.diff-subbar-spacer {
+    flex: 1;
+    min-width: 0;
+}
+
+/* ── Diff View Mode Toggle ── */
+.diff-mode-toggle {
+    display: inline-flex;
+    flex-shrink: 0;
+    gap: 1px;
+    margin-left: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px;
+}
+
+.diff-mode-btn {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--fg-dim);
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 2px 8px;
+    min-height: 22px;
+    line-height: 1;
+    transition: color 0.15s, background 0.15s;
+}
+
+.diff-mode-btn:hover {
+    color: var(--fg-main);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.diff-mode-btn.active {
+    color: var(--accent);
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--accent);
+}
+
+/* ── Tree Sidebar with CommitPanel ── */
+.tree-sidebar-with-commit {
+    width: var(--sidebar-width);
+    min-width: 200px;
+    min-height: 0;
+    border-right: 1px solid var(--line);
+    background: var(--bg-panel);
+    display: flex;
+    flex-direction: column;
+}
+
+.tree-sidebar-with-commit .file-tree-sidebar {
+    flex: 1;
+    min-height: 0;
+}
+
+/* ── Staging Flat View ── */
+.staging-flat-view {
+    width: var(--sidebar-width);
+    min-width: 200px;
+    min-height: 0;
+    border-right: 1px solid var(--line);
+    background: var(--bg-panel);
+    display: flex;
+    flex-direction: column;
+}
+
+.staging-file-list {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ── Staging Group Header ── */
+.staging-group-header {
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    height: 28px;
+    gap: 4px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--fg-main);
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--line);
+}
+
+.staging-group-header:hover {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+.staging-group-arrow {
+    display: inline-block;
+    width: 12px;
+    font-size: 0.6rem;
+    transition: transform 0.15s;
+    color: var(--fg-dim);
+}
+
+.staging-group-arrow.expanded {
+    transform: rotate(90deg);
+}
+
+.staging-group-label {
+    flex: 1;
+    min-width: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.staging-group-count {
+    color: var(--fg-dim);
+    font-weight: 400;
+}
+
+.staging-group-batch-btn {
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    color: var(--fg-dim);
+    cursor: pointer;
+    font-size: 0.7rem;
+    padding: 1px 6px;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.staging-group-header:hover .staging-group-batch-btn {
+    opacity: 1;
+}
+
+.staging-group-batch-btn:hover:not(:disabled) {
+    color: var(--fg-main);
+    border-color: var(--fg-dim);
+}
+
+.staging-group-batch-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.3;
+}
+
+/* ── Staging File Row ── */
+.staging-file-row {
+    display: flex;
+    align-items: center;
+    padding: 0 8px 0 20px;
+    height: 28px;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    color: var(--fg-main);
+    user-select: none;
+    transition: background 0.1s;
+}
+
+.staging-file-row:hover {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+.staging-file-row.selected {
+    background: var(--bg-selected, rgba(255, 255, 255, 0.08));
+}
+
+.staging-file-badge {
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+    font-weight: 700;
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+}
+
+.staging-file-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.staging-file-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.staging-file-row:hover .staging-file-actions {
+    opacity: 1;
+}
+
+.staging-action-btn {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--fg-dim);
+    cursor: pointer;
+    font-size: 0.85rem;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    line-height: 1;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.staging-action-btn:hover:not(:disabled) {
+    border-color: var(--line);
+}
+
+.staging-action-stage:hover:not(:disabled) {
+    color: var(--git-staged);
+}
+
+.staging-action-unstage:hover:not(:disabled) {
+    color: var(--warning, var(--fg-main));
+}
+
+.staging-action-discard:hover:not(:disabled) {
+    color: var(--danger);
+}
+
+.staging-action-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.3;
+}
+
+/* ── Commit Panel ── */
+.commit-panel {
+    flex-shrink: 0;
+    border-top: 1px solid var(--line);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.commit-branch-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+}
+
+.commit-branch-name {
+    font-weight: 600;
+    color: var(--fg-main);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 120px;
+}
+
+.commit-branch-ahead {
+    color: var(--git-staged);
+}
+
+.commit-branch-behind {
+    color: var(--warning, var(--fg-main));
+}
+
+.commit-branch-no-upstream {
+    font-size: 0.72rem;
+    color: var(--fg-dim);
+    font-style: italic;
+}
+
+.diff-status-warning {
+    font-size: 0.75rem;
+    color: var(--warning, #e0a020);
+    padding: 4px 8px;
+    background: rgba(224, 160, 32, 0.08);
+    border: 1px solid rgba(224, 160, 32, 0.2);
+    border-radius: 3px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.commit-conflict-warning {
+    font-size: 0.75rem;
+    color: var(--danger);
+    padding: 4px 6px;
+    background: rgba(255, 80, 80, 0.08);
+    border: 1px solid rgba(255, 80, 80, 0.2);
+    border-radius: 3px;
+}
+
+.commit-textarea {
+    width: 100%;
+    min-height: 52px;
+    max-height: 120px;
+    resize: vertical;
+    background: var(--bg-input, var(--bg-panel));
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--fg-main);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    padding: 6px 8px;
+    box-sizing: border-box;
+}
+
+.commit-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.commit-textarea:disabled {
+    opacity: 0.5;
+}
+
+.commit-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.commit-actions--secondary {
+    justify-content: flex-start;
+}
+
+.commit-btn {
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-family: inherit;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.commit-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+.commit-btn--primary {
+    flex: 1;
+    padding: 5px 10px;
+    background: var(--accent);
+    color: var(--bg-panel);
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+.commit-btn--primary:hover:not(:disabled) {
+    filter: brightness(1.15);
+}
+
+.commit-btn--secondary {
+    flex: 1;
+    padding: 5px 10px;
+    background: transparent;
+    color: var(--fg-main);
+}
+
+.commit-btn--secondary:hover:not(:disabled) {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+.commit-btn--small {
+    padding: 3px 8px;
+    background: transparent;
+    color: var(--fg-dim);
+}
+
+.commit-btn--small:hover:not(:disabled) {
+    color: var(--fg-main);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+/* ── Discard Confirm Dialog ── */
+.discard-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.discard-dialog {
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 20px;
+    max-width: 400px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.discard-dialog-message {
+    margin: 0 0 8px;
+    font-size: 0.88rem;
+    color: var(--fg-main);
+}
+
+.discard-dialog-warning {
+    margin: 0 0 16px;
+    font-size: 0.78rem;
+    color: var(--danger);
+}
+
+.discard-dialog-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.discard-dialog-btn {
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 5px 16px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-family: inherit;
+    transition: background 0.15s;
+}
+
+.discard-dialog-btn--cancel {
+    background: transparent;
+    color: var(--fg-main);
+}
+
+.discard-dialog-btn--cancel:hover {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+.discard-dialog-btn--confirm {
+    background: var(--danger);
+    color: #fff;
+    border-color: var(--danger);
+}
+
+.discard-dialog-btn--confirm:hover {
+    filter: brightness(1.15);
+}
+
+/* ── Diff Content Viewer ── */
+.diff-content-viewer {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.diff-content-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+    font-size: 0.82rem;
+}
+
+.diff-content-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-main);
+    font-family: var(--font-mono);
+}
+
+.diff-content-body {
+    flex: 1;
+    overflow: auto;
+    user-select: text;
+    cursor: text;
+}
+
+.diff-content-body:focus {
+    outline: none;
+}
+
+.diff-content-body ::selection {
+    background: var(--selection-bg);
+    color: inherit;
+}
+
+.diff-content-empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+}
+
+.diff-expand-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 12px;
+    background: var(--accent-06);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    cursor: default;
+    user-select: none;
+    transition: background 0.15s;
+}
+
+.diff-expand-bar:hover {
+    background: var(--surface-3, var(--accent-10));
+    color: var(--fg-main);
+}
+
+.diff-expand-bar--disabled {
+    cursor: default;
+    opacity: 0.5;
+    pointer-events: none;
+}

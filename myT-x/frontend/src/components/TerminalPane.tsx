@@ -1,10 +1,15 @@
-import {memo, type MouseEvent as ReactMouseEvent, useEffect, useRef, useState} from "react";
+import {memo, useCallback, type MouseEvent as ReactMouseEvent, useEffect, useRef, useState} from "react";
 import type {FitAddon} from "@xterm/addon-fit";
 import type {SearchAddon} from "@xterm/addon-search";
 import type {Terminal} from "@xterm/xterm";
 import {SearchBar} from "./SearchBar";
 import {ConfirmDialog} from "./ConfirmDialog";
+import {AutoEnterPopover} from "./AutoEnterPopover";
+import {TerminalToolbar} from "./TerminalToolbar";
 import {useTmuxStore} from "../stores/tmuxStore";
+import {useAutoEnterStore, startAutoEnter, stopAutoEnter} from "../stores/autoEnterStore";
+import {useViewerStore} from "./viewer/viewerStore";
+import {notifyAndLog} from "../utils/notifyUtils";
 import {useTerminalSetup} from "../hooks/useTerminalSetup";
 import {useTerminalEvents} from "../hooks/useTerminalEvents";
 import {useTerminalResize} from "../hooks/useTerminalResize";
@@ -46,8 +51,20 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
     const [pendingPaneCloseConfirm, setPendingPaneCloseConfirm] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
     const [scrollAtBottom, setScrollAtBottom] = useState(true);
+    const [autoPopoverOpen, setAutoPopoverOpen] = useState(false);
 
     const paneTitle = (props.paneTitle || "").trim();
+
+    // Auto Enter state from store (re-renders only when this pane's state changes).
+    const autoRunning = useAutoEnterStore(
+        (s) => s.activeEntries[props.paneId] !== undefined,
+    );
+    // Close popover when auto-enter starts running from another source.
+    useEffect(() => {
+        if (autoRunning) {
+            setAutoPopoverOpen(false);
+        }
+    }, [autoRunning]);
 
     // syncInputMode をrefで追跡（term.onDataクロージャから参照するため）
     const syncInputMode = useTmuxStore((s) => s.syncInputMode);
@@ -146,18 +163,34 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
         event.stopPropagation();
     };
 
-    const handleToolbarMouseDown = (event: ReactMouseEvent<HTMLDivElement>): void => {
-        const target = event.target;
-        if (
-            target instanceof HTMLInputElement
-            || target instanceof HTMLTextAreaElement
-            || (target instanceof HTMLElement && target.isContentEditable)
-        ) {
-            event.stopPropagation();
-            return;
+    const handleAutoClick = useCallback(() => {
+        if (autoRunning) {
+            void stopAutoEnter(props.paneId).catch((err) => {
+                console.warn("[DEBUG-auto-enter] stop failed", err);
+                notifyAndLog("Auto Enter stop", "warn", err, "TerminalPane");
+            });
+        } else {
+            setAutoPopoverOpen(true);
         }
-        preventTerminalFocusSteal(event);
-    };
+    }, [autoRunning, props.paneId]);
+
+    const handleAutoStart = useCallback((intervalSeconds: number) => {
+        setAutoPopoverOpen(false);
+        void startAutoEnter(props.paneId, intervalSeconds).catch((err) => {
+            console.warn("[DEBUG-auto-enter] start failed", err);
+            notifyAndLog("Auto Enter start", "warn", err, "TerminalPane");
+        });
+        terminalRef.current?.focus();
+    }, [props.paneId]);
+
+    const handleAutoPopoverClose = useCallback(() => {
+        setAutoPopoverOpen(false);
+        terminalRef.current?.focus();
+    }, []);
+
+    const handleAddMember = useCallback(() => {
+        useViewerStore.getState().openViewWithContext("orchestrator-teams", {addTermMemberPaneId: props.paneId});
+    }, [props.paneId]);
 
     return (
         <div
@@ -177,141 +210,52 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                 if (sourcePaneId && sourcePaneId !== props.paneId) {
                     void Promise.resolve(props.onSwapPane(sourcePaneId, props.paneId)).catch((err) => {
                         console.warn("[pane] swap failed", err);
+                        notifyAndLog("Swap panes", "warn", err, "TerminalPane");
                     });
                 }
             }}
             onClick={() => props.onFocus(props.paneId)}
             onMouseDown={() => terminalRef.current?.focus()}
         >
-            <div
-                className="terminal-toolbar"
-                draggable={false}
-                onMouseDown={handleToolbarMouseDown}
-            >
-                <div className="terminal-toolbar-pane">
-                    <span className="terminal-toolbar-id">{props.paneId}</span>
-                    <input
-                        className="terminal-toolbar-title-input"
-                        value={titleDraft}
-                        placeholder={
-                            language === "en"
-                                ? "Pane name"
-                                : t("terminalPane.titleInput.placeholder", "ペイン名")
-                        }
-                        disabled={renameBusy}
-                        onFocus={() => setTitleEditing(true)}
-                        onChange={(event) => setTitleDraft(event.target.value)}
-                        onBlur={() => {
-                            if (skipTitleCommitRef.current) {
-                                skipTitleCommitRef.current = false;
-                                return;
-                            }
-                            // I-22: fire-and-forget async needs .catch() per defensive-coding #95
-                            void commitPaneTitle().catch((err) => {
-                                console.warn("[DEBUG-pane] commitPaneTitle failed", err);
-                            });
-                        }}
-                        onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                                event.preventDefault();
-                                (event.currentTarget as HTMLInputElement).blur();
-                                return;
-                            }
-                            if (event.key === "Escape") {
-                                event.preventDefault();
-                                skipTitleCommitRef.current = true;
-                                setTitleDraft(paneTitle);
-                                setTitleEditing(false);
-                                (event.currentTarget as HTMLInputElement).blur();
-                            }
-                        }}
-                    />
-                </div>
-                <div className="terminal-toolbar-actions">
-                    <button
-                        type="button"
-                        className="terminal-toolbar-btn"
-                        draggable={false}
-                        title={
-                            language === "en"
-                                ? "Split Left/Right (Prefix: %)"
-                                : t("terminalPane.action.splitVertical.title", "左右分割 (Prefix: %)")
-                        }
-                        aria-label={
-                            language === "en"
-                                ? `Split pane ${props.paneId} left-right`
-                                : t("terminalPane.action.splitVertical.aria", "Split pane {paneId} left-right", {paneId: props.paneId})
-                        }
-                        onMouseDown={preventTerminalFocusSteal}
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            props.onFocus(props.paneId);
-                            props.onSplitVertical(props.paneId);
-                            terminalRef.current?.focus();
-                        }}
-                    >
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
-                             strokeWidth="1.5">
-                            <rect x="1" y="1" width="12" height="12" rx="1.5"/>
-                            <line x1="7" y1="1" x2="7" y2="13"/>
-                        </svg>
-                    </button>
-                    <button
-                        type="button"
-                        className="terminal-toolbar-btn"
-                        draggable={false}
-                        title={
-                            language === "en"
-                                ? "Split Top/Bottom (Prefix: quote)"
-                                : t("terminalPane.action.splitHorizontal.title", "上下分割 (Prefix: &quot;)")
-                        }
-                        aria-label={
-                            language === "en"
-                                ? `Split pane ${props.paneId} top-bottom`
-                                : t("terminalPane.action.splitHorizontal.aria", "Split pane {paneId} top-bottom", {paneId: props.paneId})
-                        }
-                        onMouseDown={preventTerminalFocusSteal}
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            props.onFocus(props.paneId);
-                            props.onSplitHorizontal(props.paneId);
-                            terminalRef.current?.focus();
-                        }}
-                    >
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
-                             strokeWidth="1.5">
-                            <rect x="1" y="1" width="12" height="12" rx="1.5"/>
-                            <line x1="1" y1="7" x2="13" y2="7"/>
-                        </svg>
-                    </button>
-                    <button
-                        type="button"
-                        className="terminal-toolbar-btn terminal-toolbar-btn-danger terminal-toolbar-btn-close"
-                        draggable={false}
-                        title={
-                            language === "en"
-                                ? "Close Pane (Prefix: x)"
-                                : t("terminalPane.action.close.title", "ペインを閉じる (Prefix: x)")
-                        }
-                        aria-label={
-                            language === "en"
-                                ? `Close pane ${props.paneId}`
-                                : t("terminalPane.action.close.aria", "Close pane {paneId}", {paneId: props.paneId})
-                        }
-                        onMouseDown={preventTerminalFocusSteal}
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            setPendingPaneCloseConfirm(true);
-                        }}
-                    >
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor"
-                             strokeWidth="1.8">
-                            <line x1="2" y1="2" x2="10" y2="10"/>
-                            <line x1="10" y1="2" x2="2" y2="10"/>
-                        </svg>
-                    </button>
-                </div>
-            </div>
+            <TerminalToolbar
+                paneId={props.paneId}
+                titleDraft={titleDraft}
+                titleEditing={titleEditing}
+                renameBusy={renameBusy}
+                autoRunning={autoRunning}
+                onTitleEditStart={() => setTitleEditing(true)}
+                onTitleChange={setTitleDraft}
+                onTitleCommit={() => {
+                    if (skipTitleCommitRef.current) {
+                        skipTitleCommitRef.current = false;
+                        return;
+                    }
+                    // I-22: fire-and-forget async needs .catch() per defensive-coding #95
+                    void commitPaneTitle().catch((err) => {
+                        console.warn("[DEBUG-pane] commitPaneTitle failed", err);
+                        notifyAndLog("Rename pane", "warn", err, "TerminalPane");
+                    });
+                }}
+                onTitleCancel={() => {
+                    skipTitleCommitRef.current = true;
+                    setTitleDraft(paneTitle);
+                    setTitleEditing(false);
+                }}
+                onAutoClick={handleAutoClick}
+                onSplitVertical={() => {
+                    props.onFocus(props.paneId);
+                    props.onSplitVertical(props.paneId);
+                    terminalRef.current?.focus();
+                }}
+                onSplitHorizontal={() => {
+                    props.onFocus(props.paneId);
+                    props.onSplitHorizontal(props.paneId);
+                    terminalRef.current?.focus();
+                }}
+                onAddMember={handleAddMember}
+                onClose={() => setPendingPaneCloseConfirm(true)}
+                preventTerminalFocusSteal={preventTerminalFocusSteal}
+            />
             <div className="terminal-pane-body">
                 <SearchBar
                     open={searchOpen}
@@ -321,6 +265,13 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                     }}
                     searchAddon={searchAddonRef.current}
                 />
+                {autoPopoverOpen && !autoRunning && (
+                    <AutoEnterPopover
+                        onStart={handleAutoStart}
+                        onClose={handleAutoPopoverClose}
+                        preventTerminalFocusSteal={preventTerminalFocusSteal}
+                    />
+                )}
                 <div ref={containerRef} className="terminal-mount"/>
                 {!scrollAtBottom && (
                     <button
@@ -384,6 +335,9 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
  *       親コンポーネントが useCallback で安定参照を維持していること。
  * これらの関数 props を比較から除外しているため、親が useCallback を
  * 使わない場合は不要な再レンダリングが抑制されなくなる。
+ *
+ * autoRunning は props ではなく Zustand store からの内部状態のため
+ * ここでの比較は不要。store 値の変化は React が直接検知する。
  */
 function areTerminalPanePropsEqual(prev: TerminalPaneProps, next: TerminalPaneProps): boolean {
     return (

@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 
+	"myT-x/internal/apptypes"
 	"myT-x/internal/ipc"
 	"myT-x/internal/tmux"
 )
@@ -15,7 +16,7 @@ func main() {
 	logger := log.New(os.Stdout, "[myT-x] ", log.LstdFlags|log.Lmsgprefix)
 
 	sessions := tmux.NewSessionManager()
-	emitter := tmux.EventEmitterFunc(func(name string, payload any) {
+	emitter := apptypes.EventEmitterFunc(func(name string, payload any) {
 		logger.Printf("event=%s payload=%v", name, payload)
 	})
 

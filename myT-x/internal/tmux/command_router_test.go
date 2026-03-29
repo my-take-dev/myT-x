@@ -118,7 +118,7 @@ func TestNewCommandRouterDefaults(t *testing.T) {
 		t.Fatal("sessions should not be nil (auto-created)")
 	}
 	if router.emitter == nil {
-		t.Fatal("emitter should not be nil (noopEmitter)")
+		t.Fatal("emitter should not be nil (NoopEmitter)")
 	}
 	if router.opts.PipeName == "" {
 		t.Fatal("PipeName should have a default value")

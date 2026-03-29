@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"myT-x/internal/testutil"
@@ -397,6 +399,174 @@ func TestPruneRemovesStaleWorktreeEntries(t *testing.T) {
 		if info.Path == wtPath {
 			t.Errorf("stale worktree %q still present after prune", wtPath)
 		}
+	}
+}
+
+func TestIsDetachedHead(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	t.Run("attached HEAD returns false", func(t *testing.T) {
+		repoDir := testutil.CreateTempGitRepo(t)
+		repo, err := Open(repoDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		isDetached, err := repo.IsDetachedHead()
+		if err != nil {
+			t.Fatalf("IsDetachedHead() error = %v", err)
+		}
+		if isDetached {
+			t.Fatal("expected attached HEAD, got detached")
+		}
+	})
+
+	t.Run("detached HEAD returns true", func(t *testing.T) {
+		repoDir := testutil.CreateTempGitRepo(t)
+		repo, err := Open(repoDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Detach HEAD.
+		if _, err := repo.runGitCommand("checkout", "--detach"); err != nil {
+			t.Fatalf("git checkout --detach failed: %v", err)
+		}
+		isDetached, err := repo.IsDetachedHead()
+		if err != nil {
+			t.Fatalf("IsDetachedHead() error = %v", err)
+		}
+		if !isDetached {
+			t.Fatal("expected detached HEAD, got attached")
+		}
+	})
+
+	t.Run("non-git directory returns error", func(t *testing.T) {
+		nonGitDir := t.TempDir()
+		repo := &Repository{path: nonGitDir}
+		isDetached, err := repo.IsDetachedHead()
+		if err == nil {
+			t.Fatal("expected error for non-git directory")
+		}
+		if isDetached {
+			t.Fatal("should not report detached HEAD on error")
+		}
+	})
+}
+
+func TestCheckWorktreeHealth(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	t.Run("healthy worktree", func(t *testing.T) {
+		repoDir := testutil.CreateTempGitRepo(t)
+		repo, err := Open(repoDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wtDir := GenerateWorktreeDirPath(repoDir)
+		if err := os.MkdirAll(wtDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		wtPath := filepath.Join(wtDir, "healthy")
+		if err := repo.CreateWorktreeDetached(wtPath, "HEAD"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = repo.RemoveWorktreeForced(wtPath) })
+
+		health := repo.CheckWorktreeHealth(wtPath)
+		if !health.IsHealthy {
+			t.Fatalf("expected healthy worktree, got issues: %v", health.Issues)
+		}
+		if len(health.Issues) > 0 {
+			t.Fatalf("expected no issues, got: %v", health.Issues)
+		}
+	})
+
+	t.Run("missing directory", func(t *testing.T) {
+		repoDir := testutil.CreateTempGitRepo(t)
+		repo, err := Open(repoDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		health := repo.CheckWorktreeHealth(filepath.Join(repoDir, "nonexistent"))
+		if health.IsHealthy {
+			t.Fatal("expected unhealthy for missing directory")
+		}
+		if len(health.Issues) == 0 {
+			t.Fatal("expected issues for missing directory")
+		}
+	})
+
+	t.Run("directory without .git file", func(t *testing.T) {
+		repoDir := testutil.CreateTempGitRepo(t)
+		repo, err := Open(repoDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		brokenDir := filepath.Join(t.TempDir(), "broken-wt")
+		if err := os.MkdirAll(brokenDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		health := repo.CheckWorktreeHealth(brokenDir)
+		if health.IsHealthy {
+			t.Fatal("expected unhealthy for directory without .git file")
+		}
+		// Step 2 failure should produce exactly 1 issue (early return, not 2).
+		if len(health.Issues) != 1 {
+			t.Fatalf("expected 1 issue for missing .git, got %d: %v", len(health.Issues), health.Issues)
+		}
+	})
+
+	t.Run("worktree with corrupt HEAD", func(t *testing.T) {
+		repoDir := testutil.CreateTempGitRepo(t)
+		repo, err := Open(repoDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wtDir := GenerateWorktreeDirPath(repoDir)
+		if err := os.MkdirAll(wtDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		wtPath := filepath.Join(wtDir, "corrupt")
+		if err := repo.CreateWorktreeDetached(wtPath, "HEAD"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = repo.RemoveWorktreeForced(wtPath) })
+
+		// Corrupt the HEAD file to make rev-parse fail.
+		headPath := filepath.Join(wtPath, ".git")
+		// Read the .git file content (it's a gitdir pointer file for worktrees).
+		gitContent, err := os.ReadFile(headPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Extract the gitdir path and corrupt the HEAD file there.
+		gitDirLine := strings.TrimSpace(string(gitContent))
+		if after, ok := strings.CutPrefix(gitDirLine, "gitdir: "); ok {
+			gitDir := filepath.FromSlash(after)
+			if !filepath.IsAbs(gitDir) {
+				gitDir = filepath.Join(wtPath, gitDir)
+			}
+			headFile := filepath.Join(gitDir, "HEAD")
+			if err := os.WriteFile(headFile, []byte("invalid-ref"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		health := repo.CheckWorktreeHealth(wtPath)
+		if health.IsHealthy {
+			t.Fatal("expected unhealthy for corrupt HEAD")
+		}
+		if len(health.Issues) == 0 {
+			t.Fatal("expected at least one issue for corrupt HEAD")
+		}
+	})
+}
+
+func TestWorktreeStructFieldCounts(t *testing.T) {
+	if got := reflect.TypeFor[WorktreeInfo]().NumField(); got != 5 {
+		t.Fatalf("WorktreeInfo field count = %d, want 5; update tests for new fields", got)
+	}
+	if got := reflect.TypeFor[WorktreeHealth]().NumField(); got != 2 {
+		t.Fatalf("WorktreeHealth field count = %d, want 2; update tests for new fields", got)
 	}
 }
 

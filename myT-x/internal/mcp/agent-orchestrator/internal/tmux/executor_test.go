@@ -47,6 +47,12 @@ func TestExecutorMethodsRejectInvalidPaneID(t *testing.T) {
 	if _, err := exec.CapturePaneOutput(ctx, "invalid", 10); err == nil {
 		t.Fatal("CapturePaneOutput should reject invalid pane_id")
 	}
+	if _, err := exec.SplitPane(ctx, "invalid", true); err == nil {
+		t.Fatal("SplitPane should reject invalid pane_id")
+	}
+	if err := exec.SendKeysPaste(ctx, "invalid", "hello"); err == nil {
+		t.Fatal("SendKeysPaste should reject invalid pane_id")
+	}
 }
 
 func TestExecutorGetPaneIDUsesTMUXPANE(t *testing.T) {

@@ -2,6 +2,7 @@ import React, {useCallback, useRef, useState, useSyncExternalStore} from "react"
 import {api} from "../../api";
 import {useI18n} from "../../i18n";
 import {useTmuxStore} from "../../stores/tmuxStore";
+import {notifyAndLog} from "../../utils/notifyUtils";
 import {normalizeViewerSidebarMode} from "../../utils/viewerSidebarMode";
 import type {ViewPlugin} from "./viewerRegistry";
 import {getRegisteredViews} from "./viewerRegistry";
@@ -78,6 +79,7 @@ export function ActivityStrip() {
             await api.ToggleViewerSidebarMode();
         } catch (err) {
             console.warn("[activity-strip] toggle sidebar mode failed", err);
+            notifyAndLog("Toggle sidebar mode", "warn", err, "ActivityStrip");
         } finally {
             toggleInFlightRef.current = false;
             setIsTogglingSidebarMode(false);

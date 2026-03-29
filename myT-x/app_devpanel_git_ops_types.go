@@ -1,20 +1,11 @@
 package main
 
-// DevPanelCommitResult represents the result of a git commit operation.
-type DevPanelCommitResult struct {
-	Hash    string `json:"hash"`    // short commit hash
-	Message string `json:"message"` // first line of commit message
-}
+import "myT-x/internal/devpanel"
 
-// DevPanelPushResult represents the result of a git push operation.
-type DevPanelPushResult struct {
-	RemoteName  string `json:"remote_name"`  // e.g. "origin"
-	BranchName  string `json:"branch_name"`  // e.g. "main"
-	UpstreamSet bool   `json:"upstream_set"` // true if --set-upstream was used
-}
-
-// DevPanelPullResult represents the result of a git pull operation.
-type DevPanelPullResult struct {
-	Updated bool   `json:"updated"` // true if any changes were pulled
-	Summary string `json:"summary"` // human-readable summary
-}
+// Type aliases for Wails binding compatibility.
+// Wails generates bindings from App method signatures in the main package.
+// These aliases re-export internal devpanel types so that Wails can
+// discover them without exposing the internal package directly.
+type DevPanelCommitResult = devpanel.CommitResult
+type DevPanelPushResult = devpanel.PushResult
+type DevPanelPullResult = devpanel.PullResult

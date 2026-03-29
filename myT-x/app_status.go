@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
 
 	"myT-x/internal/tmux"
@@ -64,25 +63,9 @@ func resolvePaneTitle(panes []tmux.PaneSnapshot, activePN int) string {
 	return ""
 }
 
+// resolveActiveWindowSnapshot delegates to the shared tmux utility.
 func resolveActiveWindowSnapshot(windows []tmux.WindowSnapshot, activeWindowID int) *tmux.WindowSnapshot {
-	if len(windows) == 0 {
-		return nil
-	}
-	for i := range windows {
-		window := &windows[i]
-		if window.ID == activeWindowID {
-			return window
-		}
-	}
-	// Fallback: activeWindowID did not match any window. This can happen transiently
-	// when a window is destroyed between snapshot collection and status rendering.
-	// Log the mismatch for diagnostics and fall back to the first window, which is
-	// always safe because snapshot windows never contain nil entries.
-	slog.Debug("[DEBUG-STATUS] activeWindowID not found in windows, falling back to first window",
-		"activeWindowID", activeWindowID,
-		"windowCount", len(windows),
-		"firstWindowID", windows[0].ID)
-	return &windows[0]
+	return tmux.ResolveActiveWindow(windows, activeWindowID)
 }
 
 // BuildStatusLine returns status line data.
@@ -99,7 +82,7 @@ func (a *App) BuildStatusLine() string {
 
 	var current tmux.SessionSnapshot
 	found := false
-	activeSession := a.getActiveSessionName()
+	activeSession := a.sessionService.GetActiveSessionName()
 	for _, session := range sessions {
 		if session.Name == activeSession {
 			current = session

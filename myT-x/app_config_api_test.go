@@ -2,21 +2,18 @@ package main
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"reflect"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"myT-x/internal/config"
-	"myT-x/internal/install"
 	"myT-x/internal/tmux"
 )
 
-// NOTE: This file overrides package-level function variables
-// (runtimeEventsEmitFn, ensureShimInstalledFn). Do not use t.Parallel() here.
+// NOTE: This file overrides the package-level function variable
+// runtimeEventsEmitFn. Do not use t.Parallel() here.
 
 func newConfigPathForAPITest(t *testing.T, fileName string) string {
 	t.Helper()
@@ -36,19 +33,18 @@ func TestSaveConfigEmitsUpdatedConfigEvent(t *testing.T) {
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.configPath = newConfigPathForAPITest(t, "config.yaml")
-	app.setConfigSnapshot(config.DefaultConfig())
+	app.configState.Initialize(newConfigPathForAPITest(t, "config.yaml"), config.DefaultConfig())
 
 	eventCount := 0
 	var eventName string
-	var eventPayload configUpdatedEvent
+	var eventPayload config.UpdatedEvent
 	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
 		eventCount++
 		eventName = name
 		if len(data) == 0 {
 			return
 		}
-		payload, ok := data[0].(configUpdatedEvent)
+		payload, ok := data[0].(config.UpdatedEvent)
 		if ok {
 			eventPayload = payload
 		}
@@ -94,15 +90,14 @@ func TestSaveConfigEmitsMonotonicEventVersion(t *testing.T) {
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.configPath = newConfigPathForAPITest(t, "config.yaml")
-	app.setConfigSnapshot(config.DefaultConfig())
+	app.configState.Initialize(newConfigPathForAPITest(t, "config.yaml"), config.DefaultConfig())
 
 	var versions []uint64
 	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
 		if name != "config:updated" || len(data) == 0 {
 			return
 		}
-		payload, ok := data[0].(configUpdatedEvent)
+		payload, ok := data[0].(config.UpdatedEvent)
 		if !ok {
 			t.Fatalf("unexpected payload type: %T", data[0])
 		}
@@ -137,7 +132,7 @@ func TestSaveConfigKeepsPreviousStateOnValidationError(t *testing.T) {
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.configPath = newConfigPathForAPITest(t, "config.yaml")
+	app.configState.Initialize(newConfigPathForAPITest(t, "config.yaml"), config.DefaultConfig())
 
 	events := 0
 	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
@@ -166,7 +161,7 @@ func TestSaveConfigKeepsPreviousStateOnValidationError(t *testing.T) {
 		t.Fatalf("config shell after failed save = %q, want %q", got.Shell, initial.Shell)
 	}
 
-	loaded, err := config.Load(app.configPath)
+	loaded, err := config.Load(app.configState.ConfigPath())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -183,20 +178,18 @@ func TestToggleViewerSidebarModePreservesLatestConfigAndEmitsUpdate(t *testing.T
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.configPath = newConfigPathForAPITest(t, "config.yaml")
-
 	initial := config.DefaultConfig()
 	initial.Shell = "cmd.exe"
 	initial.GlobalHotkey = "Ctrl+Alt+Y"
 	initial.ViewerSidebarMode = config.DefaultConfig().ViewerSidebarMode
-	app.setConfigSnapshot(initial)
+	app.configState.Initialize(newConfigPathForAPITest(t, "config.yaml"), initial)
 
-	var payloads []configUpdatedEvent
+	var payloads []config.UpdatedEvent
 	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
 		if name != "config:updated" || len(data) == 0 {
 			return
 		}
-		payload, ok := data[0].(configUpdatedEvent)
+		payload, ok := data[0].(config.UpdatedEvent)
 		if !ok {
 			t.Fatalf("unexpected payload type: %T", data[0])
 		}
@@ -252,7 +245,7 @@ func TestToggleViewerSidebarModePreservesLatestConfigAndEmitsUpdate(t *testing.T
 		t.Fatalf("payload versions = [%d %d], want [1 2]", payloads[0].Version, payloads[1].Version)
 	}
 
-	loaded, err := config.Load(app.configPath)
+	loaded, err := config.Load(app.configState.ConfigPath())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -268,87 +261,6 @@ func TestToggleViewerSidebarModePreservesLatestConfigAndEmitsUpdate(t *testing.T
 	}
 }
 
-func TestSessionAPIsEmitEventsThroughRuntimeEventsEmitFn(t *testing.T) {
-	origEmit := runtimeEventsEmitFn
-	origInstall := ensureShimInstalledFn
-	t.Cleanup(func() {
-		runtimeEventsEmitFn = origEmit
-		ensureShimInstalledFn = origInstall
-	})
-
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
-	app.workspace = t.TempDir()
-
-	var mu sync.Mutex
-	events := make([]string, 0, 3)
-	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...any) {
-		mu.Lock()
-		events = append(events, name)
-		mu.Unlock()
-	}
-
-	wantInstallResult := install.ShimInstallResult{InstalledPath: filepath.Join(app.workspace, "tmux.exe")}
-	ensureShimInstalledFn = func(string) (install.ShimInstallResult, error) {
-		return wantInstallResult, nil
-	}
-
-	app.SetActiveSession("session-a")
-	app.DetachSession("session-a")
-	gotInstallResult, err := app.InstallTmuxShim()
-	if err != nil {
-		t.Fatalf("InstallTmuxShim() error = %v", err)
-	}
-	if gotInstallResult != wantInstallResult {
-		t.Fatalf("InstallTmuxShim() result = %+v, want %+v", gotInstallResult, wantInstallResult)
-	}
-
-	mu.Lock()
-	gotEvents := append([]string(nil), events...)
-	mu.Unlock()
-	wantEvents := []string{
-		"tmux:active-session",
-		"tmux:session-detached",
-		"tmux:shim-installed",
-	}
-	if len(gotEvents) != len(wantEvents) {
-		t.Fatalf("event count = %d, want %d (%v)", len(gotEvents), len(wantEvents), gotEvents)
-	}
-	for i := range wantEvents {
-		if gotEvents[i] != wantEvents[i] {
-			t.Fatalf("event[%d] = %q, want %q", i, gotEvents[i], wantEvents[i])
-		}
-	}
-}
-
-func TestInstallTmuxShimDoesNotEmitOnError(t *testing.T) {
-	origEmit := runtimeEventsEmitFn
-	origInstall := ensureShimInstalledFn
-	t.Cleanup(func() {
-		runtimeEventsEmitFn = origEmit
-		ensureShimInstalledFn = origInstall
-	})
-
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
-	app.workspace = t.TempDir()
-
-	eventCount := 0
-	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
-		eventCount++
-	}
-	ensureShimInstalledFn = func(string) (install.ShimInstallResult, error) {
-		return install.ShimInstallResult{}, errors.New("install failed")
-	}
-
-	if _, err := app.InstallTmuxShim(); err == nil {
-		t.Fatal("InstallTmuxShim() expected error")
-	}
-	if eventCount != 0 {
-		t.Fatalf("event count = %d, want 0", eventCount)
-	}
-}
-
 func TestSaveConfigRejectsEmptyConfigPath(t *testing.T) {
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() {
@@ -357,7 +269,7 @@ func TestSaveConfigRejectsEmptyConfigPath(t *testing.T) {
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.configPath = "   "
+	app.configState.Initialize("   ", config.DefaultConfig())
 
 	eventCount := 0
 	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
@@ -372,24 +284,23 @@ func TestSaveConfigRejectsEmptyConfigPath(t *testing.T) {
 	}
 }
 
-func TestSaveConfigWithLockDoesNotIncrementEventVersionOnSaveError(t *testing.T) {
+func TestSaveConfigDoesNotIncrementEventVersionOnSaveError(t *testing.T) {
 	app := NewApp()
-	app.configPath = "   "
-	app.configEventVersion.Store(7)
-	app.setConfigSnapshot(config.DefaultConfig())
+	app.configState.Initialize("   ", config.DefaultConfig())
+	app.configState.SetEventVersion(7)
 
-	if _, err := app.saveConfigWithLock(config.DefaultConfig()); err == nil {
-		t.Fatal("saveConfigWithLock() expected error")
+	if _, err := app.configState.Save(config.DefaultConfig()); err == nil {
+		t.Fatal("configState.Save() expected error")
 	}
-	if got := app.configEventVersion.Load(); got != 7 {
-		t.Fatalf("configEventVersion = %d, want 7", got)
+	if got := app.configState.EventVersion(); got != 7 {
+		t.Fatalf("EventVersion = %d, want 7", got)
 	}
 }
 
 func TestApplyRuntimeClaudeEnvUpdateRouterNil(t *testing.T) {
 	app := NewApp()
 	// router is nil — must not panic.
-	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+	app.applyRuntimeClaudeEnvUpdate(config.UpdatedEvent{
 		Config:  config.DefaultConfig(),
 		Version: 1,
 	})
@@ -408,11 +319,11 @@ func TestApplyRuntimeClaudeEnvUpdateSkipsStaleVersion(t *testing.T) {
 	olderCfg.ClaudeEnv = &config.ClaudeEnvConfig{Vars: map[string]string{"A": "old"}}
 
 	// Apply version 2 first, then stale version 1 — version 1 must be rejected.
-	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+	app.applyRuntimeClaudeEnvUpdate(config.UpdatedEvent{
 		Config:  newerCfg,
 		Version: 2,
 	})
-	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+	app.applyRuntimeClaudeEnvUpdate(config.UpdatedEvent{
 		Config:  olderCfg,
 		Version: 1,
 	})
@@ -428,7 +339,7 @@ func TestApplyRuntimeClaudeEnvUpdateSkipsStaleVersion(t *testing.T) {
 	// Apply version 3 to confirm forward progress works.
 	v3Cfg := config.DefaultConfig()
 	v3Cfg.ClaudeEnv = &config.ClaudeEnvConfig{Vars: map[string]string{"B": "v3"}}
-	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+	app.applyRuntimeClaudeEnvUpdate(config.UpdatedEvent{
 		Config:  v3Cfg,
 		Version: 3,
 	})
@@ -447,7 +358,7 @@ func TestApplyRuntimeClaudeEnvUpdateSkipsStaleVersion(t *testing.T) {
 	// Apply duplicate version 3 — must be rejected (defensive <= check).
 	dupCfg := config.DefaultConfig()
 	dupCfg.ClaudeEnv = &config.ClaudeEnvConfig{Vars: map[string]string{"B": "dup"}}
-	app.applyRuntimeClaudeEnvUpdate(configUpdatedEvent{
+	app.applyRuntimeClaudeEnvUpdate(config.UpdatedEvent{
 		Config:  dupCfg,
 		Version: 3,
 	})
@@ -459,7 +370,7 @@ func TestApplyRuntimeClaudeEnvUpdateSkipsStaleVersion(t *testing.T) {
 func TestApplyRuntimePaneEnvUpdateRouterNil(t *testing.T) {
 	app := NewApp()
 	// router is nil — must not panic.
-	app.applyRuntimePaneEnvUpdate(configUpdatedEvent{
+	app.applyRuntimePaneEnvUpdate(config.UpdatedEvent{
 		Config:  config.DefaultConfig(),
 		Version: 1,
 	})
@@ -478,11 +389,11 @@ func TestApplyRuntimePaneEnvUpdateSkipsStaleVersion(t *testing.T) {
 	olderCfg.PaneEnv = map[string]string{"A": "old"}
 
 	// Apply version 2 first, then stale version 1 — version 1 must be rejected.
-	app.applyRuntimePaneEnvUpdate(configUpdatedEvent{
+	app.applyRuntimePaneEnvUpdate(config.UpdatedEvent{
 		Config:  newerCfg,
 		Version: 2,
 	})
-	app.applyRuntimePaneEnvUpdate(configUpdatedEvent{
+	app.applyRuntimePaneEnvUpdate(config.UpdatedEvent{
 		Config:  olderCfg,
 		Version: 1,
 	})
@@ -498,7 +409,7 @@ func TestApplyRuntimePaneEnvUpdateSkipsStaleVersion(t *testing.T) {
 	// Apply version 3 to confirm forward progress works.
 	v3Cfg := config.DefaultConfig()
 	v3Cfg.PaneEnv = map[string]string{"B": "v3"}
-	app.applyRuntimePaneEnvUpdate(configUpdatedEvent{
+	app.applyRuntimePaneEnvUpdate(config.UpdatedEvent{
 		Config:  v3Cfg,
 		Version: 3,
 	})
@@ -517,7 +428,7 @@ func TestApplyRuntimePaneEnvUpdateSkipsStaleVersion(t *testing.T) {
 	// Apply duplicate version 3 — must be rejected (defensive <= check).
 	dupCfg := config.DefaultConfig()
 	dupCfg.PaneEnv = map[string]string{"B": "dup"}
-	app.applyRuntimePaneEnvUpdate(configUpdatedEvent{
+	app.applyRuntimePaneEnvUpdate(config.UpdatedEvent{
 		Config:  dupCfg,
 		Version: 3,
 	})
@@ -538,50 +449,6 @@ func TestGetAllowedShells(t *testing.T) {
 			t.Fatalf("GetAllowedShells()[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
-}
-
-func TestListSessions(t *testing.T) {
-	t.Run("returns nil when session manager is unavailable", func(t *testing.T) {
-		app := NewApp()
-		app.sessions = nil
-		if got := app.ListSessions(); got != nil {
-			t.Fatalf("ListSessions() = %v, want nil", got)
-		}
-	})
-
-	t.Run("returns snapshots from session manager", func(t *testing.T) {
-		app := NewApp()
-		app.sessions = tmux.NewSessionManager()
-		if _, _, err := app.sessions.CreateSession("alpha", "0", 120, 40); err != nil {
-			t.Fatalf("CreateSession() error = %v", err)
-		}
-
-		got := app.ListSessions()
-		if len(got) != 1 {
-			t.Fatalf("ListSessions() length = %d, want 1", len(got))
-		}
-		if got[0].Name != "alpha" {
-			t.Fatalf("ListSessions()[0].Name = %q, want %q", got[0].Name, "alpha")
-		}
-	})
-}
-
-func TestIsAgentTeamsAvailable(t *testing.T) {
-	t.Run("returns false when router is unavailable", func(t *testing.T) {
-		app := NewApp()
-		app.router = nil
-		if app.IsAgentTeamsAvailable() {
-			t.Fatal("IsAgentTeamsAvailable() should be false when router is nil")
-		}
-	})
-
-	t.Run("returns router shim availability", func(t *testing.T) {
-		app := NewApp()
-		app.router = tmux.NewCommandRouter(nil, nil, tmux.RouterOptions{ShimAvailable: true})
-		if !app.IsAgentTeamsAvailable() {
-			t.Fatal("IsAgentTeamsAvailable() should be true when shim is available")
-		}
-	})
 }
 
 func TestGetValidationRules(t *testing.T) {
@@ -640,8 +507,8 @@ func TestGetClaudeEnvVarDescriptionsMutationSafety(t *testing.T) {
 }
 
 func TestConfigEventFieldCounts(t *testing.T) {
-	if got := reflect.TypeFor[configUpdatedEvent]().NumField(); got != 3 {
-		t.Fatalf("configUpdatedEvent field count = %d, want 3; update emit payload and tests for new fields", got)
+	if got := reflect.TypeFor[config.UpdatedEvent]().NumField(); got != 3 {
+		t.Fatalf("config.UpdatedEvent field count = %d, want 3; update emit payload and tests for new fields", got)
 	}
 }
 
@@ -653,7 +520,7 @@ func TestGetConfigAndFlushWarningsEmitsPendingConfigLoadWarningOnce(t *testing.T
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.setConfigSnapshot(config.DefaultConfig())
+	app.configState.SetSnapshot(config.DefaultConfig())
 	app.addPendingConfigLoadWarning("failed to load config at startup")
 
 	eventCount := 0
@@ -693,7 +560,7 @@ func TestGetConfigDoesNotFlushPendingWarnings(t *testing.T) {
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.setConfigSnapshot(config.DefaultConfig())
+	app.configState.SetSnapshot(config.DefaultConfig())
 	app.addPendingConfigLoadWarning("warning-to-flush-later")
 
 	eventCount := 0
@@ -735,7 +602,7 @@ func TestGetConfigAndFlushWarningsEmitsCombinedPendingConfigLoadWarnings(t *test
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.setConfigSnapshot(config.DefaultConfig())
+	app.configState.SetSnapshot(config.DefaultConfig())
 	app.addPendingConfigLoadWarning("failed to load config at startup")
 	app.addPendingConfigLoadWarning("failed to start pipe server at startup")
 
@@ -769,99 +636,26 @@ func TestGetConfigAndFlushWarningsEmitsCombinedPendingConfigLoadWarnings(t *test
 	}
 }
 
-func TestConfigAndSessionAPIsSkipRuntimeEventsWhenContextIsNil(t *testing.T) {
+func TestSaveConfigSkipsRuntimeEventsWhenContextIsNil(t *testing.T) {
 	origEmit := runtimeEventsEmitFn
-	origInstall := ensureShimInstalledFn
 	t.Cleanup(func() {
 		runtimeEventsEmitFn = origEmit
-		ensureShimInstalledFn = origInstall
 	})
 
 	app := NewApp()
-	app.configPath = newConfigPathForAPITest(t, "config.yaml")
-	app.workspace = t.TempDir()
+	app.configState.Initialize(newConfigPathForAPITest(t, "config.yaml"), config.DefaultConfig())
 
 	eventCount := 0
 	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
 		eventCount++
 	}
-	ensureShimInstalledFn = func(string) (install.ShimInstallResult, error) {
-		return install.ShimInstallResult{InstalledPath: filepath.Join(app.workspace, "tmux.exe")}, nil
-	}
 
 	if err := app.SaveConfig(config.DefaultConfig()); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
-	app.SetActiveSession("session-a")
-	app.DetachSession("session-a")
-	if _, err := app.InstallTmuxShim(); err != nil {
-		t.Fatalf("InstallTmuxShim() error = %v", err)
-	}
 
 	if eventCount != 0 {
 		t.Fatalf("event count = %d, want 0", eventCount)
-	}
-}
-
-func TestPickSessionDirectoryRequiresRuntimeContext(t *testing.T) {
-	app := NewApp()
-	app.setRuntimeContext(nil)
-
-	if _, err := app.PickSessionDirectory(); err == nil {
-		t.Fatal("PickSessionDirectory() expected context-not-ready error")
-	}
-}
-
-func TestSetActiveSessionUpdatesStateAndEmitsTrimmedName(t *testing.T) {
-	origEmit := runtimeEventsEmitFn
-	t.Cleanup(func() {
-		runtimeEventsEmitFn = origEmit
-	})
-
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
-
-	eventCount := 0
-	emittedName := ""
-	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
-		if name != "tmux:active-session" {
-			return
-		}
-		eventCount++
-		if len(data) == 0 {
-			return
-		}
-		payload, ok := data[0].(map[string]string)
-		if !ok {
-			return
-		}
-		emittedName = payload["name"]
-	}
-
-	app.SetActiveSession("  session-a  ")
-
-	if got := app.GetActiveSession(); got != "session-a" {
-		t.Fatalf("GetActiveSession() = %q, want %q", got, "session-a")
-	}
-	if emittedName != "session-a" {
-		t.Fatalf("emitted active session = %q, want %q", emittedName, "session-a")
-	}
-	if eventCount != 1 {
-		t.Fatalf("event count = %d, want 1", eventCount)
-	}
-}
-
-func TestSetActiveSessionTrimsWhitespaceOnlyToEmpty(t *testing.T) {
-	origEmit := runtimeEventsEmitFn
-	t.Cleanup(func() {
-		runtimeEventsEmitFn = origEmit
-	})
-	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {}
-
-	app := NewApp()
-	app.SetActiveSession("   ")
-	if got := app.GetActiveSession(); got != "" {
-		t.Fatalf("GetActiveSession() = %q, want empty string", got)
 	}
 }
 
@@ -873,7 +667,7 @@ func TestSaveConfigSerializesConcurrentUpdates(t *testing.T) {
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.configPath = newConfigPathForAPITest(t, "config.yaml")
+	app.configState.Initialize(newConfigPathForAPITest(t, "config.yaml"), config.DefaultConfig())
 
 	enterFirstEvent := make(chan struct{})
 	releaseFirstEvent := make(chan struct{})

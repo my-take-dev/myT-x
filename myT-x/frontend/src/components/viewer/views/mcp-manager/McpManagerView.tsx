@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {useEffect, useState} from "react";
 import {useI18n} from "../../../../i18n";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
@@ -16,7 +16,6 @@ export function McpManagerView() {
         orchMcpList,
         representativeMCP,
         orchRepresentativeMCP,
-        aggregateStatus,
         isLoading,
         error,
         activeSession,
@@ -24,9 +23,16 @@ export function McpManagerView() {
         dismissError,
     } = useMcpManager();
 
-    const [selectedCategory, setSelectedCategory] = useState<McpCategory>(
-        orchMcpList.length > 0 && lspMcpList.length === 0 ? "orchestrator" : "lsp",
-    );
+    const [selectedCategory, setSelectedCategory] = useState<McpCategory>("lsp");
+
+    // Correct the selected category after async data load completes.
+    useEffect(() => {
+        if (!isLoading && orchMcpList.length > 0 && lspMcpList.length === 0) {
+            setSelectedCategory("orchestrator");
+        } else if (!isLoading && orchMcpList.length > 0) {
+            setSelectedCategory("orchestrator");
+        }
+    }, [isLoading, orchMcpList.length, lspMcpList.length]);
 
     if (activeSession == null) {
         return (
@@ -92,18 +98,6 @@ export function McpManagerView() {
                     <>
                         <aside className="mcp-list-sidebar" aria-label="MCP categories">
                             <ul className="mcp-category-list">
-                                {lspMcpList.length > 0 && (
-                                    <li
-                                        className={`mcp-category-item${selectedCategory === "lsp" ? " mcp-category-item-selected" : ""}`}
-                                        onClick={() => setSelectedCategory("lsp")}
-                                    >
-                                        {aggregateStatus != null && (
-                                            <span className={`mcp-status-dot ${aggregateStatus}`} title={aggregateStatus}/>
-                                        )}
-                                        <span className="mcp-list-name">LSP-MCP</span>
-                                        <span className="mcp-category-count">{lspMcpList.length}</span>
-                                    </li>
-                                )}
                                 {orchMcpList.length > 0 && (
                                     <li
                                         className={`mcp-category-item${selectedCategory === "orchestrator" ? " mcp-category-item-selected" : ""}`}
@@ -111,6 +105,15 @@ export function McpManagerView() {
                                     >
                                         <span className="mcp-list-name">Agent Orchestrator</span>
                                         <span className="mcp-category-count">{orchMcpList.length}</span>
+                                    </li>
+                                )}
+                                {lspMcpList.length > 0 && (
+                                    <li
+                                        className={`mcp-category-item${selectedCategory === "lsp" ? " mcp-category-item-selected" : ""}`}
+                                        onClick={() => setSelectedCategory("lsp")}
+                                    >
+                                        <span className="mcp-list-name">LSP-MCP</span>
+                                        <span className="mcp-category-count">{lspMcpList.length}</span>
                                     </li>
                                 )}
                             </ul>
@@ -124,7 +127,6 @@ export function McpManagerView() {
                             <McpDetailPanel
                                 representativeMCP={representativeMCP}
                                 activeSession={activeSession}
-                                aggregateStatus={aggregateStatus}
                                 totalLspCount={lspMcpList.length}
                             />
                         )}

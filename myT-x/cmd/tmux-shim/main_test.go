@@ -587,13 +587,7 @@ func TestNextRotatedShimDebugLogPathIncrementsOnCollision(t *testing.T) {
 }
 
 func TestRotateShimDebugLogIfNeededScenarios(t *testing.T) {
-	originalRename := renameFileFn
-	originalRemove := removeFileFn
-	t.Cleanup(func() {
-		renameFileFn = originalRename
-		removeFileFn = originalRemove
-	})
-
+	t.Parallel()
 	tests := []struct {
 		name          string
 		unixTime      int64
@@ -633,6 +627,7 @@ func TestRotateShimDebugLogIfNeededScenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			logDir := t.TempDir()
 			basePath := filepath.Join(logDir, shimDebugLogFileName)
 			if tt.basePayload != nil {
@@ -668,10 +663,7 @@ func TestRotateShimDebugLogIfNeededScenarios(t *testing.T) {
 }
 
 func TestRotateShimDebugLogIfNeededRetriesOnRenameCollision(t *testing.T) {
-	originalRename := renameFileFn
-	t.Cleanup(func() {
-		renameFileFn = originalRename
-	})
+	t.Parallel()
 
 	logDir := t.TempDir()
 	basePath := filepath.Join(logDir, shimDebugLogFileName)
@@ -680,17 +672,20 @@ func TestRotateShimDebugLogIfNeededRetriesOnRenameCollision(t *testing.T) {
 	}
 
 	renameCalls := 0
-	renameFileFn = func(oldPath, newPath string) error {
-		renameCalls++
-		if renameCalls < 3 {
-			return os.ErrExist
-		}
-		return os.Rename(oldPath, newPath)
+	ops := shimFileOps{
+		renameFile: func(oldPath, newPath string) error {
+			renameCalls++
+			if renameCalls < 3 {
+				return os.ErrExist
+			}
+			return os.Rename(oldPath, newPath)
+		},
+		removeFile: os.Remove,
 	}
 
 	const unixTime = int64(1700002100)
-	if err := rotateShimDebugLogIfNeeded(basePath, shimDebugLogMaxBytes, unixTime); err != nil {
-		t.Fatalf("rotateShimDebugLogIfNeeded() error = %v", err)
+	if err := rotateShimDebugLogIfNeededWith(basePath, shimDebugLogMaxBytes, unixTime, ops); err != nil {
+		t.Fatalf("rotateShimDebugLogIfNeededWith() error = %v", err)
 	}
 	if renameCalls != 3 {
 		t.Fatalf("rename call count = %d, want 3", renameCalls)
@@ -703,10 +698,7 @@ func TestRotateShimDebugLogIfNeededRetriesOnRenameCollision(t *testing.T) {
 }
 
 func TestRotateShimDebugLogIfNeededFailsAfterMaxRenameRetries(t *testing.T) {
-	originalRename := renameFileFn
-	t.Cleanup(func() {
-		renameFileFn = originalRename
-	})
+	t.Parallel()
 
 	logDir := t.TempDir()
 	basePath := filepath.Join(logDir, shimDebugLogFileName)
@@ -715,14 +707,17 @@ func TestRotateShimDebugLogIfNeededFailsAfterMaxRenameRetries(t *testing.T) {
 	}
 
 	renameCalls := 0
-	renameFileFn = func(_, _ string) error {
-		renameCalls++
-		return os.ErrExist
+	ops := shimFileOps{
+		renameFile: func(_, _ string) error {
+			renameCalls++
+			return os.ErrExist
+		},
+		removeFile: os.Remove,
 	}
 
-	err := rotateShimDebugLogIfNeeded(basePath, shimDebugLogMaxBytes, 1700002150)
+	err := rotateShimDebugLogIfNeededWith(basePath, shimDebugLogMaxBytes, 1700002150, ops)
 	if err == nil {
-		t.Fatal("rotateShimDebugLogIfNeeded() expected retry exhaustion error")
+		t.Fatal("rotateShimDebugLogIfNeededWith() expected retry exhaustion error")
 	}
 	if renameCalls != 4 {
 		t.Fatalf("rename call count = %d, want 4", renameCalls)
@@ -763,10 +758,7 @@ func TestRotateShimDebugLogIfNeededPrunesOldGenerations(t *testing.T) {
 }
 
 func TestPruneRotatedShimDebugLogsContinuesAfterRemoveError(t *testing.T) {
-	originalRemove := removeFileFn
-	t.Cleanup(func() {
-		removeFileFn = originalRemove
-	})
+	t.Parallel()
 
 	logDir := t.TempDir()
 	log1 := filepath.Join(logDir, "shim-debug-1.log")
@@ -779,17 +771,20 @@ func TestPruneRotatedShimDebugLogsContinuesAfterRemoveError(t *testing.T) {
 	}
 
 	var removed []string
-	removeFileFn = func(path string) error {
-		removed = append(removed, filepath.Base(path))
-		if strings.HasSuffix(path, "shim-debug-2.log") {
-			return errors.New("simulated remove failure")
-		}
-		return os.Remove(path)
+	ops := shimFileOps{
+		renameFile: os.Rename,
+		removeFile: func(path string) error {
+			removed = append(removed, filepath.Base(path))
+			if strings.HasSuffix(path, "shim-debug-2.log") {
+				return errors.New("simulated remove failure")
+			}
+			return os.Remove(path)
+		},
 	}
 
-	err := pruneRotatedShimDebugLogs(logDir, 1)
+	err := pruneRotatedShimDebugLogsWith(logDir, 1, ops)
 	if err == nil {
-		t.Fatal("pruneRotatedShimDebugLogs() expected aggregated remove error")
+		t.Fatal("pruneRotatedShimDebugLogsWith() expected aggregated remove error")
 	}
 	if len(removed) != 2 {
 		t.Fatalf("remove calls = %v, want 2 files", removed)

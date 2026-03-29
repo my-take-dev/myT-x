@@ -10,6 +10,15 @@ import type {
 /** taskEdgeMap の最大エントリ数。超過時は古いエントリを破棄する。 */
 const MAX_TASK_EDGES = 500;
 
+/** セッション別に保持するキャンバスデータ。mode はグローバル設定のため含めない。 */
+interface PerSessionCanvasData {
+    nodePositions: Record<string, CanvasNodePosition>;
+    nodeSizes: Record<string, CanvasNodeSize>;
+    taskEdgeMap: Record<string, OrchestratorTask>;
+    agentMap: Record<string, OrchestratorAgent>;
+    processStatusMap: Record<string, boolean>;
+}
+
 interface CanvasState {
     mode: "simple" | "canvas";
     setMode: (mode: "simple" | "canvas") => void;
@@ -35,8 +44,25 @@ interface CanvasState {
     processStatusMap: Record<string, boolean>;
     updateProcessStatus: (statuses: PaneProcessStatus[]) => void;
 
-    /** セッション切替時にセッション固有状態をリセットする。 */
+    /** セッション別キャンバスデータのマップ。セッション切替時に保存/復元する。 */
+    sessionDataMap: Record<string, PerSessionCanvasData>;
+
+    /** セッション切替時に現セッションを保存し、対象セッションを復元する。 */
     resetForSession: (sessionName: string) => void;
+
+    /** セッション破棄時にセッション固有データを削除する。 */
+    clearSessionData: (sessionName: string) => void;
+}
+
+/** 空のセッションデータを生成する。参照共有を防ぐため毎回新規オブジェクトを返す。 */
+function createEmptySessionData(): PerSessionCanvasData {
+    return {
+        nodePositions: {},
+        nodeSizes: {},
+        taskEdgeMap: {},
+        agentMap: {},
+        processStatusMap: {},
+    };
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
@@ -105,13 +131,51 @@ export const useCanvasStore = create<CanvasState>((set) => ({
             return {processStatusMap: next};
         }),
 
+    sessionDataMap: {},
+
     resetForSession: (sessionName) =>
-        set(() => ({
-            activeSessionName: sessionName,
-            taskEdgeMap: {},
-            nodePositions: {},
-            nodeSizes: {},
-            agentMap: {},
-            processStatusMap: {},
-        })),
+        set((state) => {
+            // 同一セッションなら何もしない
+            if (state.activeSessionName === sessionName) {
+                return {};
+            }
+            // 現セッションのデータを保存
+            const nextMap = {...state.sessionDataMap};
+            if (state.activeSessionName != null) {
+                nextMap[state.activeSessionName] = {
+                    nodePositions: state.nodePositions,
+                    nodeSizes: state.nodeSizes,
+                    taskEdgeMap: state.taskEdgeMap,
+                    agentMap: state.agentMap,
+                    processStatusMap: state.processStatusMap,
+                };
+            }
+            // 対象セッションのデータを復元（なければ空状態）
+            const restored = nextMap[sessionName] ?? createEmptySessionData();
+            // 復元したエントリは map から除去（フラット状態との二重保持を防ぐ）
+            delete nextMap[sessionName];
+            return {
+                activeSessionName: sessionName,
+                nodePositions: restored.nodePositions,
+                nodeSizes: restored.nodeSizes,
+                taskEdgeMap: restored.taskEdgeMap,
+                agentMap: restored.agentMap,
+                processStatusMap: restored.processStatusMap,
+                sessionDataMap: nextMap,
+            };
+        }),
+
+    clearSessionData: (sessionName) =>
+        set((state) => {
+            const {[sessionName]: _, ...rest} = state.sessionDataMap;
+            // アクティブセッションの場合はフラット状態もクリアし、セッション紐づけを解除
+            if (state.activeSessionName === sessionName) {
+                return {
+                    activeSessionName: null,
+                    sessionDataMap: rest,
+                    ...createEmptySessionData(),
+                };
+            }
+            return {sessionDataMap: rest};
+        }),
 }));

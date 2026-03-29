@@ -2,6 +2,7 @@ import {act} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {McpDetailPanel} from "../src/components/viewer/views/mcp-manager/McpDetailPanel";
+import {OrchestratorDetailPanel} from "../src/components/viewer/views/mcp-manager/OrchestratorDetailPanel";
 import type {MCPSnapshot} from "../src/types/mcp";
 
 const mocked = vi.hoisted(() => ({
@@ -21,6 +22,36 @@ function flushMicrotasks(): Promise<void> {
     return Promise.resolve();
 }
 
+// ---------------------------------------------------------------------------
+// Shared test environment helpers (SUG-3)
+// ---------------------------------------------------------------------------
+
+function setupTestEnv(): {container: HTMLDivElement; root: Root} {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    mocked.writeClipboardText.mockReset();
+    mocked.notifyClipboardFailure.mockReset();
+    mocked.writeClipboardText.mockResolvedValue(undefined);
+    vi.useFakeTimers();
+    (globalThis as {IS_REACT_ACT_ENVIRONMENT?: boolean}).IS_REACT_ACT_ENVIRONMENT = true;
+    return {container, root};
+}
+
+function teardownTestEnv(container: HTMLDivElement, root: Root) {
+    act(() => {
+        root.unmount();
+    });
+    container.remove();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    (globalThis as {IS_REACT_ACT_ENVIRONMENT?: boolean}).IS_REACT_ACT_ENVIRONMENT = false;
+}
+
+// ---------------------------------------------------------------------------
+// Sample data factories
+// ---------------------------------------------------------------------------
+
 function sampleMCP(): MCPSnapshot {
     return {
         id: "lsp-gopls",
@@ -32,6 +63,21 @@ function sampleMCP(): MCPSnapshot {
     };
 }
 
+function sampleOrchMCP(): MCPSnapshot {
+    return {
+        id: "orch-agent-orchestrator",
+        name: "Agent Orchestrator",
+        description: "",
+        enabled: false,
+        status: "stopped",
+        bridge_command: `C:\\Program Files\\myT-x\\myT-x.exe`,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// McpDetailPanel
+// ---------------------------------------------------------------------------
+
 describe("McpDetailPanel", () => {
     let container: HTMLDivElement;
     let root: Root;
@@ -42,32 +88,17 @@ describe("McpDetailPanel", () => {
             <McpDetailPanel
                 representativeMCP={mcp}
                 activeSession="session-a"
-                aggregateStatus="stopped"
+
                 totalLspCount={totalLspCount}
             />,
         );
     }
 
     beforeEach(() => {
-        container = document.createElement("div");
-        document.body.appendChild(container);
-        root = createRoot(container);
-        mocked.writeClipboardText.mockReset();
-        mocked.notifyClipboardFailure.mockReset();
-        mocked.writeClipboardText.mockResolvedValue(undefined);
-        vi.useFakeTimers();
-        (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+        ({container, root} = setupTestEnv());
     });
 
-    afterEach(() => {
-        act(() => {
-            root.unmount();
-        });
-        container.remove();
-        vi.useRealTimers();
-        vi.restoreAllMocks();
-        (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
-    });
+    afterEach(() => teardownTestEnv(container, root));
 
     it("renders shared LSP-MCP guidance and client setup examples", () => {
         act(() => {
@@ -186,7 +217,7 @@ describe("McpDetailPanel", () => {
                 <McpDetailPanel
                     representativeMCP={sampleMCP()}
                     activeSession={null}
-                    aggregateStatus="stopped"
+
                     totalLspCount={3}
                 />,
             );
@@ -197,14 +228,13 @@ describe("McpDetailPanel", () => {
         expect(container.querySelectorAll(".mcp-copy-btn")).toHaveLength(0);
     });
 
-    it("renders a placeholder when aggregate status is unavailable", () => {
+    it("renders a placeholder when totalLspCount is zero", () => {
         act(() => {
             root.render(
                 <McpDetailPanel
                     representativeMCP={sampleMCP()}
                     activeSession="session-a"
-                    aggregateStatus={null}
-                    totalLspCount={3}
+                    totalLspCount={0}
                 />,
             );
         });
@@ -242,5 +272,175 @@ describe("McpDetailPanel", () => {
         });
 
         expect(vi.getTimerCount()).toBe(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// OrchestratorDetailPanel
+// ---------------------------------------------------------------------------
+
+/** Find the --session section inside the rendered panel. */
+function findSessionSection(container: HTMLElement): Element | undefined {
+    const sections = container.querySelectorAll(".mcp-connection-section");
+    return Array.from(sections).find((s) =>
+        s.querySelector("h4")?.textContent === "--session",
+    );
+}
+
+describe("OrchestratorDetailPanel", () => {
+    let container: HTMLDivElement;
+    let root: Root;
+
+    function renderOrchPanel(
+        activeSession: string | null = "my-session",
+        mcp: MCPSnapshot = sampleOrchMCP(),
+    ) {
+        root.render(
+            <OrchestratorDetailPanel
+                representativeMCP={mcp}
+                activeSession={activeSession}
+            />,
+        );
+    }
+
+    beforeEach(() => {
+        ({container, root} = setupTestEnv());
+    });
+
+    afterEach(() => teardownTestEnv(container, root));
+
+    // --- Display & content ------------------------------------------------
+
+    it("displays --session with the active session name and a copy button", async () => {
+        act(() => renderOrchPanel());
+
+        const text = container.textContent ?? "";
+        expect(text).toContain("--session");
+        expect(text).toContain(`"--session", "my-session"`);
+
+        const sessionSection = findSessionSection(container);
+        expect(sessionSection).not.toBeUndefined();
+
+        const copyBtn = sessionSection?.querySelector<HTMLButtonElement>(".mcp-copy-btn");
+        expect(copyBtn).not.toBeNull();
+
+        await act(async () => {
+            copyBtn?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+            await flushMicrotasks();
+        });
+
+        expect(mocked.writeClipboardText).toHaveBeenCalledWith(`"--session", "my-session"`);
+        expect(copyBtn?.textContent).toBe("コピー済");
+    });
+
+    it("resets copied label after 2000ms", async () => {
+        act(() => renderOrchPanel());
+
+        const copyBtn = findSessionSection(container)?.querySelector<HTMLButtonElement>(".mcp-copy-btn");
+        expect(copyBtn).not.toBeNull();
+
+        await act(async () => {
+            copyBtn?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+            await flushMicrotasks();
+        });
+
+        expect(copyBtn?.textContent).toBe("コピー済");
+
+        act(() => {
+            vi.advanceTimersByTime(2000);
+        });
+
+        expect(copyBtn?.textContent).toBe("コピー");
+    });
+
+    // --- Clipboard failure ------------------------------------------------
+
+    it("notifies the user when clipboard copy fails", async () => {
+        mocked.writeClipboardText.mockRejectedValueOnce(new Error("clipboard denied"));
+        const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        act(() => renderOrchPanel());
+
+        const copyBtn = findSessionSection(container)?.querySelector<HTMLButtonElement>(".mcp-copy-btn");
+        expect(copyBtn).not.toBeNull();
+
+        await act(async () => {
+            copyBtn?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+            await flushMicrotasks();
+        });
+
+        expect(mocked.notifyClipboardFailure).toHaveBeenCalledTimes(1);
+        expect(consoleWarnSpy).toHaveBeenCalled();
+        expect(copyBtn?.textContent).toBe("コピー");
+    });
+
+    // --- Unmount safety ---------------------------------------------------
+
+    it("does not leave a timer behind when copy resolves after unmount", async () => {
+        let resolveClipboard: (() => void) | null = null;
+        mocked.writeClipboardText.mockImplementationOnce(() => new Promise<void>((resolve) => {
+            resolveClipboard = resolve;
+        }));
+
+        act(() => renderOrchPanel());
+
+        const copyBtn = findSessionSection(container)?.querySelector<HTMLButtonElement>(".mcp-copy-btn");
+        expect(copyBtn).not.toBeNull();
+
+        await act(async () => {
+            copyBtn?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+            await flushMicrotasks();
+        });
+
+        act(() => {
+            root.render(<></>);
+        });
+
+        await act(async () => {
+            resolveClipboard?.();
+            await flushMicrotasks();
+        });
+
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    // --- Empty / missing session ------------------------------------------
+
+    it("does not display --session section when session is null", () => {
+        act(() => renderOrchPanel(null));
+
+        const text = container.textContent ?? "";
+        expect(text).not.toContain("--session");
+        expect(text).toContain("アクティブなセッションを選択");
+    });
+
+    it("does not display --session section when session is empty string", () => {
+        act(() => renderOrchPanel(""));
+
+        const text = container.textContent ?? "";
+        expect(text).not.toContain("--session");
+        expect(text).toContain("アクティブなセッションを選択");
+    });
+
+    it("does not display --session section when session is whitespace only", () => {
+        act(() => renderOrchPanel("   "));
+
+        const text = container.textContent ?? "";
+        expect(text).not.toContain("--session");
+        expect(text).toContain("アクティブなセッションを選択");
+    });
+
+    // --- Bridge command unavailable ---------------------------------------
+
+    it("shows session section even when bridge_command is unavailable", () => {
+        const mcp = sampleOrchMCP();
+        delete mcp.bridge_command;
+
+        act(() => renderOrchPanel("my-session", mcp));
+
+        const text = container.textContent ?? "";
+        expect(text).toContain("--session");
+        expect(text).toContain(`"--session", "my-session"`);
+        expect(text).toContain("ビューを更新してブリッジコマンドのメタデータを読み込んでください");
     });
 });

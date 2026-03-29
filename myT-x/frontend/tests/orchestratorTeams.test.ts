@@ -6,7 +6,7 @@ import {
     parseMemberArgsText,
     removeDraftMember,
     upsertDraftMember,
-} from "../src/components/viewer/views/orchestrator-teams/useOrchestratorTeams";
+} from "../src/components/viewer/views/orchestrator-teams/orchestratorTeamUtils";
 import type {OrchestratorMemberDraft} from "../src/components/viewer/views/orchestrator-teams/types";
 
 describe("orchestrator team helpers", () => {

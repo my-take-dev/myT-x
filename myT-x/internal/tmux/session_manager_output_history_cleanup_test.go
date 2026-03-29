@@ -46,12 +46,12 @@ func TestKillPaneReleasesOutputHistoryForRemovedAndOrphanedPanes(t *testing.T) {
 	manager.panes[orphan.ID] = orphan
 	manager.mu.Unlock()
 
-	_, removedSession, err := manager.KillPane(pane.IDString())
+	_, sessionEmptied, err := manager.KillPane(pane.IDString())
 	if err != nil {
 		t.Fatalf("KillPane() error = %v", err)
 	}
-	if !removedSession {
-		t.Fatal("removedSession = false, want true")
+	if !sessionEmptied {
+		t.Fatal("sessionEmptied = false, want true")
 	}
 
 	assertPaneHistoryReleased(t, pane, visibleHistory)
@@ -122,8 +122,11 @@ func TestRemoveWindowByIDReleasesOutputHistoryForTrackedAndOrphanedPanes(t *test
 	if err != nil {
 		t.Fatalf("RemoveWindowByID() error = %v", err)
 	}
-	if !result.SessionRemoved {
-		t.Fatal("SessionRemoved = false, want true")
+	if result.SessionRemoved {
+		t.Fatal("SessionRemoved = true, want false")
+	}
+	if !result.SessionEmptied {
+		t.Fatal("SessionEmptied = false, want true")
 	}
 	if len(result.RemovedPanes) != 2 {
 		t.Fatalf("len(RemovedPanes) = %d, want 2", len(result.RemovedPanes))

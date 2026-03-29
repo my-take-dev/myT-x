@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"maps"
 	"testing"
 )
 
@@ -80,7 +81,7 @@ func TestBuildPresetLayout(t *testing.T) {
 }
 
 func TestBuildPresetLayout_MainVerticalStructure(t *testing.T) {
-	// main-vertical with 3 panes: left main (60%) + right sub (vertical split)
+	// main-vertical with 3 panes: left main (uniform 1/3) + right sub (vertical split)
 	layout := BuildPresetLayout(PresetMainVertical, []int{10, 20, 30})
 	if layout == nil {
 		t.Fatal("expected non-nil layout")
@@ -91,8 +92,9 @@ func TestBuildPresetLayout_MainVerticalStructure(t *testing.T) {
 	if layout.Direction != SplitHorizontal {
 		t.Errorf("root direction = %s, want horizontal", layout.Direction)
 	}
-	if layout.Ratio != 0.6 {
-		t.Errorf("root ratio = %f, want 0.6", layout.Ratio)
+	wantRatio := 1.0 / 3.0
+	if layout.Ratio != wantRatio {
+		t.Errorf("root ratio = %f, want %f (uniform 1/N)", layout.Ratio, wantRatio)
 	}
 	// Left child should be leaf with pane 10
 	left := layout.Children[0]
@@ -106,6 +108,75 @@ func TestBuildPresetLayout_MainVerticalStructure(t *testing.T) {
 	}
 	if right.Direction != SplitVertical {
 		t.Errorf("right direction = %s, want vertical", right.Direction)
+	}
+}
+
+// computeLeafArea recursively computes the fraction of total area each leaf pane receives.
+func computeLeafArea(node *LayoutNode, area float64) map[int]float64 {
+	if node == nil {
+		return nil
+	}
+	if node.Type == LayoutLeaf {
+		return map[int]float64{node.PaneID: area}
+	}
+	result := make(map[int]float64)
+	leftArea := area * node.Ratio
+	rightArea := area * (1.0 - node.Ratio)
+	maps.Copy(result, computeLeafArea(node.Children[0], leftArea))
+	maps.Copy(result, computeLeafArea(node.Children[1], rightArea))
+	return result
+}
+
+func TestBuildPresetLayout_UniformRatios(t *testing.T) {
+	const tolerance = 1e-9
+
+	tests := []struct {
+		name    string
+		preset  LayoutPreset
+		paneIDs []int
+	}{
+		{"main-vertical 3 panes", PresetMainVertical, []int{1, 2, 3}},
+		{"main-vertical 4 panes", PresetMainVertical, []int{1, 2, 3, 4}},
+		{"main-vertical 5 panes", PresetMainVertical, []int{1, 2, 3, 4, 5}},
+		{"main-horizontal 3 panes", PresetMainHorizontal, []int{1, 2, 3}},
+		{"main-horizontal 4 panes", PresetMainHorizontal, []int{1, 2, 3, 4}},
+		{"even-horizontal 3 panes", PresetEvenHorizontal, []int{1, 2, 3}},
+		{"even-vertical 4 panes", PresetEvenVertical, []int{1, 2, 3, 4}},
+		{"tiled 4 panes", PresetTiled, []int{1, 2, 3, 4}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			layout := BuildPresetLayout(tt.preset, tt.paneIDs)
+			if layout == nil {
+				t.Fatal("expected non-nil layout")
+			}
+			areas := computeLeafArea(layout, 1.0)
+			wantArea := 1.0 / float64(len(tt.paneIDs))
+			for paneID, area := range areas {
+				diff := area - wantArea
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff > tolerance {
+					t.Errorf("pane %d: area = %f, want %f (diff %e)", paneID, area, wantArea, diff)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildPresetLayout_MainVertical2PaneFallback(t *testing.T) {
+	// 2 panes should fallback to buildEvenSplit (ratio 0.5, mainDir=horizontal)
+	layout := BuildPresetLayout(PresetMainVertical, []int{1, 2})
+	if layout == nil {
+		t.Fatal("expected non-nil layout")
+	}
+	if layout.Ratio != 0.5 {
+		t.Errorf("2-pane main-vertical ratio = %f, want 0.5 (even split fallback)", layout.Ratio)
+	}
+	if layout.Direction != SplitHorizontal {
+		t.Errorf("2-pane main-vertical direction = %s, want %s", layout.Direction, SplitHorizontal)
 	}
 }
 

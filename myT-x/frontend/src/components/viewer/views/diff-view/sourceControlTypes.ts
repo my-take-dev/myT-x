@@ -39,7 +39,16 @@ export type OperationType =
 
 /** Branch information from DevPanelGitStatus. */
 export interface BranchInfo {
+    /** Branch name. Empty string indicates a fresh repo with no commits yet —
+     *  used by useGitOperations to choose full vs. lightweight refresh on staging. */
     readonly branch: string;
     readonly ahead: number;
     readonly behind: number;
+    /** True when the branch has a resolvable upstream and ahead/behind counts are valid.
+     *  When false, ahead/behind are 0 = "unknown", not "no diff". */
+    readonly upstreamConfigured: boolean;
+    /** Paths currently in a merge-conflict state (UU, AA, DD, etc). */
+    readonly conflicted: readonly string[];
+    /** True when the git status fetch failed and branch/ahead/behind data may be stale or empty. */
+    readonly statusFetchFailed: boolean;
 }

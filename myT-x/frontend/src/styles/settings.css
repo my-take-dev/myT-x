@@ -74,6 +74,22 @@
   color: var(--accent);
 }
 
+.menu-bar-ime-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+}
+
+.menu-bar-ime-reset:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.menu-bar-ime-reset:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 /* ── Settings Modal (wider for sidebar layout) ── */
 .settings-panel {
   width: 740px;

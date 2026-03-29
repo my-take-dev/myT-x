@@ -2,6 +2,12 @@ import {type MutableRefObject, useEffect} from "react";
 import type {FitAddon} from "@xterm/addon-fit";
 import type {Terminal} from "@xterm/xterm";
 import {api} from "../api";
+import {createConsecutiveFailureCounter, notifyAndLog} from "../utils/notifyUtils";
+
+// Module-level consecutive failure counter for resize operations.
+// Threshold 5: resize fires frequently via ResizeObserver; transient
+// failures self-correct on the next successful call.
+const resizeFailureCounter = createConsecutiveFailureCounter(5);
 
 interface UseTerminalResizeOptions {
     paneId: string;
@@ -61,8 +67,13 @@ export function useTerminalResize({
             }
             lastResizeCols = term.cols;
             lastResizeRows = term.rows;
-            void api.ResizePane(paneId, term.cols, term.rows).catch((err) => {
+            void api.ResizePane(paneId, term.cols, term.rows).then(() => {
+                resizeFailureCounter.recordSuccess();
+            }).catch((err) => {
                 console.warn(`[DEBUG-terminal] resize failed for pane=${paneId}`, err);
+                resizeFailureCounter.recordFailure(() => {
+                    notifyAndLog("Resize pane", "warn", err, "TerminalResize");
+                });
             });
         };
 

@@ -3,6 +3,7 @@ import {api} from "../api";
 import {useTmuxStore} from "../stores/tmuxStore";
 import type {PaneSnapshot, SessionSnapshot} from "../types/tmux";
 import {resolveActivePane, resolveActiveWindow} from "../utils/session";
+import {notifyAndLog} from "../utils/notifyUtils";
 import {useI18n} from "../i18n";
 import {LayoutPresetSelector} from "./LayoutPresetSelector";
 import {LayoutRenderer} from "./LayoutRenderer";
@@ -43,18 +44,21 @@ export function SessionView(props: SessionViewProps) {
     const onFocusPane = useCallback((paneId: string) => {
         void api.FocusPane(paneId).catch((err) => {
             console.warn("[session-view] FocusPane failed", err);
+            notifyAndLog("Focus pane", "warn", err, "SessionView");
         });
     }, []);
 
     const onSplitVertical = useCallback((paneId: string) => {
         void api.SplitPane(paneId, true).catch((err) => {
             console.warn("[session-view] SplitPane(vertical) failed", err);
+            notifyAndLog("Split pane", "warn", err, "SessionView");
         });
     }, []);
 
     const onSplitHorizontal = useCallback((paneId: string) => {
         void api.SplitPane(paneId, false).catch((err) => {
             console.warn("[session-view] SplitPane(horizontal) failed", err);
+            notifyAndLog("Split pane", "warn", err, "SessionView");
         });
     }, []);
 
@@ -69,23 +73,28 @@ export function SessionView(props: SessionViewProps) {
     const onKillPane = useCallback((paneId: string) => {
         void api.KillPane(paneId).catch((err) => {
             console.warn("[session-view] KillPane failed", err);
+            notifyAndLog("Close pane", "warn", err, "SessionView");
         });
     }, []);
 
     const onRenamePane = useCallback((paneId: string, title: string) => {
         void api.RenamePane(paneId, title).catch((err) => {
             console.warn("[session-view] RenamePane failed", err);
+            notifyAndLog("Rename pane", "warn", err, "SessionView");
         });
     }, []);
 
     const onSwapPane = useCallback((sourcePaneId: string, targetPaneId: string) => {
         void api.SwapPanes(sourcePaneId, targetPaneId).catch((err) => {
             console.warn("[session-view] SwapPanes failed", err);
+            notifyAndLog("Swap panes", "warn", err, "SessionView");
         });
     }, []);
 
     const [quickStartLoading, setQuickStartLoading] = useState(false);
     const [quickStartError, setQuickStartError] = useState("");
+    const [createPaneLoading, setCreatePaneLoading] = useState(false);
+    const [createPaneError, setCreatePaneError] = useState("");
 
     const mountedRef = useRef(true);
     useEffect(() => {
@@ -106,7 +115,7 @@ export function SessionView(props: SessionViewProps) {
             if (!mountedRef.current) return;
             const message = err instanceof Error
                 ? err.message
-                : String(err ?? (language === "en" ? "Unknown error" : t("sessionView.error.unknown", "Unknown error")));
+                : String(err ?? t("sessionView.error.unknown", "Unknown error"));
             setQuickStartError(message);
         } finally {
             if (mountedRef.current) {
@@ -115,6 +124,28 @@ export function SessionView(props: SessionViewProps) {
         }
     }, [language, setActiveSession, t]);
 
+    const handleCreatePane = useCallback(async () => {
+        const sessionName = props.session?.name?.trim() ?? "";
+        if (sessionName === "") {
+            return;
+        }
+        setCreatePaneLoading(true);
+        setCreatePaneError("");
+        try {
+            await api.CreatePaneInSession(sessionName);
+        } catch (err) {
+            if (!mountedRef.current) return;
+            const message = err instanceof Error
+                ? err.message
+                : String(err ?? t("sessionView.error.unknown", "Unknown error"));
+            setCreatePaneError(message);
+        } finally {
+            if (mountedRef.current) {
+                setCreatePaneLoading(false);
+            }
+        }
+    }, [language, props.session?.name, t]);
+
     const onDetachSession = useCallback(() => {
         const sessionName = props.session?.name;
         if (!sessionName) {
@@ -122,6 +153,7 @@ export function SessionView(props: SessionViewProps) {
         }
         void api.DetachSession(sessionName).catch((err) => {
             console.warn("[session-view] DetachSession failed", err);
+            notifyAndLog("Detach session", "error", err, "SessionView");
         });
     }, [props.session?.name]);
 
@@ -159,9 +191,30 @@ export function SessionView(props: SessionViewProps) {
         if (props.session.windows.length === 0) {
             return (
                 <div className="session-empty">
-                    {language === "en"
-                        ? "No windows in this session."
-                        : t("sessionView.empty.noWindows", "セッションにウィンドウがありません。")}
+                    <div className="session-empty-content">
+                        <p className="session-empty-message">
+                            {language === "en"
+                                ? "All panes were closed."
+                                : t("sessionView.empty.allPanesClosed", "全てのペインが閉じられました。")}
+                        </p>
+                        <button
+                            type="button"
+                            className="session-quick-start-btn"
+                            onClick={handleCreatePane}
+                            disabled={createPaneLoading}
+                        >
+                            {createPaneLoading
+                                ? (language === "en"
+                                    ? "Creating..."
+                                    : t("sessionView.createPane.loading", "作成中..."))
+                                : (language === "en"
+                                    ? "+ New Pane"
+                                    : t("sessionView.createPane.button", "+ 新しいペイン"))}
+                        </button>
+                        {createPaneError && (
+                            <p className="session-quick-start-error">{createPaneError}</p>
+                        )}
+                    </div>
                 </div>
             );
         }

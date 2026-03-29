@@ -1,4 +1,6 @@
+import {useMemo} from "react";
 import {useI18n} from "../../../../i18n";
+import {isSystemTeam} from "./orchestratorTeamUtils";
 import type {OrchestratorTeamDefinition} from "./types";
 
 interface TeamListProps {
@@ -12,6 +14,7 @@ interface TeamListProps {
     onCopy: (team: OrchestratorTeamDefinition) => void;
     onDelete: (team: OrchestratorTeamDefinition) => void;
     onOpenStart: () => void;
+    onOpenUnaffiliated: () => void;
     onMoveUp: (teamID: string) => void;
     onMoveDown: (teamID: string) => void;
 }
@@ -29,10 +32,13 @@ export function TeamList({
     onCopy,
     onDelete,
     onOpenStart,
+    onOpenUnaffiliated,
     onMoveUp,
     onMoveDown,
 }: TeamListProps) {
     const {t} = useI18n();
+
+    const userTeams = useMemo(() => teams.filter((team) => !isSystemTeam(team)), [teams]);
 
     return (
         <div className="orchestrator-teams-list">
@@ -44,9 +50,17 @@ export function TeamList({
                     type="button"
                     className="orchestrator-teams-start-btn"
                     onClick={onOpenStart}
-                    disabled={selectedTeamID === null || activeSession === null}
+                    disabled={selectedTeamID === null || activeSession === null || isSystemTeam(selectedTeamID)}
                 >
                     {t("viewer.orchestratorTeams.list.start", "開始")}
+                </button>
+                <button
+                    type="button"
+                    className="orchestrator-teams-start-btn"
+                    onClick={onOpenUnaffiliated}
+                    title={t("viewer.orchestratorTeams.list.unaffiliatedDesc", "無所属メンバーの管理")}
+                >
+                    {t("viewer.orchestratorTeams.list.unaffiliated", "無所属Term")}
                 </button>
             </div>
 
@@ -58,11 +72,11 @@ export function TeamList({
 
             {loading ? (
                 <div className="orchestrator-teams-empty">{t("viewer.orchestratorTeams.list.loading", "チームを読み込み中...")}</div>
-            ) : teams.length === 0 ? (
+            ) : userTeams.length === 0 ? (
                 <div className="orchestrator-teams-empty">{t("viewer.orchestratorTeams.list.empty", "保存されたチームはありません。")}</div>
             ) : (
                 <div className="orchestrator-teams-cards">
-                    {teams.map((team, index) => (
+                    {userTeams.map((team) => (
                         <div
                             key={team.id}
                             className={`orchestrator-team-card${selectedTeamID === team.id ? " selected" : ""}`}
@@ -120,7 +134,7 @@ export function TeamList({
                                     className="orchestrator-team-card-btn icon"
                                     disabled={(() => {
                                         const loc = team.storage_location ?? "global";
-                                        const sameSource = teams.filter((t) => (t.storage_location ?? "global") === loc);
+                                        const sameSource = userTeams.filter((t) => (t.storage_location ?? "global") === loc);
                                         return sameSource.indexOf(team) === 0;
                                     })()}
                                     onClick={(event) => {
@@ -136,7 +150,7 @@ export function TeamList({
                                     className="orchestrator-team-card-btn icon"
                                     disabled={(() => {
                                         const loc = team.storage_location ?? "global";
-                                        const sameSource = teams.filter((t) => (t.storage_location ?? "global") === loc);
+                                        const sameSource = userTeams.filter((t) => (t.storage_location ?? "global") === loc);
                                         return sameSource.indexOf(team) === sameSource.length - 1;
                                     })()}
                                     onClick={(event) => {

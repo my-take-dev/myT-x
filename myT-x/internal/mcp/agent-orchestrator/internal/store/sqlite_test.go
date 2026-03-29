@@ -859,6 +859,110 @@ func TestListTasksIsNowSessionFilter(t *testing.T) {
 	}
 }
 
+func TestGetMessage(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	// 事前にメッセージを保存
+	if err := st.SaveMessage(ctx, domain.TaskMessage{ID: "m-001", Content: "hello world", CreatedAt: "2026-03-07T10:00:00Z"}); err != nil {
+		t.Fatalf("SaveMessage: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		id      string
+		want    domain.TaskMessage
+		wantErr error
+	}{
+		{
+			name: "found",
+			id:   "m-001",
+			want: domain.TaskMessage{ID: "m-001", Content: "hello world", CreatedAt: "2026-03-07T10:00:00Z"},
+		},
+		{
+			name:    "not found",
+			id:      "m-nonexistent",
+			wantErr: domain.ErrNotFound,
+		},
+		{
+			name:    "empty id",
+			id:      "",
+			wantErr: domain.ErrNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := st.GetMessage(ctx, tt.id)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("GetMessage(%q) error = %v, want %v", tt.id, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetMessage(%q): %v", tt.id, err)
+			}
+			if got != tt.want {
+				t.Errorf("GetMessage(%q) = %+v, want %+v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetTaskBySendMessageID(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	st.UpsertAgent(ctx, domain.Agent{Name: "codex", PaneID: "%1"})
+	st.SaveMessage(ctx, domain.TaskMessage{ID: "m-001", Content: "hello", CreatedAt: "2026-03-07T10:00:00Z"})
+	st.CreateTask(ctx, domain.Task{
+		ID:            "t-001",
+		AgentName:     "codex",
+		SendMessageID: "m-001",
+		Status:        "pending",
+		SentAt:        "2026-03-07T10:00:00Z",
+	})
+
+	tests := []struct {
+		name          string
+		sendMessageID string
+		wantTaskID    string
+		wantErr       error
+	}{
+		{
+			name:          "found",
+			sendMessageID: "m-001",
+			wantTaskID:    "t-001",
+		},
+		{
+			name:          "not found",
+			sendMessageID: "m-nonexistent",
+			wantErr:       domain.ErrNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := st.GetTaskBySendMessageID(ctx, tt.sendMessageID)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("GetTaskBySendMessageID(%q) error = %v, want %v", tt.sendMessageID, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetTaskBySendMessageID(%q): %v", tt.sendMessageID, err)
+			}
+			if got.ID != tt.wantTaskID {
+				t.Errorf("got task_id = %q, want %q", got.ID, tt.wantTaskID)
+			}
+			if got.SendMessageID != tt.sendMessageID {
+				t.Errorf("got send_message_id = %q, want %q", got.SendMessageID, tt.sendMessageID)
+			}
+		})
+	}
+}
+
 func TestNormalizeDBPath(t *testing.T) {
 	tests := []struct {
 		name    string

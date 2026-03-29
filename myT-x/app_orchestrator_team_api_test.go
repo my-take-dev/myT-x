@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"myT-x/internal/config"
+	"myT-x/internal/orchestrator"
 	"myT-x/internal/tmux"
 )
 
@@ -17,7 +19,7 @@ func newOrchestratorTeamTestApp(t *testing.T) *App {
 	t.Helper()
 
 	app := NewApp()
-	app.configPath = filepath.Join(t.TempDir(), "config.yaml")
+	app.configState.Initialize(filepath.Join(t.TempDir(), "config.yaml"), config.DefaultConfig())
 	app.sessions = tmux.NewSessionManager()
 	return app
 }
@@ -50,29 +52,96 @@ func createOrchestratorSourceSession(t *testing.T, app *App, sessionName, rootPa
 	}
 }
 
-func withOrchestratorTeamSeams(t *testing.T) {
+// orchestratorStartMocks provides replaceable function hooks for start tests.
+// Deps closures point through these fields so tests can swap individual operations.
+//
+// Design note: default mocks delegate to real App methods intentionally —
+// these are integration tests that exercise the full Wails-bound path.
+// For isolated unit tests, see internal/orchestrator/service_test.go's testDeps
+// which uses t.Fatal stubs to detect unexpected calls.
+type orchestratorStartMocks struct {
+	sleepFn             func(time.Duration)
+	createSession       func(rootPath, sessionName string) (tmux.SessionSnapshot, error)
+	createPaneInSession func(sessionName string) (string, error)
+	killSession         func(sessionName string) error
+	splitPane           func(paneID string, horizontal bool) (string, error)
+	renamePane          func(paneID, title string) error
+	sendKeys            func(paneID, text string) error
+	sendKeysPaste       func(paneID, text string) error
+	applyLayoutPreset   func(sessionName, preset string) error
+}
+
+// withOrchestratorStartMocks installs a new orchestrator service with replaceable
+// mock deps on the given App, restoring the original service on cleanup.
+// The returned mocks struct allows tests to swap individual function hooks.
+func withOrchestratorStartMocks(t *testing.T, app *App) *orchestratorStartMocks {
 	t.Helper()
 
-	origSleep := orchestratorTeamSleepFn
-	origCreateSession := createSessionForOrchestratorTeamFn
-	origKillSession := killSessionForOrchestratorTeamFn
-	origSplitPane := splitPaneForOrchestratorTeamFn
-	origRenamePane := renamePaneForOrchestratorTeamFn
-	origSendKeys := sendKeysForOrchestratorTeamFn
-	origSendKeysPaste := sendKeysPasteForOrchestratorTeamFn
-	origApplyLayout := applyLayoutPresetForOrchestratorTeamFn
+	m := &orchestratorStartMocks{
+		sleepFn: func(time.Duration) {},
+		createSession: func(rootPath, sessionName string) (tmux.SessionSnapshot, error) {
+			return app.CreateSession(rootPath, sessionName, CreateSessionOptions{})
+		},
+		createPaneInSession: func(sessionName string) (string, error) {
+			return app.CreatePaneInSession(sessionName)
+		},
+		killSession: func(sessionName string) error {
+			return app.KillSession(sessionName, false)
+		},
+		splitPane: func(paneID string, horizontal bool) (string, error) {
+			return app.SplitPane(paneID, horizontal)
+		},
+		renamePane: func(paneID, title string) error {
+			return app.RenamePane(paneID, title)
+		},
+		sendKeys: func(paneID, text string) error {
+			if app.router == nil {
+				return errors.New("router not initialized")
+			}
+			return app.sendKeys.sendKeysLiteralWithEnter(app.router, paneID, text)
+		},
+		sendKeysPaste: func(paneID, text string) error {
+			if app.router == nil {
+				return errors.New("router not initialized")
+			}
+			return app.sendKeys.sendKeysLiteralPasteWithEnter(app.router, paneID, text)
+		},
+		applyLayoutPreset: func(sessionName, preset string) error {
+			return app.ApplyLayoutPreset(sessionName, preset)
+		},
+	}
 
-	orchestratorTeamSleepFn = func(time.Duration) {}
-	t.Cleanup(func() {
-		orchestratorTeamSleepFn = origSleep
-		createSessionForOrchestratorTeamFn = origCreateSession
-		killSessionForOrchestratorTeamFn = origKillSession
-		splitPaneForOrchestratorTeamFn = origSplitPane
-		renamePaneForOrchestratorTeamFn = origRenamePane
-		sendKeysForOrchestratorTeamFn = origSendKeys
-		sendKeysPasteForOrchestratorTeamFn = origSendKeysPaste
-		applyLayoutPresetForOrchestratorTeamFn = origApplyLayout
-	})
+	origService := app.orchestratorService
+	deps := orchestrator.Deps{
+		ConfigPath: func() string { return app.configState.ConfigPath() },
+		FindSessionSnapshot: func(sessionName string) (tmux.SessionSnapshot, error) {
+			return app.sessionService.FindSessionSnapshotByName(sessionName)
+		},
+		GetActiveSessionName: app.sessionService.GetActiveSessionName,
+		CreateSession: func(rootPath, sessionName string) (tmux.SessionSnapshot, error) {
+			return m.createSession(rootPath, sessionName)
+		},
+		CreatePaneInSession: func(sessionName string) (string, error) {
+			return m.createPaneInSession(sessionName)
+		},
+		KillSession:       func(sessionName string) error { return m.killSession(sessionName) },
+		SplitPane:         func(paneID string, horizontal bool) (string, error) { return m.splitPane(paneID, horizontal) },
+		RenamePane:        func(paneID, title string) error { return m.renamePane(paneID, title) },
+		ApplyLayoutPreset: func(sessionName, preset string) error { return m.applyLayoutPreset(sessionName, preset) },
+		SendKeys:          func(paneID, text string) error { return m.sendKeys(paneID, text) },
+		SendKeysPaste:     func(paneID, text string) error { return m.sendKeysPaste(paneID, text) },
+		SleepFn:           func(d time.Duration) { m.sleepFn(d) },
+		CheckReady: func() error {
+			if app.router == nil {
+				return errors.New("router not initialized")
+			}
+			return nil
+		},
+	}
+	app.orchestratorService = orchestrator.NewService(deps)
+	t.Cleanup(func() { app.orchestratorService = origService })
+
+	return m
 }
 
 func TestSaveAndLoadOrchestratorTeams(t *testing.T) {
@@ -126,16 +195,8 @@ func TestSaveAndLoadOrchestratorTeams(t *testing.T) {
 	if !slices.Equal(team.Members[0].Args, []string{"--dangerously-skip-permissions", "--sandbox workspace-write"}) {
 		t.Fatalf("member args = %#v, want trimmed non-empty args", team.Members[0].Args)
 	}
-	if team.BootstrapDelayMs != orchestratorTeamBootstrapDelayMsDefault {
-		t.Fatalf("team.BootstrapDelayMs = %d, want %d", team.BootstrapDelayMs, orchestratorTeamBootstrapDelayMsDefault)
-	}
-
-	definitionsPath, membersPath := app.resolveOrchestratorTeamStoragePaths()
-	if _, err := os.Stat(definitionsPath); err != nil {
-		t.Fatalf("definitions file missing: %v", err)
-	}
-	if _, err := os.Stat(membersPath); err != nil {
-		t.Fatalf("members file missing: %v", err)
+	if team.BootstrapDelayMs != orchestrator.BootstrapDelayMsDefault {
+		t.Fatalf("team.BootstrapDelayMs = %d, want %d", team.BootstrapDelayMs, orchestrator.BootstrapDelayMsDefault)
 	}
 }
 
@@ -143,10 +204,14 @@ func TestLoadOrchestratorTeamsReturnsEmptyForMalformedJSON(t *testing.T) {
 	app := newOrchestratorTeamTestApp(t)
 	definitionsPath, membersPath := app.resolveOrchestratorTeamStoragePaths()
 
-	if err := os.WriteFile(definitionsPath, []byte("{"), 0o644); err != nil {
+	dir := filepath.Dir(definitionsPath)
+	if err := mkdirAll(dir); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeFile(definitionsPath, []byte("{")); err != nil {
 		t.Fatalf("WriteFile(definitions) error = %v", err)
 	}
-	if err := os.WriteFile(membersPath, []byte("{"), 0o644); err != nil {
+	if err := writeFile(membersPath, []byte("{")); err != nil {
 		t.Fatalf("WriteFile(members) error = %v", err)
 	}
 
@@ -163,7 +228,11 @@ func TestSaveOrchestratorTeamRefusesMalformedOverwrite(t *testing.T) {
 	app := newOrchestratorTeamTestApp(t)
 	definitionsPath, _ := app.resolveOrchestratorTeamStoragePaths()
 
-	if err := os.WriteFile(definitionsPath, []byte("{"), 0o644); err != nil {
+	dir := filepath.Dir(definitionsPath)
+	if err := mkdirAll(dir); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := writeFile(definitionsPath, []byte("{")); err != nil {
 		t.Fatalf("WriteFile(definitions) error = %v", err)
 	}
 
@@ -212,11 +281,11 @@ func TestDeleteOrchestratorTeamRemovesMembersAndOrphans(t *testing.T) {
 	}
 
 	_, membersPath := app.resolveOrchestratorTeamStoragePaths()
-	if err := os.WriteFile(membersPath, []byte(`[
+	if err := writeFile(membersPath, []byte(`[
   {"id":"member-a","team_id":"team-a","order":0,"pane_title":"Alpha","role":"Lead","command":"codex","args":[],"custom_message":""},
   {"id":"member-b","team_id":"team-b","order":0,"pane_title":"Beta","role":"Reviewer","command":"claude","args":[],"custom_message":""},
   {"id":"orphan","team_id":"missing","order":0,"pane_title":"Ghost","role":"Ghost","command":"codex","args":[],"custom_message":""}
-]`), 0o644); err != nil {
+]`)); err != nil {
 		t.Fatalf("WriteFile(members) error = %v", err)
 	}
 
@@ -248,7 +317,7 @@ func TestBuildOrchestratorBootstrapMessageIncludesRequiredContext(t *testing.T) 
 		CustomMessage: "Check the release branch first.",
 	}
 
-	message := buildOrchestratorBootstrapMessage("Launch Team", member, "%42", "architect")
+	message := orchestrator.BuildBootstrapMessage("Launch Team", member, "%42", "architect")
 
 	for _, fragment := range []string{
 		"Launch Team",
@@ -271,7 +340,7 @@ func TestBuildOrchestratorBootstrapMessageWithoutCustomMessage(t *testing.T) {
 		Command:   "claude",
 	}
 
-	message := buildOrchestratorBootstrapMessage("Dev Team", member, "%10", "builder")
+	message := orchestrator.BuildBootstrapMessage("Dev Team", member, "%10", "builder")
 
 	if !strings.Contains(message, "役割名: Implementation engineer") {
 		t.Fatalf("bootstrap message missing role: %q", message)
@@ -292,7 +361,7 @@ func TestBuildOrchestratorBootstrapMessageWithSkills(t *testing.T) {
 		},
 	}
 
-	message := buildOrchestratorBootstrapMessage("Dev Team", member, "%5", "developer")
+	message := orchestrator.BuildBootstrapMessage("Dev Team", member, "%5", "developer")
 
 	for _, fragment := range []string{
 		"得意分野:",
@@ -314,9 +383,8 @@ func TestBuildOrchestratorBootstrapMessageWithoutSkills(t *testing.T) {
 		Command:   "claude",
 	}
 
-	message := buildOrchestratorBootstrapMessage("Team", member, "%3", "worker")
+	message := orchestrator.BuildBootstrapMessage("Team", member, "%3", "worker")
 
-	// スキルセクション自体は出ないが、補完指示は出る
 	if strings.Contains(message, "skills=") {
 		t.Fatalf("register_agent should not contain skills param when no skills:\n%s", message)
 	}
@@ -372,7 +440,7 @@ func TestBuildSkillCompletionHints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hints := buildSkillCompletionHints(tt.role, tt.skills)
+			hints := orchestrator.BuildSkillCompletionHints(tt.role, tt.skills)
 			for _, want := range tt.wantContains {
 				if !strings.Contains(hints, want) {
 					t.Errorf("hints missing %q:\n%s", want, hints)
@@ -392,13 +460,13 @@ func TestMemberValidateRoleLength(t *testing.T) {
 		ID: "m1", TeamID: "t1", PaneTitle: "Dev", Command: "claude",
 	}
 
-	// 50文字: OK
+	// 50 chars: OK
 	m.Role = strings.Repeat("あ", 50)
 	if err := m.Validate(); err != nil {
 		t.Fatalf("expected valid with 50 char role: %v", err)
 	}
 
-	// 51文字: NG
+	// 51 chars: NG
 	m.Role = strings.Repeat("あ", 51)
 	if err := m.Validate(); err == nil {
 		t.Fatal("expected error with 51 char role")
@@ -406,7 +474,6 @@ func TestMemberValidateRoleLength(t *testing.T) {
 }
 
 func TestMemberValidateSkillsLimits(t *testing.T) {
-	// 正常系: 20件以内
 	m := &OrchestratorTeamMember{
 		ID: "m1", TeamID: "t1", PaneTitle: "Dev", Role: "Dev", Command: "claude",
 	}
@@ -419,7 +486,6 @@ func TestMemberValidateSkillsLimits(t *testing.T) {
 		t.Fatalf("expected valid with 20 skills: %v", err)
 	}
 
-	// 異常系: 21件
 	m.Skills = append(m.Skills, OrchestratorTeamMemberSkill{Name: "overflow"})
 	if err := m.Validate(); err == nil {
 		t.Fatal("expected error with 21 skills")
@@ -427,7 +493,7 @@ func TestMemberValidateSkillsLimits(t *testing.T) {
 }
 
 func TestDeriveOrchestratorAgentNamesSanitizesAndDeduplicates(t *testing.T) {
-	names := deriveOrchestratorAgentNames([]OrchestratorTeamMember{
+	names := orchestrator.DeriveAgentNames([]OrchestratorTeamMember{
 		{ID: "a", PaneTitle: "Lead Engineer"},
 		{ID: "b", PaneTitle: "Lead Engineer"},
 		{ID: "c", PaneTitle: "  "},
@@ -445,8 +511,6 @@ func TestDeriveOrchestratorAgentNamesSanitizesAndDeduplicates(t *testing.T) {
 }
 
 func TestStartOrchestratorTeamActiveSessionUsesExistingPanesAndReturnsWarnings(t *testing.T) {
-	withOrchestratorTeamSeams(t)
-
 	app := newOrchestratorTeamTestApp(t)
 	source := createOrchestratorSourceSession(t, app, "src", `C:\repo`, 2)
 
@@ -462,16 +526,17 @@ func TestStartOrchestratorTeamActiveSessionUsesExistingPanesAndReturnsWarnings(t
 		t.Fatalf("SaveOrchestratorTeam() error = %v", err)
 	}
 
-	splitPaneForOrchestratorTeamFn = func(a *App, paneID string, horizontal bool) (string, error) {
+	m := withOrchestratorStartMocks(t, app)
+	m.splitPane = func(paneID string, horizontal bool) (string, error) {
 		return "", errors.New("split failed")
 	}
 	renamed := make([]string, 0)
 	sent := make([]string, 0)
-	renamePaneForOrchestratorTeamFn = func(a *App, paneID, title string) error {
+	m.renamePane = func(paneID, title string) error {
 		renamed = append(renamed, paneID+":"+title)
 		return nil
 	}
-	sendKeysForOrchestratorTeamFn = func(router *tmux.CommandRouter, paneID string, text string) error {
+	m.sendKeys = func(paneID, text string) error {
 		sent = append(sent, paneID+":"+strings.TrimSpace(text))
 		return nil
 	}
@@ -479,7 +544,7 @@ func TestStartOrchestratorTeamActiveSessionUsesExistingPanesAndReturnsWarnings(t
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 	result, err := app.StartOrchestratorTeam(StartOrchestratorTeamRequest{
 		TeamID:            "team-1",
-		LaunchMode:        orchestratorLaunchModeActiveSession,
+		LaunchMode:        orchestrator.LaunchModeActiveSession,
 		SourceSessionName: source.Name,
 	})
 	if err != nil {
@@ -504,8 +569,6 @@ func TestStartOrchestratorTeamActiveSessionUsesExistingPanesAndReturnsWarnings(t
 }
 
 func TestStartOrchestratorTeamNewSessionCreatesPanesAndAppliesLayout(t *testing.T) {
-	withOrchestratorTeamSeams(t)
-
 	app := newOrchestratorTeamTestApp(t)
 	source := createOrchestratorSourceSession(t, app, "src", `C:\repo`, 1)
 
@@ -520,7 +583,8 @@ func TestStartOrchestratorTeamNewSessionCreatesPanesAndAppliesLayout(t *testing.
 		t.Fatalf("SaveOrchestratorTeam() error = %v", err)
 	}
 
-	createSessionForOrchestratorTeamFn = func(a *App, rootPath, sessionName string, opts CreateSessionOptions) (tmux.SessionSnapshot, error) {
+	m := withOrchestratorStartMocks(t, app)
+	m.createSession = func(rootPath, sessionName string) (tmux.SessionSnapshot, error) {
 		return tmux.SessionSnapshot{
 			Name:           "design-review-2",
 			RootPath:       rootPath,
@@ -532,21 +596,21 @@ func TestStartOrchestratorTeamNewSessionCreatesPanesAndAppliesLayout(t *testing.
 			}},
 		}, nil
 	}
-	splitPaneForOrchestratorTeamFn = func(a *App, paneID string, horizontal bool) (string, error) {
+	m.splitPane = func(paneID string, horizontal bool) (string, error) {
 		return "%12", nil
 	}
 	layouts := make([]string, 0)
-	applyLayoutPresetForOrchestratorTeamFn = func(a *App, sessionName, preset string) error {
+	m.applyLayoutPreset = func(sessionName, preset string) error {
 		layouts = append(layouts, sessionName+":"+preset)
 		return nil
 	}
 	sent := make([]string, 0)
-	sendKeysForOrchestratorTeamFn = func(router *tmux.CommandRouter, paneID string, text string) error {
+	m.sendKeys = func(paneID, text string) error {
 		sent = append(sent, paneID+":"+strings.TrimSpace(text))
 		return nil
 	}
 	pastedSent := make([]string, 0)
-	sendKeysPasteForOrchestratorTeamFn = func(router *tmux.CommandRouter, paneID string, text string) error {
+	m.sendKeysPaste = func(paneID, text string) error {
 		pastedSent = append(pastedSent, paneID+":"+strings.TrimSpace(text))
 		return nil
 	}
@@ -554,7 +618,7 @@ func TestStartOrchestratorTeamNewSessionCreatesPanesAndAppliesLayout(t *testing.
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 	result, err := app.StartOrchestratorTeam(StartOrchestratorTeamRequest{
 		TeamID:            "team-2",
-		LaunchMode:        orchestratorLaunchModeNewSession,
+		LaunchMode:        orchestrator.LaunchModeNewSession,
 		SourceSessionName: source.Name,
 	})
 	if err != nil {
@@ -570,8 +634,6 @@ func TestStartOrchestratorTeamNewSessionCreatesPanesAndAppliesLayout(t *testing.
 	if len(result.MemberPaneIDs) != 2 {
 		t.Fatalf("len(result.MemberPaneIDs) = %d, want 2", len(result.MemberPaneIDs))
 	}
-	// 5 regular sends: cd + launch + bootstrap(codex) for Lead, cd + launch for Reviewer
-	// 1 paste send: bootstrap(claude) for Reviewer (isClaudeCommand detects "claude" command)
 	totalSent := len(sent) + len(pastedSent)
 	if totalSent != 6 {
 		t.Fatalf("total sent = %d (regular=%d, paste=%d), want 6 (cd + launch + bootstrap for 2 members)", totalSent, len(sent), len(pastedSent))
@@ -588,8 +650,6 @@ func TestStartOrchestratorTeamNewSessionCreatesPanesAndAppliesLayout(t *testing.
 }
 
 func TestStartOrchestratorTeamNewSessionRollsBackBeforeFirstCommand(t *testing.T) {
-	withOrchestratorTeamSeams(t)
-
 	app := newOrchestratorTeamTestApp(t)
 	source := createOrchestratorSourceSession(t, app, "src", `C:\repo`, 1)
 
@@ -604,7 +664,8 @@ func TestStartOrchestratorTeamNewSessionRollsBackBeforeFirstCommand(t *testing.T
 		t.Fatalf("SaveOrchestratorTeam() error = %v", err)
 	}
 
-	createSessionForOrchestratorTeamFn = func(a *App, rootPath, sessionName string, opts CreateSessionOptions) (tmux.SessionSnapshot, error) {
+	m := withOrchestratorStartMocks(t, app)
+	m.createSession = func(rootPath, sessionName string) (tmux.SessionSnapshot, error) {
 		return tmux.SessionSnapshot{
 			Name:           "broken-launch",
 			RootPath:       rootPath,
@@ -616,11 +677,11 @@ func TestStartOrchestratorTeamNewSessionRollsBackBeforeFirstCommand(t *testing.T
 			}},
 		}, nil
 	}
-	splitPaneForOrchestratorTeamFn = func(a *App, paneID string, horizontal bool) (string, error) {
+	m.splitPane = func(paneID string, horizontal bool) (string, error) {
 		return "", errors.New("split failed")
 	}
 	rolledBack := make([]string, 0)
-	killSessionForOrchestratorTeamFn = func(a *App, sessionName string, deleteWorktree bool) error {
+	m.killSession = func(sessionName string) error {
 		rolledBack = append(rolledBack, sessionName)
 		return nil
 	}
@@ -628,7 +689,7 @@ func TestStartOrchestratorTeamNewSessionRollsBackBeforeFirstCommand(t *testing.T
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 	_, err := app.StartOrchestratorTeam(StartOrchestratorTeamRequest{
 		TeamID:            "team-3",
-		LaunchMode:        orchestratorLaunchModeNewSession,
+		LaunchMode:        orchestrator.LaunchModeNewSession,
 		SourceSessionName: source.Name,
 	})
 	if err == nil {
@@ -685,9 +746,9 @@ func TestOrchestratorTeamBootstrapDelayMsNormalize(t *testing.T) {
 		input    int
 		expected int
 	}{
-		{"zero defaults to 3000", 0, orchestratorTeamBootstrapDelayMsDefault},
-		{"negative defaults to 3000", -1, orchestratorTeamBootstrapDelayMsDefault},
-		{"custom value preserved", 5000, 5000},
+		{"zero defaults to BootstrapDelayMsDefault", 0, orchestrator.BootstrapDelayMsDefault},
+		{"negative defaults to BootstrapDelayMsDefault", -1, orchestrator.BootstrapDelayMsDefault},
+		{"custom value preserved", 7000, 7000},
 		{"minimum preserved", 1000, 1000},
 		{"maximum preserved", 30000, 30000},
 	}
@@ -720,14 +781,12 @@ func TestOrchestratorTeamBootstrapDelayMsValidate(t *testing.T) {
 		}
 	}
 
-	// Valid range
 	for _, ms := range []int{1000, 3000, 15000, 30000} {
 		if err := base(ms).Validate(); err != nil {
 			t.Fatalf("expected valid with %dms: %v", ms, err)
 		}
 	}
 
-	// Invalid range
 	for _, ms := range []int{0, 999, 30001, -1} {
 		if err := base(ms).Validate(); err == nil {
 			t.Fatalf("expected error with %dms", ms)
@@ -736,8 +795,6 @@ func TestOrchestratorTeamBootstrapDelayMsValidate(t *testing.T) {
 }
 
 func TestStartOrchestratorTeamUsesCustomBootstrapDelay(t *testing.T) {
-	withOrchestratorTeamSeams(t)
-
 	app := newOrchestratorTeamTestApp(t)
 	source := createOrchestratorSourceSession(t, app, "src", `C:\repo`, 1)
 
@@ -752,26 +809,23 @@ func TestStartOrchestratorTeamUsesCustomBootstrapDelay(t *testing.T) {
 		t.Fatalf("SaveOrchestratorTeam() error = %v", err)
 	}
 
+	m := withOrchestratorStartMocks(t, app)
 	var sleepDurations []time.Duration
-	orchestratorTeamSleepFn = func(d time.Duration) {
+	m.sleepFn = func(d time.Duration) {
 		sleepDurations = append(sleepDurations, d)
 	}
-
-	sendKeysForOrchestratorTeamFn = func(router *tmux.CommandRouter, paneID string, text string) error {
-		return nil
-	}
+	m.sendKeys = func(paneID, text string) error { return nil }
 
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 	_, err := app.StartOrchestratorTeam(StartOrchestratorTeamRequest{
 		TeamID:            "team-delay",
-		LaunchMode:        orchestratorLaunchModeActiveSession,
+		LaunchMode:        orchestrator.LaunchModeActiveSession,
 		SourceSessionName: source.Name,
 	})
 	if err != nil {
 		t.Fatalf("StartOrchestratorTeam() error = %v", err)
 	}
 
-	// The bootstrap delay (5s) should appear in the recorded sleep durations.
 	if !slices.Contains(sleepDurations, 5*time.Second) {
 		t.Fatalf("expected 5s bootstrap delay in sleep durations: %v", sleepDurations)
 	}
@@ -798,9 +852,9 @@ func TestQuoteOrchestratorCommandArg(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := quoteOrchestratorCommandArg(tt.arg)
+			got := orchestrator.QuoteCommandArg(tt.arg)
 			if got != tt.want {
-				t.Fatalf("quoteOrchestratorCommandArg(%q) = %q, want %q", tt.arg, got, tt.want)
+				t.Fatalf("QuoteCommandArg(%q) = %q, want %q", tt.arg, got, tt.want)
 			}
 		})
 	}
@@ -828,9 +882,9 @@ func TestIsClaudeCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isClaudeCommand(tt.command)
+			got := orchestrator.IsClaudeCommand(tt.command)
 			if got != tt.want {
-				t.Fatalf("isClaudeCommand(%q) = %v, want %v", tt.command, got, tt.want)
+				t.Fatalf("IsClaudeCommand(%q) = %v, want %v", tt.command, got, tt.want)
 			}
 		})
 	}
@@ -848,11 +902,8 @@ func TestReorderOrchestratorTeamsDuplicateID(t *testing.T) {
 		}
 	}
 
-	// Duplicate ID: team-a appears twice. Second occurrence sets order=1, overwriting order=0.
-	// This is allowed (last-write-wins for the same ID).
 	err := app.ReorderOrchestratorTeams([]string{"team-a", "team-b", "team-a"}, "", "")
 	if err != nil {
-		// If the implementation rejects duplicates, that's also acceptable behavior.
 		if !strings.Contains(err.Error(), "not found") {
 			t.Logf("ReorderOrchestratorTeams with duplicate ID returned: %v", err)
 		}
@@ -872,7 +923,6 @@ func TestReorderOrchestratorTeamsSubsetIDs(t *testing.T) {
 		}
 	}
 
-	// Reorder only a subset of IDs. team-c is not included, so its order stays unchanged.
 	if err := app.ReorderOrchestratorTeams([]string{"team-b", "team-a"}, "", ""); err != nil {
 		t.Fatalf("ReorderOrchestratorTeams() error = %v", err)
 	}
@@ -885,7 +935,6 @@ func TestReorderOrchestratorTeamsSubsetIDs(t *testing.T) {
 		t.Fatalf("len(teams) = %d, want 3", len(teams))
 	}
 
-	// team-b got order=0, team-a got order=1, team-c retained original order=2
 	if teams[0].Name != "Beta" {
 		t.Fatalf("teams[0].Name = %q, want Beta", teams[0].Name)
 	}
@@ -915,4 +964,19 @@ func TestReorderOrchestratorTeamsRejectsUnknownID(t *testing.T) {
 	if !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("error = %v, want 'not found'", err)
 	}
+}
+
+// resolveOrchestratorTeamStoragePaths returns the global storage paths
+// for team definitions and members. Test-only helper.
+func (a *App) resolveOrchestratorTeamStoragePaths() (string, string) {
+	return a.orchestratorService.ResolveGlobalStoragePaths()
+}
+
+// Test helpers for file operations with unified permissions.
+func mkdirAll(path string) error {
+	return os.MkdirAll(path, 0o755)
+}
+
+func writeFile(path string, data []byte) error {
+	return os.WriteFile(path, data, 0o644)
 }

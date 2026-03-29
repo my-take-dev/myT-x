@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -11,8 +12,6 @@ import (
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
 )
-
-var randRead = rand.Read
 
 // SendTaskCmd はタスク送信コマンド。
 type SendTaskCmd struct {
@@ -39,6 +38,9 @@ type TaskDispatchService struct {
 	messages domain.MessageRepository
 	sender   domain.PaneSender
 	logger   *log.Logger
+	// randRead is the random byte source for ID generation.
+	// Defaults to crypto/rand.Read. Tests inject deterministic sources.
+	randRead func([]byte) (int, error)
 }
 
 // NewTaskDispatchService は TaskDispatchService を構築する。
@@ -55,6 +57,7 @@ func NewTaskDispatchService(
 		messages: messages,
 		sender:   sender,
 		logger:   ensureLogger(logger),
+		randRead: rand.Read,
 	}
 }
 
@@ -70,7 +73,11 @@ func (s *TaskDispatchService) Send(ctx context.Context, cmd SendTaskCmd) (SendTa
 		return SendTaskResult{}, operationError(s.logger, "target agent is not available", err)
 	}
 
-	taskID, err := generateTaskID()
+	if domain.IsVirtualPaneID(agent.PaneID) {
+		return SendTaskResult{}, errors.New("cannot send task to virtual pane agent")
+	}
+
+	taskID, err := generateIDWith(s.randRead, "t-", "generate task id")
 	if err != nil {
 		return SendTaskResult{}, operationError(s.logger, "failed to generate task id", err)
 	}
@@ -83,7 +90,7 @@ func (s *TaskDispatchService) Send(ctx context.Context, cmd SendTaskCmd) (SendTa
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// メッセージを保存
-	msgID, err := generateMessageID()
+	msgID, err := generateIDWith(s.randRead, "m-", "generate message id")
 	if err != nil {
 		return SendTaskResult{}, operationError(s.logger, "failed to generate message id", err)
 	}
@@ -140,26 +147,13 @@ func buildResponseInstruction(taskID string) string {
 		"SQLiteのagentsテーブルから相手を検索し、send_task MCPツールで送信してください。"
 }
 
-func generateTaskID() (string, error) {
+// generateIDWith generates a random hex-encoded ID with the given prefix.
+// The readFn parameter allows tests to inject deterministic random sources.
+// Output format: prefix + hex(6 bytes) = prefix + 12 hex characters.
+func generateIDWith(readFn func([]byte) (int, error), prefix, errContext string) (string, error) {
 	b := make([]byte, 6)
-	if _, err := randRead(b); err != nil {
-		return "", fmt.Errorf("generate task id: %w", err)
+	if _, err := readFn(b); err != nil {
+		return "", fmt.Errorf("%s: %w", errContext, err)
 	}
-	return "t-" + hex.EncodeToString(b), nil
-}
-
-func generateMessageID() (string, error) {
-	b := make([]byte, 6)
-	if _, err := randRead(b); err != nil {
-		return "", fmt.Errorf("generate message id: %w", err)
-	}
-	return "m-" + hex.EncodeToString(b), nil
-}
-
-func generateResponseID() (string, error) {
-	b := make([]byte, 6)
-	if _, err := randRead(b); err != nil {
-		return "", fmt.Errorf("generate response id: %w", err)
-	}
-	return "r-" + hex.EncodeToString(b), nil
+	return prefix + hex.EncodeToString(b), nil
 }

@@ -1,0 +1,328 @@
+/* ── Task Scheduler View ── */
+
+.task-scheduler-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.task-scheduler-body {
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.task-scheduler-error {
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: rgba(255, 80, 80, 0.1);
+    color: var(--danger);
+    font-size: 0.84rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.task-scheduler-error button {
+    font: inherit;
+    font-size: 0.78rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+}
+
+/* ── Toolbar ── */
+.task-scheduler-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.task-scheduler-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.task-scheduler-new-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.task-scheduler-new-btn:hover {
+    background: var(--accent-10);
+}
+
+.task-scheduler-start-queue-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid rgba(112, 212, 157, 0.6);
+    background: rgba(112, 212, 157, 0.08);
+    color: #70d49d;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.task-scheduler-start-queue-btn:hover {
+    opacity: 0.8;
+}
+
+.task-scheduler-stop-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--danger);
+    background: transparent;
+    color: var(--danger);
+    cursor: pointer;
+}
+
+.task-scheduler-stop-btn:hover {
+    background: rgba(255, 80, 80, 0.1);
+}
+
+.task-scheduler-pause-btn,
+.task-scheduler-resume-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.task-scheduler-pause-btn:hover,
+.task-scheduler-resume-btn:hover {
+    background: var(--accent-10);
+}
+
+/* ── Empty state ── */
+.task-scheduler-empty {
+    text-align: center;
+    color: var(--fg-dim);
+    font-size: 0.88rem;
+    padding: 32px 0;
+}
+
+/* ── Card ── */
+.task-scheduler-card {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.task-scheduler-card-running {
+    border-color: rgba(112, 212, 157, 0.5);
+    background: rgba(112, 212, 157, 0.06);
+}
+
+.task-scheduler-card-failed {
+    background: rgba(255, 80, 80, 0.08);
+    border-color: rgba(255, 80, 80, 0.4);
+}
+
+.task-scheduler-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.task-scheduler-card-status {
+    font-size: 0.82rem;
+    flex-shrink: 0;
+    width: 20px;
+    text-align: center;
+}
+
+.task-scheduler-card-title {
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: var(--fg-main);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.task-scheduler-card-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.task-scheduler-edit-card-btn {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(163, 184, 204, 0.55);
+    background: transparent;
+    color: var(--fg-muted, var(--fg-dim));
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.task-scheduler-edit-card-btn:hover {
+    opacity: 0.8;
+}
+
+.task-scheduler-delete-card-btn {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 130, 130, 0.55);
+    background: rgba(255, 80, 80, 0.08);
+    color: var(--danger);
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.task-scheduler-delete-card-btn:hover {
+    opacity: 0.8;
+}
+
+.task-scheduler-card-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+    padding-left: 28px;
+}
+
+.task-scheduler-card-error {
+    color: var(--danger);
+}
+
+.task-scheduler-card-clear {
+    font-size: 0.72rem;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid rgba(112, 212, 157, 0.5);
+    background: rgba(112, 212, 157, 0.1);
+    color: #70d49d;
+}
+
+/* ── Form styles ── */
+.task-scheduler-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.task-scheduler-back-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 0;
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+    width: fit-content;
+}
+
+.task-scheduler-back-btn:hover {
+    text-decoration: underline;
+}
+
+.task-scheduler-textarea {
+    min-height: 80px;
+    max-height: 300px;
+    resize: vertical;
+    font: inherit;
+    font-size: 0.88rem;
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--bg-input, var(--bg-main, var(--bg-panel)));
+    color: var(--fg-main);
+    line-height: 1.4;
+}
+
+.task-scheduler-textarea:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+
+.task-scheduler-submit-btn {
+    font: inherit;
+    font-size: 0.88rem;
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: var(--bg-main, var(--bg-panel));
+    cursor: pointer;
+    transition: opacity 0.15s;
+    margin-top: 4px;
+}
+
+.task-scheduler-submit-btn:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+.task-scheduler-submit-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ── Config screen ── */
+.task-scheduler-config-title {
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--fg-main);
+    margin: 0;
+}
+
+.task-scheduler-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.88rem;
+    color: var(--fg-main);
+    cursor: pointer;
+}
+
+.task-scheduler-checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.task-scheduler-config-summary {
+    font-size: 0.84rem;
+    color: var(--fg-dim);
+    padding: 8px 0;
+}
+
+.task-scheduler-config-hint {
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+    margin-top: 2px;
+}

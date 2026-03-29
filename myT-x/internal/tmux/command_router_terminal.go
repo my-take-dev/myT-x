@@ -4,18 +4,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
 
 	"myT-x/internal/terminal"
 )
-
-// PaneOutputEvent carries one terminal output chunk for frontend delivery.
-type PaneOutputEvent struct {
-	PaneID string
-	Data   []byte
-}
 
 const maxCustomEnvValueBytes = 8192
 
@@ -211,7 +206,9 @@ func mergeEnvironment(custom map[string]string) []string {
 	out := make(map[string]string, len(base)+len(custom))
 	for _, item := range base {
 		key, value, ok := strings.Cut(item, "=")
-		if !ok {
+		// Skip entries without "=" and Windows drive-letter variables (e.g. "=C:=C:\path")
+		// whose key would be empty after splitting on the first "=".
+		if !ok || key == "" {
 			continue
 		}
 		out[key] = value
@@ -260,4 +257,39 @@ func sanitizeCustomEnvironmentEntry(key string, value string) (string, string, b
 		value = value[:maxCustomEnvValueBytes]
 	}
 	return key, value, true
+}
+
+// ---------------------------------------------------------------------------
+// Panic recovery helpers (used by the pane read-loop goroutine in attachTerminal)
+// ---------------------------------------------------------------------------
+
+const (
+	initialRouterPanicRestartBackoff = 100 * time.Millisecond
+	maxRouterPanicRestartBackoff     = 5 * time.Second
+)
+
+func recoverRouterPanic(worker string, recovered any) bool {
+	if recovered != nil {
+		slog.Error("[ERROR-PANIC] router goroutine recovered from panic",
+			"worker", worker,
+			"panic", recovered,
+			"stack", string(debug.Stack()),
+		)
+		return true
+	}
+	return false
+}
+
+func nextRouterPanicRestartBackoff(current time.Duration) time.Duration {
+	if current <= 0 {
+		return initialRouterPanicRestartBackoff
+	}
+	if current >= maxRouterPanicRestartBackoff {
+		return maxRouterPanicRestartBackoff
+	}
+	next := current * 2
+	if next > maxRouterPanicRestartBackoff || next < current {
+		return maxRouterPanicRestartBackoff
+	}
+	return next
 }

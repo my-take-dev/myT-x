@@ -1,7 +1,7 @@
 import {useMemo, useState} from "react";
 import {useI18n} from "../../../../i18n";
 import type {OrchestratorMemberDraft, OrchestratorTeamDefinition} from "./types";
-import {copyMemberToDraft} from "./useOrchestratorTeams";
+import {copyMemberToDraft} from "./orchestratorTeamUtils";
 
 interface MemberPickerProps {
     teams: OrchestratorTeamDefinition[];

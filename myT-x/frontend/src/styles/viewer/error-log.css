@@ -1,0 +1,90 @@
+/* ── Error Log View ── */
+.error-log-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.error-log-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    user-select: text;
+    cursor: text;
+}
+
+.error-log-body:focus {
+    outline: none;
+}
+
+.error-log-body ::selection {
+    background: var(--selection-bg);
+    color: inherit;
+}
+
+.error-log-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.error-log-entry:hover {
+    background: var(--accent-04);
+}
+
+.error-log-ts {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    width: 140px;
+}
+
+.error-log-level {
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    min-width: 40px;
+    text-align: center;
+}
+
+.error-log-level.error {
+    background: var(--danger-08);
+    color: var(--danger);
+}
+
+.error-log-level.warn {
+    background: var(--warning-10);
+    color: var(--warning);
+}
+
+.error-log-msg {
+    flex: 1;
+    min-width: 0;
+    color: var(--fg-main);
+    word-break: break-word;
+}
+
+.error-log-source {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 0.68rem;
+    opacity: 0.7;
+}
+
+.error-log-empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+}

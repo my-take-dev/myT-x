@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -144,6 +145,41 @@ func (r *Repository) ListWorktreesWithInfo() ([]WorktreeInfo, error) {
 	}
 
 	return worktrees, nil
+}
+
+// CheckWorktreeHealth validates the health of an existing worktree directory.
+// Checks: directory existence, .git file validity, and HEAD readability.
+func (r *Repository) CheckWorktreeHealth(wtPath string) WorktreeHealth {
+	health := WorktreeHealth{IsHealthy: true}
+
+	// 1. Directory existence check.
+	if _, err := os.Stat(wtPath); err != nil {
+		health.IsHealthy = false
+		health.Issues = append(health.Issues, "directory does not exist")
+		return health
+	}
+
+	// 2. .git file validity (worktrees have a .git file, not a .git directory).
+	gitFilePath := filepath.Join(wtPath, ".git")
+	if _, err := os.Stat(gitFilePath); err != nil {
+		health.IsHealthy = false
+		health.Issues = append(health.Issues, ".git file is missing or invalid")
+		return health
+	}
+
+	// 3. HEAD readability via git rev-parse.
+	wtRepo, err := Open(wtPath)
+	if err != nil {
+		health.IsHealthy = false
+		health.Issues = append(health.Issues, "cannot open as git repository")
+		return health
+	}
+	if _, err := wtRepo.runGitCommand("rev-parse", "HEAD"); err != nil {
+		health.IsHealthy = false
+		health.Issues = append(health.Issues, "HEAD is invalid")
+	}
+
+	return health
 }
 
 // PruneWorktrees removes stale worktree entries (broken links) immediately.

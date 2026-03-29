@@ -4,6 +4,7 @@ import {useNotificationStore} from "../stores/notificationStore";
 import {useTmuxStore} from "../stores/tmuxStore";
 import type {SessionSnapshot} from "../types/tmux";
 import {useI18n} from "../i18n";
+import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
 
 interface QuickSearchProps {
     open: boolean;
@@ -122,6 +123,7 @@ export function QuickSearch({open, onClose}: QuickSearchProps) {
                     : t("quickSearch.error.activateFailed", "Failed to activate session \"{sessionName}\".", {sessionName}),
                 "warn",
             );
+            logFrontendEventSafe("warn", `SetActiveSession failed: ${String(err)}`, "QuickSearch");
         } finally {
             switchingRef.current = false;
             if (mountedRef.current) {

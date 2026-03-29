@@ -26,7 +26,8 @@ var customNameRegex = regexp.MustCompile(`[^a-zA-Z0-9\-_]`)
 var commitishRegex = regexp.MustCompile(`^[a-zA-Z0-9._/@^~:-]+$`)
 
 const (
-	wtDirSuffix           = ".wt"
+	// WtDirSuffix is the directory suffix for worktree directories (e.g. myapp.wt).
+	WtDirSuffix           = ".wt"
 	maxWorktreePathSuffix = 100
 )
 
@@ -79,10 +80,24 @@ func ValidateCommitish(commitish string) error {
 	return nil
 }
 
+// structureSeparatorReplacer converts slashes, backslashes, and dots to hyphens.
+// These characters carry structural information (e.g. feature/auth → feature-auth)
+// that would be lost if simply stripped.
+var structureSeparatorReplacer = strings.NewReplacer("/", "-", "\\", "-", ".", "-")
+
+// consecutiveHyphenRegex matches two or more consecutive hyphens for collapsing.
+var consecutiveHyphenRegex = regexp.MustCompile(`-{2,}`)
+
 // SanitizeCustomName removes invalid characters from custom name.
-// Allowed characters: [a-zA-Z0-9-_]. Converts to lowercase, returns "work" as default if empty.
+// Slashes, backslashes, and dots are converted to hyphens to preserve structural
+// information (e.g. "feature/user-auth" → "feature-user-auth").
+// Remaining non-allowed characters are stripped. Consecutive hyphens are collapsed,
+// leading/trailing hyphens are trimmed. Returns "work" as default if empty.
 func SanitizeCustomName(name string) string {
-	sanitized := customNameRegex.ReplaceAllString(strings.ToLower(name), "")
+	replaced := structureSeparatorReplacer.Replace(strings.ToLower(name))
+	sanitized := customNameRegex.ReplaceAllString(replaced, "")
+	sanitized = consecutiveHyphenRegex.ReplaceAllString(sanitized, "-")
+	sanitized = strings.Trim(sanitized, "-")
 	if sanitized == "" {
 		return "work"
 	}
@@ -92,7 +107,7 @@ func SanitizeCustomName(name string) string {
 // GenerateWorktreeDirPath returns the .wt directory path for a repository.
 // Given repoPath=/path/to/myapp, returns /path/to/myapp.wt
 func GenerateWorktreeDirPath(repoPath string) string {
-	return filepath.Join(filepath.Dir(repoPath), filepath.Base(repoPath)+wtDirSuffix)
+	return filepath.Join(filepath.Dir(repoPath), filepath.Base(repoPath)+WtDirSuffix)
 }
 
 // GenerateWorktreePath returns the full path for a specific worktree.
@@ -103,6 +118,12 @@ func GenerateWorktreePath(repoPath, identifier string) string {
 
 // FindAvailableWorktreePath returns basePath if it does not exist.
 // If basePath already exists, it appends -2, -3, ... until a free path is found.
+//
+// NOTE: TOCTOU — There is a time-of-check-to-time-of-use race between the
+// os.Stat check here and the subsequent git worktree add. This is acceptable
+// because git worktree add atomically acquires the path; if a concurrent
+// creation takes the same path, the git command fails and the caller's rollback
+// logic cleans up. The cost is at most one failed creation attempt.
 func FindAvailableWorktreePath(basePath string) string {
 	if _, err := os.Stat(basePath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -149,4 +170,44 @@ func ValidateWorktreePath(path string) error {
 		return fmt.Errorf("worktree path must not target VCS directory: %s", path)
 	}
 	return nil
+}
+
+// PostRemovalCleanup runs standard post-worktree-removal housekeeping:
+// pruning stale git worktree entries and removing the empty .wt parent directory.
+// Failures are logged but never propagated. Callers should handle branch
+// cleanup separately as it is context-specific.
+func PostRemovalCleanup(repo *Repository, wtPath string) {
+	if repo != nil {
+		if err := repo.PruneWorktrees(); err != nil {
+			slog.Warn("[WARN-GIT] failed to prune worktrees after cleanup", "error", err)
+		}
+	}
+	RemoveEmptyWtDir(wtPath)
+}
+
+// RemoveEmptyWtDir removes the .wt parent directory of wtPath if it is empty
+// after worktree removal. Failures are logged but never propagated.
+// Safe to call from any package that performs worktree cleanup.
+func RemoveEmptyWtDir(wtPath string) {
+	if wtPath == "" {
+		return
+	}
+	wtDir := filepath.Dir(wtPath)
+	if !strings.HasSuffix(wtDir, WtDirSuffix) {
+		return
+	}
+	entries, err := os.ReadDir(wtDir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("[WARN-GIT] failed to read .wt directory for cleanup",
+				"path", wtDir, "error", err)
+		}
+		return
+	}
+	if len(entries) == 0 {
+		if err := os.Remove(wtDir); err != nil {
+			slog.Debug("[DEBUG-GIT] failed to remove empty .wt directory",
+				"path", wtDir, "error", err)
+		}
+	}
 }

@@ -175,7 +175,11 @@ func runGitCLIWithContextAndDeps(
 		lastErrMsg = errMsg
 
 		if !isLockFileConflict(errMsg) {
-			return nil, fmt.Errorf("git %s failed: %s", args[0], strings.TrimSpace(errMsg))
+			trimmed := strings.TrimSpace(errMsg)
+			if trimmed != "" {
+				return nil, fmt.Errorf("git %s failed: %s: %w", args[0], trimmed, err)
+			}
+			return nil, fmt.Errorf("git %s failed: %w", args[0], err)
 		}
 
 		if attempt >= maxGitRetries-1 {

@@ -14,8 +14,6 @@ import (
 	"strings"
 )
 
-var ensurePathContainsFn = ensurePathContains
-
 // ShimInstallResult contains shim install details.
 type ShimInstallResult struct {
 	InstalledPath  string `json:"installed_path"`
@@ -26,6 +24,12 @@ type ShimInstallResult struct {
 
 // EnsureShimInstalled installs tmux shim and adds install dir to user PATH.
 func EnsureShimInstalled(workspaceRoot string) (ShimInstallResult, error) {
+	return ensureShimInstalledWith(ensurePathContains, workspaceRoot)
+}
+
+// ensureShimInstalledWith is the testable core of EnsureShimInstalled,
+// allowing tests to inject test doubles for PATH manipulation.
+func ensureShimInstalledWith(ensurePathFn func(string) (bool, error), workspaceRoot string) (ShimInstallResult, error) {
 	installDir, err := ResolveInstallDir()
 	if err != nil {
 		return ShimInstallResult{}, err
@@ -62,7 +66,7 @@ func EnsureShimInstalled(workspaceRoot string) (ShimInstallResult, error) {
 		}
 	}
 
-	updated, err := ensurePathContainsFn(installDir)
+	updated, err := ensurePathFn(installDir)
 	if err != nil {
 		return ShimInstallResult{}, err
 	}

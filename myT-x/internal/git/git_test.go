@@ -695,7 +695,7 @@ func TestHasUnpushedCommitsErrorPropagation(t *testing.T) {
 	}
 }
 
-func TestIsNoUpstreamTrackingError(t *testing.T) {
+func TestIsNoUpstreamError(t *testing.T) {
 	tests := []struct {
 		name   string
 		errMsg string
@@ -704,6 +704,26 @@ func TestIsNoUpstreamTrackingError(t *testing.T) {
 		{
 			name:   "no upstream configured",
 			errMsg: "fatal: no upstream configured for branch 'main'",
+			want:   true,
+		},
+		{
+			name:   "no upstream branch (push error)",
+			errMsg: "fatal: The current branch feature-x has no upstream branch.",
+			want:   true,
+		},
+		{
+			name:   "has no upstream",
+			errMsg: "fatal: branch 'main' has no upstream",
+			want:   true,
+		},
+		{
+			name:   "set the remote as upstream (push hint)",
+			errMsg: "To push the current branch and set the remote as upstream, use\n    git push --set-upstream origin main",
+			want:   true,
+		},
+		{
+			name:   "does not point to a commit (rev-list)",
+			errMsg: "fatal: 'main@{u}' does not point to a commit",
 			want:   true,
 		},
 		{
@@ -750,8 +770,148 @@ func TestIsNoUpstreamTrackingError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isNoUpstreamTrackingError(tt.errMsg); got != tt.want {
-				t.Fatalf("isNoUpstreamTrackingError(%q) = %v, want %v", tt.errMsg, got, tt.want)
+			if got := IsNoUpstreamError(tt.errMsg); got != tt.want {
+				t.Fatalf("IsNoUpstreamError(%q) = %v, want %v", tt.errMsg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsGitConfigKeyNotFound(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	t.Run("key not found error returns true", func(t *testing.T) {
+		dir := testutil.CreateTempGitRepo(t)
+		// git config with a non-existent key exits with code 1.
+		_, err := RunGitCLIPublic(dir, []string{"config", "nonexistent.key.for.test"})
+		if err == nil {
+			t.Fatal("expected error for missing config key")
+		}
+		if !IsGitConfigKeyNotFound(err) {
+			t.Fatalf("IsGitConfigKeyNotFound() = false for missing key error: %v", err)
+		}
+	})
+
+	t.Run("non-ExitError returns false", func(t *testing.T) {
+		if IsGitConfigKeyNotFound(errors.New("some other error")) {
+			t.Fatal("IsGitConfigKeyNotFound() = true for non-ExitError")
+		}
+	})
+
+	t.Run("nil error returns false", func(t *testing.T) {
+		if IsGitConfigKeyNotFound(nil) {
+			t.Fatal("IsGitConfigKeyNotFound() = true for nil error")
+		}
+	})
+
+	t.Run("existing key returns no error", func(t *testing.T) {
+		dir := testutil.CreateTempGitRepo(t)
+		// user.email is set by CreateTempGitRepo.
+		_, err := RunGitCLIPublic(dir, []string{"config", "user.email"})
+		if err != nil {
+			t.Fatalf("expected no error for existing key: %v", err)
+		}
+	})
+}
+
+func TestResolveRemoteName(t *testing.T) {
+	testutil.SkipIfNoGit(t)
+
+	t.Run("configured remote returns that remote", func(t *testing.T) {
+		_, cloneDir := createBareAndClone(t)
+		branch := runGitCommandInDir(t, cloneDir, "rev-parse", "--abbrev-ref", "HEAD")
+		got, err := ResolveRemoteName(cloneDir, branch)
+		if err != nil {
+			t.Fatalf("ResolveRemoteName() error = %v", err)
+		}
+		if got != "origin" {
+			t.Fatalf("ResolveRemoteName() = %q, want %q", got, "origin")
+		}
+	})
+
+	t.Run("no config returns origin fallback", func(t *testing.T) {
+		dir := testutil.CreateTempGitRepo(t)
+		got, err := ResolveRemoteName(dir, "main")
+		if err != nil {
+			t.Fatalf("ResolveRemoteName() error = %v", err)
+		}
+		if got != "origin" {
+			t.Fatalf("ResolveRemoteName() = %q, want %q", got, "origin")
+		}
+	})
+
+	t.Run("empty branch returns origin fallback", func(t *testing.T) {
+		dir := testutil.CreateTempGitRepo(t)
+		got, err := ResolveRemoteName(dir, "")
+		if err != nil {
+			t.Fatalf("ResolveRemoteName() error = %v", err)
+		}
+		if got != "origin" {
+			t.Fatalf("ResolveRemoteName() = %q, want %q", got, "origin")
+		}
+	})
+
+	t.Run("non-origin remote is correctly resolved", func(t *testing.T) {
+		bareDir, cloneDir := createBareAndClone(t)
+		// Rename 'origin' to 'fork'.
+		runGitCommandInDir(t, cloneDir, "remote", "rename", "origin", "fork")
+		branch := runGitCommandInDir(t, cloneDir, "rev-parse", "--abbrev-ref", "HEAD")
+
+		// Manually set the branch remote to 'fork' (rename should have done this,
+		// but verify the resolved name explicitly).
+		runGitCommandInDir(t, cloneDir, "config", "branch."+branch+".remote", "fork")
+
+		got, err := ResolveRemoteName(cloneDir, branch)
+		if err != nil {
+			t.Fatalf("ResolveRemoteName() error = %v", err)
+		}
+		if got != "fork" {
+			t.Fatalf("ResolveRemoteName() = %q, want %q", got, "fork")
+		}
+		_ = bareDir // used by createBareAndClone
+	})
+}
+
+func TestIsGitConfigKeyNotFound_StringFallback(t *testing.T) {
+	// S-5: Test the string fallback path when *exec.ExitError is not available
+	// (e.g., after runGitCLI wraps errors with fmt.Errorf %s).
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "wrapped exit status 1 at end of message",
+			err:  errors.New("git config failed: exit status 1"),
+			want: true,
+		},
+		{
+			name: "exit status 1 embedded but not at end",
+			err:  errors.New("exit status 1: something else"),
+			want: false,
+		},
+		{
+			name: "exit status 128 (not config key not found)",
+			err:  errors.New("git config failed: exit status 128"),
+			want: false,
+		},
+		{
+			name: "no exit status in message",
+			err:  errors.New("connection refused"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsGitConfigKeyNotFound(tt.err)
+			if got != tt.want {
+				t.Fatalf("IsGitConfigKeyNotFound(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}

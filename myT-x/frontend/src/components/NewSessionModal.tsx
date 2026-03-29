@@ -1,8 +1,12 @@
-import {useCallback, useEffect, useMemo, useState} from "react";
+import {useCallback, useEffect, useMemo, useReducer, useRef} from "react";
 import {api} from "../api";
 import {useEscapeClose} from "../hooks/useEscapeClose";
-import type {git} from "../../wailsjs/go/models";
 import {useI18n} from "../i18n";
+import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
+import type {git} from "../../wailsjs/go/models";
+import {INITIAL_STATE, newSessionReducer} from "./new-session/newSessionReducer";
+import {NewSessionForm} from "./new-session/NewSessionForm";
+import {WorktreeOptions} from "./new-session/WorktreeOptions";
 
 interface NewSessionModalProps {
     open: boolean;
@@ -10,89 +14,40 @@ interface NewSessionModalProps {
     onCreated: (sessionName: string) => void;
 }
 
-type WorktreeSource = "existing" | "new";
-
 export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps) {
     const {language, t} = useI18n();
     const isEn = language === "en";
 
-    const [directory, setDirectory] = useState("");
-    const [sessionName, setSessionName] = useState("");
-    const [isGitRepo, setIsGitRepo] = useState(false);
-    const [currentBranch, setCurrentBranch] = useState("");
-    const [branches, setBranches] = useState<string[]>([]);
-    const [worktrees, setWorktrees] = useState<git.WorktreeInfo[]>([]);
-    const [useWorktree, setUseWorktree] = useState(false);
-    const [worktreeSource, setWorktreeSource] = useState<WorktreeSource>("new");
-    const [selectedWorktree, setSelectedWorktree] = useState<git.WorktreeInfo | null>(null);
-    const [worktreeConflict, setWorktreeConflict] = useState("");
-    const [directoryConflict, setDirectoryConflict] = useState("");
-    const [baseBranch, setBaseBranch] = useState("");
-    const [branchName, setBranchName] = useState("");
-    const [pullBefore, setPullBefore] = useState(true);
-    const [enableAgentTeam, setEnableAgentTeam] = useState(false);
-    const [useClaudeEnv, setUseClaudeEnv] = useState(false);
-    const [usePaneEnv, setUsePaneEnv] = useState(false);
-    const [useSessionPaneScope, setUseSessionPaneScope] = useState(true);
-    const [shimAvailable, setShimAvailable] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [gitCheckLoading, setGitCheckLoading] = useState(false);
-    const [worktreeDataLoading, setWorktreeDataLoading] = useState(false);
-    const [error, setError] = useState("");
-    const [configLoadFailed, setConfigLoadFailed] = useState(false);
-
-    // TODO: 22個の useState を useReducer に統合する（SettingsModal の formReducer パターン参照）。
-    // reset() を dispatch({ type: "RESET" }) に置き換え、状態管理を一元化する。
-    // 現時点では useState setter は React が安定参照を保証するため、依存配列は空で正しい。
-    const reset = useCallback(() => {
-        setDirectory("");
-        setSessionName("");
-        setIsGitRepo(false);
-        setCurrentBranch("");
-        setBranches([]);
-        setWorktrees([]);
-        setUseWorktree(false);
-        setWorktreeSource("new");
-        setSelectedWorktree(null);
-        setWorktreeConflict("");
-        setDirectoryConflict("");
-        setBaseBranch("");
-        setBranchName("");
-        setPullBefore(true);
-        setEnableAgentTeam(false);
-        setUseClaudeEnv(false);
-        setUsePaneEnv(false);
-        setUseSessionPaneScope(true);
-        setLoading(false);
-        setGitCheckLoading(false);
-        setWorktreeDataLoading(false);
-        setError("");
-        setConfigLoadFailed(false);
-    }, []);
+    const [s, dispatch] = useReducer(newSessionReducer, INITIAL_STATE);
 
     useEffect(() => {
         if (!open) {
-            reset();
+            dispatch({type: "RESET"});
             return;
         }
         api.IsAgentTeamsAvailable()
-            .then(setShimAvailable)
+            .then((available) => dispatch({type: "SET_FIELD", field: "shimAvailable", value: available}))
             .catch((err) => {
-                console.warn("[NewSessionModal] IsAgentTeamsAvailable failed", err);
-                setShimAvailable(false);
+                if (import.meta.env.DEV) {
+                    console.warn("[NewSessionModal] IsAgentTeamsAvailable failed", err);
+                }
+                dispatch({type: "SET_FIELD", field: "shimAvailable", value: false});
             });
         // NOTE: On config load failure, useClaudeEnv / usePaneEnv fall back to false
         // (conservative default). Session pane scope defaults to true independently.
         api.GetConfig()
             .then((cfg) => {
-                setUseClaudeEnv(cfg.claude_env?.default_enabled ?? false);
-                setUsePaneEnv(cfg.pane_env_default_enabled ?? false);
+                dispatch({type: "SET_FIELD", field: "useClaudeEnv", value: cfg.claude_env?.default_enabled ?? false});
+                dispatch({type: "SET_FIELD", field: "usePaneEnv", value: cfg.pane_env_default_enabled ?? false});
             })
             .catch((err) => {
-                console.warn("[NewSessionModal] failed to load config defaults", err);
-                setConfigLoadFailed(true);
+                if (import.meta.env.DEV) {
+                    console.warn("[NewSessionModal] failed to load config defaults", err);
+                }
+                logFrontendEventSafe("warn", `GetConfig failed: ${String(err)}`, "NewSessionModal");
+                dispatch({type: "SET_FIELD", field: "configLoadFailed", value: true});
             });
-    }, [open, reset]);
+    }, [open]);
 
     useEscapeClose(open, onClose);
 
@@ -100,151 +55,171 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
     // the "Use Git Worktree" checkbox, not eagerly on folder selection.
     // This reduces folder selection from 10 git subprocesses to 3.
     useEffect(() => {
-        if (!useWorktree || !isGitRepo || !directory) return;
+        if (!s.useWorktree || !s.isGitRepo || !s.directory) return;
         // Skip if data is already loaded for this directory (prevents
-        // redundant refetch on checkbox OFF→ON toggle for same directory).
-        // When directory changes, handlePickDirectory resets these to [].
-        if (branches.length > 0 || worktrees.length > 0) return;
+        // redundant refetch on checkbox OFF->ON toggle for same directory).
+        // When directory changes, PICK_DIRECTORY resets these to [].
+        if (s.branches.length > 0 || s.worktrees.length > 0) return;
 
         let cancelled = false;
-        setWorktreeDataLoading(true);
+        dispatch({type: "SET_FIELD", field: "worktreeDataLoading", value: true});
         Promise.all([
-            api.ListBranches(directory).catch(() => [] as string[]),
-            api.ListWorktreesByRepo(directory).catch(() => [] as git.WorktreeInfo[]),
+            api.ListBranches(s.directory).catch((err: unknown) => {
+                if (import.meta.env.DEV) {
+                    console.warn("[NewSessionModal] ListBranches failed:", err);
+                }
+                return [] as string[];
+            }),
+            api.ListWorktreesByRepo(s.directory).catch((err: unknown) => {
+                if (import.meta.env.DEV) {
+                    console.warn("[NewSessionModal] ListWorktreesByRepo failed:", err);
+                }
+                return [] as git.WorktreeInfo[];
+            }),
         ]).then(([branchList, wtList]) => {
             if (cancelled) return;
-            setBranches(branchList);
-            setWorktrees(wtList);
-            if (branchList.length > 0) setBaseBranch(branchList[0]);
+            dispatch({
+                type: "LOAD_GIT_DATA",
+                branches: branchList,
+                worktrees: wtList,
+                baseBranch: branchList.length > 0 ? branchList[0] : "",
+            });
         }).finally(() => {
-            if (!cancelled) setWorktreeDataLoading(false);
+            if (!cancelled) dispatch({type: "SET_FIELD", field: "worktreeDataLoading", value: false});
         });
         return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- branches.length/worktrees.length
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- s.branches.length/s.worktrees.length
     // are intentionally excluded: they serve as a runtime guard against redundant refetch,
-    // not as reactive triggers. directory change resets them via handlePickDirectory.
-    }, [useWorktree, isGitRepo, directory]);
+    // not as reactive triggers. Directory change resets them via PICK_DIRECTORY action.
+    }, [s.useWorktree, s.isGitRepo, s.directory]);
 
     const handlePickDirectory = useCallback(async () => {
         try {
             const dir = await api.PickSessionDirectory();
             if (!dir) return;
-            setDirectory(dir);
-            setSessionName(dir.split(/[\\/]/).filter(Boolean).pop() || "");
-            setError("");
-            setWorktreeSource("new");
-            setSelectedWorktree(null);
-            setWorktreeConflict("");
-            // Reset worktree data from any previous folder selection
-            setBranches([]);
-            setWorktrees([]);
-            setUseWorktree(false);
 
-            setGitCheckLoading(true);
+            dispatch({
+                type: "PICK_DIRECTORY",
+                directory: dir,
+                sessionName: dir.split(/[\\/]/).filter(Boolean).pop() || "",
+            });
+
+            dispatch({type: "SET_FIELD", field: "gitCheckLoading", value: true});
             try {
                 // Parallel: CheckDirectoryConflict is in-memory (<1ms),
                 // IsGitRepository is lightweight (1 git subprocess, ~20-50ms)
                 const [conflict, gitRepo] = await Promise.all([
                     api.CheckDirectoryConflict(dir).catch((err: unknown) => {
-                        console.error("[NewSessionModal] CheckDirectoryConflict failed:", err);
+                        if (import.meta.env.DEV) {
+                            console.error("[NewSessionModal] CheckDirectoryConflict failed:", err);
+                        }
                         return "";
                     }),
                     api.IsGitRepository(dir),
                 ]);
-                setDirectoryConflict(conflict);
-                setIsGitRepo(gitRepo);
+                dispatch({type: "SET_FIELD", field: "directoryConflict", value: conflict});
+                dispatch({type: "SET_FIELD", field: "isGitRepo", value: gitRepo});
 
                 if (gitRepo) {
                     // Only GetCurrentBranch here -- lightweight (2 git subprocesses).
                     // ListBranches and ListWorktreesByRepo are deferred until
                     // the user enables the "Use Git Worktree" checkbox.
-                    const curBranch = await api.GetCurrentBranch(dir).catch(() => "");
-                    setCurrentBranch(curBranch);
+                    const curBranch = await api.GetCurrentBranch(dir).catch((err: unknown) => {
+                        if (import.meta.env.DEV) {
+                            console.warn("[NewSessionModal] GetCurrentBranch failed:", err);
+                        }
+                        return "";
+                    });
+                    dispatch({type: "SET_FIELD", field: "currentBranch", value: curBranch});
                 } else {
-                    setCurrentBranch("");
+                    dispatch({type: "SET_FIELD", field: "currentBranch", value: ""});
                 }
             } finally {
-                setGitCheckLoading(false);
+                dispatch({type: "SET_FIELD", field: "gitCheckLoading", value: false});
             }
         } catch (err) {
-            setError(String(err));
+            dispatch({type: "SET_FIELD", field: "error", value: String(err)});
         }
     }, []);
 
+    const worktreeCheckSeqRef = useRef(0);
     const handleSelectWorktree = useCallback(async (wt: git.WorktreeInfo) => {
-        setSelectedWorktree(wt);
-        if (wt.branch) {
-            setSessionName(wt.branch.replace(/\//g, "-"));
-        }
+        const seq = ++worktreeCheckSeqRef.current;
+        dispatch({
+            type: "SELECT_WORKTREE",
+            worktree: wt,
+            sessionName: wt.branch ? wt.branch.replace(/\//g, "-") : "",
+        });
         try {
             const conflict = await api.CheckWorktreePathConflict(wt.path);
-            setWorktreeConflict(conflict);
+            if (seq !== worktreeCheckSeqRef.current) return; // stale response
+            dispatch({type: "SET_FIELD", field: "worktreeConflict", value: conflict});
         } catch (err) {
-            console.error("[NewSessionModal] CheckWorktreePathConflict failed:", err);
-            setWorktreeConflict("");
+            if (seq !== worktreeCheckSeqRef.current) return; // stale response
+            if (import.meta.env.DEV) {
+                console.error("[NewSessionModal] CheckWorktreePathConflict failed:", err);
+            }
+            dispatch({type: "SET_FIELD", field: "worktreeConflict", value: ""});
         }
     }, []);
 
-    // NOTE: SettingsModal では config.Config.createFrom(payload) でWails型インスタンスを生成しているが、
-    // CreateSessionOptions は単純なオブジェクトリテラルで十分な為、createFrom() は使用しない。
-    // Wails側の型が複雑化した場合は createFrom() パターンへの移行を検討する。
+    // NOTE: SettingsModal uses config.Config.createFrom(payload) for Wails type instances,
+    // but CreateSessionOptions works with plain object literals. If Wails-side types grow
+    // more complex, consider migrating to the createFrom() pattern.
     const handleSubmit = useCallback(async () => {
-        if (!directory || !sessionName.trim()) return;
-        setLoading(true);
-        setError("");
+        if (!s.directory || !s.sessionName.trim()) return;
+        dispatch({type: "START_SUBMIT"});
         try {
             let created;
-            if (useWorktree && isGitRepo) {
-                if (worktreeSource === "existing" && selectedWorktree) {
+            if (s.useWorktree && s.isGitRepo) {
+                if (s.worktreeSource === "existing" && s.selectedWorktree) {
                     created = await api.CreateSessionWithExistingWorktree(
-                        directory, sessionName.trim(), selectedWorktree.path, {
-                            enable_agent_team: enableAgentTeam,
-                            use_claude_env: useClaudeEnv,
-                            use_pane_env: usePaneEnv,
-                            use_session_pane_scope: useSessionPaneScope,
+                        s.directory, s.sessionName.trim(), s.selectedWorktree.path, {
+                            enable_agent_team: s.enableAgentTeam,
+                            use_claude_env: s.useClaudeEnv,
+                            use_pane_env: s.usePaneEnv,
+                            use_session_pane_scope: s.useSessionPaneScope,
                         });
                 } else {
                     const opts = {
-                        branch_name: branchName.trim(),
-                        base_branch: baseBranch,
-                        pull_before_create: pullBefore,
-                        enable_agent_team: enableAgentTeam,
-                        use_claude_env: useClaudeEnv,
-                        use_pane_env: usePaneEnv,
-                        use_session_pane_scope: useSessionPaneScope,
+                        branch_name: s.branchName.trim(),
+                        base_branch: s.baseBranch,
+                        pull_before_create: s.pullBefore,
+                        enable_agent_team: s.enableAgentTeam,
+                        use_claude_env: s.useClaudeEnv,
+                        use_pane_env: s.usePaneEnv,
+                        use_session_pane_scope: s.useSessionPaneScope,
                     };
-                    created = await api.CreateSessionWithWorktree(directory, sessionName.trim(), opts);
+                    created = await api.CreateSessionWithWorktree(s.directory, s.sessionName.trim(), opts);
                 }
             } else {
-                created = await api.CreateSession(directory, sessionName.trim(), {
-                    enable_agent_team: enableAgentTeam,
-                    use_claude_env: useClaudeEnv,
-                    use_pane_env: usePaneEnv,
-                    use_session_pane_scope: useSessionPaneScope,
+                created = await api.CreateSession(s.directory, s.sessionName.trim(), {
+                    enable_agent_team: s.enableAgentTeam,
+                    use_claude_env: s.useClaudeEnv,
+                    use_pane_env: s.usePaneEnv,
+                    use_session_pane_scope: s.useSessionPaneScope,
                 });
             }
             onCreated(created.name);
             onClose();
         } catch (err) {
-            setError(String(err));
+            dispatch({type: "SET_FIELD", field: "error", value: String(err)});
         } finally {
-            setLoading(false);
+            dispatch({type: "SET_FIELD", field: "loading", value: false});
         }
-    }, [directory, sessionName, useWorktree, isGitRepo, worktreeSource, selectedWorktree, branchName, baseBranch, pullBefore, enableAgentTeam, useClaudeEnv, usePaneEnv, useSessionPaneScope, onCreated, onClose]);
+    }, [s, onCreated, onClose]);
 
     const canSubmit = useMemo(() => {
-        if (!directory || !sessionName.trim() || loading || worktreeDataLoading) return false;
-        if (!useWorktree) return !directoryConflict;
-        if (worktreeSource === "existing") {
-            return !!selectedWorktree && !worktreeConflict;
+        if (!s.directory || !s.sessionName.trim() || s.loading || s.worktreeDataLoading || s.gitCheckLoading) return false;
+        if (!s.useWorktree) return !s.directoryConflict;
+        if (s.worktreeSource === "existing") {
+            return !!s.selectedWorktree && !s.worktreeConflict;
         }
         // new worktree: always requires branch name
-        return !!branchName.trim();
-    }, [directory, sessionName, loading, worktreeDataLoading, useWorktree, directoryConflict, worktreeSource, selectedWorktree, worktreeConflict, branchName]);
+        return !!s.branchName.trim();
+    }, [s.directory, s.sessionName, s.loading, s.worktreeDataLoading, s.gitCheckLoading, s.useWorktree, s.directoryConflict, s.worktreeSource, s.selectedWorktree, s.worktreeConflict, s.branchName]);
 
     if (!open) return null;
-
-    const nonMainWorktrees = worktrees.filter((w) => !w.isMain);
 
     return (
         <div className="modal-overlay" onClick={onClose}>
@@ -261,7 +236,7 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                     </h2>
                 </div>
                 <div className="modal-body">
-                    {configLoadFailed && (
+                    {s.configLoadFailed && (
                         <p className="form-warning">
                             {isEn
                                 ? "Failed to load settings. Showing defaults."
@@ -278,8 +253,8 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                             {isEn ? "Working Directory" : t("newSession.directory.label", "作業ディレクトリ")}
                         </span>
                         <button type="button" className="modal-btn" onClick={handlePickDirectory}>
-                            {directory
-                                ? directory
+                            {s.directory
+                                ? s.directory
                                 : (isEn
                                     ? "Select folder..."
                                     : t("newSession.directory.selectButton", "フォルダを選択..."))}
@@ -287,289 +262,43 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                     </div>
 
                     {/* Git repository check loading indicator */}
-                    {directory && gitCheckLoading && (
+                    {s.directory && s.gitCheckLoading && (
                         <div className="form-inline-loading">
                             <span className="form-spinner" />
                             {isEn ? "Checking repository..." : t("newSession.git.checking", "リポジトリを確認中...")}
                         </div>
                     )}
 
-                    {/* Session name */}
-                    {directory && (
-                        <div className="form-group">
-                            <span className="form-label">
-                                {isEn ? "Session Name" : t("newSession.sessionName.label", "セッション名")}
-                            </span>
-                            <input
-                                className="form-input"
-                                value={sessionName}
-                                onChange={(e) => setSessionName(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === "Enter" && canSubmit) void handleSubmit();
-                                }}
-                                placeholder={
-                                    isEn
-                                        ? "Enter session name"
-                                        : t("newSession.sessionName.placeholder", "セッション名を入力")
-                                }
-                                autoFocus
-                            />
-                        </div>
+                    {s.directory && (
+                        <NewSessionForm
+                            s={s}
+                            dispatch={dispatch}
+                            canSubmit={canSubmit}
+                            onSubmit={handleSubmit}
+                        />
                     )}
 
-                    {/* Agent Team option */}
-                    {directory && (
-                        <div className="form-checkbox-row">
-                            <input
-                                type="checkbox"
-                                id="enable-agent-team"
-                                checked={enableAgentTeam}
-                                onChange={(e) => setEnableAgentTeam(e.target.checked)}
-                                disabled={!shimAvailable}
-                            />
-                            <label htmlFor="enable-agent-team">
-                                {isEn ? "Start as Agent Team" : t("newSession.agentTeam.enable", "Agent Team として開始")}
-                                {!shimAvailable && (
-                                    <span className="form-hint">
-                                        {isEn
-                                            ? " (shim not installed)"
-                                            : t("newSession.agentTeam.shimMissing", " (シム未インストール)")}
-                                    </span>
-                                )}
-                            </label>
-                        </div>
+                    {s.directory && s.isGitRepo && (
+                        <WorktreeOptions
+                            s={s}
+                            dispatch={dispatch}
+                            onSelectWorktree={handleSelectWorktree}
+                        />
                     )}
 
-                    {/* Claude Code env option */}
-                    {directory && (
-                        <div className="form-checkbox-row">
-                            <input
-                                type="checkbox"
-                                id="use-claude-env"
-                                checked={useClaudeEnv}
-                                onChange={(e) => setUseClaudeEnv(e.target.checked)}
-                            />
-                            <label htmlFor="use-claude-env">
-                                {isEn
-                                    ? "Use Claude Code environment variables"
-                                    : t("newSession.env.claude", "Claude Code 環境変数を利用する")}
-                            </label>
-                        </div>
-                    )}
-
-                    {/* Pane env option */}
-                    {directory && (
-                        <div className="form-checkbox-row">
-                            <input
-                                type="checkbox"
-                                id="use-pane-env"
-                                checked={usePaneEnv}
-                                onChange={(e) => setUsePaneEnv(e.target.checked)}
-                            />
-                            <label htmlFor="use-pane-env">
-                                {isEn
-                                    ? "Use additional pane-only environment variables"
-                                    : t("newSession.env.pane", "追加ペイン専用環境変数を利用する")}
-                            </label>
-                        </div>
-                    )}
-
-                    {/* Session pane scope option */}
-                    {directory && (
-                        <div className="form-checkbox-row">
-                            <input
-                                type="checkbox"
-                                id="use-session-pane-scope"
-                                checked={useSessionPaneScope}
-                                onChange={(e) => setUseSessionPaneScope(e.target.checked)}
-                            />
-                            <label htmlFor="use-session-pane-scope">
-                                {isEn
-                                    ? "Use session-based pane management"
-                                    : t("newSession.env.sessionPaneScope", "セッション単位ペイン管理を利用する")}
-                            </label>
-                        </div>
-                    )}
-
-                    {/* Git info & worktree options */}
-                    {directory && isGitRepo && (
-                        <>
-                            {/* Current branch display */}
-                            {currentBranch && (
-                                <div className="current-branch-info">
-                                    {isEn ? "Current branch:" : t("newSession.git.currentBranch", "現在のブランチ:")}
-                                    {" "}
-                                    <span className="current-branch-name">{currentBranch}</span>
-                                </div>
-                            )}
-
-                            {/* Use worktree checkbox */}
-                            <div className="form-checkbox-row">
-                                <input
-                                    type="checkbox"
-                                    id="use-worktree"
-                                    checked={useWorktree}
-                                    onChange={(e) => setUseWorktree(e.target.checked)}
-                                    disabled={gitCheckLoading}
-                                />
-                                <label htmlFor="use-worktree">
-                                    {isEn ? "Use Git Worktree" : t("newSession.worktree.enable", "Git Worktree を使用")}
-                                </label>
-                            </div>
-
-                            {useWorktree && worktreeDataLoading && (
-                                <div className="form-inline-loading">
-                                    <span className="form-spinner" />
-                                    {isEn ? "Loading branches..." : t("newSession.worktree.loading", "ブランチを読み込み中...")}
-                                </div>
-                            )}
-                            {useWorktree && !worktreeDataLoading && (
-                                <div className="session-mode-selector">
-                                    {/* Existing worktree option (only if non-main worktrees exist) */}
-                                    {nonMainWorktrees.length > 0 && (
-                                        <>
-                                            <div className="form-radio-row">
-                                                <input
-                                                    type="radio"
-                                                    id="wt-source-existing"
-                                                    name="wt-source"
-                                                    checked={worktreeSource === "existing"}
-                                                    onChange={() => setWorktreeSource("existing")}
-                                                />
-                                                <label htmlFor="wt-source-existing">
-                                                    {isEn
-                                                        ? "Use existing worktree"
-                                                        : t("newSession.worktree.source.existing", "既存worktreeを使用")}
-                                                </label>
-                                            </div>
-                                            {worktreeSource === "existing" && (
-                                                <div className="form-group indented">
-                                                    <select
-                                                        className="form-select"
-                                                        value={selectedWorktree?.path || ""}
-                                                        onChange={(e) => {
-                                                            const wt = nonMainWorktrees.find((w) => w.path === e.target.value);
-                                                            if (wt) void handleSelectWorktree(wt);
-                                                        }}
-                                                    >
-                                                        <option value="">
-                                                            {isEn
-                                                                ? "Please select..."
-                                                                : t("newSession.worktree.select.placeholder", "選択してください...")}
-                                                        </option>
-                                                        {nonMainWorktrees.map((wt) => (
-                                                            <option key={wt.path} value={wt.path}>
-                                                                {wt.branch
-                                                                    || (isEn
-                                                                        ? "(detached)"
-                                                                        : t("newSession.worktree.detached", "(detached)"))}
-                                                                {" - "}
-                                                                {wt.path}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                    {worktreeConflict && (
-                                                        <p className="form-error">
-                                                            {isEn
-                                                                ? `This worktree is already used by session "${worktreeConflict}".`
-                                                                : t("newSession.worktree.conflict", "このworktreeはセッション「{sessionName}」で使用中です", {
-                                                                    sessionName: worktreeConflict,
-                                                                })}
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </>
-                                    )}
-
-                                    {/* New worktree option */}
-                                    <div className="form-radio-row">
-                                        <input
-                                            type="radio"
-                                            id="wt-source-new"
-                                            name="wt-source"
-                                            checked={worktreeSource === "new"}
-                                            onChange={() => setWorktreeSource("new")}
-                                        />
-                                        <label htmlFor="wt-source-new">
-                                            {isEn
-                                                ? "Create new worktree"
-                                                : t("newSession.worktree.source.new", "新規worktreeを作成")}
-                                        </label>
-                                    </div>
-                                    {worktreeSource === "new" && (
-                                        <div className="form-group indented">
-                                            {/* Pull before create */}
-                                            <div className="form-checkbox-row">
-                                                <input
-                                                    type="checkbox"
-                                                    id="pull-before"
-                                                    checked={pullBefore}
-                                                    onChange={(e) => setPullBefore(e.target.checked)}
-                                                />
-                                                <label htmlFor="pull-before">
-                                                    {isEn
-                                                        ? "Pull latest before create"
-                                                        : t("newSession.worktree.pullBefore", "作成前に pull（最新取得）")}
-                                                </label>
-                                            </div>
-
-                                            {/* Base branch */}
-                                            <div className="form-group">
-                                                <span className="form-label">
-                                                    {isEn
-                                                        ? "Base Branch"
-                                                        : t("newSession.worktree.baseBranch.label", "ベースブランチ")}
-                                                </span>
-                                                <select
-                                                    className="form-select"
-                                                    value={baseBranch}
-                                                    onChange={(e) => setBaseBranch(e.target.value)}
-                                                >
-                                                    {branches.map((b) => (
-                                                        <option key={b} value={b}>{b}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-
-                                            {/* Branch name */}
-                                            <div className="form-group">
-                                                <span className="form-label">
-                                                    {isEn
-                                                        ? "Branch Name"
-                                                        : t("newSession.worktree.branchName.label", "ブランチ名")}
-                                                </span>
-                                                <input
-                                                    className="form-input"
-                                                    value={branchName}
-                                                    onChange={(e) => setBranchName(e.target.value)}
-                                                    placeholder={
-                                                        isEn
-                                                            ? "feature/my-branch"
-                                                            : t("newSession.worktree.branchName.placeholder", "feature/my-branch")
-                                                    }
-                                                />
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </>
-                    )}
-
-                    {error && <p className="form-error">{error}</p>}
+                    {s.error && <p className="form-error">{s.error}</p>}
                 </div>
                 <div className="modal-footer">
-                    {directoryConflict && !useWorktree && (
+                    {s.directoryConflict && !s.useWorktree && (
                         <span className="form-error" style={{marginRight: "auto"}}>
                             {isEn
-                                ? `Cannot start session (${directoryConflict} is already in use)`
+                                ? `Cannot start session (${s.directoryConflict} is already in use)`
                                 : t("newSession.error.directoryConflict", "セッション開始不可（{sessionName} が使用中）", {
-                                    sessionName: directoryConflict,
+                                    sessionName: s.directoryConflict,
                                 })}
                         </span>
                     )}
-                    <button type="button" className="modal-btn" onClick={onClose} disabled={loading}>
+                    <button type="button" className="modal-btn" onClick={onClose} disabled={s.loading}>
                         {isEn ? "Cancel" : t("common.cancel", "キャンセル")}
                     </button>
                     <button
@@ -578,7 +307,7 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                         onClick={handleSubmit}
                         disabled={!canSubmit}
                     >
-                        {loading
+                        {s.loading
                             ? (isEn ? "Creating..." : t("newSession.action.creating", "作成中..."))
                             : (isEn ? "Create" : t("newSession.action.create", "作成"))}
                     </button>

@@ -2,10 +2,12 @@ package tmux
 
 import (
 	"bytes"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"myT-x/internal/config"
 	"myT-x/internal/ipc"
@@ -515,7 +517,7 @@ func TestBlockedKeyListsMatch(t *testing.T) {
 func TestFrontendBackendBlockedEnvKeysConsistency(t *testing.T) {
 	// These keys are hardcoded from frontend/src/components/settings/settingsValidation.ts
 	// BLOCKED_ENV_KEYS as of the last update. If the test fails, update this list
-	// to match the frontend const and update blockedEnvironmentKeys above.
+	// to match the frontend const and update blockedEnvironmentKeys in command_router_terminal.go.
 	//
 	// SYNC REQUIREMENT: フロントエンド側の BLOCKED_ENV_KEYS と同期が必要。
 	// When adding or removing a key from blockedEnvironmentKeys, you MUST also
@@ -638,5 +640,69 @@ func TestReplacePaneOutputHistory_ReleasesExistingHistory(t *testing.T) {
 func TestReplacePaneOutputHistory_NilPane(t *testing.T) {
 	if history := replacePaneOutputHistory(nil, 64); history != nil {
 		t.Fatal("replacement history should be nil for a nil pane")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Panic recovery tests (migrated from panic_recovery_test.go)
+// ---------------------------------------------------------------------------
+
+func TestRecoverRouterPanic(t *testing.T) {
+	var logBuf bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+	t.Cleanup(func() {
+		slog.SetDefault(originalLogger)
+	})
+
+	t.Run("returns true and logs when panic is recovered", func(t *testing.T) {
+		recovered := false
+		func() {
+			defer func() {
+				recovered = recoverRouterPanic("router-worker", recover())
+			}()
+			panic("router boom")
+		}()
+
+		if !recovered {
+			t.Fatal("recoverRouterPanic() should return true when recovering panic")
+		}
+		if !strings.Contains(logBuf.String(), "router-worker") {
+			t.Fatalf("log output = %q, want worker name", logBuf.String())
+		}
+	})
+
+	t.Run("returns false when there is no panic", func(t *testing.T) {
+		recovered := true
+		func() {
+			defer func() {
+				recovered = recoverRouterPanic("router-worker", recover())
+			}()
+		}()
+		if recovered {
+			t.Fatal("recoverRouterPanic() should return false when no panic occurred")
+		}
+	})
+}
+
+func TestNextRouterPanicRestartBackoff(t *testing.T) {
+	tests := []struct {
+		name    string
+		current time.Duration
+		want    time.Duration
+	}{
+		{name: "zero uses initial", current: 0, want: initialRouterPanicRestartBackoff},
+		{name: "negative uses initial", current: -time.Second, want: initialRouterPanicRestartBackoff},
+		{name: "doubles under cap", current: 200 * time.Millisecond, want: 400 * time.Millisecond},
+		{name: "caps at max", current: maxRouterPanicRestartBackoff, want: maxRouterPanicRestartBackoff},
+		{name: "caps overflow", current: maxRouterPanicRestartBackoff / 2 * 3, want: maxRouterPanicRestartBackoff},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nextRouterPanicRestartBackoff(tt.current); got != tt.want {
+				t.Fatalf("nextRouterPanicRestartBackoff(%s) = %s, want %s", tt.current, got, tt.want)
+			}
+		})
 	}
 }

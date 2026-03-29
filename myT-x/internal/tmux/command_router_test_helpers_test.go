@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -20,6 +21,10 @@ func (e *captureEmitter) Emit(name string, payload any) {
 	e.mu.Lock()
 	e.events = append(e.events, capturedEvent{name: name, payload: payload})
 	e.mu.Unlock()
+}
+
+func (e *captureEmitter) EmitWithContext(_ context.Context, name string, payload any) {
+	e.Emit(name, payload)
 }
 
 func (e *captureEmitter) Events() []capturedEvent {

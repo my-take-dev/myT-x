@@ -276,12 +276,12 @@ func TestKillPanePreservesMixedLayoutDirection(t *testing.T) {
 		t.Fatalf("SplitPane(vertical) error = %v", err)
 	}
 
-	_, removedSession, err := manager.KillPane(rightPane.IDString())
+	_, sessionEmptied, err := manager.KillPane(rightPane.IDString())
 	if err != nil {
 		t.Fatalf("KillPane() error = %v", err)
 	}
-	if removedSession {
-		t.Fatal("removedSession = true, want false")
+	if sessionEmptied {
+		t.Fatal("sessionEmptied = true, want false")
 	}
 
 	snapshots := manager.Snapshot()
@@ -615,18 +615,28 @@ func TestKillPaneRemovesSessionWhenLastPane(t *testing.T) {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
 
-	sessionName, removedSession, err := manager.KillPane(pane.IDString())
+	sessionName, sessionEmptied, err := manager.KillPane(pane.IDString())
 	if err != nil {
 		t.Fatalf("KillPane() error = %v", err)
 	}
 	if sessionName != "demo" {
 		t.Fatalf("sessionName = %q, want %q", sessionName, "demo")
 	}
-	if !removedSession {
-		t.Fatal("removedSession = false, want true")
+	if !sessionEmptied {
+		t.Fatal("sessionEmptied = false, want true")
 	}
-	if manager.HasSession("demo") {
-		t.Fatal("session should be removed")
+	if !manager.HasSession("demo") {
+		t.Fatal("session should remain after the last pane is closed")
+	}
+	session, ok := manager.GetSession("demo")
+	if !ok {
+		t.Fatal("GetSession(demo) failed after KillPane")
+	}
+	if len(session.Windows) != 0 {
+		t.Fatalf("len(session.Windows) = %d, want 0", len(session.Windows))
+	}
+	if session.ActiveWindowID != -1 {
+		t.Fatalf("ActiveWindowID = %d, want -1", session.ActiveWindowID)
 	}
 
 	// Verify pane is removed from internal map.
@@ -643,7 +653,7 @@ func TestKillPaneRemovesSessionWhenLastPane(t *testing.T) {
 }
 
 func TestKillPaneOrphanedPaneCleanup(t *testing.T) {
-	// I-11: When session is deleted via KillPane, orphaned panes
+	// I-11: When the last pane is closed via KillPane, orphaned panes
 	// that exist in m.panes but are not in any window's Panes slice
 	// should be defensively cleaned up.
 	manager := NewSessionManager()
@@ -664,13 +674,13 @@ func TestKillPaneOrphanedPaneCleanup(t *testing.T) {
 	manager.panes[999] = orphanPane
 	manager.mu.Unlock()
 
-	// Kill the only visible pane -> session should be deleted.
-	_, removedSession, err := manager.KillPane(pane.IDString())
+	// Kill the only visible pane -> session should be emptied.
+	_, sessionEmptied, err := manager.KillPane(pane.IDString())
 	if err != nil {
 		t.Fatalf("KillPane() error = %v", err)
 	}
-	if !removedSession {
-		t.Fatal("removedSession = false, want true")
+	if !sessionEmptied {
+		t.Fatal("sessionEmptied = false, want true")
 	}
 
 	// Verify the orphaned pane was also cleaned up.
@@ -679,7 +689,7 @@ func TestKillPaneOrphanedPaneCleanup(t *testing.T) {
 	paneCount := len(manager.panes)
 	manager.mu.RUnlock()
 	if orphanExists {
-		t.Fatal("orphaned pane should be cleaned up during session deletion")
+		t.Fatal("orphaned pane should be cleaned up while emptying the session")
 	}
 	if paneCount != 0 {
 		t.Fatalf("pane count = %d, want 0 (orphan not cleaned up)", paneCount)
@@ -758,15 +768,15 @@ func TestKillPaneKeepsOtherPanesInSession(t *testing.T) {
 		t.Fatalf("SplitPane() error = %v", err)
 	}
 
-	sessionName, removedSession, err := manager.KillPane(pane.IDString())
+	sessionName, sessionEmptied, err := manager.KillPane(pane.IDString())
 	if err != nil {
 		t.Fatalf("KillPane() error = %v", err)
 	}
 	if sessionName != "demo" {
 		t.Fatalf("sessionName = %q, want %q", sessionName, "demo")
 	}
-	if removedSession {
-		t.Fatal("removedSession = true, want false (other pane still exists)")
+	if sessionEmptied {
+		t.Fatal("sessionEmptied = true, want false (other pane still exists)")
 	}
 
 	// Verify pane2 is still in the panes map.
@@ -803,12 +813,12 @@ func TestKillPaneRepairsActiveWindowIDWithNilWindowEntries(t *testing.T) {
 	session.ActiveWindowID = -999
 	manager.mu.Unlock()
 
-	_, removedSession, err := manager.KillPane(secondPane.IDString())
+	_, sessionEmptied, err := manager.KillPane(secondPane.IDString())
 	if err != nil {
 		t.Fatalf("KillPane() error = %v", err)
 	}
-	if removedSession {
-		t.Fatal("removedSession = true, want false")
+	if sessionEmptied {
+		t.Fatal("sessionEmptied = true, want false")
 	}
 
 	snapshot, ok := manager.GetSession("demo")
@@ -866,6 +876,55 @@ func TestTopologyGenerationTracksStructuralChanges(t *testing.T) {
 	afterKill := manager.TopologyGeneration()
 	if afterKill <= afterSplit {
 		t.Fatalf("topology generation after kill = %d, want > %d", afterKill, afterSplit)
+	}
+}
+
+func TestCreatePaneInEmptySession(t *testing.T) {
+	manager := NewSessionManager()
+	_, pane, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if _, sessionEmptied, err := manager.KillPane(pane.IDString()); err != nil {
+		t.Fatalf("KillPane() error = %v", err)
+	} else if !sessionEmptied {
+		t.Fatal("sessionEmptied = false, want true")
+	}
+
+	session, newPane, err := manager.CreatePaneInEmptySession("demo", 0, 0)
+	if err != nil {
+		t.Fatalf("CreatePaneInEmptySession() error = %v", err)
+	}
+	if session == nil || newPane == nil {
+		t.Fatal("CreatePaneInEmptySession() returned nil session or pane")
+	}
+	if newPane.Width != DefaultTerminalCols || newPane.Height != DefaultTerminalRows {
+		t.Fatalf("new pane size = %dx%d, want %dx%d", newPane.Width, newPane.Height, DefaultTerminalCols, DefaultTerminalRows)
+	}
+
+	snapshot, ok := manager.GetSession("demo")
+	if !ok {
+		t.Fatal("GetSession(demo) failed after CreatePaneInEmptySession")
+	}
+	if len(snapshot.Windows) != 1 {
+		t.Fatalf("len(snapshot.Windows) = %d, want 1", len(snapshot.Windows))
+	}
+	if len(snapshot.Windows[0].Panes) != 1 {
+		t.Fatalf("len(snapshot.Windows[0].Panes) = %d, want 1", len(snapshot.Windows[0].Panes))
+	}
+	if snapshot.ActiveWindowID != snapshot.Windows[0].ID {
+		t.Fatalf("ActiveWindowID = %d, want %d", snapshot.ActiveWindowID, snapshot.Windows[0].ID)
+	}
+}
+
+func TestCreatePaneInEmptySessionRejectsNonEmptySession(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	if _, _, err := manager.CreatePaneInEmptySession("demo", 120, 40); err == nil {
+		t.Fatal("CreatePaneInEmptySession() expected error for non-empty session")
 	}
 }
 

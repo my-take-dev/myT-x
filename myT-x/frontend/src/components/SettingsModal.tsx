@@ -1,51 +1,17 @@
 import {useEffect, useLayoutEffect, useReducer, useRef} from "react";
-import {config} from "../../wailsjs/go/models";
 import {api} from "../api";
 import {useEscapeClose} from "../hooks/useEscapeClose";
-import {useNotificationStore} from "../stores/notificationStore";
-import {GeneralSettings} from "./settings/GeneralSettings";
-import {KeybindSettings} from "./settings/KeybindSettings";
-import {WorktreeSettings} from "./settings/WorktreeSettings";
-import {AgentModelSettings} from "./settings/AgentModelSettings";
-import {PaneEnvSettings} from "./settings/PaneEnvSettings";
-import {ClaudeEnvSettings} from "./settings/ClaudeEnvSettings";
-import {EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK} from "./settings/constants";
-import type {SettingsCategory} from "./settings/types";
+import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
+import {MIN_OVERRIDE_NAME_LEN_FALLBACK} from "./settings/constants";
 import {INITIAL_FORM, formReducer} from "./settings/settingsReducer";
-import {
-    validateAgentModelSettings,
-    validateClaudeEnvSettings,
-    validateDefaultSessionDir,
-    validatePaneEnvSettings,
-    validateViewerShortcuts,
-    validateWorktreeCopyPathSettings,
-} from "./settings/settingsValidation";
-import type {WailsConfigInput} from "../types/tmux";
-import {serializeViewerSidebarMode} from "../utils/viewerSidebarMode";
-import {normalizeShortcut} from "./viewer/viewerShortcutUtils";
 import {useSettingsI18n} from "./settings/settingsI18n";
+import {SettingsTabs} from "./settings/SettingsTabs";
+import {useSettingsSave} from "./settings/useSettingsSave";
 
 interface SettingsModalProps {
     open: boolean;
     onClose: () => void;
 }
-
-interface SettingsCategoryDefinition {
-    id: SettingsCategory;
-    labelKey: string;
-    labelJa: string;
-    labelEn: string;
-}
-
-// Settings category definitions.
-const SETTINGS_CATEGORIES: SettingsCategoryDefinition[] = [
-    {id: "general", labelKey: "settings.modal.categories.general", labelJa: "基本設定", labelEn: "General"},
-    {id: "keybinds", labelKey: "settings.modal.categories.keybinds", labelJa: "キーバインド", labelEn: "Keybinds"},
-    {id: "worktree", labelKey: "settings.modal.categories.worktree", labelJa: "Worktree", labelEn: "Worktree"},
-    {id: "agent-model", labelKey: "settings.modal.categories.agentModel", labelJa: "Agent Model", labelEn: "Agent Model"},
-    {id: "claude-env", labelKey: "settings.modal.categories.claudeEnv", labelJa: "CLAUDE CODE環境変数", labelEn: "Claude Code Environment Variables"},
-    {id: "pane-env", labelKey: "settings.modal.categories.paneEnv", labelJa: "追加ペイン環境変数", labelEn: "Additional Pane Environment Variables"},
-];
 
 function getFocusableElements(root: HTMLElement | null): HTMLElement[] {
     if (!root) {
@@ -58,8 +24,6 @@ function getFocusableElements(root: HTMLElement | null): HTMLElement[] {
     ).filter((el) => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true");
 }
 
-// Settings modal root component.
-
 export function SettingsModal({open, onClose}: SettingsModalProps) {
     const {t} = useSettingsI18n();
     const [s, dispatch] = useReducer(formReducer, INITIAL_FORM);
@@ -67,6 +31,8 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
     const previouslyFocusedRef = useRef<HTMLElement | null>(null);
     const prevOpenForResetRef = useRef(false);
     const prevOpenForFocusRef = useRef(false);
+
+    const {handleSave} = useSettingsSave(s, dispatch, onClose);
 
     useEscapeClose(open && !s.saving, onClose);
 
@@ -77,7 +43,7 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
         prevOpenForResetRef.current = open;
     }, [open]);
 
-    // モーダル開時にconfig読み込み
+    // Load config when modal opens.
     useEffect(() => {
         if (!open) return;
         let cancelled = false;
@@ -85,7 +51,11 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
         Promise.all([
             api.GetConfig(),
             api.GetAllowedShells(),
-            api.GetValidationRules().catch(() => null),
+            api.GetValidationRules().catch((err: unknown) => {
+                console.warn("[settings] GetValidationRules failed (non-fatal)", err);
+                logFrontendEventSafe("warn", `GetValidationRules failed: ${err instanceof Error ? err.message : String(err)}`, "SettingsModal");
+                return null;
+            }),
         ])
             .then(([cfg, shells, rules]) => {
                 if (cancelled) return;
@@ -114,6 +84,7 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
         };
     }, [open]);
 
+    // Focus management: trap focus inside modal.
     useEffect(() => {
         let raf = 0;
         if (open) {
@@ -165,183 +136,6 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
         }
     };
 
-    const handleCategoryKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, category: SettingsCategory) => {
-        const currentIndex = SETTINGS_CATEGORIES.findIndex((item) => item.id === category);
-        if (currentIndex < 0) {
-            return;
-        }
-
-        let nextIndex = currentIndex;
-        switch (event.key) {
-            case "ArrowRight":
-            case "ArrowDown":
-                nextIndex = (currentIndex + 1) % SETTINGS_CATEGORIES.length;
-                break;
-            case "ArrowLeft":
-            case "ArrowUp":
-                nextIndex = (currentIndex - 1 + SETTINGS_CATEGORIES.length) % SETTINGS_CATEGORIES.length;
-                break;
-            case "Home":
-                nextIndex = 0;
-                break;
-            case "End":
-                nextIndex = SETTINGS_CATEGORIES.length - 1;
-                break;
-            default:
-                return;
-        }
-
-        event.preventDefault();
-        const nextCategory = SETTINGS_CATEGORIES[nextIndex]!.id;
-        dispatch({type: "SET_FIELD", field: "activeCategory", value: nextCategory});
-        const nextTab = document.getElementById(`settings-tab-${nextCategory}`);
-        if (nextTab instanceof HTMLElement) {
-            nextTab.focus();
-        }
-    };
-
-    const categoryPanels: Record<SettingsCategory, () => JSX.Element> = {
-        general: () => <GeneralSettings s={s} dispatch={dispatch}/>,
-        keybinds: () => <KeybindSettings s={s} dispatch={dispatch}/>,
-        worktree: () => <WorktreeSettings s={s} dispatch={dispatch}/>,
-        "agent-model": () => <AgentModelSettings s={s} dispatch={dispatch}/>,
-        "claude-env": () => <ClaudeEnvSettings s={s} dispatch={dispatch}/>,
-        "pane-env": () => <PaneEnvSettings s={s} dispatch={dispatch}/>,
-    };
-
-    const renderCategoryPanel = (category: SettingsCategory) => {
-        return categoryPanels[category]();
-    };
-
-    const handleSave = async () => {
-        if (s.loadFailed) {
-            dispatch({
-                type: "SET_FIELD",
-                field: "error",
-                value: t(
-                    "settings.modal.error.configLoadFailedCannotSave",
-                    "設定の読み込みに失敗しているため保存できません。",
-                    "Cannot save because config loading failed.",
-                ),
-            });
-            return;
-        }
-        const errors = {
-            ...validateAgentModelSettings(s.agentFrom, s.agentTo, s.overrides, s.minOverrideNameLen),
-            ...validateClaudeEnvSettings(s.claudeEnvEntries),
-            ...validatePaneEnvSettings(s.paneEnvEntries, s.effortLevel),
-            ...validateWorktreeCopyPathSettings(s.wtCopyFiles, s.wtCopyDirs),
-            ...validateViewerShortcuts(s.viewerShortcuts, s.quakeMode ? s.globalHotkey : ""),
-            ...validateDefaultSessionDir(s.defaultSessionDir),
-        };
-        if (Object.keys(errors).length > 0) {
-            dispatch({type: "SET_FIELD", field: "validationErrors", value: errors});
-            if (Object.keys(errors).some((k) => k.startsWith("agent") || k.startsWith("override"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "agent-model"});
-            } else if (Object.keys(errors).some((k) => k.startsWith("claude_env"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "claude-env"});
-            } else if (Object.keys(errors).some((k) => k.startsWith("pane_env"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "pane-env"});
-            } else if (Object.keys(errors).some((k) => k.startsWith("wt_copy_"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "worktree"});
-            } else if (Object.keys(errors).some((k) => k === "default_session_dir")) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "general"});
-            } else if (Object.keys(errors).some((k) => k.startsWith("viewer_shortcut_"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "keybinds"});
-            }
-            return;
-        }
-        dispatch({type: "START_SAVE"});
-
-        const filteredOverrides = s.overrides.filter(
-            (ov) => ov.name.trim() || ov.model.trim(),
-        );
-
-        const hasAgent = s.agentFrom.trim() || s.agentTo.trim() || filteredOverrides.length > 0;
-
-        const paneEnv: Record<string, string> = {};
-        const effortLevel = s.effortLevel.trim();
-        if (effortLevel) {
-            paneEnv[EFFORT_LEVEL_KEY] = effortLevel;
-        }
-        for (const entry of s.paneEnvEntries) {
-            const k = entry.key.trim();
-            const v = entry.value.trim();
-            if (k && v && k !== EFFORT_LEVEL_KEY) paneEnv[k] = v;
-        }
-
-        const claudeEnvVars: Record<string, string> = {};
-        for (const entry of s.claudeEnvEntries) {
-            const k = entry.key.trim();
-            const v = entry.value.trim();
-            if (k && v) claudeEnvVars[k] = v;
-        }
-        const hasClaudeEnv = Object.keys(claudeEnvVars).length > 0 || s.claudeEnvDefaultEnabled;
-
-        // NOTE: SaveConfig performs full overwrite (not merge), so omitting
-        // claude_env / pane_env when empty correctly clears any previously saved
-        // configuration. Go-side config.Save marshals the entire Config struct
-        // and writes it atomically to disk.
-        const payload: WailsConfigInput = {
-            shell: s.shell,
-            prefix: s.prefix,
-            keys: s.keys,
-            quake_mode: s.quakeMode,
-            global_hotkey: s.globalHotkey,
-            worktree: {
-                enabled: s.wtEnabled,
-                force_cleanup: s.wtForceCleanup,
-                setup_scripts: s.wtSetupScripts.filter((v) => v.trim()),
-                copy_files: s.wtCopyFiles.filter((v) => v.trim()),
-                copy_dirs: s.wtCopyDirs.filter((v) => v.trim()),
-            },
-            agent_model: hasAgent
-                ? {
-                    from: s.agentFrom.trim(),
-                    to: s.agentTo.trim(),
-                    overrides: filteredOverrides.map((ov) => ({
-                        name: ov.name.trim(),
-                        model: ov.model.trim(),
-                    })),
-                }
-                : undefined,
-            pane_env: Object.keys(paneEnv).length > 0 ? paneEnv : undefined,
-            pane_env_default_enabled: s.paneEnvDefaultEnabled,
-            claude_env: hasClaudeEnv
-                ? {
-                    default_enabled: s.claudeEnvDefaultEnabled,
-                    vars: Object.keys(claudeEnvVars).length > 0 ? claudeEnvVars : undefined,
-                }
-                : undefined,
-            viewer_sidebar_mode: serializeViewerSidebarMode(s.viewerSidebarMode),
-            chat_overlay_percentage: s.chatOverlayPercentage,
-            default_session_dir: s.defaultSessionDir.trim() || undefined,
-            viewer_shortcuts: (() => {
-                const filtered = Object.fromEntries(
-                    Object.entries(s.viewerShortcuts)
-                        .map(([key, value]) => [key, normalizeShortcut(value.trim())] as const)
-                        .filter(([, value]) => value !== ""),
-                );
-                return Object.keys(filtered).length > 0 ? filtered : undefined;
-            })(),
-        };
-
-        try {
-            const cfg = config.Config.createFrom(payload);
-            await api.SaveConfig(cfg);
-            const addNotification = useNotificationStore.getState().addNotification;
-            addNotification(
-                t("settings.modal.notification.saved", "設定を保存しました", "Settings saved."),
-                "info",
-            );
-            onClose();
-        } catch (err) {
-            dispatch({type: "SET_FIELD", field: "error", value: String(err)});
-        } finally {
-            dispatch({type: "SET_FIELD", field: "saving", value: false});
-        }
-    };
-
     if (!open) return null;
 
     return (
@@ -366,54 +160,7 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
                 {s.loading ? (
                     <div className="modal-loading">{t("settings.modal.loading", "設定を読み込み中...", "Loading settings...")}</div>
                 ) : (
-                    <div className="settings-layout">
-                        <nav
-                            className="settings-sidebar"
-                            role="tablist"
-                            aria-label={t("settings.modal.categoriesAria", "設定カテゴリ", "Settings categories")}
-                        >
-                            {SETTINGS_CATEGORIES.map((cat) => {
-                                const tabID = `settings-tab-${cat.id}`;
-                                const panelID = `settings-panel-${cat.id}`;
-                                return (
-                                    <button
-                                        key={cat.id}
-                                        id={tabID}
-                                        role="tab"
-                                        aria-selected={s.activeCategory === cat.id}
-                                        aria-controls={panelID}
-                                        tabIndex={s.activeCategory === cat.id ? 0 : -1}
-                                        className={`settings-sidebar-item ${s.activeCategory === cat.id ? "active" : ""}`}
-                                        onClick={() => dispatch({
-                                            type: "SET_FIELD",
-                                            field: "activeCategory",
-                                            value: cat.id,
-                                        })}
-                                        onKeyDown={(event) => handleCategoryKeyDown(event, cat.id)}
-                                    >
-                                        {t(cat.labelKey, cat.labelJa, cat.labelEn)}
-                                    </button>
-                                );
-                            })}
-                        </nav>
-
-                        <div className="settings-body">
-                            {SETTINGS_CATEGORIES.map((cat) => {
-                                const isActive = s.activeCategory === cat.id;
-                                return (
-                                    <div
-                                        key={cat.id}
-                                        id={`settings-panel-${cat.id}`}
-                                        role="tabpanel"
-                                        aria-labelledby={`settings-tab-${cat.id}`}
-                                        hidden={!isActive}
-                                    >
-                                        {isActive ? renderCategoryPanel(cat.id) : null}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
+                    <SettingsTabs s={s} dispatch={dispatch}/>
                 )}
 
                 <div className="settings-footer">

@@ -1,5 +1,6 @@
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
+import {CommitPanel} from "./CommitPanel";
 import {DiffContentViewer} from "./DiffContentViewer";
 import {DiffFileSidebar} from "./DiffFileSidebar";
 import {DiffViewModeToggle} from "./DiffViewModeToggle";
@@ -105,6 +106,9 @@ export function DiffView() {
                 </div>
             )}
             <div className="diff-view-body">
+                {branchInfo?.statusFetchFailed && (
+                    <div className="diff-status-warning">{"\u26A0"} Git status unavailable — file list may be stale</div>
+                )}
                 {isLoading && !diffResult ? (
                     <div className="viewer-message">Loading diff...</div>
                 ) : fileCount === 0 ? (
@@ -112,12 +116,26 @@ export function DiffView() {
                 ) : (
                     <>
                         {sidebarMode === "tree" ? (
-                            <DiffFileSidebar
-                                flatNodes={flatNodes}
-                                selectedPath={selectedPath}
-                                onToggleDir={toggleDir}
-                                onSelectFile={selectFile}
-                            />
+                            <div className="tree-sidebar-with-commit">
+                                <DiffFileSidebar
+                                    flatNodes={flatNodes}
+                                    selectedPath={selectedPath}
+                                    onToggleDir={toggleDir}
+                                    onSelectFile={selectFile}
+                                />
+                                <CommitPanel
+                                    branchInfo={branchInfo}
+                                    commitMessage={commitMessage}
+                                    onSetCommitMessage={setCommitMessage}
+                                    onCommit={commit}
+                                    onCommitAndPush={commitAndPush}
+                                    onPush={push}
+                                    onPull={pull}
+                                    onFetch={fetch_}
+                                    operationInFlight={operationInFlight}
+                                    stagedCount={stagedCount}
+                                />
+                            </div>
                         ) : (
                             <StagingFlatView
                                 stagingItems={stagingItems}

@@ -47,6 +47,24 @@ func (a *App) SplitPane(paneID string, horizontal bool) (string, error) {
 	return strings.TrimSpace(newPaneID), nil
 }
 
+// CreatePaneInSession recreates the first pane in an existing empty session.
+func (a *App) CreatePaneInSession(sessionName string) (string, error) {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return "", errors.New("session name is required")
+	}
+	router, err := a.requireRouter()
+	if err != nil {
+		return "", err
+	}
+
+	newPaneID, err := router.CreatePaneInEmptySessionInternal(sessionName)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(newPaneID), nil
+}
+
 // SendInput writes raw input bytes to a pane.
 func (a *App) SendInput(paneID string, input string) error {
 	sessions, err := a.requireSessionsWithPaneID(&paneID)
@@ -176,13 +194,13 @@ func (a *App) KillPane(paneID string) error {
 	if err != nil {
 		return err
 	}
-	sessionName, removedSession, err := sessions.KillPane(paneID)
+	sessionName, sessionEmptied, err := sessions.KillPane(paneID)
 	if err != nil {
 		return err
 	}
-	a.stopOutputBuffer(paneID)
-	if removedSession {
-		a.emitBackendEvent("tmux:session-destroyed", map[string]string{"name": sessionName})
+	a.snapshotService.StopOutputBuffer(paneID)
+	if sessionEmptied {
+		a.emitBackendEvent("tmux:session-emptied", map[string]string{"name": sessionName})
 	} else {
 		a.emitBackendEvent("tmux:layout-changed", map[string]any{
 			"sessionName": sessionName,

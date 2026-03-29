@@ -23,15 +23,21 @@ type saveBufferWriteCloser interface {
 	io.Closer
 }
 
-var openLoadBufferFile = func(path string) (loadBufferReadCloser, error) {
-	return os.Open(path)
+// initBufferFileOps sets default buffer file I/O operations on the router
+// if they are not already configured (e.g. by tests).
+func (r *CommandRouter) initBufferFileOps() {
+	if r.openLoadBufferFile == nil {
+		r.openLoadBufferFile = func(path string) (loadBufferReadCloser, error) { return os.Open(path) }
+	}
+	if r.openSaveBufferFile == nil {
+		r.openSaveBufferFile = func(path string, flag int, perm os.FileMode) (saveBufferWriteCloser, error) {
+			return os.OpenFile(path, flag, perm)
+		}
+	}
+	if r.removeSaveBufferFile == nil {
+		r.removeSaveBufferFile = os.Remove
+	}
 }
-
-var openSaveBufferFile = func(path string, flag int, perm os.FileMode) (saveBufferWriteCloser, error) {
-	return os.OpenFile(path, flag, perm)
-}
-
-var removeSaveBufferFile = os.Remove
 
 // handleListBuffers lists all paste buffers with optional format.
 func (r *CommandRouter) handleListBuffers(req ipc.TmuxRequest) ipc.TmuxResponse {
@@ -173,7 +179,7 @@ func (r *CommandRouter) handleLoadBuffer(req ipc.TmuxRequest) ipc.TmuxResponse {
 		return errResp(fmt.Errorf("load-buffer from stdin is not supported"))
 	}
 
-	file, err := openLoadBufferFile(path)
+	file, err := r.openLoadBufferFile(path)
 	if err != nil {
 		return errResp(fmt.Errorf("load-buffer: %w", err))
 	}
@@ -254,17 +260,17 @@ func (r *CommandRouter) handleSaveBuffer(req ipc.TmuxRequest) ipc.TmuxResponse {
 		flags |= os.O_TRUNC
 	}
 
-	file, err := openSaveBufferFile(path, flags, 0o644)
+	file, err := r.openSaveBufferFile(path, flags, 0o644)
 	if err != nil {
 		return errResp(fmt.Errorf("save-buffer: %w", err))
 	}
 	if _, err := file.Write(buf.Data); err != nil {
 		_ = file.Close()
-		removePartialSaveBufferFile(path, appendMode)
+		r.removePartialSaveBufferFile(path, appendMode)
 		return errResp(fmt.Errorf("save-buffer: %w", err))
 	}
 	if err := file.Close(); err != nil {
-		removePartialSaveBufferFile(path, appendMode)
+		r.removePartialSaveBufferFile(path, appendMode)
 		return errResp(fmt.Errorf("save-buffer: %w", err))
 	}
 
@@ -277,11 +283,11 @@ func (r *CommandRouter) handleSaveBuffer(req ipc.TmuxRequest) ipc.TmuxResponse {
 	return okResp("")
 }
 
-func removePartialSaveBufferFile(path string, appendMode bool) {
+func (r *CommandRouter) removePartialSaveBufferFile(path string, appendMode bool) {
 	if appendMode || strings.TrimSpace(path) == "" {
 		return
 	}
-	if err := removeSaveBufferFile(path); err != nil && !os.IsNotExist(err) {
+	if err := r.removeSaveBufferFile(path); err != nil && !os.IsNotExist(err) {
 		slog.Warn("[WARN-BUFFER] save-buffer: failed to remove partial file", "path", path, "error", err)
 	}
 }

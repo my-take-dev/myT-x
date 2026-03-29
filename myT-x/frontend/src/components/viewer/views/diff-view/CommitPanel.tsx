@@ -28,7 +28,8 @@ export function CommitPanel({
 }: CommitPanelProps) {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const isDisabled = operationInFlight !== null;
-    const canCommit = commitMessage.trim().length > 0 && stagedCount > 0 && !isDisabled;
+    const hasConflicts = (branchInfo?.conflicted?.length ?? 0) > 0;
+    const canCommit = commitMessage.trim().length > 0 && stagedCount > 0 && !isDisabled && !hasConflicts;
 
     const handleCommit = useCallback(() => {
         if (canCommit) void onCommit(commitMessage.trim());
@@ -55,23 +56,46 @@ export function CommitPanel({
     const spinnerFor = (op: string) =>
         operationInFlight === op ? " ..." : "";
 
+    // Show distinct phase labels during commitAndPush to indicate progress.
+    function getCommitAndPushLabel(op: OperationType): string {
+        switch (op) {
+            case "commit": return "Committing...";
+            case "push":   return "Pushing...";
+            default:        return "Commit & Push";
+        }
+    }
+    const commitAndPushLabel = getCommitAndPushLabel(operationInFlight);
+
     return (
         <div className="commit-panel">
             {branchInfo && (
                 <div className="commit-branch-info">
-                    <span className="commit-branch-name" title={`Branch: ${branchInfo.branch}`}>
-                        {branchInfo.branch || "(detached)"}
+                    <span className="commit-branch-name" title={`Branch: ${branchInfo.branch || (branchInfo.statusFetchFailed ? "(status unavailable)" : "(unknown)")}`}>
+                        {branchInfo.statusFetchFailed ? "\u26A0" : ""}{branchInfo.branch || (branchInfo.statusFetchFailed ? "(status unavailable)" : "(detached)")}
                     </span>
-                    {branchInfo.ahead > 0 && (
-                        <span className="commit-branch-ahead" title={`${branchInfo.ahead} ahead`}>
-                            &uarr;{branchInfo.ahead}
+                    {branchInfo.upstreamConfigured ? (
+                        <>
+                            {branchInfo.ahead > 0 && (
+                                <span className="commit-branch-ahead" title={`${branchInfo.ahead} ahead`}>
+                                    &uarr;{branchInfo.ahead}
+                                </span>
+                            )}
+                            {branchInfo.behind > 0 && (
+                                <span className="commit-branch-behind" title={`${branchInfo.behind} behind`}>
+                                    &darr;{branchInfo.behind}
+                                </span>
+                            )}
+                        </>
+                    ) : (
+                        <span className="commit-branch-no-upstream" title="No upstream branch configured">
+                            (no upstream)
                         </span>
                     )}
-                    {branchInfo.behind > 0 && (
-                        <span className="commit-branch-behind" title={`${branchInfo.behind} behind`}>
-                            &darr;{branchInfo.behind}
-                        </span>
-                    )}
+                </div>
+            )}
+            {hasConflicts && branchInfo && (
+                <div className="commit-conflict-warning" title="Resolve conflicts before committing">
+                    {branchInfo.conflicted.length} conflicted file(s) — resolve in terminal
                 </div>
             )}
             <textarea
@@ -101,7 +125,7 @@ export function CommitPanel({
                     title="Commit & Push (Ctrl+Shift+Enter)"
                     onClick={handleCommitAndPush}
                 >
-                    Commit &amp; Push{spinnerFor("commit") || spinnerFor("push")}
+                    {commitAndPushLabel}
                 </button>
             </div>
             <div className="commit-actions commit-actions--secondary">
@@ -118,7 +142,7 @@ export function CommitPanel({
                     type="button"
                     className="commit-btn commit-btn--small"
                     disabled={isDisabled}
-                    title="Pull from remote"
+                    title="Pull from remote (fast-forward only)"
                     onClick={() => void onPull()}
                 >
                     Pull{spinnerFor("pull")}
