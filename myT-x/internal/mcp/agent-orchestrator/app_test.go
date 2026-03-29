@@ -59,6 +59,9 @@ func (r *testTaskRepo) EndSessionByInstanceID(_ context.Context, instanceID stri
 	r.endSessionCalls = append(r.endSessionCalls, instanceID)
 	return nil
 }
+func (r *testTaskRepo) GetTaskBySendMessageID(context.Context, string) (domain.Task, error) {
+	return domain.Task{}, domain.ErrNotFound
+}
 
 func TestRuntimeStartWarnsWhenPaneIDIsEmpty(t *testing.T) {
 	var logs bytes.Buffer

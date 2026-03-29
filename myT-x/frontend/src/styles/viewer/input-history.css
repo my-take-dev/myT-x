@@ -1,0 +1,81 @@
+/* ── Input History View ── */
+.input-history-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.input-history-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    user-select: text;
+    cursor: text;
+}
+
+.input-history-body:focus {
+    outline: none;
+}
+
+.input-history-body ::selection {
+    background: var(--selection-bg);
+    color: inherit;
+}
+
+.input-history-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.input-history-entry:hover {
+    background: var(--accent-04);
+}
+
+.input-history-ts {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    width: 140px;
+}
+
+.input-history-pane {
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    min-width: 40px;
+    text-align: center;
+    background: var(--accent-06);
+    color: var(--accent);
+}
+
+.input-history-msg {
+    flex: 1;
+    min-width: 0;
+    color: var(--fg-main);
+    word-break: break-word;
+}
+
+.input-history-source {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 0.68rem;
+    opacity: 0.7;
+}
+
+.input-history-empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
+}

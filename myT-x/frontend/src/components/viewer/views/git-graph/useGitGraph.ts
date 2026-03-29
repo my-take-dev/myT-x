@@ -2,6 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {api} from "../../../../api";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
 import {toErrorMessage} from "../../../../utils/errorUtils";
+import {createConsecutiveFailureCounter, notifyAndLog} from "../../../../utils/notifyUtils";
 import {
     normalizeGitGraphCommits,
     type GitGraphCommit,
@@ -11,6 +12,12 @@ import {
 import {computeLanes} from "./laneComputation";
 
 const DEFAULT_LOG_COUNT = 100;
+
+// Module-level consecutive failure counter for git graph data loading.
+// loadData fires on session change, branch toggle, and focus events,
+// so transient failures should be silently recovered. Only persistent
+// failures (3+ consecutive) trigger a user notification.
+const gitGraphFailureCounter = createConsecutiveFailureCounter(3);
 
 /** Maximum number of commits to load. Matches the UI's "Load More" cap in CommitGraph. */
 export const MAX_LOG_COUNT = 1000;
@@ -170,6 +177,20 @@ export function useGitGraph(): UseGitGraphResult {
                 if (loadFailures.length > 1) {
                     console.warn("[git-graph] partial failures:", loadFailures.join("; "));
                 }
+
+                // Track consecutive failures for toast escalation.
+                if (loadFailures.length > 0) {
+                    gitGraphFailureCounter.recordFailure(() => {
+                        notifyAndLog(
+                            "Git graph refresh",
+                            "warn",
+                            new Error(loadFailures.join("; ")),
+                            "GitGraph",
+                        );
+                    });
+                } else {
+                    gitGraphFailureCounter.recordSuccess();
+                }
             } catch (err: unknown) {
                 if (!isCurrentRequest()) return;
                 console.error("[git-graph] loadData unexpected error", err);
@@ -177,6 +198,9 @@ export function useGitGraph(): UseGitGraphResult {
                 // state inconsistent. Clear commits to avoid showing corrupted data.
                 setCommits([]);
                 setError(toErrorMessage(err, "Failed to load git data."));
+                gitGraphFailureCounter.recordFailure(() => {
+                    notifyAndLog("Git graph refresh", "warn", err, "GitGraph");
+                });
             } finally {
                 if (isCurrentRequest()) {
                     setIsLoading(false);

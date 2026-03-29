@@ -9,45 +9,55 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"myT-x/internal/config"
 	gitpkg "myT-x/internal/git"
+	"myT-x/internal/install"
 	"myT-x/internal/ipc"
 	"myT-x/internal/mcp"
-	"myT-x/internal/terminal"
+	"myT-x/internal/session"
 	"myT-x/internal/testutil"
 	"myT-x/internal/tmux"
+	"myT-x/internal/worktree"
 )
 
 // NOTE: This file overrides package-level function variables
-// (executeRouterRequestFn, runtimeEventsEmitFn). Do not use t.Parallel() here.
-// Use stubExecuteRouterRequest() to stub executeRouterRequestFn with automatic restore.
+// (runtimeEventsEmitFn). Do not use t.Parallel() here.
+// Use stubExecuteRouterRequest() to stub send-keys and session router execution.
 
-// stubExecuteRouterRequest replaces executeRouterRequestFn with fn for the
-// duration of the test and restores the original via t.Cleanup.
-// Do NOT call t.Parallel() in tests that use this helper;
-// package-level variable replacement is not concurrent-safe.
-func stubExecuteRouterRequest(t *testing.T, fn func(*tmux.CommandRouter, ipc.TmuxRequest) ipc.TmuxResponse) {
+// stubExecuteRouterRequest replaces the send-keys executeRequest function
+// on the App instance and overrides the session service's ExecuteRouterRequest
+// for the duration of the test, restoring the originals via t.Cleanup.
+//
+// Thread-safety: each test creates its own App instance, so concurrent tests
+// do not share state. Tests using this helper MUST NOT call t.Parallel() on
+// the same App instance.
+func stubExecuteRouterRequest(t *testing.T, app *App, fn func(*tmux.CommandRouter, ipc.TmuxRequest) ipc.TmuxResponse) {
 	t.Helper()
-	orig := executeRouterRequestFn
-	t.Cleanup(func() { executeRouterRequestFn = orig })
-	executeRouterRequestFn = fn
+	orig := app.sendKeys.executeRequest
+	t.Cleanup(func() { app.sendKeys.executeRequest = orig })
+	app.sendKeys.executeRequest = fn
+	if app.sessionService != nil {
+		restoreSession := app.sessionService.OverrideExecuteRouterRequest(fn)
+		t.Cleanup(restoreSession)
+	}
 }
 
-// stubOpenExplorer replaces openExplorerFn with fn for the duration of
-// the test and restores the original via t.Cleanup.
-func stubOpenExplorer(t *testing.T, fn func(string) error) {
+// stubOpenExplorer replaces openExplorerFn on the App instance with fn for
+// the duration of the test and restores the original via t.Cleanup.
+func stubOpenExplorer(t *testing.T, app *App, fn func(string) error) {
 	t.Helper()
-	orig := openExplorerFn
-	t.Cleanup(func() { openExplorerFn = orig })
-	openExplorerFn = fn
+	orig := app.openExplorerFn
+	t.Cleanup(func() { app.openExplorerFn = orig })
+	app.openExplorerFn = fn
 }
 
 func stubNewSessionCommandSuccess(t *testing.T, app *App) {
 	t.Helper()
-	stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+	stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		if req.Command != "new-session" {
 			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
 		}
@@ -67,13 +77,26 @@ func TestCreateSessionOptionsFieldCountGuard(t *testing.T) {
 	// WorktreeSessionOptions (which mirrors these fields at app_worktree_api.go:153-157).
 	// When adding a field here, also update:
 	//   - WorktreeSessionOptions in app_worktree_api.go
-	//   - the mapping in createSessionForDirectory / applySessionEnvFlags
+	//   - SessionEnvOptions in internal/worktree/types.go
+	//   - the mapping in CreateSessionWithExistingWorktree / applySessionEnvFlags
 	//   - frontend models.ts CreateSessionOptions class
 	const expectedFieldCount = 4
 	if got := reflect.TypeFor[CreateSessionOptions]().NumField(); got != expectedFieldCount {
 		t.Fatalf("CreateSessionOptions field count = %d, want %d; "+
-			"update WorktreeSessionOptions mapping, applySessionEnvFlags callers, and frontend models.ts",
+			"update WorktreeSessionOptions mapping, SessionEnvOptions, applySessionEnvFlags callers, and frontend models.ts",
 			got, expectedFieldCount)
+	}
+}
+
+func TestSessionEnvOptionsAlignedWithCreateSessionOptions(t *testing.T) {
+	// Guard against field divergence between CreateSessionOptions (main) and
+	// SessionEnvOptions (internal/worktree). The manual mapping in
+	// CreateSessionWithExistingWorktree must cover all SessionEnvOptions fields.
+	want := reflect.TypeFor[CreateSessionOptions]().NumField() // 4
+	got := reflect.TypeFor[worktree.SessionEnvOptions]().NumField()
+	if got != want {
+		t.Fatalf("SessionEnvOptions field count (%d) != CreateSessionOptions (%d); "+
+			"update manual mapping in CreateSessionWithExistingWorktree", got, want)
 	}
 }
 
@@ -125,7 +148,7 @@ func TestApplySessionEnvFlagsSetsSessionFlags(t *testing.T) {
 				t.Fatalf("CreateSession() error = %v", err)
 			}
 
-			applySessionEnvFlags(sessions, "test-session", tt.useClaudeEnv, tt.usePaneEnv, false)
+			session.ApplySessionEnvFlags(sessions, "test-session", tt.useClaudeEnv, tt.usePaneEnv, false)
 
 			session, ok := sessions.GetSession("test-session")
 			if !ok {
@@ -254,7 +277,7 @@ func TestCreateSessionReturnsErrorWhenTmuxReturnsEmptyCreatedName(t *testing.T) 
 	app.sessions = tmux.NewSessionManager()
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 
-	stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+	stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		if req.Command != "new-session" {
 			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
 		}
@@ -272,7 +295,7 @@ func TestCreateSessionRollsBackWhenStoreRootPathFails(t *testing.T) {
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 
 	var rollbackTargets []string
-	stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+	stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		switch req.Command {
 		case "new-session":
 			return ipc.TmuxResponse{ExitCode: 0, Stdout: "missing-session\n"}
@@ -308,7 +331,7 @@ func TestCreateSessionLogsGitMetadataFailures(t *testing.T) {
 
 	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
 
-	stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+	stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		if req.Command != "new-session" {
 			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
 		}
@@ -349,7 +372,7 @@ func TestCreateSessionWithAgentTeamEnvVars(t *testing.T) {
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 
 	var capturedReq ipc.TmuxRequest
-	stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+	stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		capturedReq = req
 		sessionName, _ := req.Flags["-s"].(string)
 		if _, _, err := app.sessions.CreateSession(sessionName, "0", 120, 40); err != nil {
@@ -362,7 +385,7 @@ func TestCreateSessionWithAgentTeamEnvVars(t *testing.T) {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
 
-	want := agentTeamEnvVars("team-session")
+	want := session.AgentTeamEnvVars("team-session")
 	if len(capturedReq.Env) != len(want) {
 		t.Fatalf("CreateSession() env count = %d, want %d", len(capturedReq.Env), len(want))
 	}
@@ -376,7 +399,7 @@ func TestCreateSessionWithAgentTeamEnvVars(t *testing.T) {
 func TestAgentTeamEnvVarsDoesNotContainMYTXSession(t *testing.T) {
 	// MYTX_SESSION is now universally injected by addTmuxEnvironment (Layer 5),
 	// so agentTeamEnvVars must NOT include it.
-	env := agentTeamEnvVars("team-name")
+	env := session.AgentTeamEnvVars("team-name")
 	if _, ok := env["MYTX_SESSION"]; ok {
 		t.Fatal("MYTX_SESSION must not be in agentTeamEnvVars (managed by addTmuxEnvironment)")
 	}
@@ -430,7 +453,7 @@ func TestCreateSessionEnvFlags(t *testing.T) {
 			app.sessions = tmux.NewSessionManager()
 			app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 
-			stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+			stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 				sessionName, _ := req.Flags["-s"].(string)
 				if _, _, err := app.sessions.CreateSession(sessionName, "0", 120, 40); err != nil {
 					return ipc.TmuxResponse{ExitCode: 1, Stderr: err.Error()}
@@ -492,7 +515,7 @@ func TestRenameSessionUpdatesSnapshotAndEmitsSnapshotEvent(t *testing.T) {
 	if _, _, err := app.sessions.CreateSession("old-name", "0", 120, 40); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
-	app.setActiveSessionName("old-name")
+	app.sessionService.SetActiveSessionName("old-name")
 
 	var events []string
 	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...any) {
@@ -503,7 +526,7 @@ func TestRenameSessionUpdatesSnapshotAndEmitsSnapshotEvent(t *testing.T) {
 		t.Fatalf("RenameSession() error = %v", err)
 	}
 
-	if got := app.getActiveSessionName(); got != "new-name" {
+	if got := app.sessionService.GetActiveSessionName(); got != "new-name" {
 		t.Fatalf("active session = %q, want %q", got, "new-name")
 	}
 
@@ -618,7 +641,7 @@ func TestIsWorktreeCleanForRemoval(t *testing.T) {
 	app := NewApp()
 
 	t.Run("clean worktree returns true", func(t *testing.T) {
-		if !app.isWorktreeCleanForRemoval(dir) {
+		if !app.sessionService.IsWorktreeCleanForRemoval(dir) {
 			t.Error("expected clean repo to return true")
 		}
 	})
@@ -627,13 +650,13 @@ func TestIsWorktreeCleanForRemoval(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if app.isWorktreeCleanForRemoval(dir) {
+		if app.sessionService.IsWorktreeCleanForRemoval(dir) {
 			t.Error("expected dirty repo to return false")
 		}
 	})
 
 	t.Run("nonexistent path returns false", func(t *testing.T) {
-		if app.isWorktreeCleanForRemoval("/nonexistent/path/12345") {
+		if app.sessionService.IsWorktreeCleanForRemoval("/nonexistent/path/12345") {
 			t.Error("expected nonexistent path to return false")
 		}
 	})
@@ -679,8 +702,35 @@ func TestListBranchesAPI(t *testing.T) {
 	}
 }
 
+// newCopyTestService creates a worktree Service with minimal no-op deps
+// suitable for testing copy-only operations.
+func newCopyTestService(t *testing.T) *worktree.Service {
+	t.Helper()
+	return worktree.NewService(worktree.Deps{
+		RequireSessions:            func() (*tmux.SessionManager, error) { return nil, nil },
+		RequireSessionsAndRouter:   func() (*tmux.SessionManager, error) { return nil, nil },
+		GetConfigSnapshot:          func() config.Config { return config.DefaultConfig() },
+		RuntimeContext:             func() context.Context { return context.Background() },
+		FindAvailableSessionName:   func(name string) string { return name },
+		CreateSession:              func(_, _ string, _, _, _ bool) (string, error) { return "", nil },
+		ApplySessionEnvFlags:       func(_ *tmux.SessionManager, _ string, _, _, _ bool) {},
+		ActivateCreatedSession:     func(_ string) (tmux.SessionSnapshot, error) { return tmux.SessionSnapshot{}, nil },
+		RollbackCreatedSession:     func(_ string) error { return nil },
+		StoreRootPath:              func(_, _ string) error { return nil },
+		RequestSnapshot:            func(_ bool) {},
+		FindSessionByWorktreePath:  func(_ string) string { return "" },
+		EmitWorktreeCleanupFailure: func(_, _ string, _ error) {},
+		CleanupOrphanedLocalBranch: func(_ string, _ *gitpkg.Repository, _ string) {},
+		SetupWGAdd:                 func(_ int) {},
+		SetupWGDone:                func() {},
+		RecoverBackgroundPanic:     func(_ string, _ any) bool { return false },
+	})
+}
+
 // TestCopyConfigPathTraversalDeep tests deeper path traversal scenarios.
 func TestCopyConfigPathTraversalDeep(t *testing.T) {
+	svc := newCopyTestService(t)
+
 	tests := []struct {
 		name     string
 		file     string
@@ -709,7 +759,7 @@ func TestCopyConfigPathTraversalDeep(t *testing.T) {
 				}
 			}
 
-			failures := copyConfigFilesToWorktree(repoDir, wtDir, []string{tt.file})
+			failures := svc.CopyConfigFilesToWorktree(repoDir, wtDir, []string{tt.file})
 
 			if tt.wantSkip {
 				// Should be skipped, not in failures (traversal entries are skipped silently).
@@ -766,7 +816,7 @@ func TestFindSessionByRootPath(t *testing.T) {
 				t.Fatalf("failed to set root path: %v", err)
 			}
 
-			got := app.findSessionByRootPath(tt.dir)
+			got := app.sessionService.FindSessionByRootPath(tt.dir)
 			if got != tt.want {
 				t.Errorf("findSessionByRootPath(%q) = %q, want %q", tt.dir, got, tt.want)
 			}
@@ -792,7 +842,7 @@ func TestQuickStartSession(t *testing.T) {
 
 		cfg := config.DefaultConfig()
 		cfg.DefaultSessionDir = rootDir
-		app.setConfigSnapshot(cfg)
+		app.configState.SetSnapshot(cfg)
 
 		snapshot, err := app.QuickStartSession()
 		if err != nil {
@@ -801,7 +851,7 @@ func TestQuickStartSession(t *testing.T) {
 		if snapshot.RootPath != wantRoot {
 			t.Fatalf("RootPath = %q, want %q", snapshot.RootPath, wantRoot)
 		}
-		if got := app.getActiveSessionName(); got != snapshot.Name {
+		if got := app.sessionService.GetActiveSessionName(); got != snapshot.Name {
 			t.Fatalf("active session = %q, want %q", got, snapshot.Name)
 		}
 	})
@@ -821,7 +871,7 @@ func TestQuickStartSession(t *testing.T) {
 			wantRoot = resolvedRoot
 		}
 		app.launchDir = launchDir
-		app.setConfigSnapshot(config.DefaultConfig())
+		app.configState.SetSnapshot(config.DefaultConfig())
 
 		snapshot, err := app.QuickStartSession()
 		if err != nil {
@@ -855,7 +905,7 @@ func TestQuickStartSession(t *testing.T) {
 
 		cfg := config.DefaultConfig()
 		cfg.DefaultSessionDir = rootDir
-		app.setConfigSnapshot(cfg)
+		app.configState.SetSnapshot(cfg)
 
 		snapshot, err := app.QuickStartSession()
 		if err != nil {
@@ -867,7 +917,7 @@ func TestQuickStartSession(t *testing.T) {
 		if snapshot.RootPath != wantRoot {
 			t.Fatalf("RootPath = %q, want %q", snapshot.RootPath, wantRoot)
 		}
-		if got := app.getActiveSessionName(); got != "existing-session" {
+		if got := app.sessionService.GetActiveSessionName(); got != "existing-session" {
 			t.Fatalf("active session = %q, want %q", got, "existing-session")
 		}
 		if got := len(app.sessions.Snapshot()); got != 1 {
@@ -888,7 +938,7 @@ func TestQuickStartSession(t *testing.T) {
 
 		cfg := config.DefaultConfig()
 		cfg.DefaultSessionDir = missingDir
-		app.setConfigSnapshot(cfg)
+		app.configState.SetSnapshot(cfg)
 
 		snapshot, err := app.QuickStartSession()
 		if err != nil {
@@ -929,7 +979,7 @@ func TestFindSessionByRootPathSkipsWorktreeSessions(t *testing.T) {
 	}
 
 	// Worktreeセッションはスキップされるため、コンフリクトなし。
-	if got := app.findSessionByRootPath(`C:\Projects\myapp`); got != "" {
+	if got := app.sessionService.FindSessionByRootPath(`C:\Projects\myapp`); got != "" {
 		t.Errorf("worktree session should be skipped, got %q", got)
 	}
 }
@@ -1085,9 +1135,9 @@ func TestResolveSessionDirectory(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resolveSessionDirectory(tt.snapshot)
+			got := session.ResolveSessionDirectory(tt.snapshot)
 			if got != tt.want {
-				t.Errorf("resolveSessionDirectory() = %q, want %q", got, tt.want)
+				t.Errorf("session.ResolveSessionDirectory() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -1137,7 +1187,7 @@ func TestOpenDirectoryInExplorer(t *testing.T) {
 		if err := app.sessions.SetRootPath("valid", `C:\Projects\myapp`); err != nil {
 			t.Fatalf("SetRootPath() error = %v", err)
 		}
-		stubOpenExplorer(t, func(_ string) error { return nil })
+		stubOpenExplorer(t, app, func(_ string) error { return nil })
 		if err := app.OpenDirectoryInExplorer("valid"); err != nil {
 			t.Fatalf("OpenDirectoryInExplorer() error = %v", err)
 		}
@@ -1158,7 +1208,7 @@ func TestOpenDirectoryInExplorer(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("SetWorktreeInfo() error = %v", err)
 		}
-		stubOpenExplorer(t, func(_ string) error { return nil })
+		stubOpenExplorer(t, app, func(_ string) error { return nil })
 		if err := app.OpenDirectoryInExplorer("wt-session"); err != nil {
 			t.Fatalf("OpenDirectoryInExplorer() error = %v", err)
 		}
@@ -1274,7 +1324,7 @@ func TestFindSessionByRootPathCaseInsensitive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := app.findSessionByRootPath(tt.dir)
+			got := app.sessionService.FindSessionByRootPath(tt.dir)
 			if got != tt.want {
 				t.Errorf("findSessionByRootPath(%q) = %q, want %q", tt.dir, got, tt.want)
 			}
@@ -1344,7 +1394,7 @@ func TestStoreRootPath(t *testing.T) {
 		app := NewApp()
 		app.sessions = nil
 
-		if err := app.storeRootPath("session-a", `C:\Projects\repo`); err == nil {
+		if err := app.sessionService.StoreRootPath("session-a", `C:\Projects\repo`); err == nil {
 			t.Fatal("storeRootPath() expected session manager availability error")
 		}
 	})
@@ -1353,7 +1403,7 @@ func TestStoreRootPath(t *testing.T) {
 		app := NewApp()
 		app.sessions = tmux.NewSessionManager()
 
-		if err := app.storeRootPath("missing-session", `C:\Projects\repo`); err == nil {
+		if err := app.sessionService.StoreRootPath("missing-session", `C:\Projects\repo`); err == nil {
 			t.Fatal("storeRootPath() expected missing-session error")
 		}
 	})
@@ -1365,7 +1415,7 @@ func TestStoreRootPath(t *testing.T) {
 			t.Fatalf("CreateSession() error = %v", err)
 		}
 
-		if err := app.storeRootPath("session-a", `C:\Projects\repo`); err != nil {
+		if err := app.sessionService.StoreRootPath("session-a", `C:\Projects\repo`); err != nil {
 			t.Fatalf("storeRootPath() error = %v", err)
 		}
 
@@ -1455,12 +1505,12 @@ func TestKillSessionClearsActiveSessionWhenTargetIsActive(t *testing.T) {
 	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
-	app.setActiveSessionName("session-a")
+	app.sessionService.SetActiveSessionName("session-a")
 
 	if err := app.KillSession("session-a", false); err != nil {
 		t.Fatalf("KillSession() error = %v", err)
 	}
-	if got := app.getActiveSessionName(); got != "" {
+	if got := app.sessionService.GetActiveSessionName(); got != "" {
 		t.Fatalf("active session = %q, want empty after kill", got)
 	}
 }
@@ -1475,7 +1525,7 @@ func TestKillSession_NilMCPManager(t *testing.T) {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
 
-	stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+	stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		if req.Command != "kill-session" {
 			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
 		}
@@ -1525,29 +1575,17 @@ func waitForSignal(t *testing.T, done <-chan struct{}, fallbackTimeout time.Dura
 	}
 }
 
-func TestKillSessionStopsOutputBuffersOutsideOutputLock(t *testing.T) {
+// TestKillSessionCompletesWithoutDeadlock verifies that KillSession completes
+// without deadlock when output buffers are active. The output buffer lock
+// safety test is covered in internal/snapshot/service_test.go.
+func TestKillSessionCompletesWithoutDeadlock(t *testing.T) {
 	app := NewApp()
 	app.sessions = tmux.NewSessionManager()
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 
-	_, pane, err := app.sessions.CreateSession("session-a", "0", 120, 40)
-	if err != nil {
+	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
-	paneID := fmt.Sprintf("%%%d", pane.ID)
-
-	callbackRan := make(chan struct{}, 1)
-	flusher := terminal.NewOutputFlushManager(16*time.Millisecond, 1024, func(_ string, _ []byte) {
-		app.outputMu.Lock()
-		app.outputMu.Unlock()
-		select {
-		case callbackRan <- struct{}{}:
-		default:
-		}
-	})
-	flusher.Start()
-	flusher.Write(paneID, []byte("pending"))
-	app.outputFlusher = flusher
 
 	done := make(chan error, 1)
 	go func() {
@@ -1558,25 +1596,16 @@ func TestKillSessionStopsOutputBuffersOutsideOutputLock(t *testing.T) {
 		t,
 		done,
 		2*time.Second,
-		"KillSession() timed out; possible outputMu -> Stop callback deadlock",
+		"KillSession() timed out; possible deadlock",
 	)
 	if killErr != nil {
 		t.Fatalf("KillSession() error = %v", killErr)
 	}
-
-	waitForSignal(
-		t,
-		callbackRan,
-		500*time.Millisecond,
-		"output buffer callback did not run during KillSession()",
-	)
 }
 
 func TestKillSessionWorktreeLookupFailureEmitsCleanupFailureEvent(t *testing.T) {
-	origExecute := executeRouterRequestFn
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() {
-		executeRouterRequestFn = origExecute
 		runtimeEventsEmitFn = origEmit
 	})
 
@@ -1585,12 +1614,12 @@ func TestKillSessionWorktreeLookupFailureEmitsCleanupFailureEvent(t *testing.T) 
 	app.sessions = tmux.NewSessionManager()
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 
-	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+	stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		if req.Command != "kill-session" {
 			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
 		}
 		return ipc.TmuxResponse{ExitCode: 0}
-	}
+	})
 
 	var cleanupPayload map[string]any
 	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
@@ -1615,23 +1644,18 @@ func TestKillSessionWorktreeLookupFailureEmitsCleanupFailureEvent(t *testing.T) 
 }
 
 func TestKillSessionWithoutDeleteWorktreeLogsMetadataLookupFailure(t *testing.T) {
-	origExecute := executeRouterRequestFn
-	t.Cleanup(func() {
-		executeRouterRequestFn = origExecute
-	})
-
 	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
 
 	app := NewApp()
 	app.sessions = tmux.NewSessionManager()
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 
-	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+	stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		if req.Command != "kill-session" {
 			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
 		}
 		return ipc.TmuxResponse{ExitCode: 0}
-	}
+	})
 
 	if err := app.KillSession("missing-session", false); err != nil {
 		t.Fatalf("KillSession() error = %v, want nil when tmux kill succeeds", err)
@@ -1642,10 +1666,8 @@ func TestKillSessionWithoutDeleteWorktreeLogsMetadataLookupFailure(t *testing.T)
 }
 
 func TestKillSessionDeleteWorktreeWithoutMetadataLogsDebug(t *testing.T) {
-	origExecute := executeRouterRequestFn
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() {
-		executeRouterRequestFn = origExecute
 		runtimeEventsEmitFn = origEmit
 	})
 
@@ -1659,12 +1681,12 @@ func TestKillSessionDeleteWorktreeWithoutMetadataLogsDebug(t *testing.T) {
 		t.Fatalf("CreateSession() error = %v", err)
 	}
 
-	executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+	stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 		if req.Command != "kill-session" {
 			return ipc.TmuxResponse{ExitCode: 1, Stderr: "unexpected command"}
 		}
 		return ipc.TmuxResponse{ExitCode: 0}
-	}
+	})
 
 	cleanupFailedEvents := 0
 	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...any) {
@@ -1707,7 +1729,7 @@ func TestKillSessionDeleteWorktreeDirtyWorktreeEmitsFailureAndKeepsWorktree(t *t
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.setConfigSnapshot(config.DefaultConfig())
+	app.configState.SetSnapshot(config.DefaultConfig())
 	app.sessions = tmux.NewSessionManager()
 	app.router = tmux.NewCommandRouter(app.sessions, nil, tmux.RouterOptions{})
 	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
@@ -1767,7 +1789,7 @@ func TestEmitWorktreeCleanupFailureDropsEventWhenContextIsNil(t *testing.T) {
 
 	app := NewApp()
 	// No setRuntimeContext call — context is nil.
-	app.emitWorktreeCleanupFailure("session-a", `C:\wt\session-a`, errors.New("cleanup failed"))
+	app.sessionService.EmitWorktreeCleanupFailure("session-a", `C:\wt\session-a`, errors.New("cleanup failed"))
 
 	if eventCount != 0 {
 		t.Fatalf("event count = %d, want 0: event must be dropped when runtime context is nil", eventCount)
@@ -1775,22 +1797,17 @@ func TestEmitWorktreeCleanupFailureDropsEventWhenContextIsNil(t *testing.T) {
 }
 
 func TestRollbackCreatedSessionDirect(t *testing.T) {
-	origExecute := executeRouterRequestFn
-	t.Cleanup(func() {
-		executeRouterRequestFn = origExecute
-	})
-
 	t.Run("successful kill-session request", func(t *testing.T) {
 		app := NewApp()
 		app.router = tmux.NewCommandRouter(tmux.NewSessionManager(), nil, tmux.RouterOptions{})
 
 		var captured ipc.TmuxRequest
-		executeRouterRequestFn = func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+		stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 			captured = req
 			return ipc.TmuxResponse{ExitCode: 0}
-		}
+		})
 
-		if err := app.rollbackCreatedSession("session-a"); err != nil {
+		if err := app.sessionService.RollbackCreatedSession("session-a"); err != nil {
 			t.Fatalf("rollbackCreatedSession() error = %v", err)
 		}
 		if captured.Command != "kill-session" {
@@ -1805,11 +1822,11 @@ func TestRollbackCreatedSessionDirect(t *testing.T) {
 		app := NewApp()
 		app.router = tmux.NewCommandRouter(tmux.NewSessionManager(), nil, tmux.RouterOptions{})
 
-		executeRouterRequestFn = func(_ *tmux.CommandRouter, _ ipc.TmuxRequest) ipc.TmuxResponse {
+		stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, _ ipc.TmuxRequest) ipc.TmuxResponse {
 			return ipc.TmuxResponse{ExitCode: 1, Stderr: "boom\n"}
-		}
+		})
 
-		if err := app.rollbackCreatedSession("session-a"); err == nil {
+		if err := app.sessionService.RollbackCreatedSession("session-a"); err == nil {
 			t.Fatal("rollbackCreatedSession() expected error")
 		}
 	})
@@ -1823,14 +1840,14 @@ func TestActivateCreatedSessionDirect(t *testing.T) {
 			t.Fatalf("CreateSession() error = %v", err)
 		}
 
-		snapshot, err := app.activateCreatedSession("session-a")
+		snapshot, err := app.sessionService.ActivateCreatedSession("session-a")
 		if err != nil {
 			t.Fatalf("activateCreatedSession() error = %v", err)
 		}
 		if snapshot.Name != "session-a" {
 			t.Fatalf("snapshot.Name = %q, want %q", snapshot.Name, "session-a")
 		}
-		if got := app.getActiveSessionName(); got != "session-a" {
+		if got := app.sessionService.GetActiveSessionName(); got != "session-a" {
 			t.Fatalf("active session = %q, want %q", got, "session-a")
 		}
 	})
@@ -1838,7 +1855,7 @@ func TestActivateCreatedSessionDirect(t *testing.T) {
 	t.Run("returns error when session is missing", func(t *testing.T) {
 		app := NewApp()
 		app.sessions = tmux.NewSessionManager()
-		if _, err := app.activateCreatedSession("missing"); err == nil {
+		if _, err := app.sessionService.ActivateCreatedSession("missing"); err == nil {
 			t.Fatal("activateCreatedSession() expected missing-session error")
 		}
 	})
@@ -1859,8 +1876,8 @@ func TestCleanupSessionWorktreeSuccessPaths(t *testing.T) {
 		}
 
 		app := NewApp()
-		app.setConfigSnapshot(config.DefaultConfig())
-		app.cleanupSessionWorktree(worktreeCleanupParams{
+		app.configState.SetSnapshot(config.DefaultConfig())
+		app.sessionService.CleanupSessionWorktree(session.WorktreeCleanupParams{
 			SessionName: "session-a",
 			WtPath:      wtPath,
 			RepoPath:    repoPath,
@@ -1898,8 +1915,8 @@ func TestCleanupSessionWorktreeSuccessPaths(t *testing.T) {
 		app := NewApp()
 		cfg := config.DefaultConfig()
 		cfg.Worktree.ForceCleanup = true
-		app.setConfigSnapshot(cfg)
-		app.cleanupSessionWorktree(worktreeCleanupParams{
+		app.configState.SetSnapshot(cfg)
+		app.sessionService.CleanupSessionWorktree(session.WorktreeCleanupParams{
 			SessionName: "session-a",
 			WtPath:      wtPath,
 			RepoPath:    repoPath,
@@ -1932,8 +1949,8 @@ func TestCleanupSessionWorktreeSuccessPaths(t *testing.T) {
 		}
 
 		app := NewApp()
-		app.setConfigSnapshot(config.DefaultConfig())
-		app.cleanupSessionWorktree(worktreeCleanupParams{
+		app.configState.SetSnapshot(config.DefaultConfig())
+		app.sessionService.CleanupSessionWorktree(session.WorktreeCleanupParams{
 			SessionName: "session-a",
 			WtPath:      wtPath,
 			RepoPath:    repoPath,
@@ -1948,8 +1965,8 @@ func TestCleanupSessionWorktreeSuccessPaths(t *testing.T) {
 
 func TestWorktreeCleanupParamsFieldCountGuard(t *testing.T) {
 	const expectedFieldCount = 4
-	if got := reflect.TypeFor[worktreeCleanupParams]().NumField(); got != expectedFieldCount {
-		t.Fatalf("worktreeCleanupParams field count = %d, want %d", got, expectedFieldCount)
+	if got := reflect.TypeFor[session.WorktreeCleanupParams]().NumField(); got != expectedFieldCount {
+		t.Fatalf("session.WorktreeCleanupParams field count = %d, want %d", got, expectedFieldCount)
 	}
 }
 
@@ -1957,7 +1974,7 @@ func TestCleanupSessionWorktreeSkipsWhenWorktreePathEmpty(t *testing.T) {
 	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
 
 	app := NewApp()
-	app.cleanupSessionWorktree(worktreeCleanupParams{
+	app.sessionService.CleanupSessionWorktree(session.WorktreeCleanupParams{
 		SessionName: "session-a",
 		WtPath:      "   ",
 		RepoPath:    "ignored",
@@ -1989,7 +2006,7 @@ func TestCleanupSessionWorktreeEmitsFailureWhenRepoPathEmpty(t *testing.T) {
 		}
 	}
 
-	app.cleanupSessionWorktree(worktreeCleanupParams{
+	app.sessionService.CleanupSessionWorktree(session.WorktreeCleanupParams{
 		SessionName: "session-a",
 		WtPath:      `C:\worktree\session-a`,
 		RepoPath:    "   ",
@@ -2015,7 +2032,7 @@ func TestCleanupOrphanedLocalWorktreeBranchHandlesNilRepository(t *testing.T) {
 	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
 
 	app := NewApp()
-	app.cleanupOrphanedLocalWorktreeBranch(nil, "feature/orphan")
+	app.sessionService.CleanupOrphanedLocalWorktreeBranch("test-session", nil, "feature/orphan")
 
 	logOutput := logBuf.String()
 	if !strings.Contains(logOutput, "skip orphaned branch cleanup: repository is nil") {
@@ -2038,7 +2055,7 @@ func TestCleanupOrphanedLocalWorktreeBranchSkipsWhenBranchNameEmpty(t *testing.T
 	logBuf := testutil.CaptureLogBuffer(t, slog.LevelDebug)
 
 	app := NewApp()
-	app.cleanupOrphanedLocalWorktreeBranch(repo, "   ")
+	app.sessionService.CleanupOrphanedLocalWorktreeBranch("test-session", repo, "   ")
 
 	logOutput := logBuf.String()
 	if !strings.Contains(logOutput, "skip orphaned branch cleanup: branch name is empty") {
@@ -2076,7 +2093,7 @@ func TestCleanupOrphanedLocalWorktreeBranchLogsWarnOnCleanupError(t *testing.T) 
 	}
 
 	app := NewApp()
-	app.cleanupOrphanedLocalWorktreeBranch(repo, "feature/broken")
+	app.sessionService.CleanupOrphanedLocalWorktreeBranch("test-session", repo, "feature/broken")
 
 	logOutput := logBuf.String()
 	if !strings.Contains(logOutput, "failed to clean up orphaned local branch") {
@@ -2094,7 +2111,7 @@ func TestCleanupSessionWorktreeEmitsFailureWhenRepoOpenFails(t *testing.T) {
 
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
-	app.setConfigSnapshot(config.DefaultConfig())
+	app.configState.SetSnapshot(config.DefaultConfig())
 
 	var eventPayload map[string]any
 	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
@@ -2107,7 +2124,7 @@ func TestCleanupSessionWorktreeEmitsFailureWhenRepoOpenFails(t *testing.T) {
 		}
 	}
 
-	app.cleanupSessionWorktree(worktreeCleanupParams{
+	app.sessionService.CleanupSessionWorktree(session.WorktreeCleanupParams{
 		SessionName: "session-a",
 		WtPath:      filepath.Join(t.TempDir(), "worktree-open-fail"),
 		RepoPath:    filepath.Join(t.TempDir(), "nonexistent-repo"),
@@ -2149,7 +2166,7 @@ func TestCreateSessionForDirectoryFillOnlyPriority(t *testing.T) {
 			verifyEnv: func(t *testing.T, capturedEnv map[string]string) {
 				t.Helper()
 				// Agent team vars must retain their original values (not overwritten by claude_env).
-				agentVars := agentTeamEnvVars("test-session")
+				agentVars := session.AgentTeamEnvVars("test-session")
 				for key, wantValue := range agentVars {
 					if got := capturedEnv[key]; got != wantValue {
 						t.Errorf("env[%q] = %q, want %q (agent team env must take priority)", key, got, wantValue)
@@ -2188,7 +2205,7 @@ func TestCreateSessionForDirectoryFillOnlyPriority(t *testing.T) {
 			},
 			verifyEnv: func(t *testing.T, capturedEnv map[string]string) {
 				t.Helper()
-				agentVars := agentTeamEnvVars("test-session")
+				agentVars := session.AgentTeamEnvVars("test-session")
 				for key, wantValue := range agentVars {
 					if got := capturedEnv[key]; got != wantValue {
 						t.Errorf("env[%q] = %q, want %q", key, got, wantValue)
@@ -2240,10 +2257,10 @@ func TestCreateSessionForDirectoryFillOnlyPriority(t *testing.T) {
 			} else {
 				cfg.ClaudeEnv = nil
 			}
-			app.setConfigSnapshot(cfg)
+			app.configState.SetSnapshot(cfg)
 
 			var capturedEnv map[string]string
-			stubExecuteRouterRequest(t, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
+			stubExecuteRouterRequest(t, app, func(_ *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 				capturedEnv = req.Env
 				sessionName, _ := req.Flags["-s"].(string)
 				if _, _, err := app.sessions.CreateSession(sessionName, "0", 120, 40); err != nil {
@@ -2311,10 +2328,229 @@ func TestSanitizeSessionName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sanitizeSessionName(tt.input, "quick-session")
+			got := session.SanitizeSessionName(tt.input, "quick-session")
 			if got != tt.want {
-				t.Errorf("sanitizeSessionName(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("SanitizeSessionName(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// --- Tests moved from app_config_api_test.go (session API tests) ---
+
+func TestSessionAPIsEmitEventsThroughRuntimeEventsEmitFn(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	origInstall := ensureShimInstalledFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+		ensureShimInstalledFn = origInstall
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.workspace = t.TempDir()
+
+	var mu sync.Mutex
+	events := make([]string, 0, 3)
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...any) {
+		mu.Lock()
+		events = append(events, name)
+		mu.Unlock()
+	}
+
+	wantInstallResult := install.ShimInstallResult{InstalledPath: filepath.Join(app.workspace, "tmux.exe")}
+	ensureShimInstalledFn = func(string) (install.ShimInstallResult, error) {
+		return wantInstallResult, nil
+	}
+
+	app.SetActiveSession("session-a")
+	app.DetachSession("session-a")
+	gotInstallResult, err := app.InstallTmuxShim()
+	if err != nil {
+		t.Fatalf("InstallTmuxShim() error = %v", err)
+	}
+	if gotInstallResult != wantInstallResult {
+		t.Fatalf("InstallTmuxShim() result = %+v, want %+v", gotInstallResult, wantInstallResult)
+	}
+
+	mu.Lock()
+	gotEvents := append([]string(nil), events...)
+	mu.Unlock()
+	wantEvents := []string{
+		"tmux:active-session",
+		"tmux:session-detached",
+		"tmux:shim-installed",
+	}
+	if len(gotEvents) != len(wantEvents) {
+		t.Fatalf("event count = %d, want %d (%v)", len(gotEvents), len(wantEvents), gotEvents)
+	}
+	for i := range wantEvents {
+		if gotEvents[i] != wantEvents[i] {
+			t.Fatalf("event[%d] = %q, want %q", i, gotEvents[i], wantEvents[i])
+		}
+	}
+}
+
+func TestInstallTmuxShimDoesNotEmitOnError(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	origInstall := ensureShimInstalledFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+		ensureShimInstalledFn = origInstall
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.workspace = t.TempDir()
+
+	eventCount := 0
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
+		eventCount++
+	}
+	ensureShimInstalledFn = func(string) (install.ShimInstallResult, error) {
+		return install.ShimInstallResult{}, errors.New("install failed")
+	}
+
+	if _, err := app.InstallTmuxShim(); err == nil {
+		t.Fatal("InstallTmuxShim() expected error")
+	}
+	if eventCount != 0 {
+		t.Fatalf("event count = %d, want 0", eventCount)
+	}
+}
+
+func TestListSessionsViews(t *testing.T) {
+	t.Run("returns nil when session manager is unavailable", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = nil
+		if got := app.ListSessions(); got != nil {
+			t.Fatalf("ListSessions() = %v, want nil", got)
+		}
+	})
+
+	t.Run("returns snapshots from session manager", func(t *testing.T) {
+		app := NewApp()
+		app.sessions = tmux.NewSessionManager()
+		if _, _, err := app.sessions.CreateSession("alpha", "0", 120, 40); err != nil {
+			t.Fatalf("CreateSession() error = %v", err)
+		}
+
+		got := app.ListSessions()
+		if len(got) != 1 {
+			t.Fatalf("ListSessions() length = %d, want 1", len(got))
+		}
+		if got[0].Name != "alpha" {
+			t.Fatalf("ListSessions()[0].Name = %q, want %q", got[0].Name, "alpha")
+		}
+	})
+}
+
+func TestIsAgentTeamsAvailableViews(t *testing.T) {
+	t.Run("returns false when router is unavailable", func(t *testing.T) {
+		app := NewApp()
+		app.router = nil
+		if app.IsAgentTeamsAvailable() {
+			t.Fatal("IsAgentTeamsAvailable() should be false when router is nil")
+		}
+	})
+
+	t.Run("returns router shim availability", func(t *testing.T) {
+		app := NewApp()
+		app.router = tmux.NewCommandRouter(nil, nil, tmux.RouterOptions{ShimAvailable: true})
+		if !app.IsAgentTeamsAvailable() {
+			t.Fatal("IsAgentTeamsAvailable() should be true when shim is available")
+		}
+	})
+}
+
+func TestPickSessionDirectoryRequiresRuntimeContext(t *testing.T) {
+	app := NewApp()
+	app.setRuntimeContext(nil)
+
+	if _, err := app.PickSessionDirectory(); err == nil {
+		t.Fatal("PickSessionDirectory() expected context-not-ready error")
+	}
+}
+
+func TestSetActiveSessionUpdatesStateAndEmitsTrimmedName(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+
+	eventCount := 0
+	emittedName := ""
+	runtimeEventsEmitFn = func(_ context.Context, name string, data ...any) {
+		if name != "tmux:active-session" {
+			return
+		}
+		eventCount++
+		if len(data) == 0 {
+			return
+		}
+		payload, ok := data[0].(map[string]string)
+		if !ok {
+			return
+		}
+		emittedName = payload["name"]
+	}
+
+	app.SetActiveSession("  session-a  ")
+
+	if got := app.GetActiveSession(); got != "session-a" {
+		t.Fatalf("GetActiveSession() = %q, want %q", got, "session-a")
+	}
+	if emittedName != "session-a" {
+		t.Fatalf("emitted active session = %q, want %q", emittedName, "session-a")
+	}
+	if eventCount != 1 {
+		t.Fatalf("event count = %d, want 1", eventCount)
+	}
+}
+
+func TestSetActiveSessionTrimsWhitespaceOnlyToEmpty(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {}
+
+	app := NewApp()
+	app.SetActiveSession("   ")
+	if got := app.GetActiveSession(); got != "" {
+		t.Fatalf("GetActiveSession() = %q, want empty string", got)
+	}
+}
+
+func TestSessionAPIsSkipRuntimeEventsWhenContextIsNil(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	origInstall := ensureShimInstalledFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+		ensureShimInstalledFn = origInstall
+	})
+
+	app := NewApp()
+	app.workspace = t.TempDir()
+
+	eventCount := 0
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {
+		eventCount++
+	}
+	ensureShimInstalledFn = func(string) (install.ShimInstallResult, error) {
+		return install.ShimInstallResult{InstalledPath: filepath.Join(app.workspace, "tmux.exe")}, nil
+	}
+
+	app.SetActiveSession("session-a")
+	app.DetachSession("session-a")
+	if _, err := app.InstallTmuxShim(); err != nil {
+		t.Fatalf("InstallTmuxShim() error = %v", err)
+	}
+
+	if eventCount != 0 {
+		t.Fatalf("event count = %d, want 0", eventCount)
 	}
 }

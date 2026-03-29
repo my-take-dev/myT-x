@@ -2,6 +2,7 @@ import {useEffect, useRef} from "react";
 import {api} from "../api";
 import {useTmuxStore} from "../stores/tmuxStore";
 import {isImeTransitionalEvent} from "../utils/ime";
+import {notifyAndLog} from "../utils/notifyUtils";
 import {resolveActiveWindow} from "../utils/session";
 
 interface UsePrefixKeyModeOptions {
@@ -95,6 +96,7 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
                 }
                 void api.FocusPane(targetPane.id).catch((err) => {
                     console.warn("[prefix] focus window failed", err);
+                    notifyAndLog("Focus window", "warn", err, "PrefixKey");
                 });
             };
 
@@ -103,12 +105,14 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
             if (key === "%") {
                 void api.SplitPane(paneId, true).catch((err) => {
                     console.warn("[prefix] split vertical failed", err);
+                    notifyAndLog("Split pane", "warn", err, "PrefixKey");
                 });
                 return;
             }
             if (key === '"') {
                 void api.SplitPane(paneId, false).catch((err) => {
                     console.warn("[prefix] split horizontal failed", err);
+                    notifyAndLog("Split pane", "warn", err, "PrefixKey");
                 });
                 return;
             }
@@ -149,6 +153,7 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
                 if (activeSession) {
                     void api.DetachSession(activeSession).catch((err) => {
                         console.warn("[prefix] detach session failed", err);
+                        notifyAndLog("Detach session", "error", err, "PrefixKey");
                     });
                 }
                 return;
@@ -159,6 +164,7 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
                 if (target) {
                     void api.FocusPane(target.id).catch((err) => {
                         console.warn("[prefix] focus pane failed", err);
+                        notifyAndLog("Focus pane", "warn", err, "PrefixKey");
                     });
                 }
                 return;
@@ -169,6 +175,7 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
                 if (target) {
                     void api.FocusPane(target.id).catch((err) => {
                         console.warn("[prefix] focus pane failed", err);
+                        notifyAndLog("Focus pane", "warn", err, "PrefixKey");
                     });
                 }
                 return;

@@ -1,6 +1,6 @@
 import {useI18n} from "../../../../i18n";
 import type {OrchestratorMemberDraft, OrchestratorMemberDraftSkill} from "./types";
-import {isMemberDraftValid} from "./useOrchestratorTeams";
+import {isMemberDraftValid} from "./orchestratorTeamUtils";
 
 interface MemberEditorProps {
     draft: OrchestratorMemberDraft;
@@ -8,13 +8,15 @@ interface MemberEditorProps {
     onChange: (draft: OrchestratorMemberDraft) => void;
     onBack: () => void;
     onSave: () => void;
+    /** When true, hides the back button and footer save button. Used when embedded in a parent form. */
+    hideNavigation?: boolean;
 }
 
 const maxPaneTitle = 30;
 const maxRole = 50;
 const maxCommand = 100;
 
-export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSave}: MemberEditorProps) {
+export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSave, hideNavigation}: MemberEditorProps) {
     const {t} = useI18n();
     const maxSkills = 20;
 
@@ -45,10 +47,12 @@ export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSav
     }
 
     return (
-        <div className="orchestrator-member-editor">
-            <button type="button" className="orchestrator-teams-back-btn" onClick={onBack}>
-                &larr; {t("viewer.orchestratorTeams.member.back", "戻る")}
-            </button>
+        <div className={`orchestrator-member-editor${hideNavigation ? " embedded" : ""}`}>
+            {!hideNavigation && (
+                <button type="button" className="orchestrator-teams-back-btn" onClick={onBack}>
+                    &larr; {t("viewer.orchestratorTeams.member.back", "戻る")}
+                </button>
+            )}
 
             <div className="form-group">
                 <label className="form-label">
@@ -80,7 +84,7 @@ export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSav
                     type="text"
                     value={draft.role}
                     onChange={(event) => onChange({...draft, role: event.target.value})}
-                    placeholder="リードエンジニア"
+                    placeholder={t("viewer.orchestratorTeams.member.rolePlaceholder", "リードエンジニア")}
                     maxLength={maxRole}
                 />
             </div>
@@ -120,7 +124,7 @@ export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSav
                     className="form-input orchestrator-teams-textarea"
                     value={draft.customMessage}
                     onChange={(event) => onChange({...draft, customMessage: event.target.value})}
-                    placeholder="この役割の詳細な責務や行動指針を記述してください"
+                    placeholder={t("viewer.orchestratorTeams.member.customMessagePlaceholder", "この役割の詳細な責務や行動指針を記述してください")}
                 />
             </div>
 
@@ -171,16 +175,18 @@ export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSav
                 </button>
             </div>
 
-            <div className="orchestrator-team-editor-footer">
-                <button
-                    type="button"
-                    className="orchestrator-teams-primary-btn"
-                    disabled={!isMemberDraftValid(draft) || paneTitleDuplicate}
-                    onClick={onSave}
-                >
-                    {t("viewer.orchestratorTeams.member.save", "メンバーを保存")}
-                </button>
-            </div>
+            {!hideNavigation && (
+                <div className="orchestrator-team-editor-footer">
+                    <button
+                        type="button"
+                        className="orchestrator-teams-primary-btn"
+                        disabled={!isMemberDraftValid(draft) || paneTitleDuplicate}
+                        onClick={onSave}
+                    >
+                        {t("viewer.orchestratorTeams.member.save", "メンバーを保存")}
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

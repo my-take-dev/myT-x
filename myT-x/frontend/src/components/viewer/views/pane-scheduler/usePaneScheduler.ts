@@ -9,19 +9,25 @@ import {
     SaveSchedulerTemplate,
     DeleteSchedulerTemplate,
 } from "../../../../../wailsjs/go/main/App";
-import {main} from "../../../../../wailsjs/go/models";
+import {scheduler} from "../../../../../wailsjs/go/models";
 import {EventsOn} from "../../../../../wailsjs/runtime";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
 import type {PaneSnapshot} from "../../../../types/tmux";
+import {createConsecutiveFailureCounter, notifyAndLog} from "../../../../utils/notifyUtils";
 
-export type SchedulerEntry = main.SchedulerEntryStatus;
-export type SchedulerTemplate = main.SchedulerTemplate;
+// Module-level consecutive failure counters — threshold 2 because scheduler
+// status is user-facing and users need earlier awareness of persistent issues.
+const statusFailureCounter = createConsecutiveFailureCounter(2);
+const templateFailureCounter = createConsecutiveFailureCounter(2);
+
+export type SchedulerEntry = scheduler.EntryStatus;
+export type SchedulerTemplate = scheduler.Template;
 
 export interface SchedulerStartValues {
     title: string;
     paneID: string;
     message: string;
-    intervalMinutes: number;
+    intervalSeconds: number;
     maxCount: number;
 }
 
@@ -60,7 +66,7 @@ export function createSchedulerEditDraft(entry: SchedulerEntry): SchedulerEditDr
         title: entry.title,
         paneID: entry.pane_id,
         message: entry.message,
-        intervalMinutes: entry.interval_minutes,
+        intervalSeconds: entry.interval_seconds,
         maxCount: entry.max_count,
     };
 }
@@ -94,7 +100,7 @@ function isSchedulerEntry(value: unknown): value is SchedulerEntry {
         typeof value.title === "string" &&
         typeof value.pane_id === "string" &&
         typeof value.message === "string" &&
-        typeof value.interval_minutes === "number" &&
+        typeof value.interval_seconds === "number" &&
         typeof value.max_count === "number" &&
         typeof value.current_count === "number" &&
         typeof value.running === "boolean"
@@ -156,12 +162,17 @@ export function usePaneScheduler() {
                 if (!isMountedRef.current) return;
                 setEntries(result ?? []);
                 hasLoadedStatusesRef.current = true;
+                statusFailureCounter.recordSuccess();
             })
             .catch((err) => {
                 if (!isMountedRef.current) return;
                 console.warn("[pane-scheduler] failed to get statuses", err);
                 if (!hasLoadedStatusesRef.current) {
                     setError("Failed to load scheduler statuses. Please refresh.");
+                } else {
+                    statusFailureCounter.recordFailure(() => {
+                        notifyAndLog("Scheduler status refresh", "warn", err, "PaneScheduler");
+                    });
                 }
             });
     }, []);
@@ -178,12 +189,17 @@ export function usePaneScheduler() {
                 if (!isMountedRef.current) return;
                 setTemplates(result ?? []);
                 hasLoadedTemplatesRef.current = true;
+                templateFailureCounter.recordSuccess();
             })
             .catch((err) => {
                 if (!isMountedRef.current) return;
                 console.warn("[pane-scheduler] failed to load templates", err);
                 if (!hasLoadedTemplatesRef.current) {
                     setError(`Failed to load templates for session ${activeSession}.`);
+                } else {
+                    templateFailureCounter.recordFailure(() => {
+                        notifyAndLog("Scheduler template refresh", "warn", err, "PaneScheduler");
+                    });
                 }
             });
     }, [activeSession]);
@@ -229,12 +245,12 @@ export function usePaneScheduler() {
             title,
             paneID,
             message,
-            intervalMinutes,
+            intervalSeconds,
             maxCount,
         }: SchedulerStartValues) => {
             setError(null);
             try {
-                await StartScheduler(title, paneID, message, intervalMinutes, maxCount);
+                await StartScheduler(title, paneID, message, intervalSeconds, maxCount);
             } catch (e) {
                 const msg = String(e);
                 setError(msg);

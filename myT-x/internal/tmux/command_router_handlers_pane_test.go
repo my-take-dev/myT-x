@@ -233,6 +233,173 @@ func TestSplitWindowRollbackFailureHidesRollbackError(t *testing.T) {
 	}
 }
 
+func TestCreatePaneInEmptySessionInternal(t *testing.T) {
+	emitter := &captureEmitter{}
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+	_, pane, err := sessions.CreateSession("demo", "0", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	workDir := os.TempDir()
+	if err := sessions.SetRootPath("demo", workDir); err != nil {
+		t.Fatalf("SetRootPath() error = %v", err)
+	}
+	if _, sessionEmptied, err := sessions.KillPane(pane.IDString()); err != nil {
+		t.Fatalf("KillPane() error = %v", err)
+	} else if !sessionEmptied {
+		t.Fatal("sessionEmptied = false, want true")
+	}
+
+	var attachWorkDir string
+	var attachEnv map[string]string
+	router.attachTerminalFn = func(pane *TmuxPane, workDir string, env map[string]string, _ *TmuxPane) error {
+		if pane == nil {
+			t.Fatal("pane is nil in attach hook")
+		}
+		attachWorkDir = workDir
+		attachEnv = maps.Clone(env)
+		return nil
+	}
+
+	newPaneID, err := router.CreatePaneInEmptySessionInternal("demo")
+	if err != nil {
+		t.Fatalf("CreatePaneInEmptySessionInternal() error = %v", err)
+	}
+	if newPaneID == "" {
+		t.Fatal("CreatePaneInEmptySessionInternal() returned empty pane id")
+	}
+	if attachWorkDir != workDir {
+		t.Fatalf("attach workDir = %q, want %q", attachWorkDir, workDir)
+	}
+	if got := attachEnv["TMUX_PANE"]; got != newPaneID {
+		t.Fatalf("attach env TMUX_PANE = %q, want %q", got, newPaneID)
+	}
+
+	session, ok := sessions.GetSession("demo")
+	if !ok {
+		t.Fatal("GetSession(demo) failed")
+	}
+	if len(session.Windows) != 1 {
+		t.Fatalf("len(session.Windows) = %d, want 1", len(session.Windows))
+	}
+	if len(session.Windows[0].Panes) != 1 {
+		t.Fatalf("len(session.Windows[0].Panes) = %d, want 1", len(session.Windows[0].Panes))
+	}
+	if session.Windows[0].Panes[0].IDString() != newPaneID {
+		t.Fatalf("pane id = %q, want %q", session.Windows[0].Panes[0].IDString(), newPaneID)
+	}
+
+	eventNames := emitter.EventNames()
+	if firstEventIndex(eventNames, "tmux:pane-created") < 0 {
+		t.Fatalf("events = %v, want tmux:pane-created", eventNames)
+	}
+	if firstEventIndex(eventNames, "tmux:layout-changed") < 0 {
+		t.Fatalf("events = %v, want tmux:layout-changed", eventNames)
+	}
+}
+
+func TestCreatePaneInEmptySessionInternalRollbackOnAttachFailure(t *testing.T) {
+	emitter := &captureEmitter{}
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+	_, pane, err := sessions.CreateSession("demo", "0", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := sessions.SetRootPath("demo", os.TempDir()); err != nil {
+		t.Fatalf("SetRootPath() error = %v", err)
+	}
+	if _, sessionEmptied, err := sessions.KillPane(pane.IDString()); err != nil {
+		t.Fatalf("KillPane() error = %v", err)
+	} else if !sessionEmptied {
+		t.Fatal("sessionEmptied = false, want true")
+	}
+
+	attachErr := errors.New("attach failed")
+	router.attachTerminalFn = func(p *TmuxPane, _ string, _ map[string]string, _ *TmuxPane) error {
+		return attachErr
+	}
+	emitter.mu.Lock()
+	emitter.events = nil
+	emitter.mu.Unlock()
+
+	_, createErr := router.CreatePaneInEmptySessionInternal("demo")
+	if createErr == nil {
+		t.Fatal("CreatePaneInEmptySessionInternal() expected error, got nil")
+	}
+	if !strings.Contains(createErr.Error(), attachErr.Error()) {
+		t.Fatalf("error = %q, want substring %q", createErr.Error(), attachErr.Error())
+	}
+
+	// Pane must be rolled back: session should be empty again.
+	session, ok := sessions.GetSession("demo")
+	if !ok {
+		t.Fatal("GetSession(demo) failed — session should still exist")
+	}
+	if len(session.Windows) != 0 {
+		t.Fatalf("len(session.Windows) = %d, want 0 (pane should be rolled back)", len(session.Windows))
+	}
+
+	// No pane-created or layout-changed events should be emitted on rollback.
+	eventNames := emitter.EventNames()
+	if firstEventIndex(eventNames, "tmux:pane-created") >= 0 {
+		t.Fatalf("tmux:pane-created should not be emitted on rollback, events = %v", eventNames)
+	}
+	if firstEventIndex(eventNames, "tmux:layout-changed") >= 0 {
+		t.Fatalf("tmux:layout-changed should not be emitted on rollback, events = %v", eventNames)
+	}
+}
+
+func TestSplitWindowDoesNotCopyTitle(t *testing.T) {
+	emitter := &captureEmitter{}
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, emitter, RouterOptions{ShimAvailable: true})
+	if _, _, err := sessions.CreateSession("demo", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	// Set a title on the source pane.
+	if _, err := sessions.RenamePane("%0", "agent-boss:orchestrator"); err != nil {
+		t.Fatalf("RenamePane() error = %v", err)
+	}
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "split-window",
+		Flags: map[string]any{
+			"-t": "demo:0",
+			"-h": true,
+		},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	// The new pane (%1) must have an empty title — not the source pane's title.
+	newPane, err := sessions.ResolveTarget("%1", -1)
+	if err != nil {
+		t.Fatalf("ResolveTarget(%%1) error = %v", err)
+	}
+	if newPane.Title != "" {
+		t.Fatalf("new pane title = %q, want empty string (must not copy source pane title)", newPane.Title)
+	}
+
+	// Source pane should keep its title unchanged.
+	srcPane, err := sessions.ResolveTarget("%0", -1)
+	if err != nil {
+		t.Fatalf("ResolveTarget(%%0) error = %v", err)
+	}
+	if srcPane.Title != "agent-boss:orchestrator" {
+		t.Fatalf("source pane title = %q, want %q", srcPane.Title, "agent-boss:orchestrator")
+	}
+}
+
 func TestHandleSelectPaneTitle(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -444,17 +611,21 @@ func TestHandleKillPane(t *testing.T) {
 		wantExitCode     int
 		wantSessionGone  bool
 		wantDestroyEvent bool
+		wantEmptiedEvent bool
 		wantLayoutEvent  bool
+		wantWindowCount  int
 		wantErrSubstring string
 	}{
 		{
-			name:             "kill only pane destroys session",
+			name:             "kill only pane empties session",
 			splitBeforeKill:  false,
 			killTarget:       "%0",
 			wantExitCode:     0,
-			wantSessionGone:  true,
-			wantDestroyEvent: true,
+			wantSessionGone:  false,
+			wantDestroyEvent: false,
+			wantEmptiedEvent: true,
 			wantLayoutEvent:  false,
+			wantWindowCount:  0,
 		},
 		{
 			name:             "kill one of two panes emits layout-changed",
@@ -464,6 +635,7 @@ func TestHandleKillPane(t *testing.T) {
 			wantSessionGone:  false,
 			wantDestroyEvent: false,
 			wantLayoutEvent:  true,
+			wantWindowCount:  1,
 		},
 		{
 			name:             "kill non-existent pane returns error",
@@ -522,6 +694,7 @@ func TestHandleKillPane(t *testing.T) {
 
 			events := emitter.Events()
 			destroyCount := 0
+			emptiedCount := 0
 			layoutCount := 0
 			for _, ev := range events {
 				switch ev.name {
@@ -533,6 +706,15 @@ func TestHandleKillPane(t *testing.T) {
 					}
 					if got := mustString(payload["name"]); got != "demo" {
 						t.Fatalf("session-destroyed name = %q, want %q", got, "demo")
+					}
+				case "tmux:session-emptied":
+					emptiedCount++
+					payload, ok := ev.payload.(map[string]any)
+					if !ok {
+						t.Fatalf("session-emptied payload type = %T, want map[string]any", ev.payload)
+					}
+					if got := mustString(payload["name"]); got != "demo" {
+						t.Fatalf("session-emptied name = %q, want %q", got, "demo")
 					}
 				case "tmux:layout-changed":
 					layoutCount++
@@ -555,11 +737,26 @@ func TestHandleKillPane(t *testing.T) {
 			if tt.wantDestroyEvent && destroyCount != 1 {
 				t.Fatalf("session-destroyed count = %d, want 1", destroyCount)
 			}
+			if got := emptiedCount > 0; got != tt.wantEmptiedEvent {
+				t.Fatalf("session-emptied emitted = %v, want %v (events: %v)", got, tt.wantEmptiedEvent, emitter.EventNames())
+			}
+			if tt.wantEmptiedEvent && emptiedCount != 1 {
+				t.Fatalf("session-emptied count = %d, want 1", emptiedCount)
+			}
 			if got := layoutCount > 0; got != tt.wantLayoutEvent {
 				t.Fatalf("layout-changed emitted = %v, want %v (events: %v)", got, tt.wantLayoutEvent, emitter.EventNames())
 			}
 			if tt.wantLayoutEvent && layoutCount != 1 {
 				t.Fatalf("layout-changed count = %d, want 1", layoutCount)
+			}
+			if !tt.wantSessionGone {
+				session, ok := sessions.GetSession("demo")
+				if !ok {
+					t.Fatal("GetSession(demo) failed")
+				}
+				if len(session.Windows) != tt.wantWindowCount {
+					t.Fatalf("len(session.Windows) = %d, want %d", len(session.Windows), tt.wantWindowCount)
+				}
 			}
 		})
 	}
@@ -602,9 +799,16 @@ func TestHandleKillPaneTerminalClosedOnce(t *testing.T) {
 		t.Fatal("terminal.IsClosed() = false after kill-pane, want true (KillPane must close terminal)")
 	}
 
-	// Session destroyed because it had only one pane.
-	if sessions.HasSession("demo") {
-		t.Fatal("session 'demo' still exists, want destroyed after last pane killed")
+	// The session remains alive but empty so the UI can recreate the first pane.
+	if !sessions.HasSession("demo") {
+		t.Fatal("session 'demo' not found, want retained after last pane killed")
+	}
+	session, ok := sessions.GetSession("demo")
+	if !ok {
+		t.Fatal("GetSession(demo) failed")
+	}
+	if len(session.Windows) != 0 {
+		t.Fatalf("len(session.Windows) = %d, want 0", len(session.Windows))
 	}
 }
 
@@ -1254,8 +1458,8 @@ func TestHandleListPanesFilterByMYTXSession(t *testing.T) {
 		t.Fatalf("list-panes -a failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
 	}
 
-	lines := strings.Split(strings.TrimRight(resp.Stdout, "\n"), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(strings.TrimRight(resp.Stdout, "\n"), "\n")
+	for line := range lines {
 		if line != "sess-a" {
 			t.Errorf("list-panes -a returned pane from session %q, want only sess-a", line)
 		}

@@ -310,26 +310,28 @@ func TestHandleRenameWindow(t *testing.T) {
 
 func TestHandleKillWindow(t *testing.T) {
 	tests := []struct {
-		name             string
-		setup            func(t *testing.T, sessions *SessionManager)
-		flags            map[string]any
-		wantExitCode     int
-		wantStderr       string
-		wantSessionAlive bool
-		wantWindowID     int
-		wantLayoutEvent  bool
-		wantWindowNames  []string
+		name               string
+		setup              func(t *testing.T, sessions *SessionManager)
+		flags              map[string]any
+		wantExitCode       int
+		wantStderr         string
+		wantSessionAlive   bool
+		wantSessionEmptied bool
+		wantWindowID       int
+		wantLayoutEvent    bool
+		wantWindowNames    []string
 	}{
 		{
-			name: "kill last window destroys session",
+			name: "kill last window empties session",
 			setup: func(t *testing.T, sessions *SessionManager) {
 				if _, _, err := sessions.CreateSession("demo", "main", 120, 40); err != nil {
 					t.Fatalf("CreateSession() error = %v", err)
 				}
 			},
-			flags:            map[string]any{"-t": "demo:0"},
-			wantExitCode:     0,
-			wantSessionAlive: false,
+			flags:              map[string]any{"-t": "demo:0"},
+			wantExitCode:       0,
+			wantSessionAlive:   true,
+			wantSessionEmptied: true,
 		},
 		{
 			name: "kill one window in multi-window session keeps session alive",
@@ -340,12 +342,13 @@ func TestHandleKillWindow(t *testing.T) {
 				// Inject a second window to validate the non-destroying kill path.
 				injectTestWindow(t, sessions, "demo", "second")
 			},
-			flags:            map[string]any{"-t": "demo:0"},
-			wantExitCode:     0,
-			wantSessionAlive: true,
-			wantWindowID:     0,
-			wantLayoutEvent:  true,
-			wantWindowNames:  []string{"second"},
+			flags:              map[string]any{"-t": "demo:0"},
+			wantExitCode:       0,
+			wantSessionAlive:   true,
+			wantSessionEmptied: false,
+			wantWindowID:       0,
+			wantLayoutEvent:    true,
+			wantWindowNames:    []string{"second"},
 		},
 
 		{
@@ -389,6 +392,7 @@ func TestHandleKillWindow(t *testing.T) {
 			}
 
 			destroyedCount := 0
+			emptiedCount := 0
 			windowDestroyedCount := 0
 			layoutChangedCount := 0
 			for _, event := range emitter.Events() {
@@ -410,6 +414,11 @@ func TestHandleKillWindow(t *testing.T) {
 					if got := mustInt(payload["windowId"], -1); got != tt.wantWindowID {
 						t.Fatalf("window-destroyed windowId = %d, want %d", got, tt.wantWindowID)
 					}
+				case "tmux:session-emptied":
+					emptiedCount++
+					if got := mustString(payload["name"]); got != "demo" {
+						t.Fatalf("session-emptied name = %q, want %q", got, "demo")
+					}
 				case "tmux:layout-changed":
 					layoutChangedCount++
 					if got := mustString(payload["sessionName"]); got != "demo" {
@@ -425,7 +434,14 @@ func TestHandleKillWindow(t *testing.T) {
 				if destroyedCount != 0 {
 					t.Fatalf("session-destroyed count = %d, want 0", destroyedCount)
 				}
-				if windowDestroyedCount != 1 {
+				if tt.wantSessionEmptied {
+					if emptiedCount != 1 {
+						t.Fatalf("session-emptied count = %d, want 1", emptiedCount)
+					}
+					if windowDestroyedCount != 0 {
+						t.Fatalf("window-destroyed count = %d, want 0", windowDestroyedCount)
+					}
+				} else if windowDestroyedCount != 1 {
 					t.Fatalf("window-destroyed count = %d, want 1", windowDestroyedCount)
 				}
 				if tt.wantLayoutEvent && layoutChangedCount != 1 {
@@ -437,6 +453,9 @@ func TestHandleKillWindow(t *testing.T) {
 				}
 				if windowDestroyedCount != 0 {
 					t.Fatalf("window-destroyed count = %d, want 0", windowDestroyedCount)
+				}
+				if emptiedCount != 0 {
+					t.Fatalf("session-emptied count = %d, want 0", emptiedCount)
 				}
 				if layoutChangedCount != 0 {
 					t.Fatalf("layout-changed count = %d, want 0", layoutChangedCount)

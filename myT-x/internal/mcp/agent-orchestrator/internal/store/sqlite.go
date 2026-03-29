@@ -579,6 +579,33 @@ func (s *Store) SaveMessage(ctx context.Context, msg domain.TaskMessage) error {
 	return nil
 }
 
+// GetMessage は送信メッセージを取得する。
+func (s *Store) GetMessage(ctx context.Context, id string) (domain.TaskMessage, error) {
+	var msg domain.TaskMessage
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, content, created_at FROM send_messages WHERE id = ?`, id,
+	).Scan(&msg.ID, &msg.Content, &msg.CreatedAt)
+	if err != nil {
+		return domain.TaskMessage{}, wrapNotFound(err, fmt.Sprintf("get message %q", id))
+	}
+	return msg, nil
+}
+
+// GetTaskBySendMessageID は send_message_id でタスクを取得する。
+func (s *Store) GetTaskBySendMessageID(ctx context.Context, sendMessageID string) (domain.Task, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT task_id, agent_name, assignee_pane_id, sender_pane_id, sender_name, sender_instance_id, send_message_id, send_response_id, status, sent_at, completed_at, is_now_session FROM tasks WHERE send_message_id = ?`,
+		sendMessageID,
+	)
+	t, err := scanTask(row)
+	if err != nil {
+		return domain.Task{}, wrapNotFound(err, fmt.Sprintf("get task by send_message_id %q", sendMessageID))
+	}
+	return t, nil
+}
+
 // SaveResponse は応答メッセージを保存する。
 func (s *Store) SaveResponse(ctx context.Context, msg domain.TaskMessage) error {
 	_, err := s.db.ExecContext(

@@ -2,6 +2,7 @@ import {useCallback, useMemo, useState} from "react";
 import {useCanvasStore} from "../../stores/canvasStore";
 import type {OrchestratorTaskDetail, OrchestratorTask} from "../../types/canvas";
 import {api} from "../../api";
+import {notifyAndLog} from "../../utils/notifyUtils";
 
 interface TaskTimelinePanelProps {
     sessionName: string;
@@ -59,6 +60,7 @@ function TaskTicket({task, sessionName, isExpanded, onToggleExpand}: TaskTicketP
                 .then((d) => setDetail(d))
                 .catch((err) => {
                     console.warn("[DEBUG-timeline] fetch detail failed:", err);
+                    notifyAndLog("Load task detail", "warn", err, "TaskTimeline");
                 })
                 .finally(() => setLoading(false));
         }

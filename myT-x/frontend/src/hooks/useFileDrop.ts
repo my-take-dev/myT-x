@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { OnFileDrop, OnFileDropOff } from "../../wailsjs/runtime/runtime";
 import { api } from "../api";
+import { notifyAndLog } from "../utils/notifyUtils";
 
 /** ファイルパスをシェル安全にクォートする */
 function quotePathForShell(path: string): string {
@@ -23,6 +24,7 @@ export function useFileDrop(activePaneId: string | null) {
       const quoted = paths.map(quotePathForShell).join(" ");
       void api.SendInput(activePaneId, quoted).catch((err) => {
         console.warn("[file-drop] SendInput failed", err);
+        notifyAndLog("File drop", "warn", err, "FileDrop");
       });
     }, true);
 

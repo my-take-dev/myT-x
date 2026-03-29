@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"log"
 	"time"
@@ -33,6 +34,9 @@ type ResponseService struct {
 	sender   domain.PaneSender
 	resolver domain.SelfPaneResolver
 	logger   *log.Logger
+	// randRead is the random byte source for ID generation.
+	// Defaults to crypto/rand.Read. Tests inject deterministic sources.
+	randRead func([]byte) (int, error)
 }
 
 // NewResponseService は ResponseService を構築する。
@@ -51,6 +55,7 @@ func NewResponseService(
 		sender:   sender,
 		resolver: resolver,
 		logger:   ensureLogger(logger),
+		randRead: rand.Read,
 	}
 }
 
@@ -108,10 +113,14 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 	}
 	logf(s.logger, "send_response target resolved task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
 
-	if err := s.sender.SendKeys(ctx, target.PaneID, cmd.Message); err != nil {
-		return SendResponseResult{}, operationError(s.logger, "response delivery failed", err)
+	if domain.IsVirtualPaneID(target.PaneID) {
+		logf(s.logger, "send_response skip SendKeys for virtual pane task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
+	} else {
+		if err := s.sender.SendKeys(ctx, target.PaneID, cmd.Message); err != nil {
+			return SendResponseResult{}, operationError(s.logger, "response delivery failed", err)
+		}
+		logf(s.logger, "send_response delivered task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
 	}
-	logf(s.logger, "send_response delivered task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
 
 	result := SendResponseResult{
 		SentTo:     target.PaneID,
@@ -124,7 +133,7 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 	// TaskID is always set: the caller needs it regardless of downstream failures.
 	result.TaskID = cmd.TaskID
 
-	respID, err := generateResponseID()
+	respID, err := generateIDWith(s.randRead, "r-", "generate response id")
 	if err != nil {
 		result.Warning = "message delivered but response id generation failed"
 		logf(s.logger, "generate response id for task %s: %v", cmd.TaskID, err)

@@ -25,14 +25,27 @@ const (
 	debugLogFallbackMaxMessages = 3
 )
 
+// shimFileOps holds injectable file operations for log rotation and pruning.
+// Tests create custom instances instead of mutating package-level state.
+type shimFileOps struct {
+	renameFile func(oldPath, newPath string) error
+	removeFile func(string) error
+}
+
+// defaultShimFileOps returns production file operations.
+func defaultShimFileOps() shimFileOps {
+	return shimFileOps{
+		renameFile: os.Rename,
+		removeFile: os.Remove,
+	}
+}
+
 var (
 	// Keep only the first fallback reason to avoid flooding stderr.
 	// Message count throttling is handled separately by debugLogFallbackMessageCount.
 	debugLogFallbackMu           sync.Mutex
 	debugLogFallbackLogged       bool
 	debugLogFallbackMessageCount int
-	renameFileFn                 = os.Rename
-	removeFileFn                 = os.Remove
 	pruneCountByDirMu            sync.Mutex
 	// Cache per-process rotated log counts to avoid repeated directory scans.
 	pruneCountByDir = map[string]int{}
@@ -229,6 +242,12 @@ func writeLineToStderr(message string) {
 }
 
 func rotateShimDebugLogIfNeeded(basePath string, maxBytes int64, unixTime int64) error {
+	return rotateShimDebugLogIfNeededWith(basePath, maxBytes, unixTime, defaultShimFileOps())
+}
+
+// rotateShimDebugLogIfNeededWith is the testable core of rotateShimDebugLogIfNeeded,
+// allowing tests to inject test doubles for file system operations.
+func rotateShimDebugLogIfNeededWith(basePath string, maxBytes int64, unixTime int64, fileOps shimFileOps) error {
 	info, err := os.Stat(basePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -246,10 +265,10 @@ func rotateShimDebugLogIfNeeded(basePath string, maxBytes int64, unixTime int64)
 		if err != nil {
 			return err
 		}
-		err = renameFileFn(basePath, nextPath)
+		err = fileOps.renameFile(basePath, nextPath)
 		if err == nil {
 			if shouldPruneRotatedShimDebugLogs(logDir, shimDebugLogKeepGenerations) {
-				if cleanupErr := pruneRotatedShimDebugLogs(logDir, shimDebugLogKeepGenerations); cleanupErr != nil {
+				if cleanupErr := pruneRotatedShimDebugLogsWith(logDir, shimDebugLogKeepGenerations, fileOps); cleanupErr != nil {
 					debugLogFallback(fmt.Errorf("prune rotated log files in %q: %w", logDir, cleanupErr))
 				} else {
 					markPrunedRotatedShimDebugLogs(logDir, shimDebugLogKeepGenerations)
@@ -356,13 +375,19 @@ func parseRotatedShimDebugLogUnix(path string) (int64, bool) {
 }
 
 // pruneRotatedShimDebugLogs keeps the newest keep generations and removes
-// older rotated shim logs.
+// older rotated shim logs using default file operations.
+func pruneRotatedShimDebugLogs(logDir string, keep int) error {
+	return pruneRotatedShimDebugLogsWith(logDir, keep, defaultShimFileOps())
+}
+
+// pruneRotatedShimDebugLogsWith is the testable core of pruneRotatedShimDebugLogs,
+// allowing tests to inject test doubles for file system operations.
 //
 // IMPORTANT: This function MUST NOT call debugLog() because it is invoked from
 // the rotation path: debugLog -> rotateShimDebugLogIfNeeded -> pruneRotatedShimDebugLogs.
 // Calling debugLog here would create infinite recursion -> stack overflow (C-03).
 // Use pruneLogWarning() for any diagnostic output instead.
-func pruneRotatedShimDebugLogs(logDir string, keep int) error {
+func pruneRotatedShimDebugLogsWith(logDir string, keep int, fileOps shimFileOps) error {
 	if keep <= 0 {
 		return nil
 	}
@@ -404,7 +429,7 @@ func pruneRotatedShimDebugLogs(logDir string, keep int) error {
 
 	var removeErrs []error
 	for i := keep; i < len(logs); i++ {
-		if err := removeFileFn(logs[i].path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := fileOps.removeFile(logs[i].path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			removeErrs = append(removeErrs, fmt.Errorf("remove %s: %w", logs[i].path, err))
 		}
 	}

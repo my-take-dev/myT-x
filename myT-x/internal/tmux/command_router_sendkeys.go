@@ -8,7 +8,12 @@ import (
 	"time"
 )
 
-const sendKeysSubmitDelay = 60 * time.Millisecond
+// sendKeysSubmitDelay is the pause inserted before the trailing Enter (\r)
+// to prevent double-input of confirmed characters in Japanese IME on ConPTY.
+// Increased from 60ms to 300ms to reliably avoid burst-mode duplication
+// where the ConPTY input pipe echoes the confirmed text twice when the
+// submit keystroke arrives too quickly after the preceding payload.
+const sendKeysSubmitDelay = 300 * time.Millisecond
 
 const (
 	// typewriterCharDelay is the delay between each byte in typewriter mode.

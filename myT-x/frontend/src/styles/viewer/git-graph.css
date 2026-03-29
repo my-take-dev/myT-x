@@ -1,0 +1,235 @@
+/* ── Git Graph View ── */
+.git-graph-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.git-graph-branches-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+}
+
+.git-graph-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+/* ── Branch status bar ── */
+.git-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+    font-size: 0.82rem;
+}
+
+.git-status-branch {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.git-status-counts {
+    display: flex;
+    gap: 8px;
+    color: var(--fg-dim);
+    font-size: 0.78rem;
+}
+
+.git-status-ahead {
+    color: var(--git-ahead);
+}
+
+.git-status-behind {
+    color: var(--danger);
+}
+
+.git-status-changes {
+    display: flex;
+    gap: 8px;
+    font-size: 0.78rem;
+}
+
+.git-status-modified {
+    color: var(--git-modified);
+}
+
+.git-status-staged {
+    color: var(--git-staged);
+}
+
+.git-status-untracked {
+    color: var(--fg-dim);
+}
+
+/* ── Git graph + commit list area ── */
+.git-graph-commits {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ── Commit row ── */
+.commit-row {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    min-width: 0;
+    height: 32px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    padding-right: 12px;
+    transition: background 0.1s;
+}
+
+.commit-row:hover {
+    background: var(--accent-04);
+}
+
+.commit-row.selected {
+    background: var(--accent-10);
+}
+
+.commit-graph-cell {
+    flex-shrink: 0;
+    height: 32px;
+    overflow: hidden;
+}
+
+.commit-hash {
+    width: 64px;
+    flex-shrink: 0;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 0 8px;
+}
+
+.commit-message {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-main);
+}
+
+.commit-ref-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    margin-right: 4px;
+    background: var(--accent-10);
+    color: var(--accent);
+    border: 1px solid var(--accent-25);
+}
+
+.commit-ref-badge.head {
+    background: var(--git-head-bg);
+    color: var(--git-head-fg);
+    border-color: var(--git-head-border);
+}
+
+.commit-author {
+    width: 100px;
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 8px;
+}
+
+.commit-date {
+    width: 80px;
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    text-align: right;
+    font-size: 0.72rem;
+}
+
+/* ── Commit detail + diff panel ── */
+.git-detail-panel {
+    border-top: 1px solid var(--line);
+    max-height: 50%;
+    overflow: auto;
+    background: var(--bg-panel);
+}
+
+.git-detail-header {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.82rem;
+}
+
+.git-detail-hash {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+
+.git-detail-author {
+    color: var(--fg-dim);
+    font-size: 0.78rem;
+    margin-top: 2px;
+}
+
+.git-detail-message {
+    color: var(--fg-main);
+    margin-top: 4px;
+    white-space: pre-wrap;
+}
+
+/* ── Branch selector dropdown ── */
+.git-branch-select {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--fg-main);
+    font-size: 0.78rem;
+    padding: 2px 6px;
+    cursor: pointer;
+    outline: none;
+}
+
+.git-branch-select:focus {
+    border-color: var(--accent);
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+/* ── Load more button ── */
+.git-load-more {
+    display: flex;
+    justify-content: center;
+    padding: 8px;
+}
+
+.git-load-more button {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--bg-elev);
+    color: var(--fg-dim);
+    padding: 4px 16px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+
+.git-load-more button:hover {
+    color: var(--fg-main);
+    background: var(--accent-06);
+}

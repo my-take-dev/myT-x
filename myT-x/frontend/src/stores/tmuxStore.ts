@@ -50,6 +50,9 @@ interface TmuxState {
     toggleSyncInputMode: () => void;
     setFontSize: (size: number) => void;
     reorderSession: (fromIndex: number, toIndex: number) => void;
+    /** Monotonically increasing counter; subscribers run IME reset when it changes. */
+    imeResetSignal: number;
+    triggerImeReset: () => void;
 }
 
 /**
@@ -110,6 +113,7 @@ export const useTmuxStore = create<TmuxState>((set) => ({
     prefixMode: false,
     syncInputMode: false,
     fontSize: 13,
+    imeResetSignal: 0,
     setConfig: (config) => set({config}),
     setSessions: (sessions) =>
         set((state) => resolveSessionState(sessions, state.sessionOrder, state.activeSession)),
@@ -164,6 +168,7 @@ export const useTmuxStore = create<TmuxState>((set) => ({
     setSyncInputMode: (syncInputMode) => set({syncInputMode}),
     toggleSyncInputMode: () => set((state) => ({syncInputMode: !state.syncInputMode})),
     setFontSize: (fontSize) => set({fontSize}),
+    triggerImeReset: () => set((state) => ({imeResetSignal: state.imeResetSignal + 1})),
     reorderSession: (fromIndex, toIndex) =>
         set((state) => {
             const order = [...state.sessionOrder];

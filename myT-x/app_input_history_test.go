@@ -14,132 +14,18 @@ import (
 )
 
 // --------------------------------------------------------------------
-// Ring buffer tests
-// --------------------------------------------------------------------
-
-func TestNewInputHistoryRingBuffer_ClampsNonPositiveCapacity(t *testing.T) {
-	tests := []struct {
-		name     string
-		capacity int
-	}{
-		{name: "zero capacity clamped to 1", capacity: 0},
-		{name: "negative capacity clamped to 1", capacity: -1},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rb := newInputHistoryRingBuffer(tt.capacity)
-			rb.push(InputHistoryEntry{Seq: 1, Input: "hello"})
-
-			entries := rb.snapshot()
-			if len(entries) != 1 {
-				t.Fatalf("snapshot length = %d, want 1", len(entries))
-			}
-			if entries[0].Seq != 1 {
-				t.Fatalf("snapshot[0].Seq = %d, want 1", entries[0].Seq)
-			}
-		})
-	}
-}
-
-func TestInputHistoryRingBuffer_PushAndSnapshot(t *testing.T) {
-	tests := []struct {
-		name      string
-		capacity  int
-		pushCount int
-		wantCount int
-		wantFirst string
-		wantLast  string
-	}{
-		{
-			name:      "below capacity",
-			capacity:  5,
-			pushCount: 3,
-			wantCount: 3,
-			wantFirst: "input-0",
-			wantLast:  "input-2",
-		},
-		{
-			name:      "at capacity",
-			capacity:  5,
-			pushCount: 5,
-			wantCount: 5,
-			wantFirst: "input-0",
-			wantLast:  "input-4",
-		},
-		{
-			name:      "overflow wraps around",
-			capacity:  5,
-			pushCount: 8,
-			wantCount: 5,
-			wantFirst: "input-3",
-			wantLast:  "input-7",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rb := newInputHistoryRingBuffer(tt.capacity)
-			for i := 0; i < tt.pushCount; i++ {
-				rb.push(InputHistoryEntry{Input: fmt.Sprintf("input-%d", i)})
-			}
-
-			snap := rb.snapshot()
-			if len(snap) != tt.wantCount {
-				t.Fatalf("snapshot length = %d, want %d", len(snap), tt.wantCount)
-			}
-			if snap[0].Input != tt.wantFirst {
-				t.Errorf("first entry = %q, want %q", snap[0].Input, tt.wantFirst)
-			}
-			if snap[len(snap)-1].Input != tt.wantLast {
-				t.Errorf("last entry = %q, want %q", snap[len(snap)-1].Input, tt.wantLast)
-			}
-		})
-	}
-}
-
-func TestInputHistoryRingBuffer_SnapshotIndependence(t *testing.T) {
-	rb := newInputHistoryRingBuffer(10)
-	rb.push(InputHistoryEntry{Input: "original"})
-
-	snap1 := rb.snapshot()
-	snap2 := rb.snapshot()
-
-	snap1[0].Input = "mutated"
-	if snap2[0].Input == "mutated" {
-		t.Error("mutating snapshot1 affected snapshot2 - copies are not independent")
-	}
-}
-
-func TestInputHistoryRingBuffer_EmptySnapshot(t *testing.T) {
-	rb := newInputHistoryRingBuffer(10)
-	snap := rb.snapshot()
-	if snap == nil {
-		t.Error("expected non-nil empty slice, got nil")
-	}
-	if len(snap) != 0 {
-		t.Errorf("expected 0 entries, got %d", len(snap))
-	}
-}
-
-// --------------------------------------------------------------------
 // initInputHistory / cleanupOldInputHistory / closeInputHistory tests
 // --------------------------------------------------------------------
 
 func TestInitInputHistory_CreatesDirectoryAndFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
 
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	// Verify directory exists.
 	expectedDir := filepath.Join(tmpDir, inputHistoryDir)
@@ -152,13 +38,14 @@ func TestInitInputHistory_CreatesDirectoryAndFile(t *testing.T) {
 	}
 
 	// Verify file exists with PID in filename.
-	if a.inputHistoryFile == nil {
-		t.Fatal("expected inputHistoryFile to be non-nil")
-	}
-	if a.inputHistoryPath == "" {
+	historyPath := a.GetInputHistoryFilePath()
+	if historyPath == "" {
 		t.Fatal("expected inputHistoryPath to be set")
 	}
-	filename := filepath.Base(a.inputHistoryPath)
+	if _, err := os.Stat(historyPath); err != nil {
+		t.Fatalf("expected history file at %s: %v", historyPath, err)
+	}
+	filename := filepath.Base(historyPath)
 	pidPattern := regexp.MustCompile(`^input-\d{8}-\d{6}-\d+\.jsonl$`)
 	if !pidPattern.MatchString(filename) {
 		t.Fatalf("expected filename matching input-YYYYMMDD-HHMMSS-PID.jsonl, got %s", filename)
@@ -201,12 +88,10 @@ func TestCleanupOldInputHistory_KeepsMaxFiles(t *testing.T) {
 				}
 			}
 
-			currentPath := filepath.Join(histDir, "input-current.jsonl")
-			if err := os.WriteFile(currentPath, []byte("current\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			a := &App{inputHistoryPath: currentPath}
+			a := &App{configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml"))}
 			stubRuntimeEventsEmit(t)
+			a.initInputHistory(a.configState.ConfigPath())
+			defer a.closeInputHistory()
 
 			a.cleanupOldInputHistory()
 
@@ -250,13 +135,11 @@ func TestCleanupOldInputHistory_SameTimestampOrdersByNumericPID(t *testing.T) {
 		}
 	}
 
-	currentPath := filepath.Join(histDir, "input-20260101-000200-9999.jsonl")
-	if err := os.WriteFile(currentPath, []byte("current\n"), 0o600); err != nil {
-		t.Fatalf("failed to create current file: %v", err)
-	}
-
-	a := &App{inputHistoryPath: currentPath}
+	a := &App{configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml"))}
 	stubRuntimeEventsEmit(t)
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
+
 	a.cleanupOldInputHistory()
 
 	if _, err := os.Stat(filepath.Join(histDir, pid9Name)); !os.IsNotExist(err) {
@@ -270,20 +153,20 @@ func TestCleanupOldInputHistory_SameTimestampOrdersByNumericPID(t *testing.T) {
 func TestCloseInputHistory_SetsFileToNil(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
 
-	a.initInputHistory()
-	if a.inputHistoryFile == nil {
-		t.Fatal("expected inputHistoryFile to be non-nil after init")
+	a.initInputHistory(a.configState.ConfigPath())
+	path := a.GetInputHistoryFilePath()
+	if path == "" {
+		t.Fatal("expected history path to be set after init")
 	}
 
 	a.closeInputHistory()
 
-	if a.inputHistoryFile != nil {
-		t.Error("expected inputHistoryFile to be nil after close")
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("expected file to be removable after close, got %v", err)
 	}
 }
 
@@ -310,20 +193,15 @@ func TestWriteInputHistoryEntry_WritesJSONL(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			a := &App{
-				configPath:          filepath.Join(tmpDir, "config.yaml"),
-				inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+				configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 			}
 			stubRuntimeEventsEmit(t)
-			a.initInputHistory()
-			defer func() {
-				if a.inputHistoryFile != nil {
-					a.inputHistoryFile.Close()
-				}
-			}()
+			a.initInputHistory(a.configState.ConfigPath())
+			defer a.closeInputHistory()
 
 			a.writeInputHistoryEntry(tt.entry)
 
-			content, err := os.ReadFile(a.inputHistoryPath)
+			content, err := os.ReadFile(a.GetInputHistoryFilePath())
 			if err != nil {
 				t.Fatalf("failed to read file: %v", err)
 			}
@@ -356,8 +234,7 @@ func TestWriteInputHistoryEntry_WritesJSONL(t *testing.T) {
 
 func TestWriteInputHistoryEntry_SeqMonotonicallyIncreasing(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -386,8 +263,7 @@ func TestWriteInputHistoryEntry_SeqMonotonicallyIncreasing(t *testing.T) {
 
 func TestWriteInputHistoryEntry_WithoutInitializedFile(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -410,8 +286,7 @@ func TestWriteInputHistoryEntry_WithoutInitializedFile(t *testing.T) {
 
 func TestWriteInputHistoryEntry_EmitsCorrectEvent(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	a.setRuntimeContext(context.Background())
 
@@ -443,8 +318,7 @@ func TestWriteInputHistoryEntry_EmitsCorrectEvent(t *testing.T) {
 
 func TestGetInputHistory_ReturnsIndependentCopy(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -462,16 +336,11 @@ func TestGetInputHistory_ReturnsIndependentCopy(t *testing.T) {
 func TestGetInputHistoryFilePath(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	result := a.GetInputHistoryFilePath()
 	if result == "" {
@@ -593,27 +462,20 @@ func TestProcessInputString_PreservesNormalChars(t *testing.T) {
 
 func TestRecordInput_EmptyInputIgnored(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
 	a.recordInput("%1", "", "keyboard", "")
 
-	a.inputLineBufMu.Lock()
-	count := len(a.inputLineBuffers)
-	a.inputLineBufMu.Unlock()
-
-	if count != 0 {
-		t.Errorf("expected 0 line buffers for empty input, got %d", count)
+	if got := a.GetInputHistory(); len(got) != 0 {
+		t.Fatalf("expected 0 history entries for empty input, got %d", len(got))
 	}
 }
 
 func TestRecordInput_IgnoredDuringShutdown(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
-		inputLineBuffers:    make(map[string]*inputLineBuffer),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -627,8 +489,7 @@ func TestRecordInput_IgnoredDuringShutdown(t *testing.T) {
 
 func TestRecordInput_CSIOnlyInputIgnored(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -644,16 +505,11 @@ func TestRecordInput_CSIOnlyInputIgnored(t *testing.T) {
 func TestRecordInput_EnterFlush(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	// Type "claude" keystroke by keystroke then press Enter.
 	for _, ch := range "claude" {
@@ -678,8 +534,7 @@ func TestRecordInput_EnterFlush(t *testing.T) {
 
 func TestRecordInput_EmptyEnter(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -695,16 +550,11 @@ func TestRecordInput_EmptyEnter(t *testing.T) {
 func TestRecordInput_MultilineInput(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	// Type two commands separated by Enter in a single call.
 	a.recordInput("%1", "ls\rcd /tmp\r", "keyboard", "")
@@ -724,16 +574,11 @@ func TestRecordInput_MultilineInput(t *testing.T) {
 func TestRecordInput_BackspaceEditing(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	// Type "lss", backspace once to fix typo, then Enter.
 	a.recordInput("%1", "ls", "keyboard", "")
@@ -752,8 +597,7 @@ func TestRecordInput_BackspaceEditing(t *testing.T) {
 
 func TestRecordInput_BackspaceOnEmptyBuffer(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -770,16 +614,11 @@ func TestRecordInput_BackspaceOnEmptyBuffer(t *testing.T) {
 func TestRecordInput_CtrlC(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	// Type partial command then Ctrl+C.
 	a.recordInput("%1", "some-cmd", "keyboard", "")
@@ -797,16 +636,11 @@ func TestRecordInput_CtrlC(t *testing.T) {
 func TestRecordInput_CtrlCDiscardsBuffer(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	// Type partial command, Ctrl+C, then new command + Enter.
 	a.recordInput("%1", "bad-cmd\x03new-cmd\r", "keyboard", "")
@@ -836,16 +670,11 @@ func TestRecordInput_CtrlD(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			a := &App{
-				configPath:          filepath.Join(tmpDir, "config.yaml"),
-				inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+				configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 			}
 			stubRuntimeEventsEmit(t)
-			a.initInputHistory()
-			defer func() {
-				if a.inputHistoryFile != nil {
-					a.inputHistoryFile.Close()
-				}
-			}()
+			a.initInputHistory(a.configState.ConfigPath())
+			defer a.closeInputHistory()
 
 			a.recordInput("%1", tt.input, "keyboard", "")
 
@@ -862,8 +691,7 @@ func TestRecordInput_CtrlD(t *testing.T) {
 
 func TestRecordInput_MaxInputLen(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -885,16 +713,11 @@ func TestRecordInput_MaxInputLen(t *testing.T) {
 func TestRecordInput_DifferentPanesSeparateBuffers(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	a.recordInput("%1", "abc\r", "keyboard", "")
 	a.recordInput("%2", "xyz\r", "keyboard", "")
@@ -919,16 +742,11 @@ func TestRecordInput_DifferentPanesSeparateBuffers(t *testing.T) {
 func TestRecordInput_TimeoutFlush(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	// Type without pressing Enter - should flush via flushLineBuffer (simulated).
 	a.recordInput("%1", "hello", "keyboard", "")
@@ -949,16 +767,11 @@ func TestRecordInput_TimeoutFlush(t *testing.T) {
 func TestRecordInput_RefreshesMetadataForTimeoutFlush(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	a.recordInput("%1", "abc", "keyboard", "session-a")
 	a.recordInput("%1", "def", "sync-input", "session-b")
@@ -981,8 +794,7 @@ func TestRecordInput_RefreshesMetadataForTimeoutFlush(t *testing.T) {
 
 func TestFlushLineBuffer_NoOpForMissingPane(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -997,17 +809,13 @@ func TestFlushLineBuffer_NoOpForMissingPane(t *testing.T) {
 
 func TestFlushLineBuffer_NoOpForEmptyBuffer(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
-	// Initialize buffer with empty content.
-	a.inputLineBufMu.Lock()
-	a.inputLineBuffers = map[string]*inputLineBuffer{
-		"%1": {paneID: "%1", source: "keyboard"},
-	}
-	a.inputLineBufMu.Unlock()
+	// Build and then erase a line buffer so the pane exists with empty content.
+	a.recordInput("%1", "abc", "keyboard", "")
+	a.recordInput("%1", "\x7f\x7f\x7f", "keyboard", "")
 
 	a.flushLineBuffer("%1", shutdownFlushSentinel)
 
@@ -1020,16 +828,11 @@ func TestFlushLineBuffer_NoOpForEmptyBuffer(t *testing.T) {
 func TestFlushAllLineBuffers_PersistsPendingBuffers(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
-	defer func() {
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
-	}()
+	a.initInputHistory(a.configState.ConfigPath())
+	defer a.closeInputHistory()
 
 	// Record to multiple panes without pressing Enter.
 	a.recordInput("%1", "cmd1", "keyboard", "session-a")
@@ -1074,7 +877,7 @@ func TestFlushAllLineBuffers_PersistsPendingBuffers(t *testing.T) {
 	}
 
 	// Verify all persisted to JSONL.
-	content, err := os.ReadFile(a.inputHistoryPath)
+	content, err := os.ReadFile(a.GetInputHistoryFilePath())
 	if err != nil {
 		t.Fatalf("failed to read file: %v", err)
 	}
@@ -1109,28 +912,28 @@ func TestFlushAllLineBuffers_PersistsPendingBuffers(t *testing.T) {
 
 func TestFlushAllLineBuffers_ClearsBufferMap(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
 	a.recordInput("%1", "test", "keyboard", "")
 
 	a.flushAllLineBuffers()
-
-	a.inputLineBufMu.Lock()
-	bufMap := a.inputLineBuffers
-	a.inputLineBufMu.Unlock()
-
-	if bufMap != nil {
-		t.Errorf("expected inputLineBuffers to be nil after flushAll, got %v", bufMap)
+	got := a.GetInputHistory()
+	if len(got) != 1 || got[0].Input != "test" {
+		t.Fatalf("expected one flushed entry after first flushAll, got %#v", got)
+	}
+	// Second flush should be a no-op (no stale buffers / duplicate writes).
+	a.flushAllLineBuffers()
+	got = a.GetInputHistory()
+	if len(got) != 1 {
+		t.Fatalf("expected no additional entries after second flushAll, got %d", len(got))
 	}
 }
 
 func TestFlushAllLineBuffers_NoOpWhenNilMap(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
@@ -1140,20 +943,11 @@ func TestFlushAllLineBuffers_NoOpWhenNilMap(t *testing.T) {
 
 func TestFlushLineBuffer_IgnoresTimerFlushDuringShutdown(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
-		inputLineBuffers: map[string]*inputLineBuffer{
-			"%1": {
-				paneID:   "%1",
-				source:   "keyboard",
-				session:  "session-a",
-				buf:      []rune("pending"),
-				timerGen: 1,
-			},
-		},
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
+	a.recordInput("%1", "pending", "keyboard", "session-a")
 	a.shuttingDown.Store(true)
 	a.flushLineBuffer("%1", 1)
 
@@ -1164,20 +958,11 @@ func TestFlushLineBuffer_IgnoresTimerFlushDuringShutdown(t *testing.T) {
 
 func TestFlushLineBuffer_ShutdownSentinelStillFlushes(t *testing.T) {
 	a := &App{
-		configPath:          "config.yaml",
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
-		inputLineBuffers: map[string]*inputLineBuffer{
-			"%1": {
-				paneID:   "%1",
-				source:   "keyboard",
-				session:  "session-a",
-				buf:      []rune("pending"),
-				timerGen: 7,
-			},
-		},
+		configState: newConfigStateForTest("config.yaml"),
 	}
 	stubRuntimeEventsEmit(t)
 
+	a.recordInput("%1", "pending", "keyboard", "session-a")
 	a.shuttingDown.Store(true)
 	a.flushLineBuffer("%1", shutdownFlushSentinel)
 
@@ -1193,16 +978,13 @@ func TestFlushLineBuffer_ShutdownSentinelStillFlushes(t *testing.T) {
 func TestRecordInput_ConcurrentSafety(t *testing.T) {
 	tmpDir := t.TempDir()
 	a := &App{
-		configPath:          filepath.Join(tmpDir, "config.yaml"),
-		inputHistoryEntries: newInputHistoryRingBuffer(inputHistoryMaxEntries),
+		configState: newConfigStateForTest(filepath.Join(tmpDir, "config.yaml")),
 	}
 	stubRuntimeEventsEmit(t)
-	a.initInputHistory()
+	a.initInputHistory(a.configState.ConfigPath())
 	defer func() {
 		a.flushAllLineBuffers()
-		if a.inputHistoryFile != nil {
-			a.inputHistoryFile.Close()
-		}
+		a.closeInputHistory()
 	}()
 
 	var wg sync.WaitGroup

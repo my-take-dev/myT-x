@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"myT-x/internal/orchestrator"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -16,8 +18,8 @@ import (
 type OrchestratorTask struct {
 	TaskID          string `json:"task_id"`
 	AgentName       string `json:"agent_name"`
-	SenderPaneID    string `json:"sender_pane_id"`
 	AssigneePaneID  string `json:"assignee_pane_id"`
+	SenderPaneID    string `json:"sender_pane_id"`
 	SenderName      string `json:"sender_name"`
 	Status          string `json:"status"`
 	SentAt          string `json:"sent_at"`
@@ -156,12 +158,12 @@ func (a *App) openOrchestratorDB(sessionName string) (*sql.DB, func(), error) {
 		return nil, nil, fmt.Errorf("session name is required")
 	}
 
-	snapshot, err := a.findSessionSnapshotByName(sessionName)
+	snapshot, err := a.sessionService.FindSessionSnapshotByName(sessionName)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	rootPath, err := resolveOrchestratorSourceRootPath(snapshot)
+	rootPath, err := orchestrator.ResolveSourceRootPath(snapshot)
 	if err != nil {
 		return nil, nil, err
 	}

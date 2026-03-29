@@ -343,33 +343,27 @@ func TestDefaultPathFallsBackToAppData(t *testing.T) {
 }
 
 func TestDefaultPathFallsBackToTempDirWhenHomeDirUnavailable(t *testing.T) {
-	originalUserHomeDirFn := userHomeDirFn
-	t.Cleanup(func() {
-		userHomeDirFn = originalUserHomeDirFn
-	})
 	ConsumeDefaultPathWarnings()
 	t.Cleanup(func() {
 		ConsumeDefaultPathWarnings()
 	})
 
-	userHomeDirFn = func() (string, error) {
+	failingHomeDirFn := func() (string, error) {
 		return "", errors.New("simulated home dir resolution failure")
 	}
 	t.Setenv("LOCALAPPDATA", "")
 	t.Setenv("APPDATA", "")
 
-	path := DefaultPath()
+	path := defaultPathWith(failingHomeDirFn)
 	want := filepath.Join(os.TempDir(), "myT-x", "config.yaml")
 	if path != want {
-		t.Fatalf("DefaultPath() = %q, want %q", path, want)
+		t.Fatalf("defaultPathWith() = %q, want %q", path, want)
 	}
 }
 
 func TestDefaultPathLogsWarningWhenFallingBackToTempDir(t *testing.T) {
-	originalUserHomeDirFn := userHomeDirFn
 	originalLogger := slog.Default()
 	t.Cleanup(func() {
-		userHomeDirFn = originalUserHomeDirFn
 		slog.SetDefault(originalLogger)
 	})
 	ConsumeDefaultPathWarnings()
@@ -380,13 +374,13 @@ func TestDefaultPathLogsWarningWhenFallingBackToTempDir(t *testing.T) {
 	var logBuf bytes.Buffer
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
-	userHomeDirFn = func() (string, error) {
+	failingHomeDirFn := func() (string, error) {
 		return "", errors.New("simulated home dir resolution failure")
 	}
 	t.Setenv("LOCALAPPDATA", "")
 	t.Setenv("APPDATA", "")
 
-	_ = DefaultPath()
+	_ = defaultPathWith(failingHomeDirFn)
 
 	if !strings.Contains(logBuf.String(), "using temp dir as config path fallback") {
 		t.Fatalf("log output = %q, want temp-dir fallback warning", logBuf.String())
@@ -394,22 +388,18 @@ func TestDefaultPathLogsWarningWhenFallingBackToTempDir(t *testing.T) {
 }
 
 func TestDefaultPathRecordsUserVisibleWarningOnTempDirFallback(t *testing.T) {
-	originalUserHomeDirFn := userHomeDirFn
-	t.Cleanup(func() {
-		userHomeDirFn = originalUserHomeDirFn
-	})
 	ConsumeDefaultPathWarnings()
 	t.Cleanup(func() {
 		ConsumeDefaultPathWarnings()
 	})
 
-	userHomeDirFn = func() (string, error) {
+	failingHomeDirFn := func() (string, error) {
 		return "", errors.New("simulated home dir resolution failure")
 	}
 	t.Setenv("LOCALAPPDATA", "")
 	t.Setenv("APPDATA", "")
 
-	_ = DefaultPath()
+	_ = defaultPathWith(failingHomeDirFn)
 	warnings := ConsumeDefaultPathWarnings()
 	if len(warnings) == 0 {
 		t.Fatal("ConsumeDefaultPathWarnings() returned no warning for temp-dir fallback")
@@ -1227,13 +1217,9 @@ func TestReadLimitedFileAllowsFileAtExactMaxBytes(t *testing.T) {
 }
 
 func TestLoadPreservesExplicitWorktreeEnabledWhenMetadataParseFails(t *testing.T) {
-	original := yamlUnmarshalConfigMetadataFn
-	t.Cleanup(func() {
-		yamlUnmarshalConfigMetadataFn = original
-	})
-
-	yamlUnmarshalConfigMetadataFn = func([]byte, *map[string]any) error {
-		return errors.New("simulated metadata parse failure")
+	t.Parallel()
+	failingMetadataParser := func([]byte) (map[string]any, error) {
+		return nil, errors.New("simulated metadata parse failure")
 	}
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -1242,9 +1228,9 @@ func TestLoadPreservesExplicitWorktreeEnabledWhenMetadataParseFails(t *testing.T
 		t.Fatalf("write config: %v", err)
 	}
 
-	cfg, err := Load(path)
+	cfg, err := loadWith(failingMetadataParser, path)
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("loadWith() error = %v", err)
 	}
 	if cfg.Worktree.Enabled {
 		t.Fatal("Worktree.Enabled should remain false when metadata parse fails")
@@ -1252,13 +1238,9 @@ func TestLoadPreservesExplicitWorktreeEnabledWhenMetadataParseFails(t *testing.T
 }
 
 func TestLoadAppliesDefaultWorktreeEnabledWhenMetadataParseFailsAndEnabledMissing(t *testing.T) {
-	original := yamlUnmarshalConfigMetadataFn
-	t.Cleanup(func() {
-		yamlUnmarshalConfigMetadataFn = original
-	})
-
-	yamlUnmarshalConfigMetadataFn = func([]byte, *map[string]any) error {
-		return errors.New("simulated metadata parse failure")
+	t.Parallel()
+	failingMetadataParser := func([]byte) (map[string]any, error) {
+		return nil, errors.New("simulated metadata parse failure")
 	}
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -1267,9 +1249,9 @@ func TestLoadAppliesDefaultWorktreeEnabledWhenMetadataParseFailsAndEnabledMissin
 		t.Fatalf("write config: %v", err)
 	}
 
-	cfg, err := Load(path)
+	cfg, err := loadWith(failingMetadataParser, path)
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("loadWith() error = %v", err)
 	}
 	if !cfg.Worktree.Enabled {
 		t.Fatal("Worktree.Enabled should default to true when enabled is omitted")
@@ -1325,18 +1307,14 @@ func TestProbeRawWorktreeEnabled(t *testing.T) {
 }
 
 func TestValidateConfigPathReturnsErrorWhenDefaultConfigDirResolutionFails(t *testing.T) {
-	original := defaultConfigDirFn
-	t.Cleanup(func() {
-		defaultConfigDirFn = original
-	})
-
-	defaultConfigDirFn = func() (string, error) {
+	t.Parallel()
+	failingConfigDirFn := func() (string, error) {
 		return "", errors.New("simulated default dir error")
 	}
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if _, err := validateConfigPath(path); err == nil {
-		t.Fatal("validateConfigPath() expected error when default config dir resolution fails")
+	if _, err := validateConfigPathWith(failingConfigDirFn, path); err == nil {
+		t.Fatal("validateConfigPathWith() expected error when config dir resolution fails")
 	}
 }
 
@@ -2795,10 +2773,9 @@ func TestLoadDefaultSessionDir(t *testing.T) {
 }
 
 func TestValidateDefaultSessionDirTildeExpansion(t *testing.T) {
+	t.Parallel()
 	fakeHome := filepath.Clean(t.TempDir())
-	originalFn := userHomeDirFn
-	userHomeDirFn = func() (string, error) { return fakeHome, nil }
-	t.Cleanup(func() { userHomeDirFn = originalFn })
+	fakeHomeDirFn := func() (string, error) { return fakeHome, nil }
 
 	cases := []struct {
 		name string
@@ -2812,7 +2789,7 @@ func TestValidateDefaultSessionDirTildeExpansion(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Config{DefaultSessionDir: tt.dir}
-			validateDefaultSessionDir(&cfg)
+			validateDefaultSessionDirWith(fakeHomeDirFn, &cfg)
 			if cfg.DefaultSessionDir != tt.want {
 				t.Errorf("DefaultSessionDir = %q, want %q", cfg.DefaultSessionDir, tt.want)
 			}
@@ -2875,12 +2852,11 @@ func TestValidateDefaultSessionDirUnknownEnvironmentVariable(t *testing.T) {
 }
 
 func TestValidateDefaultSessionDirTildeExpansionError(t *testing.T) {
-	originalFn := userHomeDirFn
-	userHomeDirFn = func() (string, error) { return "", errors.New("no home") }
-	t.Cleanup(func() { userHomeDirFn = originalFn })
+	t.Parallel()
+	failingHomeDirFn := func() (string, error) { return "", errors.New("no home") }
 
 	cfg := Config{DefaultSessionDir: "~/projects"}
-	validateDefaultSessionDir(&cfg)
+	validateDefaultSessionDirWith(failingHomeDirFn, &cfg)
 	if cfg.DefaultSessionDir != "" {
 		t.Errorf("DefaultSessionDir = %q, want empty on home dir error", cfg.DefaultSessionDir)
 	}

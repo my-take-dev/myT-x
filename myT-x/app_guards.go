@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"myT-x/internal/mcp"
+	"myT-x/internal/mcpapi"
 	"myT-x/internal/tmux"
 )
 
@@ -76,6 +77,17 @@ func (a *App) requireMCPRegistry() (*mcp.Registry, error) {
 		return nil, errMCPRegistryNotInitialized
 	}
 	return a.mcpRegistry, nil
+}
+
+// errMCPAPIServiceNotInitialized is returned when the MCP API service has not
+// been initialized. Consistent with other require* guard sentinels.
+var errMCPAPIServiceNotInitialized = errors.New("mcp api service is unavailable")
+
+func (a *App) requireMCPAPIService() (*mcpapi.Service, error) {
+	if a.mcpAPIService == nil {
+		return nil, errMCPAPIServiceNotInitialized
+	}
+	return a.mcpAPIService, nil
 }
 
 func (a *App) requireSessionsAndRouter() (*tmux.SessionManager, *tmux.CommandRouter, error) {

@@ -26,12 +26,14 @@ type TaskRepository interface {
 	MarkTaskFailed(ctx context.Context, taskID string) error
 	AbandonTasksByPaneID(ctx context.Context, paneID string) error
 	EndSessionByInstanceID(ctx context.Context, instanceID string) error
+	GetTaskBySendMessageID(ctx context.Context, sendMessageID string) (Task, error)
 }
 
 // MessageRepository はタスクメッセージの永続化操作を定義する。
 type MessageRepository interface {
 	SaveMessage(ctx context.Context, msg TaskMessage) error
 	SaveResponse(ctx context.Context, msg TaskMessage) error
+	GetMessage(ctx context.Context, id string) (TaskMessage, error)
 }
 
 // InstanceRegistry は MCP インスタンスの生存追跡とstaleデータのクリーンアップを提供する。
@@ -66,4 +68,15 @@ type SelfPaneResolver interface {
 // PaneTitleSetter はペインタイトルを設定する。
 type PaneTitleSetter interface {
 	SetPaneTitle(ctx context.Context, paneID string, title string) error
+}
+
+// PaneSplitter は既存ペインを分割して新ペインを作成する。
+type PaneSplitter interface {
+	SplitPane(ctx context.Context, targetPaneID string, horizontal bool) (string, error)
+}
+
+// PanePasteSender はブラケットペーストモードでテキストを送信する。
+// Claude Code等、\nをsubmitとして解釈するCLI向け。
+type PanePasteSender interface {
+	SendKeysPaste(ctx context.Context, paneID string, text string) error
 }

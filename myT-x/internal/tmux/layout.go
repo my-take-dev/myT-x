@@ -149,15 +149,20 @@ func buildEvenSplit(paneIDs []int, dir SplitDirection) *LayoutNode {
 	}
 }
 
-// buildMainSplit creates a main pane (60%) + evenly split sub panes.
+// buildMainSplit creates a main pane + evenly split sub panes.
+//
+// Simple Mode の均一サイズ要件により、各ペインは 1/N の面積を受け取る。
+// even-* との違いはトポロジー: main-vertical は左にメイン・右にサブ縦積み、
+// main-horizontal は上にメイン・下にサブ横並び。面積は均一だが配置パターンが異なる。
 func buildMainSplit(paneIDs []int, mainDir, subDir SplitDirection) *LayoutNode {
-	if len(paneIDs) <= 2 {
+	// 2 panes: even split にフォールバック（main/sub の区別不要）
+	if len(paneIDs) == 2 {
 		return buildEvenSplit(paneIDs, mainDir)
 	}
 	return &LayoutNode{
 		Type:      LayoutSplit,
 		Direction: mainDir,
-		Ratio:     0.6,
+		Ratio:     1.0 / float64(len(paneIDs)),
 		Children: [2]*LayoutNode{
 			newLeafLayout(paneIDs[0]),
 			buildEvenSplit(paneIDs[1:], subDir),

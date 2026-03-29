@@ -167,6 +167,77 @@ func (e *RealExecutor) sendKeysChunked(ctx context.Context, paneID string, text 
 	return e.sendEnter(ctx, paneID)
 }
 
+// SplitPane は既存ペインを分割して新ペインを作成し、新ペインIDを返す。
+// horizontal=true で左右分割（-h）、false で上下分割。
+func (e *RealExecutor) SplitPane(ctx context.Context, targetPaneID string, horizontal bool) (string, error) {
+	if err := ValidatePaneID(targetPaneID); err != nil {
+		return "", err
+	}
+	args := []string{"split-window", "-t", targetPaneID}
+	if horizontal {
+		args = append(args, "-h")
+	}
+	args = append(args, "-P", "-F", "#{pane_id}")
+	out, err := newTmuxCommand(ctx, args...).Output()
+	if err != nil {
+		return "", fmt.Errorf("split-window: %w", err)
+	}
+	newPaneID := strings.TrimSpace(string(out))
+	if err := ValidatePaneID(newPaneID); err != nil {
+		return "", fmt.Errorf("split-window returned invalid pane id %q: %w", newPaneID, err)
+	}
+	return newPaneID, nil
+}
+
+// SendKeysPaste はブラケットペーストモードでテキストを送信する。
+// ESC[200~ → テキスト（チャンク送信） → ESC[201~ → C-m の順で送信する。
+// チャンク送信失敗時もペーストモード終了を保証する。
+func (e *RealExecutor) SendKeysPaste(ctx context.Context, paneID string, text string) error {
+	if err := ValidatePaneID(paneID); err != nil {
+		return err
+	}
+	text = strings.TrimRight(text, "\n\r")
+
+	if err := e.selectPane(ctx, paneID); err != nil {
+		return err
+	}
+
+	// ペーストモード開始
+	if err := e.sendText(ctx, paneID, "\x1b[200~"); err != nil {
+		return fmt.Errorf("send paste-start: %w", err)
+	}
+
+	// テキスト送信（チャンク）
+	runes := []rune(text)
+	var sendErr error
+	for i := 0; i < len(runes); i += maxSendKeysLength {
+		end := min(i+maxSendKeysLength, len(runes))
+		chunk := string(runes[i:end])
+		if err := e.sendText(ctx, paneID, chunk); err != nil {
+			sendErr = fmt.Errorf("send paste-text: %w", err)
+			break
+		}
+		if err := sleepContext(ctx, sendKeysDelay); err != nil {
+			sendErr = err
+			break
+		}
+	}
+
+	// ペーストモード終了（テキスト送信失敗時も必ず実行）
+	if endErr := e.sendText(ctx, paneID, "\x1b[201~"); endErr != nil {
+		if sendErr != nil {
+			return sendErr
+		}
+		return fmt.Errorf("send paste-end: %w", endErr)
+	}
+
+	if sendErr != nil {
+		return sendErr
+	}
+
+	return e.sendEnter(ctx, paneID)
+}
+
 // CapturePaneOutput はペインの表示内容を取得する。
 func (e *RealExecutor) CapturePaneOutput(ctx context.Context, paneID string, lines int) (string, error) {
 	if err := ValidatePaneID(paneID); err != nil {

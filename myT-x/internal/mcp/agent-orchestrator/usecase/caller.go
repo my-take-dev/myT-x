@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"time"
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
 )
@@ -56,4 +57,16 @@ func logf(logger *log.Logger, format string, args ...any) {
 func operationError(logger *log.Logger, public string, err error) error {
 	logf(logger, "%s: %v", public, err)
 	return errors.New(public)
+}
+
+// sleepContext はコンテキストキャンセルに対応した sleep。
+func sleepContext(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

@@ -78,38 +78,6 @@ func (m *SessionManager) Snapshot() []SessionSnapshot {
 	return cloneSessionSnapshots(m.snapshotCache)
 }
 
-// Clone returns a deep copy of the SessionSnapshot.
-// S-1: Extracted from the former cloneSessionSnapshots package-level function
-// into a method on SessionSnapshot for better discoverability and testability.
-func (ss SessionSnapshot) Clone() SessionSnapshot {
-	out := ss
-
-	if ss.Worktree != nil {
-		worktreeCopy := *ss.Worktree
-		out.Worktree = &worktreeCopy
-	}
-
-	if len(ss.Windows) == 0 {
-		out.Windows = []WindowSnapshot{}
-		return out
-	}
-
-	out.Windows = make([]WindowSnapshot, len(ss.Windows))
-	for j := range ss.Windows {
-		window := ss.Windows[j]
-		out.Windows[j] = window
-		out.Windows[j].Layout = cloneLayout(window.Layout)
-
-		if len(window.Panes) == 0 {
-			out.Windows[j].Panes = []PaneSnapshot{}
-			continue
-		}
-		out.Windows[j].Panes = make([]PaneSnapshot, len(window.Panes))
-		copy(out.Windows[j].Panes, window.Panes)
-	}
-	return out
-}
-
 // cloneSessionSnapshots creates independent deep copies of a snapshot slice.
 // Delegates to SessionSnapshot.Clone() for each element.
 func cloneSessionSnapshots(src []SessionSnapshot) []SessionSnapshot {

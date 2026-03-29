@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,8 @@ type Config struct {
 	Capturer     domain.PaneCapturer
 	SelfResolver domain.SelfPaneResolver
 	TitleSetter  domain.PaneTitleSetter
+	Splitter     domain.PaneSplitter
+	PasteSender  domain.PanePasteSender
 }
 
 // Runtime は MCP サーバーとライフサイクルを管理する。
@@ -120,7 +123,10 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		}
 	}
 
-	if sender == nil || lister == nil || capturer == nil || resolver == nil || titleSetter == nil {
+	splitter := normalized.Splitter
+	pasteSender := normalized.PasteSender
+
+	if sender == nil || lister == nil || capturer == nil || resolver == nil || titleSetter == nil || splitter == nil || pasteSender == nil {
 		exec := tmux.NewExecutor()
 		if sender == nil {
 			sender = exec
@@ -142,17 +148,43 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		if titleSetter == nil {
 			titleSetter = exec
 		}
+		if splitter == nil {
+			splitter = exec
+		}
+		if pasteSender == nil {
+			pasteSender = exec
+		}
 	}
 	stickyResolver := newStickySelfResolver(resolver, normalized.Logger)
 
 	// usecase サービス構築
 	agentSvc := usecase.NewAgentService(agentRepo, stickyResolver, lister, titleSetter, normalized.Logger)
 	dispatchSvc := usecase.NewTaskDispatchService(agentRepo, taskRepo, messageRepo, sender, normalized.Logger)
-	querySvc := usecase.NewTaskQueryService(agentRepo, taskRepo, stickyResolver, normalized.Logger)
+	querySvc := usecase.NewTaskQueryService(agentRepo, taskRepo, messageRepo, stickyResolver, normalized.Logger)
 	responseSvc := usecase.NewResponseService(agentRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
 	captureSvc := usecase.NewCaptureService(agentRepo, capturer, stickyResolver, normalized.Logger)
 
-	handler := mcptool.NewHandler(agentSvc, dispatchSvc, querySvc, responseSvc, captureSvc, instanceID)
+	// projectRoot: DBPath を絶対パスに変換してから2階層上を導出
+	// （例: /project/.myT-x/orchestrator.db → /project）
+	absDBPath, err := filepath.Abs(normalized.DBPath)
+	if err != nil {
+		var cleanupErrs []error
+		if st != nil {
+			if closeErr := st.Close(); closeErr != nil {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("close store: %w", closeErr))
+			}
+		}
+		if joined := errors.Join(cleanupErrs...); joined != nil {
+			return nil, fmt.Errorf("resolve db path: %w (cleanup: %v)", err, joined)
+		}
+		return nil, fmt.Errorf("resolve db path: %w", err)
+	}
+	projectRoot := filepath.Dir(filepath.Dir(absDBPath))
+	memberSvc := usecase.NewMemberBootstrapService(
+		agentRepo, stickyResolver, splitter, titleSetter, sender, pasteSender, projectRoot, normalized.Logger,
+	)
+
+	handler := mcptool.NewHandler(agentSvc, dispatchSvc, querySvc, responseSvc, captureSvc, memberSvc, instanceID)
 	registry, err := handler.BuildRegistry()
 	if err != nil {
 		var cleanupErrs []error

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,14 +13,23 @@ import (
 	"myT-x/internal/ipc"
 )
 
-func executeMCPCLIForTest(args []string, stdin io.Reader, stdout io.Writer) (int, string) {
-	var stderr bytes.Buffer
-	exitCode := executeMCPCLI(args, stdin, stdout, &stderr)
-	return exitCode, stderr.String()
+// newTestMCPCLIDeps creates a mcpCLIDeps with sensible defaults for testing.
+// Fields can be overridden after creation.
+func newTestMCPCLIDeps() mcpCLIDeps {
+	return mcpCLIDeps{
+		sendIPCRequest:      func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) { return ipc.TmuxResponse{}, nil },
+		platformSupported:   func() bool { return true },
+		pipeName:            func() string { return `\\.\pipe\myT-x-test` },
+		resolveSessionByEnv: func() string { return "" },
+		resolveSessionByCwd: func(_, _ string) (string, error) { return "", errors.New("not found") },
+		getwd:               func() (string, error) { return "/tmp", nil },
+	}
 }
 
 func TestParseMCPStdioCLI(t *testing.T) {
-	cfg, err := parseMCPStdioCLI([]string{"--session", "session-a", "--mcp", "gopls"})
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	cfg, err := d.parseMCPStdioCLI([]string{"--session", "session-a", "--mcp", "gopls"})
 	if err != nil {
 		t.Fatalf("parseMCPStdioCLI error = %v", err)
 	}
@@ -32,7 +42,9 @@ func TestParseMCPStdioCLI(t *testing.T) {
 }
 
 func TestParseMCPStdioCLI_DefaultDialTimeout(t *testing.T) {
-	cfg, err := parseMCPStdioCLI([]string{"--session", "session-a", "--mcp", "gopls"})
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	cfg, err := d.parseMCPStdioCLI([]string{"--session", "session-a", "--mcp", "gopls"})
 	if err != nil {
 		t.Fatalf("parseMCPStdioCLI error = %v", err)
 	}
@@ -45,30 +57,24 @@ func TestParseMCPStdioCLI_DefaultDialTimeout(t *testing.T) {
 }
 
 func TestParseMCPStdioCLI_MissingSession(t *testing.T) {
-	origEnv := resolveSessionByEnvFn
-	origCwd := resolveSessionByCwdFn
-	origGetwd := getwdFn
-	t.Cleanup(func() {
-		resolveSessionByEnvFn = origEnv
-		resolveSessionByCwdFn = origCwd
-		getwdFn = origGetwd
-	})
-	resolveSessionByEnvFn = func() string { return "" }
-	resolveSessionByCwdFn = func(_, _ string) (string, error) { return "", errors.New("not found") }
-	getwdFn = func() (string, error) { return "/tmp", nil }
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.resolveSessionByEnv = func() string { return "" }
+	d.resolveSessionByCwd = func(_, _ string) (string, error) { return "", errors.New("not found") }
+	d.getwd = func() (string, error) { return "/tmp", nil }
 
-	_, err := parseMCPStdioCLI([]string{"--mcp", "gopls"})
+	_, err := d.parseMCPStdioCLI([]string{"--mcp", "gopls"})
 	if err == nil {
 		t.Fatal("parseMCPStdioCLI should fail when --session is missing and all fallbacks fail")
 	}
 }
 
 func TestParseMCPStdioCLI_FallbackToEnvVar(t *testing.T) {
-	origEnv := resolveSessionByEnvFn
-	t.Cleanup(func() { resolveSessionByEnvFn = origEnv })
-	resolveSessionByEnvFn = func() string { return "env-session" }
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.resolveSessionByEnv = func() string { return "env-session" }
 
-	cfg, err := parseMCPStdioCLI([]string{"--mcp", "gopls"})
+	cfg, err := d.parseMCPStdioCLI([]string{"--mcp", "gopls"})
 	if err != nil {
 		t.Fatalf("parseMCPStdioCLI error = %v", err)
 	}
@@ -78,24 +84,18 @@ func TestParseMCPStdioCLI_FallbackToEnvVar(t *testing.T) {
 }
 
 func TestParseMCPStdioCLI_FallbackToIPCResolve(t *testing.T) {
-	origEnv := resolveSessionByEnvFn
-	origCwd := resolveSessionByCwdFn
-	origGetwd := getwdFn
-	t.Cleanup(func() {
-		resolveSessionByEnvFn = origEnv
-		resolveSessionByCwdFn = origCwd
-		getwdFn = origGetwd
-	})
-	resolveSessionByEnvFn = func() string { return "" }
-	getwdFn = func() (string, error) { return "/my/repo", nil }
-	resolveSessionByCwdFn = func(_, cwd string) (string, error) {
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.resolveSessionByEnv = func() string { return "" }
+	d.getwd = func() (string, error) { return "/my/repo", nil }
+	d.resolveSessionByCwd = func(_, cwd string) (string, error) {
 		if cwd != "/my/repo" {
 			t.Fatalf("cwd = %q, want %q", cwd, "/my/repo")
 		}
 		return "ipc-session", nil
 	}
 
-	cfg, err := parseMCPStdioCLI([]string{"--mcp", "gopls"})
+	cfg, err := d.parseMCPStdioCLI([]string{"--mcp", "gopls"})
 	if err != nil {
 		t.Fatalf("parseMCPStdioCLI error = %v", err)
 	}
@@ -105,11 +105,11 @@ func TestParseMCPStdioCLI_FallbackToIPCResolve(t *testing.T) {
 }
 
 func TestParseMCPStdioCLI_FlagTakesPriority(t *testing.T) {
-	origEnv := resolveSessionByEnvFn
-	t.Cleanup(func() { resolveSessionByEnvFn = origEnv })
-	resolveSessionByEnvFn = func() string { return "env-session" }
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.resolveSessionByEnv = func() string { return "env-session" }
 
-	cfg, err := parseMCPStdioCLI([]string{"--session", "flag-session", "--mcp", "gopls"})
+	cfg, err := d.parseMCPStdioCLI([]string{"--session", "flag-session", "--mcp", "gopls"})
 	if err != nil {
 		t.Fatalf("parseMCPStdioCLI error = %v", err)
 	}
@@ -119,14 +119,10 @@ func TestParseMCPStdioCLI_FlagTakesPriority(t *testing.T) {
 }
 
 func TestResolveMCPStdioViaIPC(t *testing.T) {
-	originalSend := sendIPCRequestFn
-	originalPipeNameFn := mcpCLIPipeNameFn
-	t.Cleanup(func() {
-		sendIPCRequestFn = originalSend
-		mcpCLIPipeNameFn = originalPipeNameFn
-	})
-	mcpCLIPipeNameFn = func() string { return `\\.\pipe\myT-x-explicit` }
-	sendIPCRequestFn = func(_ string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.pipeName = func() string { return `\\.\pipe\myT-x-explicit` }
+	d.sendIPCRequest = func(_ string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
 		if req.Command != "mcp-resolve-stdio" {
 			t.Fatalf("command = %q, want %q", req.Command, "mcp-resolve-stdio")
 		}
@@ -135,7 +131,7 @@ func TestResolveMCPStdioViaIPC(t *testing.T) {
 			Stdout:   `{"session_name":"s1","mcp_id":"lsp-gopls","pipe_path":"\\\\.\\pipe\\myT-x-mcp-user-s1-lsp-gopls"}`,
 		}, nil
 	}
-	resolved, err := resolveMCPStdioViaIPC("s1", "gopls")
+	resolved, err := d.resolveMCPStdioViaIPC("s1", "gopls")
 	if err != nil {
 		t.Fatalf("resolveMCPStdioViaIPC error = %v", err)
 	}
@@ -148,14 +144,10 @@ func TestResolveMCPStdioViaIPC(t *testing.T) {
 }
 
 func TestResolveMCPStdioViaIPC_PassesExplicitPipeName(t *testing.T) {
-	originalSend := sendIPCRequestFn
-	originalPipeNameFn := mcpCLIPipeNameFn
-	t.Cleanup(func() {
-		sendIPCRequestFn = originalSend
-		mcpCLIPipeNameFn = originalPipeNameFn
-	})
-	mcpCLIPipeNameFn = func() string { return `\\.\pipe\myT-x-explicit` }
-	sendIPCRequestFn = func(pipeName string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.pipeName = func() string { return `\\.\pipe\myT-x-explicit` }
+	d.sendIPCRequest = func(pipeName string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
 		if pipeName != `\\.\pipe\myT-x-explicit` {
 			t.Fatalf("pipeName = %q, want explicit default pipe name", pipeName)
 		}
@@ -164,23 +156,21 @@ func TestResolveMCPStdioViaIPC_PassesExplicitPipeName(t *testing.T) {
 			Stdout:   `{"session_name":"s1","mcp_id":"lsp-gopls","pipe_path":"\\\\.\\pipe\\myT-x-mcp-user-s1-lsp-gopls"}`,
 		}, nil
 	}
-	if _, err := resolveMCPStdioViaIPC("s1", "gopls"); err != nil {
+	if _, err := d.resolveMCPStdioViaIPC("s1", "gopls"); err != nil {
 		t.Fatalf("resolveMCPStdioViaIPC error = %v", err)
 	}
 }
 
 func TestResolveMCPStdioViaIPC_RejectsMismatchedSessionName(t *testing.T) {
-	originalSend := sendIPCRequestFn
-	t.Cleanup(func() {
-		sendIPCRequestFn = originalSend
-	})
-	sendIPCRequestFn = func(_ string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.sendIPCRequest = func(_ string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
 		return ipc.TmuxResponse{
 			ExitCode: 0,
 			Stdout:   `{"session_name":"other","mcp_id":"lsp-gopls","pipe_path":"\\\\.\\pipe\\myT-x-mcp-user-other-lsp-gopls"}`,
 		}, nil
 	}
-	_, err := resolveMCPStdioViaIPC("s1", "gopls")
+	_, err := d.resolveMCPStdioViaIPC("s1", "gopls")
 	if err == nil {
 		t.Fatal("resolveMCPStdioViaIPC should fail for mismatched session_name")
 	}
@@ -190,17 +180,15 @@ func TestResolveMCPStdioViaIPC_RejectsMismatchedSessionName(t *testing.T) {
 }
 
 func TestResolveMCPStdioViaIPC_AllowsTrimmedCaseInsensitiveSessionName(t *testing.T) {
-	originalSend := sendIPCRequestFn
-	t.Cleanup(func() {
-		sendIPCRequestFn = originalSend
-	})
-	sendIPCRequestFn = func(_ string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.sendIPCRequest = func(_ string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
 		return ipc.TmuxResponse{
 			ExitCode: 0,
 			Stdout:   `{"session_name":" S1 ","mcp_id":"lsp-gopls","pipe_path":"\\\\.\\pipe\\myT-x-mcp-user-s1-lsp-gopls"}`,
 		}, nil
 	}
-	resolved, err := resolveMCPStdioViaIPC("s1", "gopls")
+	resolved, err := d.resolveMCPStdioViaIPC("s1", "gopls")
 	if err != nil {
 		t.Fatalf("resolveMCPStdioViaIPC error = %v", err)
 	}
@@ -210,17 +198,15 @@ func TestResolveMCPStdioViaIPC_AllowsTrimmedCaseInsensitiveSessionName(t *testin
 }
 
 func TestResolveMCPStdioViaIPC_ConnectionErrorShowsGUIHint(t *testing.T) {
-	originalSend := sendIPCRequestFn
-	t.Cleanup(func() {
-		sendIPCRequestFn = originalSend
-	})
+	t.Parallel()
 	callCount := 0
-	sendIPCRequestFn = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+	d := newTestMCPCLIDeps()
+	d.sendIPCRequest = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
 		callCount++
 		return ipc.TmuxResponse{}, &net.OpError{Op: "dial", Err: errors.New("pipe unavailable")}
 	}
 
-	_, err := resolveMCPStdioViaIPC("s1", "gopls")
+	_, err := d.resolveMCPStdioViaIPC("s1", "gopls")
 	if err == nil {
 		t.Fatal("resolveMCPStdioViaIPC should fail when IPC is unavailable")
 	}
@@ -228,17 +214,15 @@ func TestResolveMCPStdioViaIPC_ConnectionErrorShowsGUIHint(t *testing.T) {
 		t.Fatalf("error = %v, want GUI startup hint", err)
 	}
 	if callCount != ipcResolveMaxRetries {
-		t.Fatalf("sendIPCRequestFn called %d times, want %d (all retries exhausted)", callCount, ipcResolveMaxRetries)
+		t.Fatalf("sendIPCRequest called %d times, want %d (all retries exhausted)", callCount, ipcResolveMaxRetries)
 	}
 }
 
 func TestResolveMCPStdioViaIPC_ConnectionErrorRetriesAndSucceeds(t *testing.T) {
-	originalSend := sendIPCRequestFn
-	t.Cleanup(func() {
-		sendIPCRequestFn = originalSend
-	})
+	t.Parallel()
 	callCount := 0
-	sendIPCRequestFn = func(_ string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+	d := newTestMCPCLIDeps()
+	d.sendIPCRequest = func(_ string, req ipc.TmuxRequest) (ipc.TmuxResponse, error) {
 		callCount++
 		if callCount <= 2 {
 			return ipc.TmuxResponse{}, &net.OpError{Op: "dial", Err: errors.New("pipe unavailable")}
@@ -247,7 +231,7 @@ func TestResolveMCPStdioViaIPC_ConnectionErrorRetriesAndSucceeds(t *testing.T) {
 		return ipc.TmuxResponse{ExitCode: 0, Stdout: payload}, nil
 	}
 
-	resolved, err := resolveMCPStdioViaIPC("s1", "gopls")
+	resolved, err := d.resolveMCPStdioViaIPC("s1", "gopls")
 	if err != nil {
 		t.Fatalf("resolveMCPStdioViaIPC error = %v, want success after retry", err)
 	}
@@ -255,22 +239,20 @@ func TestResolveMCPStdioViaIPC_ConnectionErrorRetriesAndSucceeds(t *testing.T) {
 		t.Fatalf("PipePath = %q, want %q", resolved.PipePath, `\\.\pipe\test`)
 	}
 	if callCount != 3 {
-		t.Fatalf("sendIPCRequestFn called %d times, want 3 (2 failures + 1 success)", callCount)
+		t.Fatalf("sendIPCRequest called %d times, want 3 (2 failures + 1 success)", callCount)
 	}
 }
 
 func TestResolveMCPStdioViaIPC_NonConnectionErrorDoesNotRetry(t *testing.T) {
-	originalSend := sendIPCRequestFn
-	t.Cleanup(func() {
-		sendIPCRequestFn = originalSend
-	})
+	t.Parallel()
 	callCount := 0
-	sendIPCRequestFn = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+	d := newTestMCPCLIDeps()
+	d.sendIPCRequest = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
 		callCount++
 		return ipc.TmuxResponse{}, errors.New("protocol error")
 	}
 
-	_, err := resolveMCPStdioViaIPC("s1", "gopls")
+	_, err := d.resolveMCPStdioViaIPC("s1", "gopls")
 	if err == nil {
 		t.Fatal("resolveMCPStdioViaIPC should fail for non-connection errors")
 	}
@@ -278,23 +260,21 @@ func TestResolveMCPStdioViaIPC_NonConnectionErrorDoesNotRetry(t *testing.T) {
 		t.Fatalf("error = %v, want ipc request failed error", err)
 	}
 	if callCount != 1 {
-		t.Fatalf("sendIPCRequestFn called %d times, want 1 (no retry for non-connection errors)", callCount)
+		t.Fatalf("sendIPCRequest called %d times, want 1 (no retry for non-connection errors)", callCount)
 	}
 }
 
 func TestResolveMCPStdioViaIPC_InvalidJSONPayload(t *testing.T) {
-	originalSend := sendIPCRequestFn
-	t.Cleanup(func() {
-		sendIPCRequestFn = originalSend
-	})
-	sendIPCRequestFn = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.sendIPCRequest = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
 		return ipc.TmuxResponse{
 			ExitCode: 0,
 			Stdout:   "{invalid json",
 		}, nil
 	}
 
-	_, err := resolveMCPStdioViaIPC("s1", "gopls")
+	_, err := d.resolveMCPStdioViaIPC("s1", "gopls")
 	if err == nil {
 		t.Fatal("resolveMCPStdioViaIPC should fail for invalid JSON")
 	}
@@ -304,18 +284,16 @@ func TestResolveMCPStdioViaIPC_InvalidJSONPayload(t *testing.T) {
 }
 
 func TestResolveMCPStdioViaIPC_EmptyStderrFallsBackToUnknownError(t *testing.T) {
-	originalSend := sendIPCRequestFn
-	t.Cleanup(func() {
-		sendIPCRequestFn = originalSend
-	})
-	sendIPCRequestFn = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.sendIPCRequest = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
 		return ipc.TmuxResponse{
 			ExitCode: 1,
 			Stderr:   "   ",
 		}, nil
 	}
 
-	_, err := resolveMCPStdioViaIPC("s1", "gopls")
+	_, err := d.resolveMCPStdioViaIPC("s1", "gopls")
 	if err == nil {
 		t.Fatal("resolveMCPStdioViaIPC should fail for non-zero exit code")
 	}
@@ -325,27 +303,50 @@ func TestResolveMCPStdioViaIPC_EmptyStderrFallsBackToUnknownError(t *testing.T) 
 }
 
 func TestExecuteMCPCLI_RejectsUnsupportedPlatformBeforeIPC(t *testing.T) {
-	originalPlatformSupported := mcpStdioPlatformSupportedFn
-	originalSend := sendIPCRequestFn
-	t.Cleanup(func() {
-		mcpStdioPlatformSupportedFn = originalPlatformSupported
-		sendIPCRequestFn = originalSend
-	})
-	mcpStdioPlatformSupportedFn = func() bool { return false }
-	sendIPCRequestFn = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
-		t.Fatal("sendIPCRequestFn should not be called on unsupported platforms")
+	t.Parallel()
+	d := newTestMCPCLIDeps()
+	d.platformSupported = func() bool { return false }
+	d.sendIPCRequest = func(string, ipc.TmuxRequest) (ipc.TmuxResponse, error) {
+		t.Fatal("sendIPCRequest should not be called on unsupported platforms")
 		return ipc.TmuxResponse{}, nil
 	}
 
-	exitCode, stderr := executeMCPCLIForTest(
+	var stderr bytes.Buffer
+	exitCode := d.executeMCPCLIWith(
 		[]string{"stdio", "--session", "s1", "--mcp", "gopls"},
 		strings.NewReader(""),
 		io.Discard,
+		&stderr,
 	)
 	if exitCode != 1 {
 		t.Fatalf("exitCode = %d, want 1", exitCode)
 	}
-	if !strings.Contains(stderr, "supported only on Windows") {
-		t.Fatalf("stderr = %q, want unsupported platform message", stderr)
+	if !strings.Contains(stderr.String(), "supported only on Windows") {
+		t.Fatalf("stderr = %q, want unsupported platform message", stderr.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Field count guard tests
+// ---------------------------------------------------------------------------
+
+func TestMCPCLIDepsFieldCount(t *testing.T) {
+	t.Parallel()
+	const expectedFields = 6
+	actual := reflect.TypeFor[mcpCLIDeps]().NumField()
+	if actual != expectedFields {
+		t.Fatalf("mcpCLIDeps has %d fields, expected %d — update newTestMCPCLIDeps and defaultMCPCLIDeps for new fields", actual, expectedFields)
+	}
+}
+
+func TestDefaultMCPCLIDepsAllFieldsNonNil(t *testing.T) {
+	t.Parallel()
+	d := defaultMCPCLIDeps()
+	v := reflect.ValueOf(d)
+	for i := range v.NumField() {
+		f := v.Field(i)
+		if f.Kind() == reflect.Func && f.IsNil() {
+			t.Errorf("defaultMCPCLIDeps().%s is nil", v.Type().Field(i).Name)
+		}
 	}
 }

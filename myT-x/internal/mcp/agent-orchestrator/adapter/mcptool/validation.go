@@ -9,19 +9,26 @@ import (
 )
 
 const (
-	maxAgentNameLen = 64
-	maxRoleLen      = 120
-	maxSkillLen     = 100
-	maxSkillDescLen = 400
-	maxSkills       = 20
-	maxMessageLen   = 8000
-	maxTaskIDLen    = 64
-	maxCaptureLines = 200
+	maxAgentNameLen     = 64
+	maxRoleLen          = 120
+	maxSkillLen         = 100
+	maxSkillDescLen     = 400
+	maxSkills           = 20
+	maxMessageLen       = 8000
+	maxTaskIDLen        = 64
+	maxCaptureLines     = 200
+	maxPaneTitleLen     = 30
+	maxCommandLen       = 100
+	maxCustomMessageLen = 2000
+	maxTeamNameLen      = 64
+	maxArgs             = 20
+	maxArgLen           = 200
 )
 
 var (
-	agentNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	taskIDPattern    = regexp.MustCompile(`^t-[A-Za-z0-9]+$`)
+	agentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	taskIDPattern        = regexp.MustCompile(`^t-[A-Za-z0-9]+$`)
+	sendMessageIDPattern = regexp.MustCompile(`^m-[A-Za-z0-9]+$`)
 )
 
 func requiredAgentName(args map[string]any, key string) (string, error) {
@@ -65,6 +72,17 @@ func requiredTaskID(args map[string]any, key string) (string, error) {
 func validateTaskIDString(key string, value string) (string, error) {
 	if !taskIDPattern.MatchString(value) {
 		return "", fmt.Errorf("%s must match %s", key, taskIDPattern.String())
+	}
+	return value, nil
+}
+
+func requiredSendMessageID(args map[string]any, key string) (string, error) {
+	value, err := requiredString(args, key, maxTaskIDLen)
+	if err != nil {
+		return "", err
+	}
+	if !sendMessageIDPattern.MatchString(value) {
+		return "", fmt.Errorf("%s must match %s", key, sendMessageIDPattern.String())
 	}
 	return value, nil
 }
@@ -240,5 +258,62 @@ func optionalStatusFilter(args map[string]any, key string, defaultValue string) 
 		return status, nil
 	default:
 		return "", fmt.Errorf("%s must be one of all, pending, completed, failed, abandoned", key)
+	}
+}
+
+// optionalPaneID は任意のペインIDを取得する。未指定時は空文字を返す。
+func optionalPaneID(args map[string]any, key string) (string, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return "", nil
+	}
+	str, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	if strings.TrimSpace(str) == "" {
+		return "", nil
+	}
+	if err := domain.ValidatePaneID(str); err != nil {
+		return "", err
+	}
+	return str, nil
+}
+
+// optionalIntBounded は任意の整数パラメータを範囲付きで取得する。
+func optionalIntBounded(args map[string]any, key string, defaultValue, minVal, maxVal int) (int, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return defaultValue, nil
+	}
+	number, ok := value.(float64)
+	if !ok {
+		return 0, fmt.Errorf("%s must be a number", key)
+	}
+	if number != float64(int(number)) {
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	n := int(number)
+	if n < minVal || n > maxVal {
+		return 0, fmt.Errorf("%s must be between %d and %d", key, minVal, maxVal)
+	}
+	return n, nil
+}
+
+// optionalSplitDirection は分割方向を取得する。"horizontal" または "vertical"。
+func optionalSplitDirection(args map[string]any, key string, defaultValue string) (string, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return defaultValue, nil
+	}
+	str, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	switch str {
+	case "horizontal", "vertical":
+		return str, nil
+	default:
+		return "", fmt.Errorf("%s must be one of horizontal, vertical", key)
 	}
 }

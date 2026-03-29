@@ -24,24 +24,6 @@ import (
 // aliased into internal state. This completes the bidirectional isolation
 // contract for pane environment maps.
 
-// PaneContextSnapshot is a lock-safe snapshot of pane-owned session/window state.
-type PaneContextSnapshot struct {
-	SessionID   int
-	SessionName string
-	WindowID    int
-	Layout      *LayoutNode
-	Env         map[string]string
-	Title       string
-	// SessionWorkDir is the effective working directory for the session.
-	// Worktree sessions use Worktree.Path; regular sessions use RootPath.
-	SessionWorkDir string
-	// PaneWidth and PaneHeight are the pane's column/row dimensions at snapshot
-	// time. Added for I-02 so that handleResizePane can read fallback dimensions
-	// under RLock instead of dereferencing the live pointer after lock release.
-	PaneWidth  int
-	PaneHeight int
-}
-
 // parseSessionName extracts the session name from a target string.
 // If name contains a colon, only the portion before it is used
 // (e.g., "mysession:0" -> "mysession").
@@ -320,10 +302,7 @@ func (m *SessionManager) GetPaneContextSnapshot(paneID int) (PaneContextSnapshot
 
 	// Resolve effective working directory.
 	sess := pane.Window.Session
-	workDir := strings.TrimSpace(sess.RootPath)
-	if wt := sess.Worktree; wt != nil && strings.TrimSpace(wt.Path) != "" {
-		workDir = strings.TrimSpace(wt.Path)
-	}
+	workDir := sessionWorkDir(sess)
 
 	return PaneContextSnapshot{
 		SessionID:      sess.ID,
@@ -360,12 +339,6 @@ func (m *SessionManager) HasPane(paneID string) bool {
 	_, ok := m.panes[id]
 	m.mu.RUnlock()
 	return ok
-}
-
-// PanePIDInfo はペインIDとシェルプロセスPIDの組を表す。
-type PanePIDInfo struct {
-	PaneID string
-	PID    int
 }
 
 // GetSessionPanePIDs はセッション内の全ペインのPID情報を返す。

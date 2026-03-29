@@ -1,4 +1,5 @@
 import {useCallback, useState} from "react";
+import {useI18n} from "../../../../i18n";
 import {isSchedulerInfiniteCount} from "./usePaneScheduler";
 import type {SchedulerEntry, SchedulerTemplate} from "./usePaneScheduler";
 
@@ -13,6 +14,9 @@ interface SchedulerListProps {
 }
 
 export function SchedulerList({entries, onStart, onDelete, onEdit, onStop, onNew, onSaveTemplate}: SchedulerListProps) {
+    const {language, t} = useI18n();
+    const tr = (key: string, jaText: string, enText: string) =>
+        t(key, language === "ja" ? jaText : enText);
     const [savingEntryID, setSavingEntryID] = useState<string | null>(null);
 
     const handleSaveTemplate = useCallback(
@@ -25,7 +29,7 @@ export function SchedulerList({entries, onStart, onDelete, onEdit, onStop, onNew
                 await onSaveTemplate({
                     title: entry.title,
                     message: entry.message,
-                    interval_minutes: entry.interval_minutes,
+                    interval_seconds: entry.interval_seconds,
                     max_count: entry.max_count,
                 });
             } catch (e) {
@@ -45,12 +49,12 @@ export function SchedulerList({entries, onStart, onDelete, onEdit, onStop, onNew
                     className="pane-scheduler-new-btn"
                     onClick={onNew}
                 >
-                    + New
+                    {tr("viewer.scheduler.list.new", "+ 新規", "+ New")}
                 </button>
             </div>
 
             {entries.length === 0 ? (
-                <div className="pane-scheduler-empty">No schedulers</div>
+                <div className="pane-scheduler-empty">{tr("viewer.scheduler.list.empty", "スケジューラーなし", "No schedulers")}</div>
             ) : (
                 entries.map((entry) => (
                     <div
@@ -64,27 +68,29 @@ export function SchedulerList({entries, onStart, onDelete, onEdit, onStop, onNew
                                     type="button"
                                     className="pane-scheduler-edit-card-btn"
                                     onClick={() => onEdit(entry)}
-                                    title="Edit this scheduler"
+                                    title={tr("viewer.scheduler.list.edit", "編集", "Edit this scheduler")}
                                 >
-                                    Edit
+                                    {tr("viewer.scheduler.list.edit", "編集", "Edit")}
                                 </button>
                                 <button
                                     type="button"
                                     className="pane-scheduler-save-card-btn"
                                     onClick={() => void handleSaveTemplate(entry)}
                                     disabled={savingEntryID !== null}
-                                    title="Save as template"
+                                    title={tr("viewer.scheduler.form.saveAsTemplate", "テンプレートとして保存", "Save as template")}
                                 >
-                                    {savingEntryID === entry.id ? "Saving..." : "Save"}
+                                    {savingEntryID === entry.id
+                                        ? tr("viewer.scheduler.form.saving", "保存中...", "Saving...")
+                                        : tr("viewer.scheduler.list.save", "保存", "Save")}
                                 </button>
                                 {entry.running ? (
                                     <button
                                         type="button"
                                         className="pane-scheduler-stop-btn"
                                         onClick={() => onStop(entry.id)}
-                                        title="Stop this scheduler"
+                                        title={tr("viewer.scheduler.list.stop", "停止", "Stop this scheduler")}
                                     >
-                                        Stop
+                                        {tr("viewer.scheduler.list.stop", "停止", "Stop")}
                                     </button>
                                 ) : (
                                     <>
@@ -92,29 +98,31 @@ export function SchedulerList({entries, onStart, onDelete, onEdit, onStop, onNew
                                             type="button"
                                             className="pane-scheduler-start-card-btn"
                                             onClick={() => onStart(entry.id)}
-                                            title="Restart this scheduler"
+                                            title={tr("viewer.scheduler.list.start", "再開", "Restart this scheduler")}
                                         >
-                                            Start
+                                            {tr("viewer.scheduler.list.start", "開始", "Start")}
                                         </button>
                                         <button
                                             type="button"
                                             className="pane-scheduler-delete-card-btn"
                                             onClick={() => onDelete(entry.id)}
-                                            title="Delete this scheduler"
+                                            title={tr("viewer.scheduler.list.delete", "削除", "Delete this scheduler")}
                                         >
-                                            Delete
+                                            {tr("viewer.scheduler.list.delete", "削除", "Delete")}
                                         </button>
                                     </>
                                 )}
                             </div>
                         </div>
                         <div className="pane-scheduler-card-meta">
-                            <span>Status: {entry.running ? "Running" : "Stopped"}</span>
-                            <span>Pane: {entry.pane_id}</span>
-                            <span>Every {entry.interval_minutes}m</span>
+                            <span>{tr("viewer.scheduler.list.status", "状態", "Status")}: {entry.running
+                                ? tr("viewer.scheduler.list.running", "実行中", "Running")
+                                : tr("viewer.scheduler.list.stopped", "停止", "Stopped")}</span>
+                            <span>{tr("viewer.scheduler.list.pane", "ペイン", "Pane")}: {entry.pane_id}</span>
+                            <span>{tr("viewer.scheduler.list.every", "間隔", "Every")} {entry.interval_seconds}s</span>
                         </div>
                         <div className="pane-scheduler-card-progress">
-                            Sent: {entry.current_count} / {isSchedulerInfiniteCount(entry.max_count) ? "\u221E" : entry.max_count}
+                            {tr("viewer.scheduler.list.sent", "送信済", "Sent")}: {entry.current_count} / {isSchedulerInfiniteCount(entry.max_count) ? "\u221E" : entry.max_count}
                         </div>
                     </div>
                 ))

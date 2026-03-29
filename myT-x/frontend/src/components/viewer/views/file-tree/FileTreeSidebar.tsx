@@ -12,6 +12,7 @@ interface FileTreeSidebarProps {
     readonly selectedPath: string | null;
     readonly onToggleDir: (path: string) => void;
     readonly onSelectFile: (path: string) => void;
+    readonly onSearchOpen: () => void;
 }
 
 interface RowData {
@@ -73,7 +74,7 @@ const Row = memo(function Row({index, style, data}: ListChildComponentProps<RowD
         && prevData.findParentIndex === nextData.findParentIndex;
 });
 
-export function FileTreeSidebar({flatNodes, selectedPath, onToggleDir, onSelectFile}: FileTreeSidebarProps) {
+export function FileTreeSidebar({flatNodes, selectedPath, onToggleDir, onSelectFile, onSearchOpen}: FileTreeSidebarProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const listRef = useRef<FixedSizeList<RowData> | null>(null);
     // noiseThresholdPx: 1 suppresses ±1px ResizeObserver churn that causes scroll jitter.
@@ -101,7 +102,18 @@ export function FileTreeSidebar({flatNodes, selectedPath, onToggleDir, onSelectF
     }), [flatNodes, selectedPath, focusedIndex, focusIndex, findParentIndex, onToggleDir, onSelectFile, handleContextMenu]);
 
     return (
-        <div className="file-tree-sidebar" ref={containerRef}>
+        <div className="file-tree-sidebar">
+            <div className="file-tree-sidebar-header">
+                <button
+                    className="file-tree-search-toggle"
+                    onClick={onSearchOpen}
+                    title="Search files (Ctrl+F)"
+                    type="button"
+                >
+                    🔍
+                </button>
+            </div>
+            <div className="file-tree-sidebar-list" ref={containerRef}>
             {/* NOTE: height starts at 0 until ResizeObserver reports; guard prevents empty FixedSizeList render. */}
             {height > 0 ? (
                 <FixedSizeList
@@ -125,6 +137,7 @@ export function FileTreeSidebar({flatNodes, selectedPath, onToggleDir, onSelectF
                     onClose={handleCloseContextMenu}
                 />
             )}
+            </div>
         </div>
     );
 }

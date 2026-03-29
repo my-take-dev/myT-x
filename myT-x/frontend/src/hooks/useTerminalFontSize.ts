@@ -3,6 +3,11 @@ import type {FitAddon} from "@xterm/addon-fit";
 import type {Terminal} from "@xterm/xterm";
 import {api} from "../api";
 import {useTmuxStore} from "../stores/tmuxStore";
+import {createConsecutiveFailureCounter, notifyAndLog} from "../utils/notifyUtils";
+
+// Module-level consecutive failure counter for font-size resize operations.
+// Threshold 5: font-size change triggers fit + resize which can fail transiently.
+const fontSizeResizeFailureCounter = createConsecutiveFailureCounter(5);
 
 interface UseTerminalFontSizeOptions {
     paneId: string;
@@ -106,8 +111,13 @@ export function useTerminalFontSize({
         // fitAddon.fit() 後は DOM サイズ変更がないため ResizeObserver が
         // 発火しない可能性がある。フォントサイズ変更で cols/rows が変化した
         // 場合にバックエンドへ確実に通知するため明示的に API を呼ぶ。
-        void api.ResizePane(paneId, term.cols, term.rows).catch((err) => {
+        void api.ResizePane(paneId, term.cols, term.rows).then(() => {
+            fontSizeResizeFailureCounter.recordSuccess();
+        }).catch((err) => {
             console.warn(`[DEBUG-terminal] fontSize-resize failed for pane=${paneId}`, err);
+            fontSizeResizeFailureCounter.recordFailure(() => {
+                notifyAndLog("Resize pane", "warn", err, "TerminalFontSize");
+            });
         });
         // terminalRef, fitAddonRef, fontSizeRef are MutableRefObject whose identity
         // is stable across renders. Including them in deps would have no effect since

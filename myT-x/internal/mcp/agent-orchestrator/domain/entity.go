@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // TaskStatus はタスクの状態を表す列挙型。
@@ -16,15 +17,29 @@ const (
 	TaskStatusAbandoned TaskStatus = "abandoned"
 )
 
+// VirtualPaneIDPrefix is the prefix for virtual pane IDs that do not
+// correspond to real tmux panes. Virtual panes are used by internal
+// services (e.g. task scheduler) that participate in the orchestrator
+// task protocol without owning a physical terminal pane.
+const VirtualPaneIDPrefix = "%virtual-"
+
+// IsVirtualPaneID reports whether paneID represents a virtual (non-tmux) pane.
+func IsVirtualPaneID(paneID string) bool {
+	return strings.HasPrefix(paneID, VirtualPaneIDPrefix)
+}
+
 var paneIDPattern = regexp.MustCompile(`^%[0-9]+$`)
 
-// ValidatePaneID は tmux ペインIDを検証する。
+// ValidatePaneID は tmux ペインIDまたは仮想ペインIDを検証する。
 func ValidatePaneID(paneID string) error {
 	if paneID == "" {
 		return fmt.Errorf("pane_id is required")
 	}
+	if IsVirtualPaneID(paneID) {
+		return nil
+	}
 	if !paneIDPattern.MatchString(paneID) {
-		return fmt.Errorf("invalid pane_id %q: must match ^%%[0-9]+$", paneID)
+		return fmt.Errorf("invalid pane_id %q: must match ^%%[0-9]+$ or be a virtual pane id", paneID)
 	}
 	return nil
 }

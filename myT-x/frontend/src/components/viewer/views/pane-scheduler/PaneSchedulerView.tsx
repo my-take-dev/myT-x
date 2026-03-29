@@ -1,4 +1,5 @@
 import {useState, useCallback} from "react";
+import {useI18n} from "../../../../i18n";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {
@@ -15,6 +16,9 @@ import {SchedulerForm} from "./SchedulerForm";
 type Screen = "list" | "form";
 
 export function PaneSchedulerView() {
+    const {language, t} = useI18n();
+    const tr = (key: string, jaText: string, enText: string) =>
+        t(key, language === "ja" ? jaText : enText);
     const closeView = useViewerStore((s) => s.closeView);
     const {
         entries, templates, error, setError, availablePanes,
@@ -45,7 +49,7 @@ export function PaneSchedulerView() {
     return (
         <ViewerPanelShell
             className="pane-scheduler-view"
-            title="Schedule"
+            title={tr("viewer.scheduler.title", "スケジュール", "Schedule")}
             onClose={closeView}
             onRefresh={refreshStatuses}
         >
@@ -54,7 +58,7 @@ export function PaneSchedulerView() {
                     <div className="pane-scheduler-error">
                         <span>{error}</span>
                         <button type="button" onClick={() => setError(null)}>
-                            Dismiss
+                            {tr("viewer.scheduler.dismiss", "閉じる", "Dismiss")}
                         </button>
                     </div>
                 )}
@@ -78,7 +82,10 @@ export function PaneSchedulerView() {
                         onBack={handleBack}
                         onSaveTemplate={saveTemplate}
                         onDeleteTemplate={deleteTemplate}
-                        submitLabel={editingDraft === null ? "Start" : "Apply Changes"}
+                        submitLabel={editingDraft === null
+                            ? tr("viewer.scheduler.start", "開始", "Start")
+                            : tr("viewer.scheduler.applyChanges", "変更を適用", "Apply Changes")
+                        }
                     />
                 )}
             </div>

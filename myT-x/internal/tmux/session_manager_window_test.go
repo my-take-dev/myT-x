@@ -109,8 +109,8 @@ func TestFallbackWindowIDNearIndex(t *testing.T) {
 	}
 }
 
-func TestRemoveWindowLastWindowRemovesSession(t *testing.T) {
-	// S-33: Killing the last window should remove the entire session.
+func TestRemoveWindowLastWindowKeepsEmptySession(t *testing.T) {
+	// S-33: Killing the last window should keep the session in an empty state.
 	manager := NewSessionManager()
 	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
@@ -126,11 +126,24 @@ func TestRemoveWindowLastWindowRemovesSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveWindowByID() error = %v", err)
 	}
-	if !result.SessionRemoved {
-		t.Fatal("SessionRemoved = false, want true (last window removed)")
+	if result.SessionRemoved {
+		t.Fatal("SessionRemoved = true, want false (last window empties the session)")
 	}
-	if manager.HasSession("demo") {
-		t.Fatal("session 'demo' should be removed after last window deletion")
+	if !result.SessionEmptied {
+		t.Fatal("SessionEmptied = false, want true (last window removed)")
+	}
+	if !manager.HasSession("demo") {
+		t.Fatal("session 'demo' should remain after last window deletion")
+	}
+	after, ok := manager.GetSession("demo")
+	if !ok {
+		t.Fatal("GetSession(demo) failed after removal")
+	}
+	if len(after.Windows) != 0 {
+		t.Fatalf("len(after.Windows) = %d, want 0", len(after.Windows))
+	}
+	if after.ActiveWindowID != -1 {
+		t.Fatalf("ActiveWindowID = %d, want -1", after.ActiveWindowID)
 	}
 }
 
@@ -209,16 +222,18 @@ func TestRemoveWindowByID(t *testing.T) {
 		setup                func(m *SessionManager) int // returns windowID to use, or -1 if windowID field is used
 		wantErr              bool
 		wantSessionGone      bool
+		wantSessionEmptied   bool
 		wantSurvivingID      int
 		wantRemovedPanes     int
 		wantPaneUnregistered bool // verify pane is removed from global map
 	}{
 		{
-			name:                 "sole window removal deletes session",
+			name:                 "sole window removal empties session",
 			sessionName:          "test",
 			windowID:             -1,
 			wantErr:              false,
-			wantSessionGone:      true,
+			wantSessionGone:      false,
+			wantSessionEmptied:   true,
 			wantSurvivingID:      -1,
 			wantRemovedPanes:     1,
 			wantPaneUnregistered: true,
@@ -289,6 +304,9 @@ func TestRemoveWindowByID(t *testing.T) {
 			if result.SessionRemoved != tt.wantSessionGone {
 				t.Fatalf("SessionRemoved = %v, want %v", result.SessionRemoved, tt.wantSessionGone)
 			}
+			if result.SessionEmptied != tt.wantSessionEmptied {
+				t.Fatalf("SessionEmptied = %v, want %v", result.SessionEmptied, tt.wantSessionEmptied)
+			}
 			if result.SurvivingWindowID != tt.wantSurvivingID {
 				t.Fatalf("SurvivingWindowID = %d, want %d", result.SurvivingWindowID, tt.wantSurvivingID)
 			}
@@ -296,9 +314,18 @@ func TestRemoveWindowByID(t *testing.T) {
 				t.Fatalf("len(RemovedPanes) = %d, want %d", len(result.RemovedPanes), tt.wantRemovedPanes)
 			}
 
-			// Verify session is gone from the manager
+			// Verify session lifecycle outcome in the manager.
 			if tt.wantSessionGone && manager.HasSession(tt.sessionName) {
-				t.Fatal("session should be removed after last window deletion")
+				t.Fatal("session should be removed after explicit session removal")
+			}
+			if tt.wantSessionEmptied {
+				session, ok := manager.GetSession(tt.sessionName)
+				if !ok {
+					t.Fatalf("session %q should remain after emptying", tt.sessionName)
+				}
+				if len(session.Windows) != 0 {
+					t.Fatalf("len(session.Windows) = %d, want 0", len(session.Windows))
+				}
 			}
 
 			// Verify pane is unregistered from global pane map

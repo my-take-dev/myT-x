@@ -17,7 +17,8 @@ export const DiffHunkSection = memo(function DiffHunkSection({hunk, gap}: DiffHu
                 <DiffLineRow key={`${hunk.header}:${line.oldLineNum ?? "n"}:${line.newLineNum ?? "n"}:${li}`} line={line}/>
             ))}
             {gap && (
-                <div className="diff-expand-bar" title="Hidden context expansion is not available.">
+                <div className="diff-expand-bar diff-expand-bar--disabled"
+                     title="Hidden context expansion is not available.">
                     Hidden context: {gap.hiddenLineCount} lines
                 </div>
             )}

@@ -13,6 +13,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 
 const apiMock = vi.hoisted(() => ({
     DevPanelWorkingDiff: vi.fn<() => Promise<unknown>>(),
+    DevPanelGitStatus: vi.fn<() => Promise<unknown>>(),
 }));
 
 let mockActiveSession: string | null = "test-session";
@@ -20,6 +21,7 @@ let mockActiveSession: string | null = "test-session";
 vi.mock("../src/api", () => ({
     api: {
         DevPanelWorkingDiff: (...args: unknown[]) => apiMock.DevPanelWorkingDiff(...(args as [])),
+        DevPanelGitStatus: (...args: unknown[]) => apiMock.DevPanelGitStatus(...(args as [])),
     },
 }));
 
@@ -58,6 +60,9 @@ describe("useDiffView – .finally() loading reset", () => {
         root = createRoot(container);
         mockActiveSession = "test-session";
         apiMock.DevPanelWorkingDiff.mockReset();
+        apiMock.DevPanelGitStatus.mockReset();
+        // DevPanelGitStatus is called in parallel but its result is non-fatal for loading tests.
+        apiMock.DevPanelGitStatus.mockResolvedValue({branch: "", ahead: 0, behind: 0});
         vi.spyOn(console, "error").mockImplementation(() => {});
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     });

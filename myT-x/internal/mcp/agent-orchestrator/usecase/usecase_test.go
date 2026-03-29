@@ -163,6 +163,18 @@ func (r *testTaskRepo) EndSessionByInstanceID(context.Context, string) error {
 	return nil
 }
 
+func (r *testTaskRepo) GetTaskBySendMessageID(_ context.Context, sendMessageID string) (domain.Task, error) {
+	if r.getTaskErr != nil {
+		return domain.Task{}, r.getTaskErr
+	}
+	for _, task := range r.tasks {
+		if task.SendMessageID == sendMessageID {
+			return task, nil
+		}
+	}
+	return domain.Task{}, domain.ErrNotFound
+}
+
 type testMessageRepo struct {
 	messages  map[string]domain.TaskMessage
 	responses map[string]domain.TaskMessage
@@ -190,6 +202,14 @@ func (r *testMessageRepo) SaveResponse(_ context.Context, msg domain.TaskMessage
 	}
 	r.responses[msg.ID] = msg
 	return nil
+}
+
+func (r *testMessageRepo) GetMessage(_ context.Context, id string) (domain.TaskMessage, error) {
+	msg, ok := r.messages[id]
+	if !ok {
+		return domain.TaskMessage{}, domain.ErrNotFound
+	}
+	return msg, nil
 }
 
 type testPaneOps struct {
@@ -247,7 +267,7 @@ func TestConstructorsDefaultToStandardLogger(t *testing.T) {
 	}{
 		{"agent", NewAgentService(agents, panes, panes, panes, nil).logger},
 		{"dispatch", NewTaskDispatchService(agents, tasks, messages, panes, nil).logger},
-		{"query", NewTaskQueryService(agents, tasks, panes, nil).logger},
+		{"query", NewTaskQueryService(agents, tasks, messages, panes, nil).logger},
 		{"response", NewResponseService(agents, tasks, messages, panes, panes, nil).logger},
 		{"capture", NewCaptureService(agents, panes, panes, nil).logger},
 	}
@@ -381,11 +401,7 @@ func TestTaskDispatchServiceSendReturnsPersistError(t *testing.T) {
 }
 
 func TestTaskDispatchServiceSendReturnsIDGenerationError(t *testing.T) {
-	oldRandRead := randRead
-	randRead = func([]byte) (int, error) {
-		return 0, errors.New("rng down")
-	}
-	defer func() { randRead = oldRandRead }()
+	t.Parallel()
 
 	agents := newTestAgentRepo()
 	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%2"}
@@ -394,6 +410,9 @@ func TestTaskDispatchServiceSendReturnsIDGenerationError(t *testing.T) {
 	messages := newTestMessageRepo()
 	panes := &testPaneOps{selfPane: "%2"}
 	svc := NewTaskDispatchService(agents, tasks, messages, panes, discardLogger())
+	svc.randRead = func([]byte) (int, error) {
+		return 0, errors.New("rng down")
+	}
 
 	_, err := svc.Send(context.Background(), SendTaskCmd{
 		AgentName: "codex",
@@ -640,6 +659,157 @@ func TestResponseServiceSendAllowsTrustedCaller(t *testing.T) {
 	}
 }
 
+func TestResponseServiceSendReturnsWarningOnIDGenerationError(t *testing.T) {
+	t.Parallel()
+
+	agents := newTestAgentRepo()
+	agents.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-001"] = domain.Task{
+		ID:             "t-001",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderName:     "orchestrator",
+		Status:         "pending",
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
+	svc.randRead = func([]byte) (int, error) {
+		return 0, errors.New("rng down")
+	}
+
+	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err != nil {
+		t.Fatalf("unexpected error (should be best-effort): %v", err)
+	}
+	if result.Warning == "" {
+		t.Fatal("expected warning for ID generation failure")
+	}
+	if !strings.Contains(result.Warning, "response id generation failed") {
+		t.Fatalf("unexpected warning: %q", result.Warning)
+	}
+	if result.TaskID != "t-001" {
+		t.Fatalf("TaskID = %q, want %q", result.TaskID, "t-001")
+	}
+	// Message should still be delivered despite ID generation failure.
+	if len(panes.sent) != 1 || panes.sent[0].paneID != "%0" {
+		t.Fatalf("unexpected sent calls: %+v", panes.sent)
+	}
+}
+
+func TestResponseServiceSendSkipsSendKeysForVirtualPane(t *testing.T) {
+	t.Parallel()
+
+	agents := newTestAgentRepo()
+	agents.agents["task-master"] = domain.Agent{Name: "task-master", PaneID: "%virtual-task-master"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-001"] = domain.Task{
+		ID:             "t-001",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderName:     "task-master",
+		Status:         "pending",
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
+
+	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SentToName != "task-master" {
+		t.Fatalf("expected SentToName=task-master, got %q", result.SentToName)
+	}
+	// SendKeys should NOT be called for virtual pane.
+	if len(panes.sent) != 0 {
+		t.Fatalf("SendKeys should not be called for virtual pane, got %d calls", len(panes.sent))
+	}
+}
+
+func TestResponseServiceSendCallsSendKeysForRealPane(t *testing.T) {
+	t.Parallel()
+
+	agents := newTestAgentRepo()
+	agents.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-001"] = domain.Task{
+		ID:             "t-001",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderName:     "orchestrator",
+		Status:         "pending",
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
+
+	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SentToName != "orchestrator" {
+		t.Fatalf("expected SentToName=orchestrator, got %q", result.SentToName)
+	}
+	// SendKeys SHOULD be called for real pane.
+	if len(panes.sent) != 1 || panes.sent[0].paneID != "%0" {
+		t.Fatalf("expected SendKeys to %q, got %+v", "%0", panes.sent)
+	}
+}
+
+func TestTaskDispatchServiceSendRejectsVirtualPane(t *testing.T) {
+	t.Parallel()
+
+	agents := newTestAgentRepo()
+	agents.agents["task-master"] = domain.Agent{Name: "task-master", PaneID: "%virtual-task-master"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewTaskDispatchService(agents, tasks, messages, panes, discardLogger())
+
+	_, err := svc.Send(context.Background(), SendTaskCmd{
+		AgentName: "task-master",
+		FromAgent: "worker",
+		Message:   "do something",
+	})
+	if err == nil {
+		t.Fatal("expected error when sending to virtual pane agent")
+	}
+	if err.Error() != "cannot send task to virtual pane agent" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// No task should be created in the repo.
+	if len(tasks.tasks) != 0 {
+		t.Fatalf("tasks should remain empty: %+v", tasks.tasks)
+	}
+}
+
+func TestCaptureServiceCaptureReturnsWarningForVirtualPane(t *testing.T) {
+	t.Parallel()
+
+	agents := newTestAgentRepo()
+	agents.agents["task-master"] = domain.Agent{Name: "task-master", PaneID: "%virtual-task-master"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewCaptureService(agents, panes, panes, discardLogger())
+
+	result, err := svc.Capture(context.Background(), CapturePaneCmd{AgentName: "task-master", Lines: 50})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Warning != "virtual pane cannot be captured" {
+		t.Fatalf("expected warning about virtual pane, got %q", result.Warning)
+	}
+	if result.Content != "" {
+		t.Fatalf("expected empty content for virtual pane, got %q", result.Content)
+	}
+}
+
 func TestTaskQueryServiceCheckTasksCountsAllStatuses(t *testing.T) {
 	agents := newTestAgentRepo()
 	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
@@ -649,7 +819,7 @@ func TestTaskQueryServiceCheckTasksCountsAllStatuses(t *testing.T) {
 	tasks.tasks["t-3"] = domain.Task{ID: "t-3", AgentName: "worker", Status: "failed"}
 	tasks.tasks["t-4"] = domain.Task{ID: "t-4", AgentName: "worker", Status: "abandoned"}
 	panes := &testPaneOps{selfPane: "%1"}
-	svc := NewTaskQueryService(agents, tasks, panes, discardLogger())
+	svc := NewTaskQueryService(agents, tasks, newTestMessageRepo(), panes, discardLogger())
 
 	result, err := svc.CheckTasks(context.Background(), CheckTasksCmd{StatusFilter: "all"})
 	if err != nil {
@@ -667,7 +837,7 @@ func TestTaskQueryServiceGetMyTasksIncludesTaskIDPlaceholderInstruction(t *testi
 	tasks := newTestTaskRepo()
 	tasks.tasks["t-1"] = domain.Task{ID: "t-1", AgentName: "worker", Status: "pending"}
 	panes := &testPaneOps{selfPane: "%1"}
-	svc := NewTaskQueryService(agents, tasks, panes, discardLogger())
+	svc := NewTaskQueryService(agents, tasks, newTestMessageRepo(), panes, discardLogger())
 
 	result, err := svc.GetMyTasks(context.Background(), GetMyTasksCmd{AgentName: "worker"})
 	if err != nil {
@@ -678,5 +848,228 @@ func TestTaskQueryServiceGetMyTasksIncludesTaskIDPlaceholderInstruction(t *testi
 	}
 	if !strings.Contains(result.ResponseInstructions, "send_response(task_id=\"<task_id>\", message=\"...\")") {
 		t.Fatalf("response instructions should include send_response example: %q", result.ResponseInstructions)
+	}
+}
+
+func TestTaskQueryServiceGetMyTask(t *testing.T) {
+	tests := []struct {
+		name        string
+		callerPane  string
+		agentName   string
+		msgID       string
+		setupAgent  map[string]domain.Agent
+		setupTask   map[string]domain.Task
+		setupMsg    map[string]domain.TaskMessage
+		wantErr     string
+		wantTaskID  string
+		wantContent string
+	}{
+		{
+			name:       "success",
+			callerPane: "%1",
+			agentName:  "worker",
+			msgID:      "m-001",
+			setupAgent: map[string]domain.Agent{"worker": {Name: "worker", PaneID: "%1"}},
+			setupTask:  map[string]domain.Task{"t-001": {ID: "t-001", AgentName: "worker", SendMessageID: "m-001", Status: "pending", SentAt: "2026-03-07T10:00:00Z"}},
+			setupMsg:   map[string]domain.TaskMessage{"m-001": {ID: "m-001", Content: "hello world", CreatedAt: "2026-03-07T10:00:00Z"}},
+			wantTaskID: "t-001", wantContent: "hello world",
+		},
+		{
+			name:       "access denied - caller mismatch",
+			callerPane: "%2",
+			agentName:  "worker",
+			msgID:      "m-001",
+			setupAgent: map[string]domain.Agent{"other": {Name: "other", PaneID: "%2"}, "worker": {Name: "worker", PaneID: "%1"}},
+			setupTask:  map[string]domain.Task{"t-001": {ID: "t-001", AgentName: "worker", SendMessageID: "m-001", Status: "pending"}},
+			setupMsg:   map[string]domain.TaskMessage{"m-001": {ID: "m-001", Content: "hello"}},
+			wantErr:    "access denied",
+		},
+		{
+			name:       "access denied - task belongs to other agent",
+			callerPane: "%1",
+			agentName:  "worker",
+			msgID:      "m-001",
+			setupAgent: map[string]domain.Agent{"worker": {Name: "worker", PaneID: "%1"}},
+			setupTask:  map[string]domain.Task{"t-001": {ID: "t-001", AgentName: "other", SendMessageID: "m-001", Status: "pending"}},
+			setupMsg:   map[string]domain.TaskMessage{"m-001": {ID: "m-001", Content: "hello"}},
+			wantErr:    "access denied",
+		},
+		{
+			name:       "task not found",
+			callerPane: "%1",
+			agentName:  "worker",
+			msgID:      "m-nonexistent",
+			setupAgent: map[string]domain.Agent{"worker": {Name: "worker", PaneID: "%1"}},
+			setupTask:  map[string]domain.Task{},
+			setupMsg:   map[string]domain.TaskMessage{},
+			wantErr:    "task not found",
+		},
+		{
+			name:       "message not found",
+			callerPane: "%1",
+			agentName:  "worker",
+			msgID:      "m-001",
+			setupAgent: map[string]domain.Agent{"worker": {Name: "worker", PaneID: "%1"}},
+			setupTask:  map[string]domain.Task{"t-001": {ID: "t-001", AgentName: "worker", SendMessageID: "m-001", Status: "pending"}},
+			setupMsg:   map[string]domain.TaskMessage{},
+			wantErr:    "message not found",
+		},
+		{
+			name:       "trusted caller bypasses pane check",
+			callerPane: "",
+			agentName:  "worker",
+			msgID:      "m-001",
+			setupAgent: map[string]domain.Agent{"worker": {Name: "worker", PaneID: "%1"}},
+			setupTask:  map[string]domain.Task{"t-001": {ID: "t-001", AgentName: "worker", SendMessageID: "m-001", Status: "pending", SentAt: "2026-03-07T10:00:00Z"}},
+			setupMsg:   map[string]domain.TaskMessage{"m-001": {ID: "m-001", Content: "trusted", CreatedAt: "2026-03-07T10:00:00Z"}},
+			wantTaskID: "t-001", wantContent: "trusted",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agents := &testAgentRepo{agents: tt.setupAgent}
+			tasks := &testTaskRepo{tasks: tt.setupTask}
+			messages := &testMessageRepo{messages: tt.setupMsg, responses: make(map[string]domain.TaskMessage)}
+			panes := &testPaneOps{selfPane: tt.callerPane}
+			svc := NewTaskQueryService(agents, tasks, messages, panes, discardLogger())
+
+			result, err := svc.GetMyTask(context.Background(), GetMyTaskCmd{
+				AgentName:     tt.agentName,
+				SendMessageID: tt.msgID,
+			})
+
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.TaskID != tt.wantTaskID {
+				t.Errorf("TaskID = %q, want %q", result.TaskID, tt.wantTaskID)
+			}
+			if result.Message.Content != tt.wantContent {
+				t.Errorf("Content = %q, want %q", result.Message.Content, tt.wantContent)
+			}
+			if result.SendMessageID != tt.msgID {
+				t.Errorf("SendMessageID = %q, want %q", result.SendMessageID, tt.msgID)
+			}
+		})
+	}
+}
+
+func TestTaskQueryServiceGetMyTasksIncludesSendMessageID(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-1"] = domain.Task{ID: "t-1", AgentName: "worker", SendMessageID: "m-001", Status: "pending"}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewTaskQueryService(agents, tasks, newTestMessageRepo(), panes, discardLogger())
+
+	result, err := svc.GetMyTasks(context.Background(), GetMyTasksCmd{AgentName: "worker", StatusFilter: "pending"})
+	if err != nil {
+		t.Fatalf("GetMyTasks: %v", err)
+	}
+	if len(result.Tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(result.Tasks))
+	}
+	if result.Tasks[0].SendMessageID != "m-001" {
+		t.Errorf("SendMessageID = %q, want %q", result.Tasks[0].SendMessageID, "m-001")
+	}
+}
+
+func TestTaskQueryServiceCheckTasksIncludesSendMessageID(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-1"] = domain.Task{ID: "t-1", AgentName: "worker", SendMessageID: "m-002", Status: "pending"}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewTaskQueryService(agents, tasks, newTestMessageRepo(), panes, discardLogger())
+
+	result, err := svc.CheckTasks(context.Background(), CheckTasksCmd{StatusFilter: "all"})
+	if err != nil {
+		t.Fatalf("CheckTasks: %v", err)
+	}
+	if len(result.Tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(result.Tasks))
+	}
+	if result.Tasks[0].SendMessageID != "m-002" {
+		t.Errorf("SendMessageID = %q, want %q", result.Tasks[0].SendMessageID, "m-002")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// generateIDWith direct tests
+// ---------------------------------------------------------------------------
+
+func TestGenerateIDWith(t *testing.T) {
+	t.Parallel()
+
+	fixedBytes := []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe}
+	fixedRand := func(b []byte) (int, error) {
+		return copy(b, fixedBytes), nil
+	}
+
+	tests := []struct {
+		name    string
+		readFn  func([]byte) (int, error)
+		prefix  string
+		wantID  string
+		wantErr bool
+	}{
+		{
+			name:   "success with t- prefix",
+			readFn: fixedRand,
+			prefix: "t-",
+			wantID: "t-deadbeefcafe",
+		},
+		{
+			name:   "success with r- prefix",
+			readFn: fixedRand,
+			prefix: "r-",
+			wantID: "r-deadbeefcafe",
+		},
+		{
+			name:   "success with m- prefix",
+			readFn: fixedRand,
+			prefix: "m-",
+			wantID: "m-deadbeefcafe",
+		},
+		{
+			name:    "readFn error",
+			readFn:  func([]byte) (int, error) { return 0, errors.New("rng down") },
+			prefix:  "t-",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			id, err := generateIDWith(tt.readFn, tt.prefix, "test context")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != tt.wantID {
+				t.Fatalf("id = %q, want %q", id, tt.wantID)
+			}
+			// Verify format: prefix + 12 hex characters (6 bytes).
+			if !strings.HasPrefix(id, tt.prefix) {
+				t.Fatalf("id %q does not start with prefix %q", id, tt.prefix)
+			}
+			hexPart := id[len(tt.prefix):]
+			if len(hexPart) != 12 {
+				t.Fatalf("hex part length = %d, want 12", len(hexPart))
+			}
+		})
 	}
 }

@@ -80,15 +80,16 @@ func (m *SessionManager) SwapPanes(sourcePaneID string, targetPaneID string) (st
 // killPaneResult holds the results from the lock-protected portion of KillPane.
 type killPaneResult struct {
 	sessionName       string
-	removedSession    bool
+	sessionEmptied    bool
 	closeTargets      []terminalCloser
 	removedFromWindow bool
 }
 
 // killPaneLocked performs the lock-protected portion of KillPane.
 // Uses defer to guarantee lock release even on panic.
-// When the session is deleted, defensively cleans up all remaining panes
-// that might still be tracked in m.panes for that session.
+// When the last pane is removed, defensively cleans up any orphaned panes that
+// might still be tracked in m.panes for that session. Sets sessionEmptied=true
+// when the last pane is removed and the session transitions to an empty state.
 func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -174,13 +175,13 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 
 	session.Windows = nextWindows
 	if len(session.Windows) == 0 {
-		delete(m.sessions, session.Name)
-		result.removedSession = true
+		session.ActiveWindowID = -1
+		result.sessionEmptied = true
 
-		// Defensive cleanup: when deleting the entire session, collect
-		// terminals from any remaining panes that are still tracked in
-		// m.panes for this session. In normal flow the killed pane was
-		// the only one, but this protects against data inconsistency.
+		// Defensive cleanup: when the session becomes empty, collect terminals
+		// from any remaining panes that are still tracked in m.panes for this
+		// session. In normal flow the killed pane was the only one, but this
+		// protects against data inconsistency.
 		orphanedPanes := make([]struct {
 			id   int
 			pane *TmuxPane
@@ -201,12 +202,12 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 			}
 			releasePaneOutputHistory(orphaned.pane)
 			delete(m.panes, orphaned.id)
-			slog.Warn("[WARN-PANE] KillPane: cleaned up orphaned pane during session deletion",
+			slog.Warn("[WARN-PANE] KillPane: cleaned up orphaned pane while emptying session",
 				"paneId", orphaned.pane.IDString(),
 				"session", result.sessionName,
 			)
 		}
-		m.markSessionMapMutationLocked()
+		m.markTopologyMutationLocked()
 	} else {
 		activeWindow, _ := findWindowByID(session.Windows, session.ActiveWindowID)
 		if activeWindow == nil {
@@ -221,8 +222,9 @@ func (m *SessionManager) killPaneLocked(id int, paneIDStr string) (killPaneResul
 	return result, nil
 }
 
-// KillPane closes and removes one pane.
-func (m *SessionManager) KillPane(paneID string) (sessionName string, removedSession bool, err error) {
+// KillPane closes and removes one pane. Returns the session name, whether the
+// session transitioned to an empty state (last pane removed), and any error.
+func (m *SessionManager) KillPane(paneID string) (sessionName string, sessionEmptied bool, err error) {
 	id, err := parsePaneID(strings.TrimSpace(paneID))
 	if err != nil {
 		return "", false, err
@@ -249,7 +251,7 @@ func (m *SessionManager) KillPane(paneID string) (sessionName string, removedSes
 			"session", result.sessionName,
 		)
 	}
-	return result.sessionName, result.removedSession, nil
+	return result.sessionName, result.sessionEmptied, nil
 }
 
 func rebuildLayoutFromPaneOrder(panes []*TmuxPane) *LayoutNode {

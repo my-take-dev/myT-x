@@ -1,8 +1,14 @@
 import {useEffect} from "react";
 import {api} from "../api";
 import {useCanvasStore} from "../stores/canvasStore";
+import {createConsecutiveFailureCounter, notifyAndLog} from "../utils/notifyUtils";
 
 const POLL_INTERVAL_MS = 3000;
+
+// Module-level consecutive failure counter for canvas polling.
+// 3-second polling can produce many failures when backend is disconnected;
+// only notify after 3 consecutive failures (≈9 seconds of sustained failure).
+const canvasSyncFailureCounter = createConsecutiveFailureCounter(3);
 
 /**
  * Canvas Mode が有効な間、3秒間隔でオーケストレーターのタスク・エージェント・
@@ -34,10 +40,23 @@ export function useCanvasTaskSync(sessionName: string | null): void {
                 ]);
                 if (cancelled) return;
 
-                for (const result of results) {
-                    if (result.status === "rejected") {
-                        console.warn("[canvas-sync] poll partial failure", result.reason);
-                    }
+                const rejectedReasons = results
+                    .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+                    .map((r) => r.reason instanceof Error ? r.reason.message : String(r.reason));
+
+                for (const reason of rejectedReasons) {
+                    console.warn("[canvas-sync] poll partial failure", reason);
+                }
+
+                // Only record failure when ALL requests failed. Partial success
+                // (e.g., 2/3 succeeded) resets the counter so that intermittent
+                // single-endpoint failures do not accumulate to the threshold.
+                if (rejectedReasons.length === results.length) {
+                    canvasSyncFailureCounter.recordFailure(() => {
+                        notifyAndLog("Canvas data sync", "warn", new Error(rejectedReasons.join("; ")), "CanvasTaskSync");
+                    });
+                } else {
+                    canvasSyncFailureCounter.recordSuccess();
                 }
 
                 if (results[0].status === "fulfilled" && results[0].value) {
@@ -51,6 +70,9 @@ export function useCanvasTaskSync(sessionName: string | null): void {
                 }
             } catch (err) {
                 console.warn("[canvas-sync] poll failed", err);
+                canvasSyncFailureCounter.recordFailure(() => {
+                    notifyAndLog("Canvas data sync", "warn", err, "CanvasTaskSync");
+                });
             }
 
             if (!cancelled) {

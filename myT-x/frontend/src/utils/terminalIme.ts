@@ -79,9 +79,21 @@ export interface TerminalImeInputGate {
 /**
  * Post-composition dedupe window duration in milliseconds.
  * Exported for test synchronization.
+ *
+ * 150ms covers:
+ * - setTimeout(0) delay (~4ms typical, up to ~50ms under WebView2 GC/microtask load)
+ * - WebView2 IPC overhead
+ * - Timer coalescing on Windows (setTimeout can fire earlier than requested)
+ * - Safety margin
+ *
+ * 150ms is well below the minimum human IME conversion interval (~200ms+),
+ * so legitimate repeated input of the same character is not affected.
+ *
+ * This value is shared by both the recentAccepted dedup timer and the
+ * schedulePendingWindowReset timeout. Both represent the same "how long
+ * to wait after compositionend" concept, so a single constant is used.
  */
-// 80ms: covers setTimeout(0) delay (~4ms) + WebView2 IPC overhead + safety margin
-export const COMMIT_DEDUPE_WINDOW_MS = 80;
+export const COMMIT_DEDUPE_WINDOW_MS = 150;
 
 function isEmptyImePayload(input: string): boolean {
     return input.length === 0;
@@ -119,13 +131,20 @@ function isControlSequence(input: string): boolean {
  * transitions, and xterm.js version dependency.
  */
 export function createTerminalImeInputGate(): TerminalImeInputGate {
+    /** Entry in the recentAccepted dedup map (implementation detail). */
+    interface RecentEntry {
+        timer: ReturnType<typeof window.setTimeout>;
+        /** performance.now() when the payload was accepted. Used as fallback when
+         *  WebView2 timer coalescing causes the setTimeout to fire earlier than requested. */
+        acceptedAt: number;
+    }
     let composing = false;
     let commitWindowActive = false;
     // Pre-registered committed text from compositionend event.data.
     // Used to accept the deferred onData payload that arrives during composing.
     let pendingCommit: string | null = null;
     let pendingWindowTimer: ReturnType<typeof window.setTimeout> | null = null;
-    const recentAccepted = new Map<string, ReturnType<typeof window.setTimeout>>();
+    const recentAccepted = new Map<string, RecentEntry>();
     let lastAcceptedInput: string | null = null;
 
     const clearPendingWindowTimer = (): void => {
@@ -136,42 +155,75 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
     };
 
     const clearRecentAccepted = (): void => {
-        for (const timer of recentAccepted.values()) {
-            window.clearTimeout(timer);
+        for (const entry of recentAccepted.values()) {
+            window.clearTimeout(entry.timer);
         }
         recentAccepted.clear();
         lastAcceptedInput = null;
     };
 
-    const rememberRecentAccepted = (input: string): void => {
-        const existingTimer = recentAccepted.get(input);
-        if (existingTimer !== undefined) {
-            window.clearTimeout(existingTimer);
+    /**
+     * Registers `input` in the dedup map with a self-cleaning timer.
+     * @param input - The accepted payload text.
+     * @param preserveAcceptedAt - When rescheduling due to early timer fire,
+     *   pass the original acceptedAt so elapsed time always converges and the
+     *   timer is guaranteed to terminate. Omit for normal calls (new timestamp).
+     */
+    const rememberRecentAccepted = (input: string, preserveAcceptedAt?: number): void => {
+        const existing = recentAccepted.get(input);
+        if (existing !== undefined) {
+            window.clearTimeout(existing.timer);
         }
+        const acceptedAt = preserveAcceptedAt ?? performance.now();
         const nextTimer = window.setTimeout(() => {
-            if (recentAccepted.get(input) === nextTimer) {
-                recentAccepted.delete(input);
-                if (lastAcceptedInput === input) {
-                    lastAcceptedInput = null;
-                }
+            const entry = recentAccepted.get(input);
+            if (entry?.timer !== nextTimer) return;
+            // Guard against WebView2 timer coalescing: if the timer fires
+            // earlier than requested, reschedule with the ORIGINAL acceptedAt
+            // so elapsed time always converges and the timer terminates.
+            const elapsed = performance.now() - entry.acceptedAt;
+            if (elapsed < COMMIT_DEDUPE_WINDOW_MS) {
+                rememberRecentAccepted(input, entry.acceptedAt);
+                return;
+            }
+            recentAccepted.delete(input);
+            if (lastAcceptedInput === input) {
+                lastAcceptedInput = null;
             }
         }, COMMIT_DEDUPE_WINDOW_MS);
-        recentAccepted.set(input, nextTimer);
+        recentAccepted.set(input, {timer: nextTimer, acceptedAt});
         lastAcceptedInput = input;
     };
 
     const isRecentAccepted = (input: string): boolean => {
-        return recentAccepted.has(input);
+        const entry = recentAccepted.get(input);
+        if (entry === undefined) return false;
+        // Defense-in-depth: verify the entry is still within the dedupe window
+        // via wall-clock timestamp, guarding against WebView2 timer misbehavior.
+        if (performance.now() - entry.acceptedAt >= COMMIT_DEDUPE_WINDOW_MS) {
+            // Proactive cleanup: remove expired entry immediately rather than
+            // waiting for the timer callback, keeping map and logic in sync.
+            window.clearTimeout(entry.timer);
+            recentAccepted.delete(input);
+            if (lastAcceptedInput === input) lastAcceptedInput = null;
+            return false;
+        }
+        return true;
     };
 
     const refreshRecentAccepted = (): void => {
         for (const input of Array.from(recentAccepted.keys())) {
-            rememberRecentAccepted(input);
+            // Only refresh entries still within the dedupe window.
+            // isRecentAccepted proactively cleans up expired entries,
+            // so this avoids reviving entries that have already expired.
+            if (isRecentAccepted(input)) {
+                rememberRecentAccepted(input);
+            }
         }
     };
 
     const rewriteAcceptedPrefix = (input: string): string | null => {
-        if (lastAcceptedInput === null || !recentAccepted.has(lastAcceptedInput)) {
+        if (lastAcceptedInput === null || !isRecentAccepted(lastAcceptedInput)) {
             return null;
         }
         if (input.length <= lastAcceptedInput.length || !input.startsWith(lastAcceptedInput)) {
@@ -224,6 +276,19 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
         return false;
     };
 
+    // Layer 4: Diagnostic logging for IME gate decisions. DEV-only to avoid
+    // production overhead. Captures gate state + decision for post-mortem debugging.
+    let lastFilterTimestamp = 0;
+    const logFilterDecision = (decision: string, input: string): void => {
+        if (!import.meta.env.DEV) return;
+        const now = performance.now();
+        const elapsed = lastFilterTimestamp > 0 ? Math.round(now - lastFilterTimestamp) : 0;
+        lastFilterTimestamp = now;
+        const state = composing ? "Composing" : commitWindowActive ? "CommitPending" : "Idle";
+        const preview = input.length > 20 ? input.slice(0, 20) + "..." : input;
+        console.debug(`[DEBUG-ime-gate] filterInput state=${state} decision=${decision} input="${preview}" elapsed=${elapsed}ms recentN=${recentAccepted.size}`);
+    };
+
     return {
         filterInput(input: string): string | null {
             // State: composing — suppress all onData payloads because they still
@@ -234,19 +299,28 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
                 // Accept it via pendingCommit match.
                 if (pendingCommit !== null) {
                     if (input === pendingCommit) {
+                        logFilterDecision("accepted(RC-2:pendingCommit)", input);
                         return filterCommittedPayload(input);
                     }
                     if (input.length > pendingCommit.length && input.startsWith(pendingCommit)) {
+                        logFilterDecision("accepted(RC-2:pendingPrefix)", input);
                         return filterCommittedPayload(pendingCommit);
                     }
                 }
                 if (isRecentAccepted(input)) {
+                    logFilterDecision("suppressed(composing:recentDup)", input);
                     suppressRecentDuplicate(input);
                     return null;
                 }
+                // Side effect: rewriteAcceptedPrefix calls rememberRecentAccepted
+                // internally, extending the dedupe window for lastAcceptedInput.
+                // This is intentional — keeping dedup alive during composing prevents
+                // stale duplicates from slipping through between composition cycles.
                 if (rewriteAcceptedPrefix(input) !== null) {
+                    logFilterDecision("suppressed(composing:prefixRewrite)", input);
                     return null;
                 }
+                logFilterDecision("suppressed(composing)", input);
                 return null;
             }
             if (commitWindowActive) {
@@ -267,22 +341,26 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
                 // A matching pendingCommit belongs to the current composition cycle
                 // and must be accepted even if the same text was committed recently.
                 if (pendingCommit !== null && input === pendingCommit) {
+                    logFilterDecision("accepted(commitWindow:pendingMatch)", input);
                     return filterCommittedPayload(input);
                 }
                 // If the payload does not match the current cycle but was already
                 // accepted recently, treat it as a stale duplicate and keep waiting
                 // for the current cycle's committed text.
                 if (isRecentAccepted(input)) {
+                    logFilterDecision("suppressed(commitWindow:recentDup)", input);
                     schedulePendingWindowReset();
                     suppressRecentDuplicate(input);
                     return null;
                 }
                 // Accept the first printable payload after compositionend and keep
                 // duplicate suppression separate from future composition cycles.
+                logFilterDecision("accepted(commitWindow:firstPrintable)", input);
                 return filterCommittedPayload(input);
             }
             // State: idle — no IME transition is active, so pass the payload through.
             if (isRecentAccepted(input)) {
+                logFilterDecision("suppressed(idle:recentDup)", input);
                 suppressRecentDuplicate(input);
                 return null;
             }

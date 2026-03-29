@@ -6,9 +6,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"time"
 )
 
-func bridgeMCPStdio(context.Context, string, time.Duration, io.Reader, io.Writer) error {
+func bridgeMCPStdio(_ context.Context, _ string, _ time.Duration, _ io.Reader, _ io.Writer, _ func(string, *time.Duration) (net.Conn, error)) error {
 	return errors.New("mcp stdio mode is supported only on Windows")
 }

@@ -155,6 +155,9 @@ func TestPaneMutationAPIsRequireSessionManager(t *testing.T) {
 	if err := app.KillPane("%1"); err == nil {
 		t.Fatal("KillPane() expected error when sessions is nil")
 	}
+	if _, err := app.CreatePaneInSession("session-a"); err == nil {
+		t.Fatal("CreatePaneInSession() expected error when router is nil")
+	}
 	if err := app.ApplyLayoutPreset("session-a", "even-horizontal"); err == nil {
 		t.Fatal("ApplyLayoutPreset() expected error when sessions is nil")
 	}
@@ -268,15 +271,16 @@ func TestPaneMutationAPIsSuccessPaths(t *testing.T) {
 		if !containsEvent(eventSnapshot(), "tmux:layout-changed") {
 			t.Fatalf("events = %v, want tmux:layout-changed", eventSnapshot())
 		}
+		// snapshotCoalesceWindow (50ms) + 300ms headroom for CI jitter.
 		waitForCondition(
 			t,
-			snapshotCoalesceWindow+300*time.Millisecond,
+			350*time.Millisecond,
 			func() bool { return containsAnyEvent(eventSnapshot(), "tmux:snapshot", "tmux:snapshot-delta") },
 			"snapshot update event after swap",
 		)
 	})
 
-	t.Run("KillPane emits session-destroyed when last pane is removed", func(t *testing.T) {
+	t.Run("KillPane emits session-emptied when last pane is removed", func(t *testing.T) {
 		app := NewApp()
 		app.setRuntimeContext(context.Background())
 		app.sessions = tmux.NewSessionManager()
@@ -293,11 +297,15 @@ func TestPaneMutationAPIsSuccessPaths(t *testing.T) {
 		if err := app.KillPane(onlyPane.IDString()); err != nil {
 			t.Fatalf("KillPane() error = %v", err)
 		}
-		if len(app.sessions.Snapshot()) != 0 {
-			t.Fatal("session should be removed after killing the last pane")
+		snapshots := app.sessions.Snapshot()
+		if len(snapshots) != 1 {
+			t.Fatalf("len(snapshots) = %d, want 1", len(snapshots))
 		}
-		if !containsEvent(events, "tmux:session-destroyed") {
-			t.Fatalf("events = %v, want tmux:session-destroyed", events)
+		if len(snapshots[0].Windows) != 0 {
+			t.Fatalf("len(snapshots[0].Windows) = %d, want 0", len(snapshots[0].Windows))
+		}
+		if !containsEvent(events, "tmux:session-emptied") {
+			t.Fatalf("events = %v, want tmux:session-emptied", events)
 		}
 		if !containsAnyEvent(events, "tmux:snapshot", "tmux:snapshot-delta") {
 			t.Fatalf("events = %v, want snapshot update event", events)
@@ -605,11 +613,10 @@ func TestApplyLayoutPresetErrorPaths(t *testing.T) {
 			wantErr:     "session not found",
 		},
 		{
-			name: "session removed after killing last pane",
+			name: "empty session after killing last pane",
 			setup: func() *App {
 				app := NewApp()
 				app.sessions = tmux.NewSessionManager()
-				// Create session then kill its only pane to leave zero windows.
 				_, pane, err := app.sessions.CreateSession("empty-session", "0", 120, 40)
 				if err != nil {
 					// Cannot use t.Fatal in setup closure; panic is acceptable in test setup.
@@ -618,15 +625,11 @@ func TestApplyLayoutPresetErrorPaths(t *testing.T) {
 				if _, _, err := app.sessions.KillPane(pane.IDString()); err != nil {
 					panic(fmt.Sprintf("KillPane() error = %v", err))
 				}
-				// Re-create the session as empty: KillPane removes the session entirely
-				// when last pane is killed, so we need a different approach.
-				// Instead, we rely on ApplyLayoutPresetToActiveWindow returning
-				// "session not found" because the session was removed.
 				return app
 			},
 			sessionName: "empty-session",
 			preset:      "even-horizontal",
-			wantErr:     "session not found",
+			wantErr:     "session has no windows",
 		},
 	}
 	for _, tt := range tests {

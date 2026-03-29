@@ -2,6 +2,8 @@ package mcptool
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"myT-x/internal/mcp/agent-orchestrator/internal/mcp"
 	"myT-x/internal/mcp/agent-orchestrator/usecase"
@@ -14,6 +16,7 @@ type Handler struct {
 	querySvc    *usecase.TaskQueryService
 	responseSvc *usecase.ResponseService
 	captureSvc  *usecase.CaptureService
+	memberSvc   *usecase.MemberBootstrapService
 	instanceID  string
 }
 
@@ -24,6 +27,7 @@ func NewHandler(
 	querySvc *usecase.TaskQueryService,
 	responseSvc *usecase.ResponseService,
 	captureSvc *usecase.CaptureService,
+	memberSvc *usecase.MemberBootstrapService,
 	instanceID string,
 ) *Handler {
 	return &Handler{
@@ -32,20 +36,24 @@ func NewHandler(
 		querySvc:    querySvc,
 		responseSvc: responseSvc,
 		captureSvc:  captureSvc,
+		memberSvc:   memberSvc,
 		instanceID:  instanceID,
 	}
 }
 
-// BuildRegistry は全7ツールを定義し、Registry を返す。
+// BuildRegistry は全10ツールを定義し、Registry を返す。
 func (h *Handler) BuildRegistry() (*mcp.Registry, error) {
 	return mcp.NewRegistry([]mcp.Tool{
 		h.registerAgentTool(),
 		h.listAgentsTool(),
 		h.sendTaskTool(),
 		h.getMyTasksTool(),
+		h.getMyTaskTool(),
 		h.sendResponseTool(),
 		h.checkTasksTool(),
 		h.capturePaneTool(),
+		h.addMemberTool(),
+		helpTool(),
 	})
 }
 
@@ -266,6 +274,9 @@ func (h *Handler) handleGetMyTasks(ctx context.Context, args map[string]any) (an
 		if t.SenderPaneID != "" {
 			entry["sender_pane_id"] = t.SenderPaneID
 		}
+		if t.SendMessageID != "" {
+			entry["send_message_id"] = t.SendMessageID
+		}
 		if t.CompletedAt != "" {
 			entry["completed_at"] = t.CompletedAt
 		}
@@ -277,6 +288,62 @@ func (h *Handler) handleGetMyTasks(ctx context.Context, args map[string]any) (an
 		"tasks":                 taskList,
 		"response_instructions": result.ResponseInstructions,
 	}, nil
+}
+
+func (h *Handler) getMyTaskTool() mcp.Tool {
+	return mcp.Tool{
+		Name:        "get_my_task",
+		Description: "send_message_id から自分宛タスクのメッセージ本文とメタデータを取得する。呼び出し元の登録名と agent_name が一致する場合のみ返す。get_my_tasks で取得した send_message_id を指定して使う。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"agent_name":      map[string]any{"type": "string", "description": "自分のエージェント名"},
+				"send_message_id": map[string]any{"type": "string", "description": "取得対象の send_message_id（m- プレフィックス）"},
+			},
+			"required": []string{"agent_name", "send_message_id"},
+		},
+		Handler: h.handleGetMyTask,
+	}
+}
+
+func (h *Handler) handleGetMyTask(ctx context.Context, args map[string]any) (any, error) {
+	agentName, err := requiredAgentName(args, "agent_name")
+	if err != nil {
+		return nil, err
+	}
+	sendMessageID, err := requiredSendMessageID(args, "send_message_id")
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := h.querySvc.GetMyTask(ctx, usecase.GetMyTaskCmd{
+		AgentName:     agentName,
+		SendMessageID: sendMessageID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	entry := map[string]any{
+		"task_id":         result.TaskID,
+		"agent_name":      result.AgentName,
+		"send_message_id": result.SendMessageID,
+		"status":          result.Status,
+		"sent_at":         result.SentAt,
+		"is_now_session":  result.IsNowSession,
+		"message": map[string]any{
+			"content":    result.Message.Content,
+			"created_at": result.Message.CreatedAt,
+		},
+	}
+	if result.SenderPaneID != "" {
+		entry["sender_pane_id"] = result.SenderPaneID
+	}
+	if result.CompletedAt != "" {
+		entry["completed_at"] = result.CompletedAt
+	}
+
+	return entry, nil
 }
 
 func (h *Handler) sendResponseTool() mcp.Tool {
@@ -373,6 +440,9 @@ func (h *Handler) handleCheckTasks(ctx context.Context, args map[string]any) (an
 		if t.SenderPaneID != "" {
 			entry["sender_pane_id"] = t.SenderPaneID
 		}
+		if t.SendMessageID != "" {
+			entry["send_message_id"] = t.SendMessageID
+		}
 		if t.CompletedAt != "" {
 			entry["completed_at"] = t.CompletedAt
 		}
@@ -431,4 +501,136 @@ func (h *Handler) handleCapturePane(ctx context.Context, args map[string]any) (a
 		"content":    result.Content,
 		"warning":    result.Warning,
 	}, nil
+}
+
+func (h *Handler) addMemberTool() mcp.Tool {
+	return mcp.Tool{
+		Name:        "add_member",
+		Description: "新メンバーを動的に追加する。ペイン分割→CLI起動→ブートストラップメッセージ送信を一括実行。登録済みエージェントのみ実行可能。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pane_title":         map[string]any{"type": "string", "description": "メンバー表示名（最大30文字）"},
+				"role":               map[string]any{"type": "string", "description": "役割（最大120文字）"},
+				"command":            map[string]any{"type": "string", "description": "CLIコマンド（例: \"claude\"）（最大100文字）"},
+				"args":               map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "コマンド引数配列"},
+				"custom_message":     map[string]any{"type": "string", "description": "追加指示メッセージ（最大2000文字）"},
+				"skills":             map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"name"}}, "description": "得意分野配列（register_agentと同形式）"},
+				"team_name":          map[string]any{"type": "string", "description": "チーム名（最大64文字、デフォルト: \"動的チーム\"）"},
+				"split_from":         map[string]any{"type": "string", "description": "分割元ペインID（デフォルト: 呼び出し元ペイン）"},
+				"split_direction":    map[string]any{"type": "string", "enum": []string{"horizontal", "vertical"}, "description": "分割方向（デフォルト: \"horizontal\"）"},
+				"bootstrap_delay_ms": map[string]any{"type": "integer", "description": "CLI起動後の待ち時間ms（1000-30000、デフォルト: 3000）"},
+			},
+			"required": []string{"pane_title", "role", "command"},
+		},
+		Handler: h.handleAddMember,
+	}
+}
+
+func (h *Handler) handleAddMember(ctx context.Context, args map[string]any) (any, error) {
+	if h.memberSvc == nil {
+		return nil, errors.New("add_member is not available")
+	}
+	paneTitle, err := requiredString(args, "pane_title", maxPaneTitleLen)
+	if err != nil {
+		return nil, err
+	}
+	role, err := requiredString(args, "role", maxRoleLen)
+	if err != nil {
+		return nil, err
+	}
+	command, err := requiredString(args, "command", maxCommandLen)
+	if err != nil {
+		return nil, err
+	}
+	cmdArgs, err := optionalStringList(args, "args", maxArgs, maxArgLen)
+	if err != nil {
+		return nil, err
+	}
+	customMessage, err := optionalBoundedString(args, "custom_message", maxCustomMessageLen)
+	if err != nil {
+		return nil, err
+	}
+	skills, err := optionalSkillList(args, "skills", maxSkills)
+	if err != nil {
+		return nil, err
+	}
+	teamName, err := optionalBoundedString(args, "team_name", maxTeamNameLen)
+	if err != nil {
+		return nil, err
+	}
+	splitFrom, err := optionalPaneID(args, "split_from")
+	if err != nil {
+		return nil, err
+	}
+	splitDirection, err := optionalSplitDirection(args, "split_direction", "horizontal")
+	if err != nil {
+		return nil, err
+	}
+	bootstrapDelayMs, err := optionalIntBounded(args, "bootstrap_delay_ms",
+		usecase.BootstrapDelayDefault, usecase.BootstrapDelayMin, usecase.BootstrapDelayMax)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := h.memberSvc.AddMember(ctx, usecase.AddMemberCmd{
+		PaneTitle:        paneTitle,
+		Role:             role,
+		Command:          command,
+		Args:             cmdArgs,
+		CustomMessage:    customMessage,
+		Skills:           skills,
+		TeamName:         teamName,
+		SplitFrom:        splitFrom,
+		SplitDirection:   splitDirection,
+		BootstrapDelayMs: bootstrapDelayMs,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	m := map[string]any{
+		"pane_id":    result.PaneID,
+		"pane_title": result.PaneTitle,
+		"agent_name": result.AgentName,
+	}
+	if len(result.Warnings) > 0 {
+		m["warnings"] = result.Warnings
+	}
+	return m, nil
+}
+
+func helpTool() mcp.Tool {
+	return mcp.Tool{
+		Name:        "help",
+		Description: "オーケストレーターMCPの使い方ヘルプを返す。topic を省略すると全体概要とワークフローを返し、ツール名を指定するとそのツールの詳細ヘルプを返す。登録不要で誰でも利用可能。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"topic": map[string]any{"type": "string", "description": "ヘルプトピック（ツール名を指定。省略時は全体概要）"},
+			},
+		},
+		Handler: handleHelp,
+	}
+}
+
+func handleHelp(_ context.Context, args map[string]any) (any, error) {
+	topic, err := optionalBoundedString(args, "topic", maxAgentNameLen)
+	if err != nil {
+		return nil, err
+	}
+
+	if topic == "" {
+		return helpOverview(), nil
+	}
+
+	detail, ok := helpForTool(topic)
+	if !ok {
+		return map[string]any{
+			"error":            fmt.Sprintf("unknown topic %q", topic),
+			"available_topics": availableTopics(),
+		}, nil
+	}
+
+	return detail, nil
 }

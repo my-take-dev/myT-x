@@ -503,7 +503,7 @@ describe("createTerminalImeInputGate", () => {
         gate.markCompositionEnd("");
         expect(gate.shouldSend("境界")).toBe(true);
 
-        vi.advanceTimersByTime(COMMIT_DEDUPE_WINDOW_MS - 1); // 79ms
+        vi.advanceTimersByTime(COMMIT_DEDUPE_WINDOW_MS - 1); // 149ms
         // Window still active → duplicate suppressed
         expect(gate.shouldSend("境界")).toBe(false);
     });
@@ -514,7 +514,7 @@ describe("createTerminalImeInputGate", () => {
         gate.markCompositionEnd("");
         expect(gate.shouldSend("境界")).toBe(true);
 
-        vi.advanceTimersByTime(COMMIT_DEDUPE_WINDOW_MS); // 80ms
+        vi.advanceTimersByTime(COMMIT_DEDUPE_WINDOW_MS); // 150ms
         // Window expired → same text accepted as new input
         expect(gate.shouldSend("境界")).toBe(true);
     });
@@ -731,5 +731,66 @@ describe("createTerminalImeInputGate", () => {
 
         expect(gate.filterInput("東京さ")).toBe("さ");
         expect(gate.filterInput("東京さ")).toBeNull();
+    });
+
+    // --- Timestamp-based dedup (Layer 2b: performance.now() fallback) ---
+
+    it("suppresses duplicate even if timer fires early due to coalescing", () => {
+        const gate = createTerminalImeInputGate();
+        let fakeTime = 1000;
+        vi.spyOn(performance, "now").mockImplementation(() => fakeTime);
+
+        gate.markCompositionStart();
+        gate.markCompositionEnd("テスト");
+        expect(gate.filterInput("テスト")).toBe("テスト");
+
+        // Advance fake timers by a small amount (less than window)
+        fakeTime += 50;
+        // Force the timer to fire early by advancing vi timers
+        vi.advanceTimersByTime(COMMIT_DEDUPE_WINDOW_MS);
+
+        // Even though setTimeout fired, timestamp-based check should still
+        // suppress the duplicate because only 50ms elapsed in real time
+        fakeTime += 10; // total 60ms < 150ms
+        expect(gate.filterInput("テスト")).toBeNull();
+
+        // After the full window, duplicate should be accepted
+        fakeTime += COMMIT_DEDUPE_WINDOW_MS;
+        vi.advanceTimersByTime(COMMIT_DEDUPE_WINDOW_MS);
+        expect(gate.filterInput("テスト")).toBe("テスト");
+
+        vi.restoreAllMocks();
+    });
+
+    it("suppresses three rapid onData fires for the same committed text", () => {
+        const gate = createTerminalImeInputGate();
+
+        gate.markCompositionStart();
+        gate.markCompositionEnd("三重");
+
+        // Simulate 3 rapid triggerDataEvent calls from xterm.js:
+        // 1. _handleAnyTextareaChanges setTimeout
+        // 2. _finalizeComposition setTimeout
+        // 3. _inputEvent (insertText)
+        expect(gate.filterInput("三重")).toBe("三重");  // First: accepted
+        expect(gate.filterInput("三重")).toBeNull();     // Second: suppressed
+        expect(gate.filterInput("三重")).toBeNull();     // Third: suppressed
+    });
+
+    it("150ms window does not interfere with normal typing speed", () => {
+        const gate = createTerminalImeInputGate();
+
+        // First character confirmed
+        gate.markCompositionStart();
+        gate.markCompositionEnd("あ");
+        expect(gate.filterInput("あ")).toBe("あ");
+
+        // Advance just past the dedupe window boundary
+        vi.advanceTimersByTime(TIMER_PAST_DEDUPE_WINDOW);
+
+        gate.markCompositionStart();
+        gate.markCompositionEnd("あ");
+        // Should be accepted as new input, not suppressed as duplicate
+        expect(gate.filterInput("あ")).toBe("あ");
     });
 });

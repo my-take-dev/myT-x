@@ -513,21 +513,17 @@ func TestHandleLoadBuffer(t *testing.T) {
 }
 
 func TestHandleLoadBufferRejectsGrowthAfterStat(t *testing.T) {
-	originalOpenLoadBufferFile := openLoadBufferFile
-	t.Cleanup(func() {
-		openLoadBufferFile = originalOpenLoadBufferFile
-	})
+	t.Parallel()
 
-	openLoadBufferFile = func(path string) (loadBufferReadCloser, error) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	router := NewCommandRouter(sessions, nil, RouterOptions{})
+	router.openLoadBufferFile = func(path string) (loadBufferReadCloser, error) {
 		return &stubLoadBufferFile{
 			reader: bytes.NewReader(bytes.Repeat([]byte("x"), maxLoadBufferFileSize+1)),
 			info:   stubFileInfo{size: maxLoadBufferFileSize - 1},
 		}, nil
 	}
-
-	sessions := NewSessionManager()
-	t.Cleanup(sessions.Close)
-	router := NewCommandRouter(sessions, nil, RouterOptions{})
 
 	resp := router.Execute(ipc.TmuxRequest{
 		Command: "load-buffer",
@@ -823,26 +819,20 @@ func TestHandleSaveBufferCleanupOnFailure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			originalOpenSaveBufferFile := openSaveBufferFile
-			originalRemoveSaveBufferFile := removeSaveBufferFile
-			t.Cleanup(func() {
-				openSaveBufferFile = originalOpenSaveBufferFile
-				removeSaveBufferFile = originalRemoveSaveBufferFile
-			})
-
-			openSaveBufferFile = func(path string, flag int, perm os.FileMode) (saveBufferWriteCloser, error) {
-				return tt.file, nil
-			}
+			t.Parallel()
 
 			var removedPath string
-			removeSaveBufferFile = func(path string) error {
-				removedPath = path
-				return nil
-			}
 
 			sessions := NewSessionManager()
 			t.Cleanup(sessions.Close)
 			router := NewCommandRouter(sessions, nil, RouterOptions{})
+			router.openSaveBufferFile = func(path string, flag int, perm os.FileMode) (saveBufferWriteCloser, error) {
+				return tt.file, nil
+			}
+			router.removeSaveBufferFile = func(path string) error {
+				removedPath = path
+				return nil
+			}
 			router.buffers.Set("savebuf", []byte("payload"), false)
 
 			targetPath := filepath.Join(t.TempDir(), "out.txt")

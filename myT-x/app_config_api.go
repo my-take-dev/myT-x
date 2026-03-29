@@ -1,24 +1,12 @@
 package main
 
 import (
-	"errors"
 	"log/slog"
 	"maps"
 	"strings"
-	"time"
 
 	"myT-x/internal/config"
-	"myT-x/internal/install"
-	"myT-x/internal/tmux"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
-
-type configUpdatedEvent struct {
-	Config             config.Config `json:"config"`
-	Version            uint64        `json:"version"`
-	UpdatedAtUnixMilli int64         `json:"updated_at_unix_milli"`
-}
 
 // ValidationRules contains validation parameters shared between backend and frontend.
 type ValidationRules struct {
@@ -27,13 +15,13 @@ type ValidationRules struct {
 
 // GetConfig returns loaded config.
 func (a *App) GetConfig() config.Config {
-	return a.getConfigSnapshot()
+	return a.configState.Snapshot()
 }
 
 // GetConfigAndFlushWarnings returns loaded config and emits any pending startup warnings.
 func (a *App) GetConfigAndFlushWarnings() config.Config {
 	a.flushPendingConfigLoadWarnings()
-	return a.getConfigSnapshot()
+	return a.configState.Snapshot()
 }
 
 func (a *App) flushPendingConfigLoadWarnings() {
@@ -51,7 +39,7 @@ func (a *App) flushPendingConfigLoadWarnings() {
 // SaveConfig validates and persists cfg to disk, then updates in-memory config.
 // The config:updated event carries the normalized config (with defaults filled).
 func (a *App) SaveConfig(cfg config.Config) error {
-	event, err := a.saveConfigWithLock(cfg)
+	event, err := a.configState.Save(cfg)
 	if err != nil {
 		return err
 	}
@@ -60,9 +48,15 @@ func (a *App) SaveConfig(cfg config.Config) error {
 }
 
 // ToggleViewerSidebarMode flips the persisted viewer sidebar mode using the
-// latest in-memory config snapshot under cfgSaveMu to avoid stale overwrite.
+// latest in-memory config snapshot under the save lock to avoid stale overwrite.
 func (a *App) ToggleViewerSidebarMode() error {
-	event, err := a.toggleViewerSidebarModeWithLock()
+	event, err := a.configState.Update(func(cfg *config.Config) {
+		if strings.TrimSpace(cfg.ViewerSidebarMode) == "docked" {
+			cfg.ViewerSidebarMode = config.DefaultConfig().ViewerSidebarMode
+		} else {
+			cfg.ViewerSidebarMode = "docked"
+		}
+	})
 	if err != nil {
 		return err
 	}
@@ -70,10 +64,10 @@ func (a *App) ToggleViewerSidebarMode() error {
 	return nil
 }
 
-func (a *App) emitConfigUpdatedEvent(event configUpdatedEvent) {
+func (a *App) emitConfigUpdatedEvent(event config.UpdatedEvent) {
 	a.applyRuntimePaneEnvUpdate(event)
 	a.applyRuntimeClaudeEnvUpdate(event)
-	// Event emission intentionally happens outside cfgSaveMu.
+	// Event emission intentionally happens outside the save lock.
 	// Concurrent saves are ordered by Version, and frontend consumers must
 	// treat the highest version as authoritative.
 	a.emitRuntimeEvent("config:updated", event)
@@ -81,7 +75,7 @@ func (a *App) emitConfigUpdatedEvent(event configUpdatedEvent) {
 
 // applyRuntimePaneEnvUpdate updates router pane_env defaults while preventing
 // out-of-order writes from concurrent SaveConfig calls.
-func (a *App) applyRuntimePaneEnvUpdate(event configUpdatedEvent) {
+func (a *App) applyRuntimePaneEnvUpdate(event config.UpdatedEvent) {
 	router, guardErr := a.requireRouter()
 	if guardErr != nil {
 		slog.Warn("[WARN-CONFIG] skipped PaneEnv update: router unavailable", "error", guardErr)
@@ -104,7 +98,7 @@ func (a *App) applyRuntimePaneEnvUpdate(event configUpdatedEvent) {
 
 // applyRuntimeClaudeEnvUpdate updates router claude_env while preventing
 // out-of-order writes from concurrent SaveConfig calls.
-func (a *App) applyRuntimeClaudeEnvUpdate(event configUpdatedEvent) {
+func (a *App) applyRuntimeClaudeEnvUpdate(event config.UpdatedEvent) {
 	router, guardErr := a.requireRouter()
 	if guardErr != nil {
 		slog.Warn("[WARN-CONFIG] skipped ClaudeEnv update: router unavailable", "error", guardErr)
@@ -127,44 +121,6 @@ func (a *App) applyRuntimeClaudeEnvUpdate(event configUpdatedEvent) {
 	a.claudeEnvAppliedVersion = event.Version
 }
 
-// saveConfigWithLock persists cfg, updates the in-memory snapshot, and bumps event version under cfgSaveMu.
-func (a *App) saveConfigWithLock(cfg config.Config) (configUpdatedEvent, error) {
-	a.cfgSaveMu.Lock()
-	defer a.cfgSaveMu.Unlock()
-
-	return a.saveConfigLocked(cfg)
-}
-
-func (a *App) toggleViewerSidebarModeWithLock() (configUpdatedEvent, error) {
-	a.cfgSaveMu.Lock()
-	defer a.cfgSaveMu.Unlock()
-
-	current := a.getConfigSnapshot()
-	if strings.TrimSpace(current.ViewerSidebarMode) == "docked" {
-		current.ViewerSidebarMode = config.DefaultConfig().ViewerSidebarMode
-	} else {
-		current.ViewerSidebarMode = "docked"
-	}
-	return a.saveConfigLocked(current)
-}
-
-// saveConfigLocked persists cfg and updates the in-memory snapshot.
-// REQUIRES: a.cfgSaveMu must be held by the caller.
-func (a *App) saveConfigLocked(cfg config.Config) (configUpdatedEvent, error) {
-	normalized, err := config.Save(a.configPath, cfg)
-	if err != nil {
-		return configUpdatedEvent{}, err
-	}
-	a.setConfigSnapshot(normalized)
-	version := a.configEventVersion.Add(1)
-
-	return configUpdatedEvent{
-		Config:             config.Clone(normalized),
-		Version:            version,
-		UpdatedAtUnixMilli: time.Now().UnixMilli(),
-	}, nil
-}
-
 // GetAllowedShells returns the list of allowed shell executables for UI dropdown.
 func (a *App) GetAllowedShells() []string {
 	return config.AllowedShellList()
@@ -184,82 +140,4 @@ func (a *App) GetClaudeEnvVarDescriptions() map[string]string {
 	cp := make(map[string]string, len(claudeEnvVarDescriptions))
 	maps.Copy(cp, claudeEnvVarDescriptions)
 	return cp
-}
-
-// ListSessions returns current session snapshots.
-func (a *App) ListSessions() []tmux.SessionSnapshot {
-	sessions, err := a.requireSessions()
-	if err != nil {
-		return nil
-	}
-	return sessions.Snapshot()
-}
-
-// PickSessionDirectory opens a directory picker for new session root.
-func (a *App) PickSessionDirectory() (string, error) {
-	ctx := a.runtimeContext()
-	if ctx == nil {
-		return "", errors.New("app context is not ready")
-	}
-	dir, err := runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
-		Title: "Select Session Root Directory",
-	})
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(dir), nil
-}
-
-// SetActiveSession sets current active session for status line and UI.
-func (a *App) SetActiveSession(sessionName string) {
-	name := a.setActiveSessionName(sessionName)
-	a.emitRuntimeEvent("tmux:active-session", map[string]string{"name": name})
-}
-
-// GetActiveSession returns active session name.
-func (a *App) GetActiveSession() string {
-	return a.getActiveSessionName()
-}
-
-func (a *App) setActiveSessionName(sessionName string) string {
-	normalized := strings.TrimSpace(sessionName)
-	a.activeSessMu.Lock()
-	a.activeSess = normalized
-	a.activeSessMu.Unlock()
-	return normalized
-}
-
-func (a *App) getActiveSessionName() string {
-	a.activeSessMu.RLock()
-	name := a.activeSess
-	a.activeSessMu.RUnlock()
-	return name
-}
-
-// DetachSession currently keeps process alive and only emits UI event.
-func (a *App) DetachSession(sessionName string) {
-	a.emitRuntimeEvent("tmux:session-detached", map[string]string{"name": sessionName})
-}
-
-// IsAgentTeamsAvailable reports whether Agent Teams can be started.
-// Returns true when tmux CLI shim is installed and available on PATH.
-func (a *App) IsAgentTeamsAvailable() bool {
-	router, err := a.requireRouter()
-	if err != nil {
-		return false
-	}
-	return router.ShimAvailable()
-}
-
-// InstallTmuxShim triggers shim installer manually.
-func (a *App) InstallTmuxShim() (install.ShimInstallResult, error) {
-	result, err := ensureShimInstalledFn(a.workspace)
-	if err != nil {
-		return install.ShimInstallResult{}, err
-	}
-	if router, guardErr := a.requireRouter(); guardErr == nil {
-		router.SetShimAvailable(true)
-	}
-	a.emitRuntimeEvent("tmux:shim-installed", result)
-	return result, nil
 }

@@ -52,19 +52,19 @@ func TestGetEmbeddedShim_WithData(t *testing.T) {
 	}
 }
 
+// testEnsurePathFn returns a process-local PATH updater for use as the
+// ensurePathFn parameter to ensureShimInstalledWith (no registry writes).
+func testEnsurePathFn() func(string) (bool, error) {
+	return func(dir string) (bool, error) {
+		return EnsureProcessPathContains(dir), nil
+	}
+}
+
 // setupEmbedTestEnv sets up LOCALAPPDATA and PATH for shim install tests and
 // redirects PATH mutation to process-local updates (no registry writes).
 // Returns the installDir path.
-// NOTE: This helper mutates package-level test seams; callers must not use
-// t.Parallel() in tests that invoke this helper.
 func setupEmbedTestEnv(t *testing.T) string {
 	t.Helper()
-
-	origEnsurePathContains := ensurePathContainsFn
-	t.Cleanup(func() { ensurePathContainsFn = origEnsurePathContains })
-	ensurePathContainsFn = func(dir string) (bool, error) {
-		return EnsureProcessPathContains(dir), nil
-	}
 
 	origLocal := os.Getenv("LOCALAPPDATA")
 	t.Cleanup(func() { _ = os.Setenv("LOCALAPPDATA", origLocal) })
@@ -92,9 +92,9 @@ func TestEnsureShimInstalled_EmbeddedPath(t *testing.T) {
 
 	installDir := setupEmbedTestEnv(t)
 
-	result, err := EnsureShimInstalled("")
+	result, err := ensureShimInstalledWith(testEnsurePathFn(), "")
 	if err != nil {
-		t.Fatalf("EnsureShimInstalled() error = %v", err)
+		t.Fatalf("ensureShimInstalledWith() error = %v", err)
 	}
 
 	target := filepath.Join(installDir, "tmux.exe")
@@ -142,9 +142,9 @@ func TestEnsureShimInstalled_FallbackWhenNoEmbed(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Remove(shimSource) })
 
-	result, err := EnsureShimInstalled("")
+	result, err := ensureShimInstalledWith(testEnsurePathFn(), "")
 	if err != nil {
-		t.Fatalf("EnsureShimInstalled() error = %v", err)
+		t.Fatalf("ensureShimInstalledWith() error = %v", err)
 	}
 
 	target := filepath.Join(installDir, "tmux.exe")
@@ -181,9 +181,11 @@ func TestEnsureShimInstalled_SkipsWhenHashMatches(t *testing.T) {
 
 	installDir := setupEmbedTestEnv(t)
 
+	ensurePathFn := testEnsurePathFn()
+
 	// First install: writes tmux.exe + hash file.
-	if _, err := EnsureShimInstalled(""); err != nil {
-		t.Fatalf("first EnsureShimInstalled() error = %v", err)
+	if _, err := ensureShimInstalledWith(ensurePathFn, ""); err != nil {
+		t.Fatalf("first ensureShimInstalledWith() error = %v", err)
 	}
 
 	target := filepath.Join(installDir, "tmux.exe")
@@ -194,8 +196,8 @@ func TestEnsureShimInstalled_SkipsWhenHashMatches(t *testing.T) {
 	modTime1 := info1.ModTime()
 
 	// Second install with same content: should skip write.
-	if _, err := EnsureShimInstalled(""); err != nil {
-		t.Fatalf("second EnsureShimInstalled() error = %v", err)
+	if _, err := ensureShimInstalledWith(ensurePathFn, ""); err != nil {
+		t.Fatalf("second ensureShimInstalledWith() error = %v", err)
 	}
 
 	info2, err := os.Stat(target)
@@ -216,9 +218,11 @@ func TestEnsureShimInstalled_OverwritesWhenHashDiffers(t *testing.T) {
 
 	installDir := setupEmbedTestEnv(t)
 
+	ensurePathFn := testEnsurePathFn()
+
 	// First install.
-	if _, err := EnsureShimInstalled(""); err != nil {
-		t.Fatalf("first EnsureShimInstalled() error = %v", err)
+	if _, err := ensureShimInstalledWith(ensurePathFn, ""); err != nil {
+		t.Fatalf("first ensureShimInstalledWith() error = %v", err)
 	}
 
 	target := filepath.Join(installDir, "tmux.exe")
@@ -228,8 +232,8 @@ func TestEnsureShimInstalled_OverwritesWhenHashDiffers(t *testing.T) {
 	embeddedShimBinary = v2Content
 
 	// Second install: should overwrite.
-	if _, err := EnsureShimInstalled(""); err != nil {
-		t.Fatalf("second EnsureShimInstalled() error = %v", err)
+	if _, err := ensureShimInstalledWith(ensurePathFn, ""); err != nil {
+		t.Fatalf("second ensureShimInstalledWith() error = %v", err)
 	}
 
 	got, err := os.ReadFile(target)

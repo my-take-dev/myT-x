@@ -1,14 +1,15 @@
 import {type Dispatch, type MutableRefObject, type SetStateAction, useEffect} from "react";
 import type {Terminal} from "@xterm/xterm";
-import {ClipboardGetText, EventsOn} from "../../wailsjs/runtime/runtime";
-import {writeClipboardText} from "../utils/clipboardUtils";
-import {api} from "../api";
-import {registerPaneHandler, isConnected as isWsConnected, setReconnectCallback} from "../services/paneDataStream";
+import {createTerminalImeInputGate} from "../utils/terminalIme";
 import {useTmuxStore} from "../stores/tmuxStore";
-import {shouldRecoverTerminalFocus, type TerminalFocusRecoveryReason} from "../utils/terminalFocus";
-import {createTerminalImeInputGate, shouldLetXtermHandleImeEvent} from "../utils/terminalIme";
-import {pasteTextSafely} from "../utils/terminalPaste";
-import {resolveActivePaneID} from "../utils/session";
+import {
+    isTerminalImeRecoveryEvent,
+    TERMINAL_IME_RECOVERY_EVENT,
+    type TerminalImeRecoveryReason,
+} from "../utils/imeRecovery";
+import type {TerminalEventShared} from "./useTerminalKeyHandler";
+import {setupKeyHandler} from "./useTerminalKeyHandler";
+import {setupPaneDataStream} from "./useTerminalPaneData";
 
 interface UseTerminalEventsOptions {
     paneId: string;
@@ -62,30 +63,27 @@ export function useTerminalEvents({
             return;
         }
 
-        let disposed = false;
-        let rafWriteID: number | null = null;
-        let scrollWriteTimer: ReturnType<typeof window.setTimeout> | null = null;
-        let copyOnSelectTimer: ReturnType<typeof window.setTimeout> | null = null;
-        let focusRecoverRAFId: number | null = null;
-        let focusRecoverTimer: ReturnType<typeof window.setTimeout> | null = null;
-        // M-06: Skip rendering when page tab is hidden. Backend continues processing
-        // pane output; rendering resumes automatically when the tab becomes visible
-        // and the next pane:data event arrives. See task/速度改善.md.
-        let pageHidden = document.hidden;
-        const pendingWrites: string[] = [];
+        // --- Shared mutable state for the useEffect lifetime ---
+        const shared: TerminalEventShared = {
+            disposed: false,
+            // M-06: Skip rendering when page tab is hidden. Backend continues processing
+            // pane output; rendering resumes automatically when the tab becomes visible
+            // and the next pane:data event arrives.
+            pageHidden: document.hidden,
+            isComposing: false,
+            composingOutput: [],
+        };
 
-        // --- IME composition バッファリング ---
-        let isComposing = false;
-        let composingOutput: string[] = [];
-        const compositionTextarea = term.textarea ?? null;
+        // --- IME composition core ---
         const imeInputGate = createTerminalImeInputGate();
+        const compositionTextarea = term.textarea ?? null;
 
         const flushComposedOutput = () => {
-            if (composingOutput.length === 0) {
+            if (shared.composingOutput.length === 0) {
                 return;
             }
-            const buffered = composingOutput.join("");
-            composingOutput.length = 0;
+            const buffered = shared.composingOutput.join("");
+            shared.composingOutput.length = 0;
             // useTerminalSetup のクリーンアップが先に実行され term.dispose() が
             // 呼ばれた後にこの関数が到達する競合窓がある。try-catch で安全に吸収する。
             try {
@@ -96,7 +94,7 @@ export function useTerminalEvents({
         };
 
         const finishComposition = (commitEnded: boolean, eventData: string = "") => {
-            isComposing = false;
+            shared.isComposing = false;
             isComposingRef.current = false;
             try {
                 if (commitEnded) {
@@ -109,395 +107,32 @@ export function useTerminalEvents({
             }
         };
 
-        const onCompositionStart = () => {
-            isComposing = true;
-            isComposingRef.current = true;
-            imeInputGate.markCompositionStart();
-        };
-        const onCompositionEnd = (e: Event) => {
-            const compositionEvent = e as CompositionEvent;
-            finishComposition(true, compositionEvent.data ?? "");
-        };
+        // --- Setup sub-systems ---
 
-        const isCurrentPaneActive = (): boolean => {
-            const state = useTmuxStore.getState();
-            if (!state.activeSession) {
-                return false;
-            }
-            const activeSessionSnapshot = state.sessions.find((session) => session.name === state.activeSession) ?? null;
-            return resolveActivePaneID(activeSessionSnapshot) === paneId;
-        };
-
-        const clearFocusRecoveryTimers = () => {
-            if (focusRecoverRAFId !== null) {
-                window.cancelAnimationFrame(focusRecoverRAFId);
-                focusRecoverRAFId = null;
-            }
-            if (focusRecoverTimer !== null) {
-                window.clearTimeout(focusRecoverTimer);
-                focusRecoverTimer = null;
-            }
-        };
-
-        const shouldAttemptTerminalFocusRecovery = (reason: TerminalFocusRecoveryReason): boolean => {
-            if (disposed || pageHidden || !document.hasFocus() || !isCurrentPaneActive()) {
-                return false;
-            }
-            if (reason === "composition-blur" && !isComposing) {
-                return false;
-            }
-            return shouldRecoverTerminalFocus(reason, document.activeElement, term.element ?? null, compositionTextarea);
-        };
-
-        const scheduleTerminalFocusRecovery = (reason: TerminalFocusRecoveryReason): void => {
-            clearFocusRecoveryTimers();
-            focusRecoverRAFId = window.requestAnimationFrame(() => {
-                focusRecoverRAFId = null;
-                focusRecoverTimer = window.setTimeout(() => {
-                    focusRecoverTimer = null;
-                    if (shouldAttemptTerminalFocusRecovery(reason)) {
-                        try {
-                            term.focus();
-                        } catch (err) {
-                            if (import.meta.env.DEV) {
-                                console.warn("[DEBUG-terminal] focus recovery failed", err);
-                            }
-                        }
-                        return;
-                    }
-                    if (isComposing && !pageHidden && document.hasFocus()) {
-                        // IME変換中に意図的に他要素へフォーカスが移った場合は、
-                        // stale isComposing ロックを避けるため状態を確定させる。
-                        finishComposition(false);
-                    }
-                }, 0);
-            });
-        };
-
-        // compositionend が発火しない異常時（フォーカス喪失等）の安全弁。
-        // 即 finish せず、1フレーム後に activeElement を確認してから復元可否を判定する。
-        const onBlur = () => {
-            if (isComposing) {
-                scheduleTerminalFocusRecovery("composition-blur");
-            }
-        };
-
-        const onWindowFocus = () => {
-            if (!isCurrentPaneActive()) {
-                return;
-            }
-            scheduleTerminalFocusRecovery("window-focus");
-        };
-
-        const onVisibilityChange = () => {
-            pageHidden = document.hidden;
-            if (pageHidden || !isCurrentPaneActive()) {
-                return;
-            }
-            scheduleTerminalFocusRecovery("visibilitychange");
-        };
-
-        if (compositionTextarea) {
-            compositionTextarea.addEventListener("compositionstart", onCompositionStart);
-            compositionTextarea.addEventListener("compositionend", onCompositionEnd);
-            compositionTextarea.addEventListener("blur", onBlur);
-        }
-        window.addEventListener("focus", onWindowFocus);
-        document.addEventListener("visibilitychange", onVisibilityChange);
-
-        // --- Copy on Select ---
-        // Do NOT cancel the timer on deselection (click-away). The selection value
-        // is captured at schedule time and copied after debounce, preventing the
-        // race condition where select → immediate click would lose the copy.
-        const selectionDisposable = term.onSelectionChange(() => {
-            const selection = term.getSelection();
-            if (!selection) {
-                return;
-            }
-            if (copyOnSelectTimer !== null) window.clearTimeout(copyOnSelectTimer);
-            copyOnSelectTimer = window.setTimeout(() => {
-                copyOnSelectTimer = null;
-                if (disposed) return;
-                void writeClipboardText(selection).catch((err) => {
-                    console.warn("[terminal] copy-on-select clipboard write failed", err);
-                });
-            }, 100);
+        const keyCleanup = setupKeyHandler({
+            term,
+            shared,
+            ime: {gate: imeInputGate, compositionTextarea, finishComposition},
+            paneId,
+            isComposingRef,
+            syncInputModeRef,
+            setSearchOpen,
+            setPrefixMode,
         });
 
-        const pasteClipboardText = (source: "keyboard" | "contextmenu") => {
-            if (disposed) return;
-            // When paste occurs during IME composition, cancel the composition
-            // and prioritize the paste. The paste path ultimately triggers onData
-            // (via pasteTextSafely → target.paste()), and composing=true would
-            // cause imeInputGate to suppress it.
-            // NOTE: finishComposition(false) resets our app-level state only.
-            // The browser's native IME session remains until the next
-            // compositionend event, at which point state re-synchronizes.
-            // If a stale compositionend fires after cancel, markCompositionEnd runs
-            // from non-composing state; harmless because the dedupe window simply
-            // expires without matching any payload.
-            if (isComposing) {
-                finishComposition(false);
-            }
-            void ClipboardGetText()
-                .then((text) => {
-                    if (disposed) return;
-                    const pasted = pasteTextSafely(term, text);
-                    if (text.length > 0 && !pasted) {
-                        console.warn("[terminal] paste discarded after normalization", {paneId, source, textLen: text.length});
-                    }
-                })
-                .catch((err) => {
-                    if (disposed) return;
-                    console.warn(`[terminal] clipboard read failed for pane=${paneId} source=${source}`, err);
-                });
-        };
-
-        // --- 右クリック: 選択あり->コピー / 選択なし->ペースト ---
-        const termEl = term.element;
-        const handleContextMenu = (e: MouseEvent) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const selection = term.getSelection();
-            if (selection) {
-                void writeClipboardText(selection).catch((err) => {
-                    console.warn("[terminal] context-menu clipboard write failed", err);
-                });
-                term.clearSelection();
-            } else {
-                pasteClipboardText("contextmenu");
-            }
-        };
-        if (termEl) {
-            termEl.addEventListener("contextmenu", handleContextMenu);
-        }
-
-        term.attachCustomKeyEventHandler((event) => {
-            // Allow xterm's internal CompositionHelper to handle IME-related events.
-            // xterm's contract here is "true = let xterm process the event".
-            if (shouldLetXtermHandleImeEvent(event, isComposing)) {
-                return true;
-            }
-            // Only process keydown events for shortcuts; let xterm handle keyup/keypress normally.
-            if (event.type !== "keydown") {
-                return true;
-            }
-
-            // Ctrl+B: tmux prefix mode
-            const key = event.key.toLowerCase();
-
-            if (event.ctrlKey && key === "b") {
-                setPrefixMode(true);
-                return false;
-            }
-
-            // Ctrl+F / Ctrl+Shift+F: 検索バーを開く
-            if (event.ctrlKey && key === "f") {
-                setSearchOpen(true);
-                return false;
-            }
-
-            // Smart Ctrl+C: 選択あり->コピー、選択なし->SIGINT 送信
-            if (event.ctrlKey && key === "c") {
-                const selection = term.getSelection();
-                if (selection) {
-                    void writeClipboardText(selection).catch((err) => {
-                        console.warn("[terminal] ctrl+c clipboard write failed", err);
-                    });
-                    term.clearSelection();
-                    return false;
-                }
-                return true;
-            }
-
-            // Ctrl+V: クリップボードからペースト（ブラケットペースト対応）
-            if (event.ctrlKey && key === "v") {
-                event.preventDefault();
-                event.stopPropagation();
-                pasteClipboardText("keyboard");
-                return false;
-            }
-            return true;
-        });
-
-        // --- キー入力送信 ---
-        const inputDisposable = term.onData((input) => {
-            const filteredInput = imeInputGate.filterInput(input);
-            if (filteredInput === null || filteredInput.length === 0) {
-                if (import.meta.env.DEV) {
-                    console.warn("[DEBUG-ime] suppressed onData payload", {paneId, input});
-                }
-                return;
-            }
-            if (import.meta.env.DEV && filteredInput !== input) {
-                console.warn("[DEBUG-ime] rewrote onData payload", {paneId, input, filteredInput});
-            }
-            if (syncInputModeRef.current) {
-                void api.SendSyncInput(paneId, filteredInput).catch((err) => {
-                    // Always warn — input loss is user-visible and must be diagnosable
-                    // even in production builds (not gated by DEV).
-                    console.warn(`[terminal] sync input failed for pane=${paneId}`, err);
-                });
-            } else {
-                void api.SendInput(paneId, filteredInput).catch((err) => {
-                    // (same rationale as SendSyncInput above)
-                    console.warn(`[terminal] input failed for pane=${paneId}`, err);
-                });
-            }
-        });
-
-        // --- バックエンドからの出力を RAF でバッチ書き込み ---
-        const flushPendingWrites = () => {
-            rafWriteID = null;
-            if (disposed || pendingWrites.length === 0) {
-                return;
-            }
-            if (isComposing) {
-                // During IME composition, buffer to composingOutput.
-                // join("") is acceptable here: human typing speed, low frequency.
-                composingOutput.push(pendingWrites.join(""));
-                pendingWrites.length = 0;
-                return;
-            }
-            // xterm.js buffers write() calls internally and processes them in a
-            // single parseBuffer pass. Multiple write() calls avoid the intermediate
-            // join("") string allocation while achieving identical rendering output.
-            // See H-04 in task/速度改善.md.
-            try {
-                for (let i = 0; i < pendingWrites.length; i++) {
-                    term.write(pendingWrites[i]);
-                }
-            } catch (err) {
-                console.warn("[terminal] flushPendingWrites failed (terminal may be disposed)", err);
-            }
-            pendingWrites.length = 0;
-        };
-
-        const enqueuePendingWrite = (data: string) => {
-            // I-28: Guard against writes after cleanup.
-            if (disposed) return;
-
-            if (pageHidden) {
-                // M-06: Skip RAF scheduling when page/tab is hidden, but preserve
-                // data in the xterm.js internal buffer so that background command
-                // output is not lost (Wails desktop app: window minimised ≠ idle).
-                // term.write() is safe to call off-screen; xterm.js queues internally.
-                if (isComposing) {
-                    composingOutput.push(data);
-                    return;
-                }
-                try {
-                    term.write(data);
-                } catch (err) {
-                    console.warn("[terminal] hidden write failed (terminal may be disposed)", err);
-                }
-                return;
-            }
-
-            pendingWrites.push(data);
-            if (rafWriteID !== null) {
-                return;
-            }
-            rafWriteID = window.requestAnimationFrame(flushPendingWrites);
-        };
-
-        // --- C-1: Dual-listener approach for pane data ---
-        // Register BOTH WebSocket handler AND Wails IPC listener to ensure
-        // pane data is received regardless of WebSocket connection state.
-        //
-        // Priority: When WebSocket is connected and delivering data, IPC
-        // events are ignored to prevent duplicate rendering. When WebSocket
-        // is disconnected/failed, the IPC fallback is already in place and
-        // will deliver data sent by the backend via Wails EventsEmit.
-        //
-        // S-37: Design tradeoff — there is a brief window after component mount
-        // where wsActive is false and paneDataStream has not yet delivered its
-        // first frame. During that window both WS and IPC can process frames,
-        // potentially causing a single initial burst to be written twice.
-        // This is an acceptable tradeoff: the duplicate is at most one flush
-        // worth of data, it resolves itself on the next WS frame, and it is
-        // far preferable to dropping data during the startup race.
-
-        // Flag: set to true when WebSocket has delivered at least one frame.
-        // Once WebSocket proves working, IPC data is suppressed to avoid duplicates.
-        // I-20: wsActive is reset to false in the reconnect callback so that if the
-        // WS reconnects after a disconnection, the IPC suppression is re-evaluated
-        // from scratch — preventing stale "wsActive=true" from blocking IPC data
-        // during the window between reconnection and the first new WS frame.
-        let wsActive = false;
-
-        // WebSocket binary stream: registerPaneHandler receives raw Uint8Array
-        // from paneDataStream module. Decode to string for xterm.js write().
-        // I-18: paneTextDecoder uses stream: true across frames within a single WS
-        // connection. On WS reconnect the old decoder may hold incomplete multi-byte
-        // bytes from the previous session, so we reset it via the reconnect callback.
-        // Using 'let' (not 'const') allows replacement with a fresh instance on reconnect.
-        let paneTextDecoder = new TextDecoder("utf-8");
-
-        // I-18 / I-20: Register a callback so that when paneDataStream (re)connects,
-        // we flush any buffered bytes from the old stream-mode decoder and create a
-        // fresh one, and reset wsActive so IPC suppression is re-evaluated cleanly.
-        setReconnectCallback(() => {
-            // Flush remaining bytes from the previous decoder session. This causes the
-            // decoder to emit any incomplete sequence as U+FFFD and then clear its buffer,
-            // preventing stale bytes from corrupting the start of the new stream.
-            try {
-                const flushed = paneTextDecoder.decode(new Uint8Array(), {stream: false});
-                if (flushed.length > 0) {
-                    enqueuePendingWrite(flushed);
-                }
-            } catch (err) {
-                if (import.meta.env.DEV) {
-                    console.warn("[DEBUG-terminal] decoder flush failed during reconnect", err);
-                }
-            }
-            paneTextDecoder = new TextDecoder("utf-8");
-            wsActive = false; // I-20: re-enable IPC fallback until WS proves delivery
-        });
-
-        const unregisterPane = registerPaneHandler(paneId, (rawData: Uint8Array) => {
-            wsActive = true;
-            // stream: true preserves incomplete multi-byte sequences across chunk boundaries,
-            // preventing U+FFFD replacement characters when UTF-8 is split across WebSocket frames.
-            const text = paneTextDecoder.decode(rawData, {stream: true});
-            enqueuePendingWrite(text);
-        });
-
-        // Wails IPC fallback: always registered so that if WebSocket never
-        // connects or disconnects, pane data still arrives via EventsEmit.
-        // The backend sends "pane:data:<paneId>" events when no WebSocket
-        // subscription exists for the pane (or as a fallback path).
-        const cancelIpcListener = EventsOn(`pane:data:${paneId}`, (data: unknown) => {
-            // Suppress IPC data when WebSocket is actively delivering.
-            // Check both the wsActive flag (has WS delivered data?) and
-            // isWsConnected() (is WS currently open?) to handle the case
-            // where WS was active but just disconnected — in that case,
-            // wsActive is true but isWsConnected() is false, so we should
-            // accept IPC data again.
-            if (wsActive && isWsConnected()) {
-                return;
-            }
-            // Reset wsActive when WS is no longer connected so that
-            // subsequent IPC data flows through immediately.
-            if (wsActive && !isWsConnected()) {
-                wsActive = false;
-            }
-            if (typeof data === "string") {
-                enqueuePendingWrite(data);
-            } else {
-                console.warn(`[terminal] IPC received non-string data for pane=${paneId}, ignoring`, typeof data);
-            }
-        });
+        const paneDataCleanup = setupPaneDataStream({term, shared, paneId});
 
         // --- スクロール位置インジケータ ---
+        let scrollWriteTimer: ReturnType<typeof window.setTimeout> | null = null;
+
         const updateScrollState = () => {
-            if (disposed) return;
+            if (shared.disposed) return;
             const buf = term.buffer.active;
             const atBottom = buf.viewportY >= buf.baseY;
             setScrollAtBottom(atBottom);
         };
         const scheduleScrollWriteUpdate = () => {
-            if (disposed || scrollWriteTimer !== null) {
+            if (shared.disposed || scrollWriteTimer !== null) {
                 return;
             }
             scrollWriteTimer = window.setTimeout(() => {
@@ -508,67 +143,74 @@ export function useTerminalEvents({
         const scrollDisposable = term.onScroll(updateScrollState);
         const writeDisposable = term.onWriteParsed(scheduleScrollWriteUpdate);
 
-        return () => {
-            disposed = true;
+        // --- IME recovery (global reset signal from MenuBar) ---
+        let imeResetTimer: ReturnType<typeof window.setTimeout> | null = null;
 
-            if (rafWriteID !== null) {
-                window.cancelAnimationFrame(rafWriteID);
+        const resetIme = (reason: TerminalImeRecoveryReason): void => {
+            if (imeResetTimer !== null) {
+                window.clearTimeout(imeResetTimer);
+                imeResetTimer = null;
             }
+            const wasComposing = shared.isComposing;
+            if (shared.isComposing) {
+                finishComposition(false);
+            }
+            imeInputGate.dispose();
+            try {
+                term.blur();
+            } catch {
+                // Terminal may already be disposed
+            }
+            imeResetTimer = window.setTimeout(() => {
+                imeResetTimer = null;
+                if (shared.disposed) return;
+                try {
+                    term.focus();
+                } catch {
+                    // Terminal may already be disposed
+                }
+            }, 100);
+            console.warn("[IME-RECOVERY] reset executed", {paneId, reason, wasComposing});
+        };
+
+        const handleTerminalImeRecovery = (event: Event): void => {
+            if (shared.disposed || !isTerminalImeRecoveryEvent(event) || event.detail.paneId !== paneId) {
+                return;
+            }
+            resetIme(event.detail.reason);
+        };
+        window.addEventListener(TERMINAL_IME_RECOVERY_EVENT, handleTerminalImeRecovery);
+
+        // --- Cleanup ---
+
+        return () => {
+            // 1. Signal disposal first — async callbacks in sub-systems
+            //    check this flag to short-circuit, preventing writes to a
+            //    disposed terminal or stale state updates.
+            shared.disposed = true;
+
+            // 2. Tear down sub-systems (order is not critical since
+            //    disposed=true already prevents cross-system interactions).
+            keyCleanup();
+            paneDataCleanup();
+
             if (scrollWriteTimer !== null) {
                 window.clearTimeout(scrollWriteTimer);
             }
-            if (copyOnSelectTimer !== null) {
-                window.clearTimeout(copyOnSelectTimer);
-            }
-            clearFocusRecoveryTimers();
-
-            isComposing = false;
-            isComposingRef.current = false;
-            composingOutput.length = 0;
-            pendingWrites.length = 0;
-            imeInputGate.dispose();
-
-            if (compositionTextarea) {
-                compositionTextarea.removeEventListener("compositionstart", onCompositionStart);
-                compositionTextarea.removeEventListener("compositionend", onCompositionEnd);
-                compositionTextarea.removeEventListener("blur", onBlur);
-            }
-            termEl?.removeEventListener("contextmenu", handleContextMenu);
-            window.removeEventListener("focus", onWindowFocus);
-            document.removeEventListener("visibilitychange", onVisibilityChange);
-
-            // S-11: Flush any incomplete multi-byte sequence buffered by the
-            // streaming TextDecoder. decode() with no arguments forces the
-            // decoder to emit remaining bytes and resets internal state,
-            // preventing a memory leak from held buffers.
-            try {
-                paneTextDecoder.decode();
-            } catch (err) {
-                if (import.meta.env.DEV) {
-                    console.warn("[DEBUG-terminal] decoder final flush failed", err);
-                }
-            }
-
-            // Clear the reconnect callback so that paneDataStream does not call into
-            // a stale closure after this component unmounts. (I-18 / I-20 cleanup)
-            setReconnectCallback(null);
-
-            // Unsubscribe pane from WebSocket stream and remove handler.
-            unregisterPane();
-
-            // Remove Wails IPC fallback listener (#C-1).
-            try {
-                cancelIpcListener();
-            } catch (err) {
-                if (import.meta.env.DEV) {
-                    console.warn("[DEBUG-terminal] IPC listener cleanup failed", err);
-                }
-            }
-
-            selectionDisposable.dispose();
             scrollDisposable.dispose();
             writeDisposable.dispose();
-            inputDisposable.dispose();
+
+            // IME reset listener + pending timer
+            window.removeEventListener(TERMINAL_IME_RECOVERY_EVENT, handleTerminalImeRecovery);
+            if (imeResetTimer !== null) {
+                window.clearTimeout(imeResetTimer);
+            }
+
+            // Final IME state cleanup
+            shared.isComposing = false;
+            isComposingRef.current = false;
+            shared.composingOutput.length = 0;
+            imeInputGate.dispose();
         };
         // Zustand store actions (setPrefixMode) and React setState dispatchers
         // (setSearchOpen, setScrollAtBottom) are stable references across renders.

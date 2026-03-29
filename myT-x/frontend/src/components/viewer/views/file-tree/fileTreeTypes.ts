@@ -44,3 +44,17 @@ export interface FlatFileNode extends FlatNodeBase {
 }
 
 export type FlatNode = FlatDirNode | FlatFileNode;
+
+/** Backend SearchFileResult returned by DevPanelSearchFiles. */
+export interface SearchFileResult {
+    readonly path: string;
+    readonly name: string;
+    readonly is_name_match: boolean;
+    readonly content_lines: readonly SearchContentLine[];
+}
+
+/** Backend SearchContentLine — a single matching line within a file. */
+export interface SearchContentLine {
+    readonly line: number;
+    readonly content: string;
+}

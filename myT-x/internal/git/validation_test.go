@@ -127,6 +127,17 @@ func TestSanitizeCustomName(t *testing.T) {
 		{"only special", "@#$", "work"},
 		{"hyphens ok", "my-branch", "my-branch"},
 		{"underscores ok", "my_branch", "my_branch"},
+		// Slash/dot/backslash → hyphen conversion
+		{"slash to hyphen", "feature/user-auth", "feature-user-auth"},
+		{"nested slash", "feature/auth/login", "feature-auth-login"},
+		{"backslash to hyphen", `feature\auth`, "feature-auth"},
+		{"dot to hyphen", "v1.0.0", "v1-0-0"},
+		{"mixed separators", "feature/v1.0/auth", "feature-v1-0-auth"},
+		{"consecutive hyphens collapsed", "a//b", "a-b"},
+		{"leading slash stripped", "/feature", "feature"},
+		{"trailing slash stripped", "feature/", "feature"},
+		{"only slashes", "///", "work"},
+		{"slash and special", "feat/@branch!", "feat-branch"},
 	}
 
 	for _, tt := range tests {

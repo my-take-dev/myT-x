@@ -5,5 +5,19 @@
 @import "./styles/notifications.css";
 @import "./styles/responsive.css";
 @import "./styles/settings.css";
-@import "./styles/viewer.css";
+/* Viewer panel — order matters: shared → file-tree → diff-view → git-graph
+   (diff-view defines diff primitives reused by git-graph;
+    file-tree defines tree-node/sidebar classes reused by diff-view).
+   Remaining 5 files (error-log, input-history, mcp-manager, scheduler,
+   orchestrator-teams) have no inter-file dependencies — order is arbitrary. */
+@import "./styles/viewer/shared.css";
+@import "./styles/viewer/file-tree.css";
+@import "./styles/viewer/diff-view.css";
+@import "./styles/viewer/git-graph.css";
+@import "./styles/viewer/error-log.css";
+@import "./styles/viewer/input-history.css";
+@import "./styles/viewer/mcp-manager.css";
+@import "./styles/viewer/scheduler.css";
+@import "./styles/viewer/task-scheduler.css";
+@import "./styles/viewer/orchestrator-teams.css";
 @import "./styles/chat.css";

@@ -1,7 +1,10 @@
+import {useCallback, useEffect, useState} from "react";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {FileContentViewer} from "./FileContentViewer";
+import {FileSearchPanel} from "./FileSearchPanel";
 import {FileTreeSidebar} from "./FileTreeSidebar";
+import {useFileSearch} from "./useFileSearch";
 import {useFileTree} from "./useFileTree";
 
 export function FileTreeView() {
@@ -20,6 +23,41 @@ export function FileTreeView() {
         loadRoot,
         activeSession,
     } = useFileTree();
+
+    const {query, setQuery, results, isSearching, searchError, clearSearch} = useFileSearch();
+    const [isSearchMode, setIsSearchMode] = useState(false);
+
+    const handleSearchOpen = useCallback(() => setIsSearchMode(true), []);
+    const handleSearchClose = useCallback(() => {
+        setIsSearchMode(false);
+        clearSearch();
+    }, [clearSearch]);
+
+    // Double-click handler: select file + close search.
+    const handleOpenFile = useCallback((path: string) => {
+        selectFile(path);
+        setIsSearchMode(false);
+    }, [selectFile]);
+
+    // Ctrl+F handler — skip when focus is inside a terminal pane to avoid
+    // conflicting with the terminal's own Ctrl+F search bar.
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => {
+            if (e.ctrlKey && e.key === "f") {
+                if (document.activeElement?.closest(".xterm")) return;
+                e.preventDefault();
+                setIsSearchMode(true);
+            }
+        };
+        document.addEventListener("keydown", handler);
+        return () => document.removeEventListener("keydown", handler);
+    }, []);
+
+    // Reset search mode on session change.
+    useEffect(() => {
+        setIsSearchMode(false);
+        clearSearch();
+    }, [activeSession, clearSearch]);
 
     if (!activeSession) {
         return (
@@ -56,12 +94,29 @@ export function FileTreeView() {
                     <div className="viewer-message">Loading file tree...</div>
                 ) : (
                     <>
-                        <FileTreeSidebar
-                            flatNodes={flatNodes}
-                            selectedPath={selectedPath}
-                            onToggleDir={toggleDir}
-                            onSelectFile={selectFile}
-                        />
+                        {/* Left panel: search mode or tree mode */}
+                        {isSearchMode ? (
+                            <FileSearchPanel
+                                query={query}
+                                onQueryChange={setQuery}
+                                results={results}
+                                isSearching={isSearching}
+                                searchError={searchError}
+                                selectedPath={selectedPath}
+                                onSelectFile={selectFile}
+                                onOpenFile={handleOpenFile}
+                                onClose={handleSearchClose}
+                            />
+                        ) : (
+                            <FileTreeSidebar
+                                flatNodes={flatNodes}
+                                selectedPath={selectedPath}
+                                onToggleDir={toggleDir}
+                                onSelectFile={selectFile}
+                                onSearchOpen={handleSearchOpen}
+                            />
+                        )}
+                        {/* Right panel: always visible (shared between both modes) */}
                         <div className="file-tree-content">
                             {/* Priority: dirError > contentError > content.
                                dirError is cleared by selectFile, loadRoot, and any directory

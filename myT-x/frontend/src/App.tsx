@@ -13,12 +13,14 @@ import {ToastContainer} from "./components/ToastContainer";
 import {ViewerSystem} from "./components/viewer";
 import {useIsViewerDocked} from "./components/viewer/useIsViewerDocked";
 import {useViewerStore} from "./components/viewer/viewerStore";
+import {useAppImeRecovery} from "./hooks/useAppImeRecovery";
 import {useBackendSync} from "./hooks/useBackendSync";
 import {useFileDrop} from "./hooks/useFileDrop";
 import {usePrefixKeyMode} from "./hooks/usePrefixKeyMode";
 import {useI18n} from "./i18n";
 import {useTmuxStore} from "./stores/tmuxStore";
 import {isImeTransitionalEvent} from "./utils/ime";
+import {notifyAndLog} from "./utils/notifyUtils";
 import {resolveActivePane, resolveActivePaneID, resolveActiveWindow} from "./utils/session";
 
 type DockedAppBodyStyle = CSSProperties & {
@@ -60,6 +62,7 @@ function App() {
         : undefined;
     usePrefixKeyMode({activePaneId});
     useFileDrop(activePaneId);
+    const imeRecoverySurfaceRef = useAppImeRecovery({activePaneId});
 
     useEffect(() => {
         const currentSessionName = current?.name ?? null;
@@ -74,6 +77,7 @@ function App() {
         void api.SetActiveSession(currentSessionName).catch((err) => {
             lastSyncedSessionRef.current = null;
             console.warn("[app] SetActiveSession failed", err);
+            notifyAndLog("Set active session", "warn", err, "App");
         });
     }, [current?.name]);
 
@@ -95,6 +99,15 @@ function App() {
     return (
         <div className="app-root">
             <MenuBar onOpenSettings={() => setSettingsOpen(true)}/>
+            <textarea
+                ref={imeRecoverySurfaceRef}
+                className="ime-recovery-surface"
+                data-ime-recovery-surface="true"
+                tabIndex={-1}
+                readOnly
+                aria-hidden="true"
+                spellCheck={false}
+            />
             <div className={appBodyClassName} style={appBodyStyle}>
                 <Sidebar sessions={sessions} activeSession={current?.name ?? null}/>
                 <main className="main-content">
@@ -133,6 +146,7 @@ function App() {
                     }
                     void api.KillPane(paneID).catch((err) => {
                         console.warn("[prefix] kill pane failed", err);
+                        notifyAndLog("Close pane", "warn", err, "App");
                     });
                 }}
                 onClose={() => setPendingPrefixKillPaneId(null)}

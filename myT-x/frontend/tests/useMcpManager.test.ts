@@ -1,63 +1,22 @@
 import {describe, expect, it} from "vitest";
 import {
-    aggregateLspMcpStatus,
     isLspMcp,
     normalizeActiveSessionName,
     selectRepresentativeLspMcp,
 } from "../src/components/viewer/views/mcp-manager/useMcpManager";
-import type {MCPSnapshot, MCPStatus} from "../src/types/mcp";
+import type {MCPSnapshot} from "../src/types/mcp";
 
-function makeSnapshot(status: MCPStatus, id = "lsp-gopls"): MCPSnapshot {
+function makeSnapshot(status: string, id = "lsp-gopls"): MCPSnapshot {
     return {
         id,
         name: id,
         description: "",
         enabled: false,
-        status,
+        status: status as MCPSnapshot["status"],
     };
 }
 
 describe("useMcpManager helpers", () => {
-    describe("aggregateLspMcpStatus", () => {
-        it("prefers running over every other status", () => {
-            const snapshots = [
-                makeSnapshot("starting"),
-                makeSnapshot("error", "lsp-rust-analyzer"),
-                makeSnapshot("running", "lsp-pyright"),
-            ];
-
-            expect(aggregateLspMcpStatus(snapshots)).toBe("running");
-        });
-
-        it("prefers error when nothing is running", () => {
-            const snapshots = [
-                makeSnapshot("stopped"),
-                makeSnapshot("starting", "lsp-rust-analyzer"),
-                makeSnapshot("error", "lsp-pyright"),
-            ];
-
-            expect(aggregateLspMcpStatus(snapshots)).toBe("error");
-        });
-
-        it("prefers starting when all remaining snapshots are non-running and non-error", () => {
-            const snapshots = [
-                makeSnapshot("stopped"),
-                makeSnapshot("starting", "lsp-rust-analyzer"),
-            ];
-
-            expect(aggregateLspMcpStatus(snapshots)).toBe("starting");
-        });
-
-        it("falls back to stopped when every snapshot is stopped", () => {
-            const snapshots = [
-                makeSnapshot("stopped"),
-                makeSnapshot("stopped", "lsp-rust-analyzer"),
-            ];
-
-            expect(aggregateLspMcpStatus(snapshots)).toBe("stopped");
-        });
-    });
-
     describe("isLspMcp", () => {
         it("matches case-insensitive lsp ids and rejects non-lsp ids", () => {
             expect(isLspMcp(makeSnapshot("running", "lsp-gopls"))).toBe(true);

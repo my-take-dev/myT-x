@@ -66,3 +66,18 @@ export interface OrchestratorTeamDraft {
     storageLocation: OrchestratorStorageLocation;
     members: OrchestratorMemberDraft[];
 }
+
+export type PaneState = "cli_running" | "cli_not_running";
+
+export interface BootstrapMemberToPaneRequest {
+    pane_id: string;
+    pane_state: PaneState;
+    team_name: string;
+    member: OrchestratorTeamMember;
+    bootstrap_delay_ms: number;
+    session_name: string;
+}
+
+export interface BootstrapMemberToPaneResult {
+    warnings: string[];
+}

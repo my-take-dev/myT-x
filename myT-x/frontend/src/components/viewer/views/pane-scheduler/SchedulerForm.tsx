@@ -1,4 +1,5 @@
 import {useState, useCallback, useRef, useEffect, type ChangeEvent} from "react";
+import {useI18n} from "../../../../i18n";
 import type {PaneSnapshot} from "../../../../types/tmux";
 import {
     SCHEDULER_INFINITE_COUNT,
@@ -31,28 +32,33 @@ export function SchedulerForm({
                                   onDeleteTemplate,
                                   submitLabel = "Start",
                               }: SchedulerFormProps) {
+    const {language, t} = useI18n();
+    const tr = (key: string, jaText: string, enText: string) =>
+        t(key, language === "ja" ? jaText : enText);
     const [selectedTemplate, setSelectedTemplate] = useState(MANUAL_INPUT);
     const [title, setTitle] = useState(initialDraft?.title ?? "");
     const [paneID, setPaneID] = useState(initialDraft?.paneID ?? "");
     const [message, setMessage] = useState(initialDraft?.message ?? "");
-    const [intervalMinutes, setIntervalMinutes] = useState(initialDraft?.intervalMinutes ?? 5);
+    const [intervalSeconds, setIntervalSeconds] = useState(String(initialDraft?.intervalSeconds ?? 30));
     const [maxCount, setMaxCount] = useState(initialDraft?.maxCount ?? 1);
     const [submitting, setSubmitting] = useState(false);
     const [saving, setSaving] = useState(false);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+    const parsedInterval = intervalSeconds === "" ? 0 : Number(intervalSeconds);
+
     const isFormValid =
         title.trim() !== "" &&
         paneID !== "" &&
         message !== "" &&
-        intervalMinutes >= 1 &&
+        parsedInterval >= 10 &&
         isSchedulerMaxCountValid(maxCount);
 
     const isTemplateValid =
         title.trim() !== "" &&
         message !== "" &&
-        intervalMinutes >= 1 &&
+        parsedInterval >= 10 &&
         isSchedulerMaxCountValid(maxCount);
 
     // Auto-resize textarea on input.
@@ -75,7 +81,7 @@ export function SchedulerForm({
         setTitle(initialDraft?.title ?? "");
         setPaneID(initialDraft?.paneID ?? "");
         setMessage(initialDraft?.message ?? "");
-        setIntervalMinutes(initialDraft?.intervalMinutes ?? 5);
+        setIntervalSeconds(String(initialDraft?.intervalSeconds ?? 30));
         setMaxCount(initialDraft?.maxCount ?? 1);
         if (textareaRef.current) {
             textareaRef.current.style.height = "auto";
@@ -96,7 +102,7 @@ export function SchedulerForm({
             if (!tmpl) return;
             setTitle(tmpl.title);
             setMessage(tmpl.message);
-            setIntervalMinutes(tmpl.interval_minutes);
+            setIntervalSeconds(String(tmpl.interval_seconds));
             setMaxCount(tmpl.max_count);
             // Reset textarea height for new content.
             if (textareaRef.current) {
@@ -119,7 +125,7 @@ export function SchedulerForm({
                 title: title.trim(),
                 paneID,
                 message,
-                intervalMinutes,
+                intervalSeconds: parsedInterval,
                 maxCount,
             });
             onBack();
@@ -129,7 +135,7 @@ export function SchedulerForm({
         } finally {
             setSubmitting(false);
         }
-    }, [isFormValid, submitting, title, paneID, message, intervalMinutes, maxCount, onStart, onBack]);
+    }, [isFormValid, submitting, title, paneID, message, parsedInterval, maxCount, onStart, onBack]);
 
     const handleSaveTemplate = useCallback(async () => {
         if (!isTemplateValid || saving) return;
@@ -138,7 +144,7 @@ export function SchedulerForm({
             await onSaveTemplate({
                 title: title.trim(),
                 message,
-                interval_minutes: intervalMinutes,
+                interval_seconds: parsedInterval,
                 max_count: maxCount,
             });
             setSelectedTemplate(title.trim());
@@ -148,7 +154,7 @@ export function SchedulerForm({
         } finally {
             setSaving(false);
         }
-    }, [isTemplateValid, saving, title, message, intervalMinutes, maxCount, onSaveTemplate]);
+    }, [isTemplateValid, saving, title, message, parsedInterval, maxCount, onSaveTemplate]);
 
     const handleDeleteTemplate = useCallback(async () => {
         if (selectedTemplate === MANUAL_INPUT) return;
@@ -168,18 +174,18 @@ export function SchedulerForm({
                 className="pane-scheduler-back-btn"
                 onClick={onBack}
             >
-                &larr; Back
+                &larr; {tr("viewer.scheduler.form.back", "戻る", "Back")}
             </button>
 
             <div className="pane-scheduler-template-row">
                 <div className="form-group">
-                    <label className="form-label">Template</label>
+                    <label className="form-label">{tr("viewer.scheduler.form.template", "テンプレート", "Template")}</label>
                     <select
                         className="form-select"
                         value={selectedTemplate}
                         onChange={handleTemplateChange}
                     >
-                        <option value={MANUAL_INPUT}>-- Manual input --</option>
+                        <option value={MANUAL_INPUT}>{tr("viewer.scheduler.form.manualInput", "-- 手動入力 --", "-- Manual input --")}</option>
                         {templates.map((t) => (
                             <option key={t.title} value={t.title}>
                                 {t.title}
@@ -192,32 +198,32 @@ export function SchedulerForm({
                         type="button"
                         className="pane-scheduler-delete-tmpl-btn"
                         onClick={handleDeleteTemplate}
-                        title="Delete this template"
+                        title={tr("viewer.scheduler.form.delete", "テンプレートを削除", "Delete this template")}
                     >
-                        Delete
+                        {tr("viewer.scheduler.form.delete", "削除", "Delete")}
                     </button>
                 )}
             </div>
 
             <div className="form-group">
-                <label className="form-label">Title</label>
+                <label className="form-label">{tr("viewer.scheduler.form.title", "タイトル", "Title")}</label>
                 <input
                     className="form-input"
                     type="text"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    placeholder="Scheduler name..."
+                    placeholder={tr("viewer.scheduler.form.namePlaceholder", "スケジューラー名...", "Scheduler name...")}
                 />
             </div>
 
             <div className="form-group">
-                <label className="form-label">Target Pane</label>
+                <label className="form-label">{tr("viewer.scheduler.form.targetPane", "対象ペイン", "Target Pane")}</label>
                 <select
                     className="form-select"
                     value={paneID}
                     onChange={(e) => setPaneID(e.target.value)}
                 >
-                    <option value="">Select pane...</option>
+                    <option value="">{tr("viewer.scheduler.form.selectPane", "ペインを選択...", "Select pane...")}</option>
                     {availablePanes.map((p) => (
                         <option key={p.id} value={p.id}>
                             {p.id}{p.title ? ` (${p.title})` : ""}
@@ -227,29 +233,34 @@ export function SchedulerForm({
             </div>
 
             <div className="form-group">
-                <label className="form-label">Message</label>
+                <label className="form-label">{tr("viewer.scheduler.form.message", "メッセージ", "Message")}</label>
                 <textarea
                     ref={textareaRef}
                     className="form-input pane-scheduler-textarea"
                     value={message}
                     onChange={handleMessageChange}
-                    placeholder="Message to send..."
+                    placeholder={tr("viewer.scheduler.form.messagePlaceholder", "送信するメッセージ...", "Message to send...")}
                 />
             </div>
 
             <div className="pane-scheduler-row">
                 <div className="form-group pane-scheduler-half">
-                    <label className="form-label">Interval (min)</label>
+                    <label className="form-label">{tr("viewer.scheduler.form.interval", "間隔 (秒)", "Interval (sec)")}</label>
                     <input
                         className="form-input"
-                        type="number"
-                        min={1}
-                        value={intervalMinutes}
-                        onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value)))}
+                        type="text"
+                        inputMode="numeric"
+                        value={intervalSeconds}
+                        onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === "" || /^\d+$/.test(v)) {
+                                setIntervalSeconds(v.replace(/^0+(?=\d)/, ""));
+                            }
+                        }}
                     />
                 </div>
                 <div className="form-group pane-scheduler-half">
-                    <label className="form-label">Count ({SCHEDULER_INFINITE_COUNT}=&infin;)</label>
+                    <label className="form-label">{tr("viewer.scheduler.form.count", "回数", "Count")} ({SCHEDULER_INFINITE_COUNT}=&infin;)</label>
                     <input
                         className="form-input"
                         type="number"
@@ -269,7 +280,9 @@ export function SchedulerForm({
                     disabled={!isFormValid || submitting}
                     onClick={handleSubmit}
                 >
-                    {submitting ? (submitLabel === "Start" ? "Starting..." : "Applying...") : submitLabel}
+                    {submitting
+                        ? tr("viewer.scheduler.form.starting", "開始中...", "Starting...")
+                        : submitLabel}
                 </button>
                 <button
                     type="button"
@@ -277,7 +290,9 @@ export function SchedulerForm({
                     disabled={!isTemplateValid || saving}
                     onClick={handleSaveTemplate}
                 >
-                    {saving ? "Saving..." : "Save as Template"}
+                    {saving
+                        ? tr("viewer.scheduler.form.saving", "保存中...", "Saving...")
+                        : tr("viewer.scheduler.form.saveAsTemplate", "テンプレートとして保存", "Save as Template")}
                 </button>
             </div>
         </div>

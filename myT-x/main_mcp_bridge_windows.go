@@ -22,12 +22,12 @@ const (
 	mcpBridgeMaxBackoff         = 1 * time.Second
 )
 
-// dialPipeFn is a test seam for overriding winio.DialPipe in unit tests.
-var dialPipeFn = func(path string, timeout *time.Duration) (net.Conn, error) {
+// dialPipe is the production dial function using winio.DialPipe.
+func dialPipe(path string, timeout *time.Duration) (net.Conn, error) {
 	return winio.DialPipe(path, timeout)
 }
 
-func bridgeMCPStdio(ctx context.Context, pipePath string, dialTimeout time.Duration, stdin io.Reader, stdout io.Writer) error {
+func bridgeMCPStdio(ctx context.Context, pipePath string, dialTimeout time.Duration, stdin io.Reader, stdout io.Writer, dialFn func(string, *time.Duration) (net.Conn, error)) error {
 	pipePath = strings.TrimSpace(pipePath)
 	if !strings.HasPrefix(pipePath, `\\.\pipe\`) {
 		return fmt.Errorf("invalid pipe path %q", pipePath)
@@ -46,7 +46,7 @@ func bridgeMCPStdio(ctx context.Context, pipePath string, dialTimeout time.Durat
 		}
 		attemptTimeout := min(mcpBridgeDialAttemptTimeout, remaining)
 
-		conn, err := dialPipeFn(pipePath, &attemptTimeout)
+		conn, err := dialFn(pipePath, &attemptTimeout)
 		if err == nil {
 			if attempt > 1 {
 				slog.Debug("[DEBUG-MCP-BRIDGE] pipe connected after retry",
