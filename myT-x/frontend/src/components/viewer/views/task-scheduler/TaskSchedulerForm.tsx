@@ -1,14 +1,13 @@
 import {useState, useCallback} from "react";
 import {useI18n} from "../../../../i18n";
 import type {PaneSnapshot} from "../../../../types/tmux";
-import type {QueueItem} from "./useTaskScheduler";
+import {isEditableStatus, type QueueItem} from "./useTaskScheduler";
 
 interface TaskSchedulerFormProps {
     availablePanes: PaneSnapshot[];
     editingItem: QueueItem | null;
     onSave: (title: string, message: string, targetPaneID: string, clearBefore: boolean, clearCommand: string) => Promise<void>;
     onBack: () => void;
-    isRunning: boolean;
 }
 
 export function TaskSchedulerForm({
@@ -16,7 +15,6 @@ export function TaskSchedulerForm({
     editingItem,
     onSave,
     onBack,
-    isRunning,
 }: TaskSchedulerFormProps) {
     const {language, t} = useI18n();
     const tr = (key: string, jaText: string, enText: string) =>
@@ -28,6 +26,7 @@ export function TaskSchedulerForm({
     const [clearBefore, setClearBefore] = useState(editingItem?.clear_before ?? false);
     const [clearCommand, setClearCommand] = useState(editingItem?.clear_command ?? "");
     const [submitting, setSubmitting] = useState(false);
+    const isEditingLocked = !isEditableStatus(editingItem?.status);
 
     const canSubmit = title.trim() !== "" && message.trim() !== "" && targetPaneID !== "" && !submitting;
 
@@ -57,7 +56,7 @@ export function TaskSchedulerForm({
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     placeholder={tr("viewer.taskScheduler.titlePlaceholder", "タスク名", "Task name")}
-                    disabled={isRunning && editingItem !== null}
+                    disabled={isEditingLocked}
                 />
             </div>
 
@@ -70,7 +69,7 @@ export function TaskSchedulerForm({
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     placeholder={tr("viewer.taskScheduler.messagePlaceholder", "AIに送信する指示", "Instructions to send to AI")}
-                    disabled={isRunning && editingItem !== null}
+                    disabled={isEditingLocked}
                 />
             </div>
 
@@ -82,7 +81,7 @@ export function TaskSchedulerForm({
                     className="form-select"
                     value={targetPaneID}
                     onChange={(e) => setTargetPaneID(e.target.value)}
-                    disabled={isRunning && editingItem !== null}
+                    disabled={isEditingLocked}
                 >
                     <option value="">
                         {tr("viewer.taskScheduler.selectPane", "ペインを選択", "Select pane")}
@@ -101,7 +100,7 @@ export function TaskSchedulerForm({
                         type="checkbox"
                         checked={clearBefore}
                         onChange={(e) => setClearBefore(e.target.checked)}
-                        disabled={isRunning && editingItem !== null}
+                        disabled={isEditingLocked}
                     />
                     <span>
                         {tr("viewer.taskScheduler.clearBefore",
@@ -122,7 +121,7 @@ export function TaskSchedulerForm({
                         value={clearCommand}
                         onChange={(e) => setClearCommand(e.target.value)}
                         placeholder="/new"
-                        disabled={isRunning && editingItem !== null}
+                        disabled={isEditingLocked}
                     />
                     <span className="task-scheduler-config-hint">
                         {tr("viewer.taskScheduler.clearCommandHint",

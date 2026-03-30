@@ -1,4 +1,4 @@
-import type {KeyboardEvent} from "react";
+import type {KeyboardEvent, MouseEvent} from "react";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {api} from "../api";
 import {toErrorMessage} from "../utils/errorUtils";
@@ -7,29 +7,28 @@ import {notifyAndLog} from "../utils/notifyUtils";
 
 interface UseChatInputParams {
     readonly activePaneId: string | null;
+    readonly paneIds: readonly string[];
     readonly autoClose: boolean;
     readonly expanded: boolean;
     readonly setExpanded: (expanded: boolean) => void;
 }
 
-export function useChatInput({activePaneId, autoClose, expanded, setExpanded}: UseChatInputParams) {
+export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExpanded}: UseChatInputParams) {
     const [text, setText] = useState("");
     const [sending, setSending] = useState(false);
     const [sendError, setSendError] = useState<string | null>(null);
-    const [selectedPaneId, setSelectedPaneId] = useState<string | null>(activePaneId);
+    const [selectedPaneId, setSelectedPaneId] = useState<string | null>(null);
     const composingRef = useRef(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-    // Initialize selectedPaneId once when activePaneId becomes available.
-    const initializedRef = useRef(false);
     useEffect(() => {
-        if (!initializedRef.current && activePaneId) {
-            setSelectedPaneId(activePaneId);
-            initializedRef.current = true;
+        if (selectedPaneId !== null && paneIds.length > 0 && !paneIds.includes(selectedPaneId)) {
+            setSelectedPaneId(null);
         }
-    }, [activePaneId]);
+    }, [paneIds, selectedPaneId]);
 
-    const targetPaneId = selectedPaneId ?? activePaneId;
+    const selectedPaneIsAvailable = selectedPaneId !== null && (paneIds.length === 0 || paneIds.includes(selectedPaneId));
+    const targetPaneId = selectedPaneIsAvailable ? selectedPaneId : activePaneId;
 
     // Auto-clear send error after a few seconds.
     useEffect(() => {
@@ -90,7 +89,7 @@ export function useChatInput({activePaneId, autoClose, expanded, setExpanded}: U
     }, []);
 
     const handleBarClick = useCallback(
-        (e: React.MouseEvent<HTMLDivElement>) => {
+        (e: MouseEvent<HTMLDivElement>) => {
             // Avoid expanding when clicking the send button.
             const target = e.target as HTMLElement;
             if (target.tagName === "BUTTON") {

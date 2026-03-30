@@ -26,6 +26,10 @@ export function CheckDirectoryConflict(arg1) {
   return window['go']['main']['App']['CheckDirectoryConflict'](arg1);
 }
 
+export function CheckTaskSchedulerOrchestratorReady() {
+  return window['go']['main']['App']['CheckTaskSchedulerOrchestratorReady']();
+}
+
 export function CheckWorktreePathConflict(arg1) {
   return window['go']['main']['App']['CheckWorktreePathConflict'](arg1);
 }
@@ -360,6 +364,10 @@ export function SaveOrchestratorTeam(arg1, arg2) {
 
 export function SaveSchedulerTemplate(arg1, arg2) {
   return window['go']['main']['App']['SaveSchedulerTemplate'](arg1, arg2);
+}
+
+export function SaveUnaffiliatedTeamMembers(arg1, arg2) {
+  return window['go']['main']['App']['SaveUnaffiliatedTeamMembers'](arg1, arg2);
 }
 
 export function SendChatMessage(arg1, arg2) {

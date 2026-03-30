@@ -9,8 +9,9 @@ import {
     RemoveTaskSchedulerItem,
     ReorderTaskSchedulerItems,
     UpdateTaskSchedulerItem,
+    CheckTaskSchedulerOrchestratorReady,
 } from "../../../../../wailsjs/go/main/App";
-import {taskscheduler} from "../../../../../wailsjs/go/models";
+import {main, taskscheduler} from "../../../../../wailsjs/go/models";
 import {EventsOn} from "../../../../../wailsjs/runtime";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
 import type {PaneSnapshot} from "../../../../types/tmux";
@@ -18,6 +19,41 @@ import type {PaneSnapshot} from "../../../../types/tmux";
 export type QueueStatus = taskscheduler.QueueStatus;
 export type QueueItem = taskscheduler.QueueItem;
 export type QueueConfig = taskscheduler.QueueConfig;
+
+export type OrchestratorReadiness = main.TaskSchedulerOrchestratorReadiness;
+
+export const RUNNING_ITEM_STATUS = "running";
+export const PENDING_ITEM_STATUS = "pending";
+export const COMPLETED_ITEM_STATUS = "completed";
+export const FAILED_ITEM_STATUS = "failed";
+export const SKIPPED_ITEM_STATUS = "skipped";
+
+const EDITABLE_ITEM_STATUSES: ReadonlySet<string> = new Set([
+    PENDING_ITEM_STATUS,
+    COMPLETED_ITEM_STATUS,
+    FAILED_ITEM_STATUS,
+    SKIPPED_ITEM_STATUS,
+]);
+
+const ACTIVE_QUEUE_STATUSES: ReadonlySet<string> = new Set([
+    "running",
+    "paused",
+    "preparing",
+]);
+
+export function isEditableStatus(status: string | null | undefined): boolean {
+    if (status == null) {
+        return true;
+    }
+    return EDITABLE_ITEM_STATUSES.has(status);
+}
+
+export function isActiveQueueStatus(status: string | null | undefined): boolean {
+    if (status == null) {
+        return false;
+    }
+    return ACTIVE_QUEUE_STATUSES.has(status);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
@@ -186,6 +222,16 @@ export function useTaskScheduler() {
         }
     }, []);
 
+    const checkOrchestratorReady = useCallback(async (): Promise<OrchestratorReadiness> => {
+        try {
+            return await CheckTaskSchedulerOrchestratorReady();
+        } catch {
+            return new main.TaskSchedulerOrchestratorReadiness({
+                ready: false, db_exists: false, agent_count: 0, has_panes: false,
+            });
+        }
+    }, []);
+
     return {
         status,
         error,
@@ -200,5 +246,6 @@ export function useTaskScheduler() {
         reorderItems,
         updateItem,
         refreshStatus,
+        checkOrchestratorReady,
     };
 }

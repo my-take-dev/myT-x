@@ -1,10 +1,10 @@
 import {useI18n} from "../../../../i18n";
-import type {QueueStatus} from "./useTaskScheduler";
+import {isEditableStatus, RUNNING_ITEM_STATUS, type QueueStatus} from "./useTaskScheduler";
 
 interface TaskSchedulerListProps {
     status: QueueStatus | null;
-    onNew: () => void;
-    onEdit: (id: string) => void;
+    onNew: () => void | Promise<void>;
+    onEdit: (id: string) => void | Promise<void>;
     onRemove: (id: string) => Promise<void>;
     onStart: () => void;
     onStop: () => Promise<void>;
@@ -21,27 +21,65 @@ const STATUS_ICONS: Record<string, string> = {
     skipped: "⏭",
 };
 
+function preExecPhaseLabel(
+    progress: string | undefined,
+    tr: (key: string, jaText: string, enText: string) => string,
+): string {
+    switch (progress) {
+        case "resetting":
+            return tr("viewer.taskScheduler.preExecResetting", "セッションリセット中", "Resetting sessions");
+        case "waiting_reset":
+            return tr("viewer.taskScheduler.preExecWaitingReset", "リセット待機中", "Waiting for reset");
+        case "sending_reminders":
+            return tr("viewer.taskScheduler.preExecSendingReminders", "役割リマインド送信中", "Sending role reminders");
+        case "waiting_idle":
+            return tr("viewer.taskScheduler.preExecWaitingIdle", "アイドル待機中", "Waiting for agents");
+        case "idle_timeout":
+            return tr(
+                "viewer.taskScheduler.preExecIdleTimeout",
+                "アイドル待機がタイムアウトしたため、そのまま続行しています",
+                "Idle wait timed out, continuing queue execution",
+            );
+        default:
+            return tr("viewer.taskScheduler.preparing", "前準備中...", "Preparing...");
+    }
+}
+
 export function TaskSchedulerList({
-    status,
-    onNew,
-    onEdit,
-    onRemove,
-    onStart,
-    onStop,
-    onPause,
-    onResume,
-    isRunning,
-}: TaskSchedulerListProps) {
+                                      status,
+                                      onNew,
+                                      onEdit,
+                                      onRemove,
+                                      onStart,
+                                      onStop,
+                                      onPause,
+                                      onResume,
+                                      isRunning,
+                                  }: TaskSchedulerListProps) {
     const {language, t} = useI18n();
     const tr = (key: string, jaText: string, enText: string) =>
         t(key, language === "ja" ? jaText : enText);
 
     const items = status?.items ?? [];
     const runStatus = status?.run_status ?? "idle";
+    const preExecTimedOut = status?.pre_exec_progress === "idle_timeout";
     const hasPendingItems = items.some((i) => i.status === "pending");
 
     return (
         <div className="task-scheduler-list">
+            {(runStatus === "preparing" || preExecTimedOut) && (
+                <div
+                    className={`task-scheduler-preexec-status ${preExecTimedOut ? "task-scheduler-preexec-status-timeout" : ""}`}>
+                    <span className="task-scheduler-preexec-badge">
+                        {preExecTimedOut
+                            ? tr("viewer.taskScheduler.preExecNotice", "通知", "Notice")
+                            : tr("viewer.taskScheduler.preparing", "前準備中...", "Preparing...")}
+                    </span>
+                    <span className="task-scheduler-preexec-label">
+                        {preExecPhaseLabel(status?.pre_exec_progress, tr)}
+                    </span>
+                </div>
+            )}
             <div className="task-scheduler-toolbar">
                 {!isRunning && hasPendingItems && (
                     <button
@@ -82,7 +120,7 @@ export function TaskSchedulerList({
                 <button
                     type="button"
                     className="task-scheduler-new-btn"
-                    onClick={onNew}
+                    onClick={() => void onNew()}
                 >
                     + {tr("viewer.taskScheduler.addTask", "タスク追加", "Add Task")}
                 </button>
@@ -96,7 +134,7 @@ export function TaskSchedulerList({
                 items.map((item) => (
                     <div
                         key={item.id}
-                        className={`task-scheduler-card ${item.status === "failed" ? "task-scheduler-card-failed" : ""} ${item.status === "running" ? "task-scheduler-card-running" : ""}`}
+                        className={`task-scheduler-card ${item.status === "failed" ? "task-scheduler-card-failed" : ""} ${item.status === RUNNING_ITEM_STATUS ? "task-scheduler-card-running" : ""}`}
                     >
                         <div className="task-scheduler-card-header">
                             <span className="task-scheduler-card-status">
@@ -104,12 +142,12 @@ export function TaskSchedulerList({
                             </span>
                             <span className="task-scheduler-card-title">{item.title}</span>
                             <div className="task-scheduler-card-actions">
-                                {item.status === "pending" && (
+                                {isEditableStatus(item.status) && (
                                     <>
                                         <button
                                             type="button"
                                             className="task-scheduler-edit-card-btn"
-                                            onClick={() => onEdit(item.id)}
+                                            onClick={() => void onEdit(item.id)}
                                         >
                                             {tr("viewer.taskScheduler.edit", "編集", "Edit")}
                                         </button>

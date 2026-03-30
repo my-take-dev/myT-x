@@ -17,3 +17,9 @@ func (a *App) AddMemberToUnaffiliatedTeam(member OrchestratorTeamMember, storage
 func (a *App) EnsureUnaffiliatedTeam(storageLocation string, sessionName string) (OrchestratorTeamDefinition, error) {
 	return a.orchestratorService.EnsureUnaffiliatedTeam(storageLocation, sessionName)
 }
+
+// SaveUnaffiliatedTeamMembers replaces all members of the unaffiliated team.
+// Wails-bound: called from the frontend TeamEditor when editing the system team.
+func (a *App) SaveUnaffiliatedTeamMembers(members []OrchestratorTeamMember, sessionName string) error {
+	return a.orchestratorService.SaveUnaffiliatedTeamMembers(members, sessionName)
+}

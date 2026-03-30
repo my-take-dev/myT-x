@@ -11,6 +11,7 @@ import {MemberPicker} from "./MemberPicker";
 import {StartDialog} from "./StartDialog";
 import {TeamEditor} from "./TeamEditor";
 import {TeamList} from "./TeamList";
+import {isSystemTeam} from "./orchestratorTeamUtils";
 import {useTeamCRUD} from "./useTeamCRUD";
 
 export function OrchestratorTeamsView() {
@@ -76,8 +77,10 @@ export function OrchestratorTeamsView() {
                         key={crud.teamDraft.id}
                         draft={crud.teamDraft}
                         saving={crud.saving}
+                        canSave={crud.canSaveTeam}
                         teamNameDuplicate={crud.teamNameDuplicate}
                         activeSession={crud.activeSession}
+                        systemTeam={isSystemTeam(crud.teamDraft.id)}
                         onChange={crud.setTeamDraft}
                         onBack={crud.handleTeamBack}
                         onSave={() => void crud.handleSaveTeam()}

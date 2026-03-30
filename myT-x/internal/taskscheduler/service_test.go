@@ -35,8 +35,13 @@ func testDeps() Deps {
 		BaseRecoveryOptions: func() workerutil.RecoveryOptions {
 			return workerutil.RecoveryOptions{MaxRetries: 0}
 		},
-		SendClearCommand: func(paneID, command string) error { return nil },
-		SessionName:      "test-session",
+		SendClearCommand:  func(paneID, command string) error { return nil },
+		GetSessionPaneIDs: func(sessionName string) ([]string, error) { return []string{"%0", "%1"}, nil },
+		IsPaneQuiet:       func(paneID string) bool { return true },
+		IsAgentTeamSession: func(sessionName string) bool {
+			return false
+		},
+		SessionName: "test-session",
 	}
 }
 
@@ -199,6 +204,41 @@ func TestPauseResume(t *testing.T) {
 	}
 
 	svc.StopAll()
+}
+
+func TestPause_PreparingReturnsPausableStateError(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(testDeps())
+	svc.mu.Lock()
+	svc.runStatus = QueuePreparing
+	svc.mu.Unlock()
+
+	err := svc.Pause()
+	if err == nil {
+		t.Fatal("expected error when pausing during pre-execution")
+	}
+	if err.Error() != "queue is not in a pausable state" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyConfigDefaults_AllowsZeroResetDelay(t *testing.T) {
+	t.Parallel()
+
+	config := QueueConfig{
+		PreExecTargetMode: PreExecTargetModeTaskPanes,
+		PreExecResetDelay: 0,
+	}
+
+	applyConfigDefaults(&config)
+
+	if config.PreExecResetDelay != 0 {
+		t.Fatalf("expected zero reset delay to be preserved, got %d", config.PreExecResetDelay)
+	}
+	if config.PreExecIdleTimeout != 120 {
+		t.Fatalf("expected idle timeout default to be applied, got %d", config.PreExecIdleTimeout)
+	}
 }
 
 func TestAddItem(t *testing.T) {
@@ -375,6 +415,191 @@ func TestUpdateItem_Errors(t *testing.T) {
 	}
 }
 
+func TestRemoveItem_NonPendingStatuses(t *testing.T) {
+	t.Parallel()
+
+	editableStatuses := []QueueItemStatus{
+		ItemStatusFailed,
+		ItemStatusSkipped,
+		ItemStatusCompleted,
+	}
+	for _, status := range editableStatuses {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			svc := NewService(testDeps())
+			if err := svc.AddItem("task1", "msg1", "%0", false, ""); err != nil {
+				t.Fatal(err)
+			}
+			id := svc.GetStatus().Items[0].ID
+
+			// Force status to the target value.
+			svc.mu.Lock()
+			svc.items[0].Status = status
+			svc.mu.Unlock()
+
+			if err := svc.RemoveItem(id); err != nil {
+				t.Fatalf("RemoveItem should succeed for status %q, got: %v", status, err)
+			}
+			if len(svc.GetStatus().Items) != 0 {
+				t.Error("expected item to be removed")
+			}
+		})
+	}
+}
+
+func TestRemoveItem_RunningBlocked(t *testing.T) {
+	t.Parallel()
+	svc := NewService(testDeps())
+	if err := svc.AddItem("task1", "msg1", "%0", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	id := svc.GetStatus().Items[0].ID
+
+	svc.mu.Lock()
+	svc.items[0].Status = ItemStatusRunning
+	svc.mu.Unlock()
+
+	err := svc.RemoveItem(id)
+	if err == nil {
+		t.Fatal("expected error when removing a running item")
+	}
+	if !strings.Contains(err.Error(), "running") {
+		t.Errorf("error should mention 'running', got: %v", err)
+	}
+}
+
+func TestUpdateItem_NonPendingAutoReset(t *testing.T) {
+	t.Parallel()
+
+	editableStatuses := []QueueItemStatus{
+		ItemStatusFailed,
+		ItemStatusSkipped,
+		ItemStatusCompleted,
+	}
+	for _, status := range editableStatuses {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			svc := NewService(testDeps())
+			if err := svc.AddItem("task1", "msg1", "%0", false, ""); err != nil {
+				t.Fatal(err)
+			}
+			id := svc.GetStatus().Items[0].ID
+
+			// Force status and populate execution fields.
+			svc.mu.Lock()
+			svc.items[0].Status = status
+			svc.items[0].ErrorMessage = "some error"
+			svc.items[0].StartedAt = "2025-01-01T00:00:00Z"
+			svc.items[0].CompletedAt = "2025-01-01T00:01:00Z"
+			svc.items[0].OrcTaskID = "t-abc123"
+			svc.mu.Unlock()
+
+			if err := svc.UpdateItem(id, "updated", "new msg", "%1", true, "/clear"); err != nil {
+				t.Fatalf("UpdateItem should succeed for status %q, got: %v", status, err)
+			}
+
+			item := svc.GetStatus().Items[0]
+			if item.Status != ItemStatusPending {
+				t.Errorf("expected status reset to %q, got %q", ItemStatusPending, item.Status)
+			}
+			if item.ErrorMessage != "" {
+				t.Errorf("expected ErrorMessage cleared, got %q", item.ErrorMessage)
+			}
+			if item.StartedAt != "" {
+				t.Errorf("expected StartedAt cleared, got %q", item.StartedAt)
+			}
+			if item.CompletedAt != "" {
+				t.Errorf("expected CompletedAt cleared, got %q", item.CompletedAt)
+			}
+			if item.OrcTaskID != "" {
+				t.Errorf("expected OrcTaskID cleared, got %q", item.OrcTaskID)
+			}
+			if item.Title != "updated" {
+				t.Errorf("expected title 'updated', got %q", item.Title)
+			}
+			if item.Message != "new msg" {
+				t.Errorf("expected message 'new msg', got %q", item.Message)
+			}
+			if item.TargetPaneID != "%1" {
+				t.Errorf("expected pane '%%1', got %q", item.TargetPaneID)
+			}
+			if !item.ClearBefore {
+				t.Error("expected ClearBefore=true")
+			}
+			if item.ClearCommand != "/clear" {
+				t.Errorf("expected ClearCommand '/clear', got %q", item.ClearCommand)
+			}
+		})
+	}
+}
+
+func TestUpdateItem_RunningBlocked(t *testing.T) {
+	t.Parallel()
+	svc := NewService(testDeps())
+	if err := svc.AddItem("task1", "msg1", "%0", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	id := svc.GetStatus().Items[0].ID
+
+	svc.mu.Lock()
+	svc.items[0].Status = ItemStatusRunning
+	svc.mu.Unlock()
+
+	err := svc.UpdateItem(id, "updated", "msg", "%1", false, "")
+	if err == nil {
+		t.Fatal("expected error when updating a running item")
+	}
+	if !strings.Contains(err.Error(), "running") {
+		t.Errorf("error should mention 'running', got: %v", err)
+	}
+}
+
+func TestIsEditable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		status   QueueItemStatus
+		expected bool
+	}{
+		{ItemStatusPending, true},
+		{ItemStatusRunning, false},
+		{ItemStatusCompleted, true},
+		{ItemStatusFailed, true},
+		{ItemStatusSkipped, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			t.Parallel()
+			if got := IsEditable(tt.status); got != tt.expected {
+				t.Errorf("IsEditable(%q) = %v, want %v", tt.status, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsTerminal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		status   QueueItemStatus
+		expected bool
+	}{
+		{ItemStatusPending, false},
+		{ItemStatusRunning, false},
+		{ItemStatusCompleted, true},
+		{ItemStatusFailed, true},
+		{ItemStatusSkipped, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			t.Parallel()
+			if got := IsTerminal(tt.status); got != tt.expected {
+				t.Errorf("IsTerminal(%q) = %v, want %v", tt.status, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestStopAll_Idempotent(t *testing.T) {
 	t.Parallel()
 	svc := NewService(testDeps())
@@ -443,7 +668,7 @@ func TestQueueItemFieldCount(t *testing.T) {
 // TestQueueConfigFieldCount guards against struct field additions.
 func TestQueueConfigFieldCount(t *testing.T) {
 	t.Parallel()
-	expected := 0
+	expected := 4
 	actual := reflect.TypeFor[QueueConfig]().NumField()
 	if actual != expected {
 		t.Errorf("QueueConfig has %d fields, expected %d. Update tests if fields were added.", actual, expected)
@@ -452,7 +677,7 @@ func TestQueueConfigFieldCount(t *testing.T) {
 
 func TestQueueStatusFieldCount(t *testing.T) {
 	t.Parallel()
-	expected := 5
+	expected := 6
 	actual := reflect.TypeFor[QueueStatus]().NumField()
 	if actual != expected {
 		t.Errorf("QueueStatus has %d fields, expected %d.", actual, expected)
@@ -857,7 +1082,7 @@ func TestExecuteClearPreStep_ContextCancelled(t *testing.T) {
 
 func TestDepsFieldCount(t *testing.T) {
 	t.Parallel()
-	expected := 10
+	expected := 13
 	actual := reflect.TypeFor[Deps]().NumField()
 	if actual != expected {
 		t.Errorf("Deps has %d fields, expected %d. Update validateRequired and testDeps if fields were added.", actual, expected)

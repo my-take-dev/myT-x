@@ -1,39 +1,67 @@
-import {useState, useCallback} from "react";
+import {useState, useCallback, useRef} from "react";
 import {useI18n} from "../../../../i18n";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
-import {useTaskScheduler, type QueueConfig, type QueueItem} from "./useTaskScheduler";
+import {
+    isActiveQueueStatus,
+    PENDING_ITEM_STATUS,
+    useTaskScheduler,
+    type QueueConfig,
+    type QueueItem,
+    type OrchestratorReadiness,
+} from "./useTaskScheduler";
 import {TaskSchedulerList} from "./TaskSchedulerList";
 import {TaskSchedulerForm} from "./TaskSchedulerForm";
 import {TaskSchedulerConfig} from "./TaskSchedulerConfig";
+import {TaskSchedulerAlert} from "./TaskSchedulerAlert";
 
-type Screen = "list" | "form" | "config";
+type Screen = "list" | "form" | "config" | "alert";
 
 export function TaskSchedulerView() {
     const {language, t} = useI18n();
     const tr = (key: string, jaText: string, enText: string) =>
         t(key, language === "ja" ? jaText : enText);
     const closeView = useViewerStore((s) => s.closeView);
+    const openViewWithContext = useViewerStore((s) => s.openViewWithContext);
     const hook = useTaskScheduler();
     const [screen, setScreen] = useState<Screen>("list");
     const [editingItemID, setEditingItemID] = useState<string | null>(null);
+    const [orchestratorReadiness, setOrchestratorReadiness] = useState<OrchestratorReadiness | null>(null);
+    const statusRef = useRef(hook.status);
+    statusRef.current = hook.status;
 
     const handleBack = useCallback(() => {
         setEditingItemID(null);
         setScreen("list");
     }, []);
 
-    const handleNew = useCallback(() => {
+    const handleNew = useCallback(async () => {
         hook.setError(null);
+        const readiness = await hook.checkOrchestratorReady();
+        if (!readiness.ready) {
+            setOrchestratorReadiness(readiness);
+            setScreen("alert");
+            return;
+        }
         setEditingItemID(null);
         setScreen("form");
-    }, [hook.setError]);
+    }, [hook.setError, hook.checkOrchestratorReady]);
 
-    const handleEdit = useCallback((id: string) => {
+    const handleEdit = useCallback(async (id: string) => {
         hook.setError(null);
+        // Non-pending items will be auto-reset to pending on save — verify orchestrator readiness.
+        const item = statusRef.current?.items.find((i) => i.id === id);
+        if (item && item.status !== PENDING_ITEM_STATUS) {
+            const readiness = await hook.checkOrchestratorReady();
+            if (!readiness.ready) {
+                setOrchestratorReadiness(readiness);
+                setScreen("alert");
+                return;
+            }
+        }
         setEditingItemID(id);
         setScreen("form");
-    }, [hook.setError]);
+    }, [hook.setError, hook.checkOrchestratorReady]);
 
     const handleOpenConfig = useCallback(() => {
         hook.setError(null);
@@ -47,7 +75,19 @@ export function TaskSchedulerView() {
         }
     }, [hook.start]);
 
-    const isRunning = hook.status?.run_status === "running" || hook.status?.run_status === "paused";
+    // Navigate to orchestrator-teams with the first available pane as a default hint.
+    // The orchestrator-teams view provides its own pane selection UI.
+    const handleRegisterMember = useCallback(() => {
+        if (hook.availablePanes.length > 0) {
+            openViewWithContext("orchestrator-teams", {
+                addTermMemberPaneId: hook.availablePanes[0].id,
+            });
+            return;
+        }
+        openViewWithContext("orchestrator-teams", {});
+    }, [hook.availablePanes, openViewWithContext]);
+
+    const isRunning = isActiveQueueStatus(hook.status?.run_status);
 
     return (
         <ViewerPanelShell
@@ -96,15 +136,23 @@ export function TaskSchedulerView() {
                             handleBack();
                         }}
                         onBack={handleBack}
-                        isRunning={isRunning}
                     />
                 )}
 
                 {screen === "config" && (
                     <TaskSchedulerConfig
                         items={hook.status?.items ?? []}
+                        initialConfig={hook.status?.config ?? null}
                         onStart={handleStart}
                         onBack={handleBack}
+                    />
+                )}
+
+                {screen === "alert" && orchestratorReadiness && (
+                    <TaskSchedulerAlert
+                        readiness={orchestratorReadiness}
+                        onBack={handleBack}
+                        onRegisterMember={handleRegisterMember}
                     />
                 )}
             </div>

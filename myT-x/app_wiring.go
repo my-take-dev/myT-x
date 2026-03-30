@@ -26,6 +26,37 @@ import (
 	"myT-x/internal/worktree"
 )
 
+func findSessionSnapshotByName(sessions *tmux.SessionManager, sessionName string) (tmux.SessionSnapshot, bool) {
+	for _, snap := range sessions.Snapshot() {
+		if snap.Name == sessionName {
+			return snap, true
+		}
+	}
+	return tmux.SessionSnapshot{}, false
+}
+
+func requireSessionSnapshot(app *App, sessionName string) (tmux.SessionSnapshot, error) {
+	sessions, err := app.requireSessions()
+	if err != nil {
+		return tmux.SessionSnapshot{}, err
+	}
+	snap, found := findSessionSnapshotByName(sessions, sessionName)
+	if !found {
+		return tmux.SessionSnapshot{}, fmt.Errorf("session %s not found", sessionName)
+	}
+	return snap, nil
+}
+
+func collectSessionPaneIDs(snap tmux.SessionSnapshot) []string {
+	paneIDs := make([]string, 0, len(snap.Windows)*2)
+	for _, window := range snap.Windows {
+		for _, pane := range window.Panes {
+			paneIDs = append(paneIDs, pane.ID)
+		}
+	}
+	return paneIDs
+}
+
 // ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------
@@ -320,19 +351,14 @@ func buildSchedulerServiceDeps(app *App) scheduler.Deps {
 			return app.sendKeys.schedulerSendMessage(router, paneID, message)
 		},
 		ResolveSessionRootPath: func(sessionName string) (string, error) {
-			sessions, err := app.requireSessions()
+			snap, err := requireSessionSnapshot(app, sessionName)
 			if err != nil {
 				return "", err
 			}
-			for _, snap := range sessions.Snapshot() {
-				if snap.Name == sessionName {
-					if snap.RootPath == "" {
-						return "", errors.New("session has no root path")
-					}
-					return snap.RootPath, nil
-				}
+			if snap.RootPath == "" {
+				return "", errors.New("session has no root path")
 			}
-			return "", fmt.Errorf("session %s not found", sessionName)
+			return snap.RootPath, nil
 		},
 		NewContext: func() (context.Context, context.CancelFunc) {
 			parentCtx := app.runtimeContext()
@@ -379,19 +405,14 @@ func buildTaskSchedulerDepsFactory(app *App) taskscheduler.DepsFactory {
 				return app.sendKeys.sendKeysLiteralPasteWithEnter(router, paneID, message)
 			},
 			ResolveOrchestratorDBPath: func() (string, error) {
-				sessions, err := app.requireSessions()
+				snap, err := requireSessionSnapshot(app, sessionName)
 				if err != nil {
 					return "", err
 				}
-				for _, snap := range sessions.Snapshot() {
-					if snap.Name == sessionName {
-						if snap.RootPath == "" {
-							return "", errors.New("session has no root path")
-						}
-						return filepath.Join(snap.RootPath, ".myT-x", "orchestrator.db"), nil
-					}
+				if snap.RootPath == "" {
+					return "", errors.New("session has no root path")
 				}
-				return "", fmt.Errorf("session %s not found", sessionName)
+				return filepath.Join(snap.RootPath, ".myT-x", "orchestrator.db"), nil
 			},
 			NewContext: func() (context.Context, context.CancelFunc) {
 				parentCtx := app.runtimeContext()
@@ -411,6 +432,26 @@ func buildTaskSchedulerDepsFactory(app *App) taskscheduler.DepsFactory {
 					return err
 				}
 				return app.sendKeys.sendKeysLiteralWithEnter(router, paneID, command)
+			},
+			GetSessionPaneIDs: func(sName string) ([]string, error) {
+				snap, err := requireSessionSnapshot(app, sName)
+				if err != nil {
+					return nil, err
+				}
+				return collectSessionPaneIDs(snap), nil
+			},
+			IsPaneQuiet: func(paneID string) bool {
+				return app.snapshotService.IsPaneQuiet(paneID)
+			},
+			IsAgentTeamSession: func(sName string) bool {
+				snap, err := requireSessionSnapshot(app, sName)
+				if err != nil {
+					slog.Warn("[DEBUG-TASK-SCHEDULER] IsAgentTeamSession: require sessions failed",
+						"session", sName,
+						"error", err)
+					return false
+				}
+				return snap.IsAgentTeam
 			},
 			SessionName: sessionName,
 		}

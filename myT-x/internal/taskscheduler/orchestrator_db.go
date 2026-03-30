@@ -6,10 +6,60 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+// OrchestratorReadiness holds the result of an orchestrator readiness check.
+type OrchestratorReadiness struct {
+	DBExists   bool
+	AgentCount int
+}
+
+// CheckOrchestratorReady checks if orchestrator.db exists and has registered agents.
+// task-master is the scheduler's own virtual agent and is excluded from the count.
+func CheckOrchestratorReady(dbPath string) (OrchestratorReadiness, error) {
+	if dbPath == "" {
+		return OrchestratorReadiness{}, nil
+	}
+
+	if _, err := os.Stat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return OrchestratorReadiness{DBExists: false, AgentCount: 0}, nil
+		}
+		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness: stat db path", "path", dbPath, "error", err)
+		return OrchestratorReadiness{DBExists: false, AgentCount: 0},
+			fmt.Errorf("stat orchestrator db: %w", err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_busy_timeout=5000")
+	if err != nil {
+		return OrchestratorReadiness{DBExists: true, AgentCount: 0},
+			fmt.Errorf("open orchestrator db for readiness check: %w", err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			slog.Warn("[DEBUG-TASK-SCHEDULER] close readiness db", "error", closeErr)
+		}
+	}()
+
+	var count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM agents WHERE name != ?`, taskMasterAgentName).Scan(&count)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table: agents") {
+			// The DB file exists but orchestrator initialization has not created the agents table yet.
+			slog.Warn("[DEBUG-TASK-SCHEDULER] readiness agent count query failed", "error", err)
+			return OrchestratorReadiness{DBExists: true, AgentCount: 0}, nil
+		}
+		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness query failed", "path", dbPath, "error", err)
+		return OrchestratorReadiness{}, fmt.Errorf("query orchestrator readiness: %w", err)
+	}
+
+	return OrchestratorReadiness{DBExists: true, AgentCount: count}, nil
+}
 
 // orchestratorDB wraps a direct connection to orchestrator.db for
 // task-master agent registration and task tracking operations.
@@ -30,7 +80,9 @@ func openOrchestratorDB(dbPath string) (*orchestratorDB, error) {
 	}
 	// Verify connectivity.
 	if err := db.Ping(); err != nil {
-		db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			slog.Warn("[DEBUG-TASK-SCHEDULER] close orchestrator db after ping failure", "error", closeErr)
+		}
 		return nil, fmt.Errorf("ping orchestrator db: %w", err)
 	}
 	return &orchestratorDB{db: db}, nil

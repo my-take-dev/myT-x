@@ -5,7 +5,6 @@ import {
     bootstrapDelaySecToMs,
     formatBootstrapDelaySec,
     isMemberDraftValid,
-    isTeamDraftValid,
     normalizeBootstrapDelaySecInput,
 } from "./orchestratorTeamUtils";
 import {useBootstrapDelayInput} from "./useBootstrapDelayInput";
@@ -13,8 +12,10 @@ import {useBootstrapDelayInput} from "./useBootstrapDelayInput";
 interface TeamEditorProps {
     draft: OrchestratorTeamDraft;
     saving: boolean;
+    canSave: boolean;
     teamNameDuplicate: boolean;
     activeSession: string | null;
+    systemTeam?: boolean;
     onChange: (draft: OrchestratorTeamDraft) => void;
     onBack: () => void;
     onSave: () => void;
@@ -27,8 +28,10 @@ interface TeamEditorProps {
 export function TeamEditor({
     draft,
     saving,
+    canSave,
     teamNameDuplicate,
     activeSession,
+    systemTeam = false,
     onChange,
     onBack,
     onSave,
@@ -69,91 +72,113 @@ export function TeamEditor({
             </button>
 
             <div className="orchestrator-team-editor-body">
-                <div className="form-group">
-                    <label className="form-label">{t("viewer.orchestratorTeams.editor.teamName", "チーム名")}</label>
-                    <input
-                        className="form-input"
-                        type="text"
-                        value={draft.name}
-                        onChange={(event) => onChange({...draft, name: event.target.value})}
-                        placeholder="Release swarm"
-                    />
-                    {teamNameDuplicate && (
-                        <span className="orchestrator-team-editor-member-warning">
-                            {t("viewer.orchestratorTeams.editor.duplicateTeamName", "同じ名前のチームが既に存在します")}
-                        </span>
-                    )}
-                </div>
-
-                <div className="form-group">
-                    <label className="form-label">
-                        {t("viewer.orchestratorTeams.editor.storageLocation", "保存先")}
-                    </label>
-                    <div className="orchestrator-team-storage-selector">
-                        <label className="orchestrator-team-storage-option">
-                            <input
-                                type="radio"
-                                name="storageLocation"
-                                value="global"
-                                checked={draft.storageLocation === "global"}
-                                onChange={() => onChange({...draft, storageLocation: "global"})}
-                            />
-                            {t("viewer.orchestratorTeams.editor.storageGlobal", "グローバル設定")}
-                        </label>
-                        <label className={`orchestrator-team-storage-option${activeSession === null ? " disabled" : ""}`}>
-                            <input
-                                type="radio"
-                                name="storageLocation"
-                                value="project"
-                                checked={draft.storageLocation === "project"}
-                                disabled={activeSession === null}
-                                onChange={() => onChange({...draft, storageLocation: "project"})}
-                            />
-                            {t("viewer.orchestratorTeams.editor.storageProject", "プロジェクト (.myT-x)")}
-                        </label>
+                {systemTeam ? (
+                    <div className="form-group">
+                        <label className="form-label">{t("viewer.orchestratorTeams.editor.teamName", "チーム名")}</label>
+                        <span className="orchestrator-team-editor-readonly-text">{draft.name}</span>
                     </div>
-                </div>
+                ) : (
+                    <div className="form-group">
+                        <label className="form-label">{t("viewer.orchestratorTeams.editor.teamName", "チーム名")}</label>
+                        <input
+                            className="form-input"
+                            type="text"
+                            value={draft.name}
+                            onChange={(event) => onChange({...draft, name: event.target.value})}
+                            placeholder="Release swarm"
+                        />
+                        {teamNameDuplicate && (
+                            <span className="orchestrator-team-editor-member-warning">
+                                {t("viewer.orchestratorTeams.editor.duplicateTeamName", "同じ名前のチームが既に存在します")}
+                            </span>
+                        )}
+                    </div>
+                )}
 
-                <div className="form-group">
-                    <label className="form-label">
-                        {t("viewer.orchestratorTeams.editor.description", "チーム説明")}
-                    </label>
-                    <p className="orchestrator-teams-field-note">
-                        {t("viewer.orchestratorTeams.editor.descriptionHint", "一覧画面では先頭約50文字が表示されます。要点を先頭に書くと識別しやすくなります。（最大400文字）")}
-                    </p>
-                    <textarea
-                        className="form-input"
-                        rows={3}
-                        maxLength={400}
-                        value={draft.description}
-                        onChange={(event) => onChange({...draft, description: event.target.value})}
-                        placeholder={t("viewer.orchestratorTeams.editor.descriptionPlaceholder", "このチームの目的や用途を記入")}
-                    />
-                    <span className="orchestrator-team-card-meta" style={{textAlign: "right"}}>
-                        {draft.description.length} / 400
-                    </span>
-                </div>
-
-                <div className="form-group">
-                    <label className="form-label">
-                        {t("viewer.orchestratorTeams.editor.bootstrapDelay", "役割挿入待機時間（秒）")}
-                    </label>
-                    <p className="orchestrator-teams-field-note">
-                        {t("viewer.orchestratorTeams.editor.bootstrapDelayDescription", "コマンド起動後、役割メッセージ送信までの待機時間です。エージェントの起動に時間がかかる場合は増やしてください。")}
-                    </p>
-                    <input
-                        className="form-input"
-                        type="text"
-                        inputMode="numeric"
-                        value={bootstrapDelay.delaySec}
-                        onChange={handleBootstrapDelayChange}
-                    />
-                    {bootstrapDelayErrorText && (
-                        <span className="orchestrator-team-editor-member-warning">
-                            {bootstrapDelayErrorText}
+                {systemTeam ? (
+                    <div className="form-group">
+                        <label className="form-label">
+                            {t("viewer.orchestratorTeams.editor.storageLocation", "保存先")}
+                        </label>
+                        <span className="orchestrator-team-editor-readonly-text">
+                            {t("viewer.orchestratorTeams.editor.storageGlobal", "グローバル設定")}
                         </span>
-                    )}
-                </div>
+                    </div>
+                ) : (
+                    <div className="form-group">
+                        <label className="form-label">
+                            {t("viewer.orchestratorTeams.editor.storageLocation", "保存先")}
+                        </label>
+                        <div className="orchestrator-team-storage-selector">
+                            <label className="orchestrator-team-storage-option">
+                                <input
+                                    type="radio"
+                                    name="storageLocation"
+                                    value="global"
+                                    checked={draft.storageLocation === "global"}
+                                    onChange={() => onChange({...draft, storageLocation: "global"})}
+                                />
+                                {t("viewer.orchestratorTeams.editor.storageGlobal", "グローバル設定")}
+                            </label>
+                            <label className={`orchestrator-team-storage-option${activeSession === null ? " disabled" : ""}`}>
+                                <input
+                                    type="radio"
+                                    name="storageLocation"
+                                    value="project"
+                                    checked={draft.storageLocation === "project"}
+                                    disabled={activeSession === null}
+                                    onChange={() => onChange({...draft, storageLocation: "project"})}
+                                />
+                                {t("viewer.orchestratorTeams.editor.storageProject", "プロジェクト (.myT-x)")}
+                            </label>
+                        </div>
+                    </div>
+                )}
+
+                {!systemTeam && (
+                    <div className="form-group">
+                        <label className="form-label">
+                            {t("viewer.orchestratorTeams.editor.description", "チーム説明")}
+                        </label>
+                        <p className="orchestrator-teams-field-note">
+                            {t("viewer.orchestratorTeams.editor.descriptionHint", "一覧画面では先頭約50文字が表示されます。要点を先頭に書くと識別しやすくなります。（最大400文字）")}
+                        </p>
+                        <textarea
+                            className="form-input"
+                            rows={3}
+                            maxLength={400}
+                            value={draft.description}
+                            onChange={(event) => onChange({...draft, description: event.target.value})}
+                            placeholder={t("viewer.orchestratorTeams.editor.descriptionPlaceholder", "このチームの目的や用途を記入")}
+                        />
+                        <span className="orchestrator-team-card-meta" style={{textAlign: "right"}}>
+                            {draft.description.length} / 400
+                        </span>
+                    </div>
+                )}
+
+                {!systemTeam && (
+                    <div className="form-group">
+                        <label className="form-label">
+                            {t("viewer.orchestratorTeams.editor.bootstrapDelay", "役割挿入待機時間（秒）")}
+                        </label>
+                        <p className="orchestrator-teams-field-note">
+                            {t("viewer.orchestratorTeams.editor.bootstrapDelayDescription", "コマンド起動後、役割メッセージ送信までの待機時間です。エージェントの起動に時間がかかる場合は増やしてください。")}
+                        </p>
+                        <input
+                            className="form-input"
+                            type="text"
+                            inputMode="numeric"
+                            value={bootstrapDelay.delaySec}
+                            onChange={handleBootstrapDelayChange}
+                        />
+                        {bootstrapDelayErrorText && (
+                            <span className="orchestrator-team-editor-member-warning">
+                                {bootstrapDelayErrorText}
+                            </span>
+                        )}
+                    </div>
+                )}
 
                 <div className="orchestrator-team-editor-header">
                     <div>
@@ -225,7 +250,7 @@ export function TeamEditor({
                 <button
                     type="button"
                     className="orchestrator-teams-primary-btn"
-                    disabled={!isTeamDraftValid(draft) || !bootstrapDelay.isValid || teamNameDuplicate || saving}
+                    disabled={!canSave || saving}
                     onClick={onSave}
                 >
                     {saving
