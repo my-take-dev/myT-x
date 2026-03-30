@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {useMemo, useState} from "react";
 import {useI18n} from "../i18n";
 import type {PaneSnapshot} from "../types/tmux";
 import {useChatInput} from "./useChatInput";
@@ -20,8 +20,9 @@ export function ChatInputBar({
     const {t} = useI18n();
     const [expanded, setExpanded] = useState(false);
     const [autoClose, setAutoClose] = useState(true);
+    const paneIds = useMemo(() => panes.map((pane) => pane.id), [panes]);
 
-    const input = useChatInput({activePaneId, autoClose, expanded, setExpanded});
+    const input = useChatInput({activePaneId, paneIds, autoClose, expanded, setExpanded});
     const resize = useChatResize({expanded, chatOverlayPercentage});
 
     if (expanded) {

@@ -1,6 +1,13 @@
 /* ── Task Scheduler View ── */
 
 .task-scheduler-view {
+    --task-scheduler-preexec-fg: #70d49d;
+    --task-scheduler-preexec-border: rgba(112, 212, 157, 0.45);
+    --task-scheduler-preexec-border-soft: rgba(112, 212, 157, 0.35);
+    --task-scheduler-preexec-border-strong: rgba(112, 212, 157, 0.6);
+    --task-scheduler-preexec-bg: rgba(112, 212, 157, 0.06);
+    --task-scheduler-preexec-bg-strong: rgba(112, 212, 157, 0.08);
+    --task-scheduler-preexec-bg-soft: rgba(112, 212, 157, 0.1);
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -46,6 +53,42 @@
     gap: 8px;
 }
 
+.task-scheduler-preexec-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--task-scheduler-preexec-border-soft);
+    border-radius: 6px;
+    background: var(--task-scheduler-preexec-bg);
+}
+
+.task-scheduler-preexec-status-timeout {
+    border-color: var(--accent);
+    background: var(--accent-10, rgba(0, 150, 255, 0.1));
+}
+
+.task-scheduler-preexec-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--task-scheduler-preexec-border);
+    color: var(--task-scheduler-preexec-fg);
+    font-size: 0.74rem;
+    font-weight: 600;
+}
+
+.task-scheduler-preexec-status-timeout .task-scheduler-preexec-badge {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.task-scheduler-preexec-label {
+    color: var(--fg-dim);
+    font-size: 0.82rem;
+}
+
 .task-scheduler-toolbar {
     display: flex;
     justify-content: flex-end;
@@ -74,9 +117,9 @@
     font-size: 0.82rem;
     padding: 4px 12px;
     border-radius: 4px;
-    border: 1px solid rgba(112, 212, 157, 0.6);
-    background: rgba(112, 212, 157, 0.08);
-    color: #70d49d;
+    border: 1px solid var(--task-scheduler-preexec-border-strong);
+    background: var(--task-scheduler-preexec-bg-strong);
+    color: var(--task-scheduler-preexec-fg);
     cursor: pointer;
     transition: opacity 0.15s;
 }
@@ -137,8 +180,8 @@
 }
 
 .task-scheduler-card-running {
-    border-color: rgba(112, 212, 157, 0.5);
-    background: rgba(112, 212, 157, 0.06);
+    border-color: var(--task-scheduler-preexec-border);
+    background: var(--task-scheduler-preexec-bg);
 }
 
 .task-scheduler-card-failed {
@@ -223,9 +266,9 @@
     font-size: 0.72rem;
     padding: 1px 6px;
     border-radius: 3px;
-    border: 1px solid rgba(112, 212, 157, 0.5);
-    background: rgba(112, 212, 157, 0.1);
-    color: #70d49d;
+    border: 1px solid var(--task-scheduler-preexec-border);
+    background: var(--task-scheduler-preexec-bg-soft);
+    color: var(--task-scheduler-preexec-fg);
 }
 
 /* ── Form styles ── */
@@ -300,6 +343,50 @@
     margin: 0;
 }
 
+.task-scheduler-config-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.task-scheduler-config-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.task-scheduler-config-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.task-scheduler-config-label {
+    font-size: 0.82rem;
+    color: var(--fg-main);
+}
+
+.task-scheduler-config-input {
+    width: 100%;
+    max-width: 180px;
+    font: inherit;
+    font-size: 0.84rem;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--bg-input, var(--bg-main, var(--bg-panel)));
+    color: var(--fg-main);
+}
+
+.task-scheduler-config-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
 .task-scheduler-checkbox-label {
     display: flex;
     align-items: center;
@@ -315,6 +402,19 @@
     cursor: pointer;
 }
 
+.task-scheduler-radio-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.84rem;
+    color: var(--fg-main);
+    cursor: pointer;
+}
+
+.task-scheduler-radio-label input[type="radio"] {
+    cursor: pointer;
+}
+
 .task-scheduler-config-summary {
     font-size: 0.84rem;
     color: var(--fg-dim);
@@ -325,4 +425,56 @@
     font-size: 0.78rem;
     color: var(--fg-dim);
     margin-top: 2px;
+}
+
+/* ── Alert screen ── */
+.task-scheduler-alert {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.task-scheduler-alert-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 24px 16px;
+    border: 1px solid rgba(255, 180, 50, 0.4);
+    border-radius: 8px;
+    background: rgba(255, 180, 50, 0.06);
+}
+
+.task-scheduler-alert-icon {
+    font-size: 1.6rem;
+}
+
+.task-scheduler-alert-message {
+    font-size: 0.88rem;
+    color: var(--fg-main);
+    text-align: center;
+    line-height: 1.5;
+    margin: 0;
+}
+
+.task-scheduler-alert-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.task-scheduler-register-btn {
+    font: inherit;
+    font-size: 0.84rem;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: var(--bg-main, var(--bg-panel));
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.task-scheduler-register-btn:hover {
+    opacity: 0.9;
 }

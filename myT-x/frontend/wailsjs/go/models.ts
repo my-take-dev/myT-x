@@ -693,6 +693,24 @@ export namespace main {
 	        this.has_child_process = source["has_child_process"];
 	    }
 	}
+	export class TaskSchedulerOrchestratorReadiness {
+	    ready: boolean;
+	    db_exists: boolean;
+	    agent_count: number;
+	    has_panes: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskSchedulerOrchestratorReadiness(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ready = source["ready"];
+	        this.db_exists = source["db_exists"];
+	        this.agent_count = source["agent_count"];
+	        this.has_panes = source["has_panes"];
+	    }
+	}
 	export class ValidationRules {
 	    min_override_name_len: number;
 	
@@ -1058,7 +1076,10 @@ export namespace sessionlog {
 export namespace taskscheduler {
 	
 	export class QueueConfig {
-	
+	    pre_exec_enabled: boolean;
+	    pre_exec_target_mode: string;
+	    pre_exec_reset_delay_s: number;
+	    pre_exec_idle_timeout_s: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new QueueConfig(source);
@@ -1066,7 +1087,10 @@ export namespace taskscheduler {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	
+	        this.pre_exec_enabled = source["pre_exec_enabled"];
+	        this.pre_exec_target_mode = source["pre_exec_target_mode"];
+	        this.pre_exec_reset_delay_s = source["pre_exec_reset_delay_s"];
+	        this.pre_exec_idle_timeout_s = source["pre_exec_idle_timeout_s"];
 	    }
 	}
 	export class QueueItem {
@@ -1111,6 +1135,7 @@ export namespace taskscheduler {
 	    run_status: string;
 	    current_index: number;
 	    session_name: string;
+	    pre_exec_progress?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new QueueStatus(source);
@@ -1123,6 +1148,7 @@ export namespace taskscheduler {
 	        this.run_status = source["run_status"];
 	        this.current_index = source["current_index"];
 	        this.session_name = source["session_name"];
+	        this.pre_exec_progress = source["pre_exec_progress"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

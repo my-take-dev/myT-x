@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.0.2
+
+### タスクスケジューラー
+- タスク耐障害性の向上（失敗・完了・スキップ済みタスクの編集・削除を許可、編集時に自動でpendingリセット）
+- タスク追加前のオーケストレーター準備状況チェック（orchestrator.db存在確認＋エージェント登録数検証）
+- 未準備時のアラート画面追加（DB未存在・エージェント未登録に応じたメッセージと登録導線）
+- アラート画面からペインへのメンバー登録画面へのワンクリック遷移
+- Pre-Executionフェーズの実装（キュー開始前の全ペイン/newリセット＋役割リマインド送信）
+  - `QueuePreparing` ステータス追加（前準備中の進捗表示: resetting / waiting_reset / sending_reminders / waiting_idle）
+  - QueueConfig拡張（PreExecEnabled, PreExecTargetMode, PreExecResetDelay, PreExecIdleTimeoutフィールド）
+  - ターゲットモード対応（task_panes: タスク対象ペインのみ / all_panes: セッション全ペイン）
+  - 全ペインのアイドル待機機能（OutputFlushManager再利用、タイムアウト後もキュー実行継続）
+- Pre-Executionフェーズの/newコマンド未到達バグ修正（ConPTYコンテンションによる5ペイン環境での問題）
+  - ペイン間ディレイ追加（resetコマンド: 2秒、役割リマインド: 500ms）
+
+### チャット入力
+- マルチセッション時の送信先ペイン誤送信バグ修正（`initializedRef`による初回セッション固定の解消）
+  - セッション切替時にselectedPaneIdをペインリストで有効性チェック、無効なら自動リセット
+
+### オーケストレーター
+- 無所属チーム（`__unaffiliated__`）のメンバー編集・一括保存機能の追加
+  - `SaveUnaffiliatedTeamMembers`メソッド新設（全置換方式、空スライスで全削除対応）
+  - TeamEditorでのシステムチーム表示調整（チーム名・保存先を読取専用、説明・待機時間を非表示）
+  - 保存ルーティング追加（システムチーム判定で新APIへ自動振り分け）
+
+---
+
 ## v1.0.1
 
 ### リファクタリング

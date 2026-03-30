@@ -265,6 +265,13 @@
     color: #ffd9a4;
 }
 
+.orchestrator-team-editor-readonly-text {
+    display: block;
+    padding: 6px 8px;
+    font-size: 0.82rem;
+    color: var(--text-secondary, #a0a0a0);
+}
+
 .orchestrator-team-member-list {
     display: flex;
     flex-wrap: nowrap;

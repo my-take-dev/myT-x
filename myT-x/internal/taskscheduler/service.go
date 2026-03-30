@@ -34,10 +34,11 @@ type Service struct {
 	mu   sync.Mutex
 
 	// Queue state (protected by mu).
-	items        []QueueItem
-	config       QueueConfig
-	runStatus    QueueRunStatus
-	currentIndex int // -1 when not running
+	items           []QueueItem
+	config          QueueConfig
+	runStatus       QueueRunStatus
+	currentIndex    int    // -1 when not running
+	preExecProgress string // Empty when not in the pre-execution phase.
 
 	// Worker lifecycle (protected by mu for reads; cancel called outside lock).
 	cancel context.CancelFunc
@@ -68,6 +69,10 @@ func NewService(deps Deps) *Service {
 func (s *Service) Start(config QueueConfig, items []QueueItem) error {
 	if len(items) == 0 {
 		return errors.New("at least one task item is required")
+	}
+	applyConfigDefaults(&config)
+	if config.PreExecTargetMode != PreExecTargetModeAllPanes && config.PreExecTargetMode != PreExecTargetModeTaskPanes {
+		return fmt.Errorf("invalid pre-exec target mode: %q", config.PreExecTargetMode)
 	}
 
 	// Validate all target panes exist before starting.
@@ -107,14 +112,20 @@ func (s *Service) Start(config QueueConfig, items []QueueItem) error {
 	}
 
 	s.mu.Lock()
-	if s.runStatus == QueueRunning || s.runStatus == QueuePaused {
+	if s.runStatus == QueueRunning || s.runStatus == QueuePaused || s.runStatus == QueuePreparing {
 		s.mu.Unlock()
 		return errors.New("queue is already running; stop it first")
 	}
 	s.items = prepared
 	s.config = config
-	s.runStatus = QueueRunning
-	s.currentIndex = 0
+	s.preExecProgress = ""
+	if config.PreExecEnabled {
+		s.runStatus = QueuePreparing
+		s.currentIndex = -1
+	} else {
+		s.runStatus = QueueRunning
+		s.currentIndex = 0
+	}
 	s.mu.Unlock()
 
 	ctx, cancel := s.deps.NewContext()
@@ -133,19 +144,20 @@ func (s *Service) Start(config QueueConfig, items []QueueItem) error {
 // Stop stops the queue and marks remaining items as skipped.
 func (s *Service) Stop() error {
 	s.mu.Lock()
-	if s.runStatus != QueueRunning && s.runStatus != QueuePaused {
+	if s.runStatus != QueueRunning && s.runStatus != QueuePaused && s.runStatus != QueuePreparing {
 		s.mu.Unlock()
 		return errors.New("queue is not running")
 	}
 	cancel := s.cancel
 	s.cancel = nil
 	for i := range s.items {
-		if s.items[i].Status == ItemStatusPending || s.items[i].Status == ItemStatusRunning {
+		if !IsTerminal(s.items[i].Status) {
 			s.items[i].Status = ItemStatusSkipped
 		}
 	}
 	s.runStatus = QueueIdle
 	s.currentIndex = -1
+	s.preExecProgress = ""
 	s.mu.Unlock()
 
 	if cancel != nil {
@@ -158,14 +170,16 @@ func (s *Service) Stop() error {
 	return nil
 }
 
-// Pause pauses the queue by cancelling the current worker context.
+// Pause pauses an actively running queue by cancelling the current worker
+// context. The preparing phase is intentionally not pausable because it does
+// not have resumable intermediate state.
 // If an item is currently running, its status is preserved as "running".
 // Resume() detects the running item and re-polls for its completion.
 func (s *Service) Pause() error {
 	s.mu.Lock()
 	if s.runStatus != QueueRunning {
 		s.mu.Unlock()
-		return errors.New("queue is not running")
+		return errors.New("queue is not in a pausable state")
 	}
 	s.runStatus = QueuePaused
 	cancel := s.cancel
@@ -210,7 +224,7 @@ func (s *Service) Resume() error {
 // StopAll is called during shutdown to stop the queue gracefully.
 func (s *Service) StopAll() {
 	s.mu.Lock()
-	if s.runStatus != QueueRunning && s.runStatus != QueuePaused {
+	if s.runStatus != QueueRunning && s.runStatus != QueuePaused && s.runStatus != QueuePreparing {
 		s.mu.Unlock()
 		return
 	}
@@ -218,6 +232,7 @@ func (s *Service) StopAll() {
 	s.cancel = nil
 	s.runStatus = QueueIdle
 	s.currentIndex = -1
+	s.preExecProgress = ""
 	s.mu.Unlock()
 
 	if cancel != nil {
@@ -268,7 +283,7 @@ func (s *Service) AddItem(title, message, targetPaneID string, clearBefore bool,
 	return nil
 }
 
-// RemoveItem removes a pending item from the queue.
+// RemoveItem removes a non-running item from the queue.
 func (s *Service) RemoveItem(id string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -280,7 +295,7 @@ func (s *Service) RemoveItem(id string) error {
 	filtered := make([]QueueItem, 0, len(s.items))
 	for _, item := range s.items {
 		if item.ID == id {
-			if item.Status != ItemStatusPending {
+			if !IsEditable(item.Status) {
 				s.mu.Unlock()
 				return fmt.Errorf("cannot remove item %s with status %s", id, item.Status)
 			}
@@ -347,7 +362,7 @@ func (s *Service) ReorderItems(orderedIDs []string) error {
 	return nil
 }
 
-// UpdateItem updates a pending item's fields.
+// UpdateItem updates a non-running item's fields. Non-pending items are reset to pending.
 func (s *Service) UpdateItem(id, title, message, targetPaneID string, clearBefore bool, clearCommand string) error {
 	id = strings.TrimSpace(id)
 	title = strings.TrimSpace(title)
@@ -372,9 +387,17 @@ func (s *Service) UpdateItem(id, title, message, targetPaneID string, clearBefor
 	found := false
 	for i := range s.items {
 		if s.items[i].ID == id {
-			if s.items[i].Status != ItemStatusPending {
+			if !IsEditable(s.items[i].Status) {
 				s.mu.Unlock()
 				return fmt.Errorf("cannot update item %s with status %s", id, s.items[i].Status)
+			}
+			// Reset non-pending items to pending so they can be re-executed.
+			if s.items[i].Status != ItemStatusPending {
+				s.items[i].Status = ItemStatusPending
+				s.items[i].ErrorMessage = ""
+				s.items[i].StartedAt = ""
+				s.items[i].CompletedAt = ""
+				s.items[i].OrcTaskID = ""
 			}
 			s.items[i].Title = title
 			s.items[i].Message = message
@@ -404,11 +427,12 @@ func (s *Service) GetStatus() QueueStatus {
 	copy(items, s.items)
 
 	return QueueStatus{
-		Config:       s.config,
-		Items:        items,
-		RunStatus:    s.runStatus,
-		CurrentIndex: s.currentIndex,
-		SessionName:  s.deps.SessionName,
+		Config:          s.config,
+		Items:           items,
+		RunStatus:       s.runStatus,
+		CurrentIndex:    s.currentIndex,
+		SessionName:     s.deps.SessionName,
+		PreExecProgress: s.preExecProgress,
 	}
 }
 
@@ -427,6 +451,28 @@ func (s *Service) launchWorker(ctx context.Context) {
 		}
 	}
 	s.deps.LaunchWorker("task-scheduler", ctx, func(ctx context.Context) {
+		s.mu.Lock()
+		items := make([]QueueItem, len(s.items))
+		copy(items, s.items)
+		config := s.config
+		s.mu.Unlock()
+
+		if config.PreExecEnabled {
+			if !s.runPreExecutionPhase(ctx, items, config) {
+				return
+			}
+
+			s.mu.Lock()
+			if s.runStatus != QueuePreparing {
+				s.mu.Unlock()
+				return
+			}
+			s.runStatus = QueueRunning
+			s.currentIndex = -1
+			s.mu.Unlock()
+			s.emitUpdated()
+		}
+
 		s.runLoop(ctx)
 	}, recoveryOpts)
 }
@@ -470,6 +516,7 @@ func (s *Service) runLoop(ctx context.Context) {
 			// All items processed.
 			s.runStatus = QueueCompleted
 			s.currentIndex = -1
+			s.preExecProgress = ""
 			s.mu.Unlock()
 			s.closeOrcDB()
 			s.emitUpdated()
@@ -479,17 +526,16 @@ func (s *Service) runLoop(ctx context.Context) {
 
 		s.currentIndex = nextIdx
 		item := s.items[nextIdx]
-		config := s.config
 		s.mu.Unlock()
 
 		s.emitUpdated()
 
 		if resuming {
-			if !s.resumeRunningItem(ctx, nextIdx, item, config) {
+			if !s.resumeRunningItem(ctx, nextIdx, item) {
 				return
 			}
 		} else {
-			if !s.executeItem(ctx, nextIdx, item, config) {
+			if !s.executeItem(ctx, nextIdx, item) {
 				return
 			}
 		}
@@ -499,7 +545,7 @@ func (s *Service) runLoop(ctx context.Context) {
 // executeItem executes a single queue item. Returns true if the item completed
 // successfully and the worker should continue, false if it failed and the
 // worker should stop.
-func (s *Service) executeItem(ctx context.Context, idx int, item QueueItem, config QueueConfig) bool {
+func (s *Service) executeItem(ctx context.Context, idx int, item QueueItem) bool {
 	// Mark item as running.
 	now := time.Now().UTC().Format(time.RFC3339)
 	s.mu.Lock()
@@ -577,7 +623,7 @@ func (s *Service) executeItem(ctx context.Context, idx int, item QueueItem, conf
 
 // resumeRunningItem resumes polling for an item that was already sent to a pane
 // (e.g. after Pause → Resume). Returns true if the item completed successfully.
-func (s *Service) resumeRunningItem(ctx context.Context, idx int, item QueueItem, config QueueConfig) bool {
+func (s *Service) resumeRunningItem(ctx context.Context, idx int, item QueueItem) bool {
 	slog.Info("[DEBUG-TASK-SCHEDULER] resuming poll for running item",
 		"itemID", item.ID, "taskID", item.OrcTaskID, "pane", item.TargetPaneID)
 
@@ -676,6 +722,7 @@ func (s *Service) failItem(idx int, reason string) {
 	}
 	s.runStatus = QueueIdle
 	s.currentIndex = -1
+	s.preExecProgress = ""
 	s.mu.Unlock()
 
 	slog.Warn("[DEBUG-TASK-SCHEDULER] item failed", "idx", idx, "reason", reason)
@@ -687,6 +734,7 @@ func (s *Service) handleWorkerFatal(reason string) {
 	s.mu.Lock()
 	s.runStatus = QueueIdle
 	s.currentIndex = -1
+	s.preExecProgress = ""
 	s.mu.Unlock()
 
 	s.closeOrcDB()

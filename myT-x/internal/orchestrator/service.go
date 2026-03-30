@@ -459,6 +459,82 @@ func (s *Service) AddMemberToUnaffiliatedTeam(member TeamMember, storageLocation
 	return nil
 }
 
+// SaveUnaffiliatedTeamMembers replaces all members in the unaffiliated team
+// with the given members slice. An empty slice is valid and removes all members.
+// Storage is always global, so sessionName is accepted only for API symmetry.
+func (s *Service) SaveUnaffiliatedTeamMembers(members []TeamMember, sessionName string) error {
+	_ = sessionName
+
+	normalizedMembers := make([]TeamMember, len(members))
+	copy(normalizedMembers, members)
+
+	// Normalize and validate each member without mutating the caller's slice.
+	seen := make(map[string]struct{}, len(normalizedMembers))
+	for i := range normalizedMembers {
+		normalizedMembers[i].Normalize()
+		normalizedMembers[i].TeamID = UnaffiliatedTeamID
+		normalizedMembers[i].Order = i
+		if err := normalizedMembers[i].Validate(); err != nil {
+			return fmt.Errorf("member[%d] validation failed: %w", i, err)
+		}
+		title := strings.TrimSpace(normalizedMembers[i].PaneTitle)
+		if _, dup := seen[title]; dup {
+			return fmt.Errorf("duplicate pane title %q in input members", title)
+		}
+		seen[title] = struct{}{}
+	}
+
+	definitionsPath, membersPath := s.resolveGlobalStoragePaths()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	definitions, err := readDefinitionsForWrite(definitionsPath)
+	if err != nil {
+		return fmt.Errorf("read team definitions: %w", err)
+	}
+	allMembers, err := readMembersForWrite(membersPath)
+	if err != nil {
+		return fmt.Errorf("read team members: %w", err)
+	}
+
+	// Ensure unaffiliated team definition exists.
+	defFound := false
+	for _, d := range definitions {
+		if IsSystemTeam(d.ID) {
+			defFound = true
+			break
+		}
+	}
+	if !defFound {
+		definitions = append(definitions, newUnaffiliatedTeamRecord())
+		sortDefinitions(definitions)
+	}
+
+	// Remove existing unaffiliated members, keep others intact.
+	kept := make([]TeamMember, 0, len(allMembers))
+	for _, m := range allMembers {
+		if !IsSystemTeam(m.TeamID) {
+			kept = append(kept, m)
+		}
+	}
+	// Append the new members.
+	kept = append(kept, normalizedMembers...)
+	kept = filterOrphanMembers(kept, definitions)
+	sortMembers(kept)
+
+	// Two-file write strategy: write definitions only when newly created.
+	if !defFound {
+		if err := writeDefinitions(definitionsPath, definitions); err != nil {
+			return fmt.Errorf("write definitions: %w", err)
+		}
+	}
+	if err := writeMembers(membersPath, kept); err != nil {
+		return fmt.Errorf("write members: %w", err)
+	}
+	return nil
+}
+
 // ReorderTeams reorders team definitions by the given ID sequence.
 func (s *Service) ReorderTeams(teamIDs []string, storageLocation string, sessionName string) error {
 	if len(teamIDs) == 0 {

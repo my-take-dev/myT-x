@@ -15,7 +15,6 @@ import type {
 import {
     buildStartRequest,
     buildTeamPayload,
-    copyMemberToDraft,
     createCopiedTeamDraft,
     createEmptyMemberDraft,
     createEmptyTeamDraft,
@@ -58,6 +57,7 @@ export interface UseTeamCRUDResult {
     readonly teamDraft: OrchestratorTeamDraft | null;
     readonly setTeamDraft: Dispatch<SetStateAction<OrchestratorTeamDraft | null>>;
     readonly saving: boolean;
+    readonly canSaveTeam: boolean;
     readonly teamNameDuplicate: boolean;
     // Member draft
     readonly memberDraft: OrchestratorMemberDraft | null;
@@ -132,6 +132,7 @@ export function useTeamCRUD(): UseTeamCRUDResult {
         moveTeamDown,
         bootstrapMemberToPane,
         addMemberToUnaffiliatedTeam,
+        saveUnaffiliatedTeamMembers,
         ensureUnaffiliatedTeam,
     } = useOrchestratorTeams();
 
@@ -229,14 +230,24 @@ export function useTeamCRUD(): UseTeamCRUDResult {
         void refresh();
     }, [refresh]);
 
+    const saveTeamRouted = useCallback(async (draft: OrchestratorTeamDraft) => {
+        if (isSystemTeam(draft.id)) {
+            await saveUnaffiliatedTeamMembers(draft);
+        } else {
+            await saveTeam(draft);
+        }
+    }, [saveTeam, saveUnaffiliatedTeamMembers]);
+
     const handleSaveTeam = useCallback(async () => {
         if (teamDraft === null) {
             return;
         }
         setSaving(true);
         try {
-            await saveTeam(teamDraft);
-            setSelectedTeamID(teamDraft.id);
+            await saveTeamRouted(teamDraft);
+            if (!isSystemTeam(teamDraft.id)) {
+                setSelectedTeamID(teamDraft.id);
+            }
             setTeamDraftSnapshot(null);
             setMemberDraftSnapshot(null);
             setScreen("list");
@@ -246,7 +257,7 @@ export function useTeamCRUD(): UseTeamCRUDResult {
         } finally {
             setSaving(false);
         }
-    }, [saveTeam, teamDraft]);
+    }, [saveTeamRouted, teamDraft]);
 
     // --- Member CRUD handlers ---
 
@@ -504,6 +515,9 @@ export function useTeamCRUD(): UseTeamCRUDResult {
 
     const canSaveTeam = useMemo(() => {
         if (teamDraft === null) return false;
+        if (isSystemTeam(teamDraft.id)) {
+            return teamDraft.members.every(isMemberDraftValid);
+        }
         return isTeamDraftValid(teamDraft) && !teamNameDuplicate;
     }, [teamDraft, teamNameDuplicate]);
 
@@ -523,6 +537,9 @@ export function useTeamCRUD(): UseTeamCRUDResult {
         if (memberDraft === null || teamDraft === null) return false;
         if (!canSaveMember) return false;
         const hypothetical = upsertDraftMember(teamDraft, memberDraft, memberEditIndex);
+        if (isSystemTeam(hypothetical.id)) {
+            return hypothetical.members.every(isMemberDraftValid);
+        }
         if (!isTeamDraftValid(hypothetical)) return false;
         return !isTeamNameDuplicate(hypothetical.name, hypothetical.id, teams, hypothetical.storageLocation);
     }, [memberDraft, teamDraft, memberEditIndex, teams, canSaveMember]);
@@ -607,7 +624,7 @@ export function useTeamCRUD(): UseTeamCRUDResult {
                     if (teamDraft === null) break;
                     setSaving(true);
                     try {
-                        await saveTeam(teamDraft);
+                        await saveTeamRouted(teamDraft);
                         setPendingNavigation(null);
                         closeView();
                     } catch (err) {
@@ -622,7 +639,7 @@ export function useTeamCRUD(): UseTeamCRUDResult {
                     setSaving(true);
                     try {
                         const updatedTeam = upsertDraftMember(teamDraft, memberDraft, memberEditIndex);
-                        await saveTeam(updatedTeam);
+                        await saveTeamRouted(updatedTeam);
                         setPendingNavigation(null);
                         closeView();
                     } catch (err) {
@@ -634,7 +651,7 @@ export function useTeamCRUD(): UseTeamCRUDResult {
                     break;
             }
         }
-    }, [pendingNavigation, returnToList, clearMemberAndReturnToTeam, closeView, handleSaveTeam, handleSaveMember, teamDraft, memberDraft, memberEditIndex, saveTeam]);
+    }, [pendingNavigation, returnToList, clearMemberAndReturnToTeam, closeView, handleSaveTeam, handleSaveMember, teamDraft, memberDraft, memberEditIndex, saveTeamRouted]);
 
     return {
         // From useOrchestratorTeams
@@ -658,6 +675,7 @@ export function useTeamCRUD(): UseTeamCRUDResult {
         teamDraft,
         setTeamDraft,
         saving,
+        canSaveTeam,
         teamNameDuplicate,
         // Member draft
         memberDraft,

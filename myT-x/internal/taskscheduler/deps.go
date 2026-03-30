@@ -48,6 +48,15 @@ type Deps struct {
 	// Uses literal SendKeys (non-paste) as the command is a short single-line input.
 	SendClearCommand func(paneID, command string) error
 
+	// GetSessionPaneIDs returns all pane IDs in the named session.
+	GetSessionPaneIDs func(sessionName string) ([]string, error)
+
+	// IsPaneQuiet returns true when the pane has had no recent output.
+	IsPaneQuiet func(paneID string) bool
+
+	// IsAgentTeamSession reports whether the session is running in agent-team mode.
+	IsAgentTeamSession func(sessionName string) bool
+
 	// SessionName is the session this service instance is bound to.
 	SessionName string
 }
@@ -57,10 +66,12 @@ func (d *Deps) validateRequired() {
 	if d.CheckPaneAlive == nil || d.SendMessagePaste == nil ||
 		d.ResolveOrchestratorDBPath == nil || d.NewContext == nil ||
 		d.LaunchWorker == nil || d.BaseRecoveryOptions == nil ||
-		d.SendClearCommand == nil {
+		d.SendClearCommand == nil || d.GetSessionPaneIDs == nil ||
+		d.IsPaneQuiet == nil || d.IsAgentTeamSession == nil {
 		panic("taskscheduler.NewService: required function fields in Deps must be non-nil " +
 			"(CheckPaneAlive, SendMessagePaste, ResolveOrchestratorDBPath, NewContext, " +
-			"LaunchWorker, BaseRecoveryOptions, SendClearCommand)")
+			"LaunchWorker, BaseRecoveryOptions, SendClearCommand, GetSessionPaneIDs, " +
+			"IsPaneQuiet, IsAgentTeamSession)")
 	}
 }
 

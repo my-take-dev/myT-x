@@ -7,6 +7,7 @@ import {
     LoadOrchestratorTeams,
     ReorderOrchestratorTeams,
     SaveOrchestratorTeam,
+    SaveUnaffiliatedTeamMembers,
     StartOrchestratorTeam,
 } from "../../../../../wailsjs/go/main/App";
 import {orchestrator} from "../../../../../wailsjs/go/models";
@@ -156,6 +157,20 @@ export function useOrchestratorTeams() {
         }
     }, [activeSession]);
 
+    const saveUnaffiliatedTeamMembers = useCallback(async (draft: OrchestratorTeamDraft) => {
+        setError(null);
+        setNotice(null);
+        try {
+            const payload = buildTeamPayload(draft);
+            const wireMembers = payload.members.map((m) => orchestrator.TeamMember.createFrom(m));
+            await SaveUnaffiliatedTeamMembers(wireMembers, activeSession ?? "");
+            await refresh();
+        } catch (err) {
+            setError(toErrorMessage(err, "Failed to save unaffiliated team members."));
+            throw err;
+        }
+    }, [activeSession, refresh]);
+
     const ensureUnaffiliatedTeam = useCallback(async (storageLocation: OrchestratorStorageLocation): Promise<OrchestratorTeamDefinition> => {
         const result = await EnsureUnaffiliatedTeam(storageLocation, activeSession ?? "");
         return result as OrchestratorTeamDefinition;
@@ -177,6 +192,7 @@ export function useOrchestratorTeams() {
         moveTeamDown,
         bootstrapMemberToPane,
         addMemberToUnaffiliatedTeam,
+        saveUnaffiliatedTeamMembers,
         ensureUnaffiliatedTeam,
     };
 }
