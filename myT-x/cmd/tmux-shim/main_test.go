@@ -522,16 +522,6 @@ func TestParseCommandRejectsNegativeSizeFlags(t *testing.T) {
 			args:    []string{"new-session", "-s", "demo", "-y", "-1"},
 			wantErr: "flag -y must be non-negative",
 		},
-		{
-			name:    "resize-pane rejects negative -x",
-			args:    []string{"resize-pane", "-t", "%0", "-x", "-1"},
-			wantErr: "flag -x must be non-negative",
-		},
-		{
-			name:    "resize-pane rejects negative -y",
-			args:    []string{"resize-pane", "-t", "%0", "-y", "-1"},
-			wantErr: "flag -y must be non-negative",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -541,6 +531,49 @@ func TestParseCommandRejectsNegativeSizeFlags(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseCommandResizePaneAcceptsStringDimensions(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantFlags map[string]any
+	}{
+		{
+			name:      "absolute sizes remain strings",
+			args:      []string{"resize-pane", "-t", "%0", "-x", "100", "-y", "30"},
+			wantFlags: map[string]any{"-t": "%0", "-x": "100", "-y": "30"},
+		},
+		{
+			name:      "percentage sizes are accepted",
+			args:      []string{"resize-pane", "-t", "%0", "-x", "30%", "-y", "75%"},
+			wantFlags: map[string]any{"-t": "%0", "-x": "30%", "-y": "75%"},
+		},
+		{
+			name:      "negative size is forwarded as string for handler fallback",
+			args:      []string{"resize-pane", "-t", "%0", "-x", "-1"},
+			wantFlags: map[string]any{"-t": "%0", "-x": "-1"},
+		},
+		{
+			name:      "invalid resize size is forwarded for handler fallback",
+			args:      []string{"resize-pane", "-t", "%0", "-x", "notint"},
+			wantFlags: map[string]any{"-t": "%0", "-x": "notint"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := parseCommand(tt.args)
+			if err != nil {
+				t.Fatalf("parseCommand(%v) error = %v", tt.args, err)
+			}
+			for flag, want := range tt.wantFlags {
+				if got := req.Flags[flag]; !reflect.DeepEqual(got, want) {
+					t.Fatalf("flag %s = %v (%T), want %v (%T)", flag, got, got, want, want)
+				}
 			}
 		})
 	}
@@ -1422,6 +1455,12 @@ func TestParseCommandAdditionalCoverage(t *testing.T) {
 			wantCmd:   "select-pane",
 			wantFlags: map[string]any{"-t": "%1"},
 		},
+		{
+			name:      "select-pane with pane style",
+			args:      []string{"select-pane", "-P", "bg=default,fg=colour33"},
+			wantCmd:   "select-pane",
+			wantFlags: map[string]any{"-P": "bg=default,fg=colour33"},
+		},
 		// list-panes: without -s flag
 		{
 			name:      "list-panes without -s",
@@ -1654,12 +1693,13 @@ func TestParseCommandNewCommands(t *testing.T) {
 			name:      "resize-pane with -t -x -y",
 			args:      []string{"resize-pane", "-t", "%0", "-x", "100", "-y", "30"},
 			wantCmd:   "resize-pane",
-			wantFlags: map[string]any{"-t": "%0", "-x": 100, "-y": 30},
+			wantFlags: map[string]any{"-t": "%0", "-x": "100", "-y": "30"},
 		},
 		{
-			name:    "resize-pane -x non-integer errors",
-			args:    []string{"resize-pane", "-t", "%0", "-x", "notint"},
-			wantErr: true,
+			name:      "resize-pane with percentage width",
+			args:      []string{"resize-pane", "-t", "%0", "-x", "30%"},
+			wantCmd:   "resize-pane",
+			wantFlags: map[string]any{"-t": "%0", "-x": "30%"},
 		},
 		// --- I-7: resize-pane direction flags ---
 		{
@@ -1696,7 +1736,30 @@ func TestParseCommandNewCommands(t *testing.T) {
 			name:      "resize-pane direction with size",
 			args:      []string{"resize-pane", "-t", "%0", "-U", "-y", "10"},
 			wantCmd:   "resize-pane",
-			wantFlags: map[string]any{"-t": "%0", "-U": true, "-y": 10},
+			wantFlags: map[string]any{"-t": "%0", "-U": true, "-y": "10"},
+		},
+		// --- select-layout ---
+		{
+			name:      "select-layout with target and preset",
+			args:      []string{"select-layout", "-t", "demo:0", "main-vertical"},
+			wantCmd:   "select-layout",
+			wantFlags: map[string]any{"-t": "demo:0"},
+			wantArgs:  []string{"main-vertical"},
+		},
+		// --- set-option ---
+		{
+			name:      "set-option with pane scope",
+			args:      []string{"set-option", "-p", "-t", "%1", "pane-active-border-style", "bg=default,fg=colour33"},
+			wantCmd:   "set-option",
+			wantFlags: map[string]any{"-p": true, "-t": "%1"},
+			wantArgs:  []string{"pane-active-border-style", "bg=default,fg=colour33"},
+		},
+		{
+			name:      "set-option accepts format expansion flag as bool",
+			args:      []string{"set-option", "-F", "-g", "status-left", "#{session_name}"},
+			wantCmd:   "set-option",
+			wantFlags: map[string]any{"-F": true, "-g": true},
+			wantArgs:  []string{"status-left", "#{session_name}"},
 		},
 		// --- show-environment ---
 		{

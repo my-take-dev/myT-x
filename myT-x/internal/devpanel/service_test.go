@@ -1,6 +1,7 @@
 package devpanel
 
 import (
+	"context"
 	"errors"
 	"os"
 	execStdlib "os/exec"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -40,6 +42,76 @@ func newTestService(sessionName, rootPath string) *Service {
 		},
 		IsPathWithinBase: testIsPathWithinBase,
 	})
+}
+
+type recordedEvent struct {
+	name    string
+	payload any
+}
+
+const testWatcherDebounceInterval = 20 * time.Millisecond
+
+type testEmitter struct {
+	mu     sync.Mutex
+	events []recordedEvent
+}
+
+func (e *testEmitter) Emit(name string, payload any) {
+	e.mu.Lock()
+	e.events = append(e.events, recordedEvent{name: name, payload: payload})
+	e.mu.Unlock()
+}
+
+func (e *testEmitter) EmitWithContext(_ context.Context, name string, payload any) {
+	e.Emit(name, payload)
+}
+
+func (e *testEmitter) waitForEvent(t *testing.T, name string, timeout time.Duration) recordedEvent {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		e.mu.Lock()
+		for _, event := range e.events {
+			if event.name == name {
+				e.mu.Unlock()
+				return event
+			}
+		}
+		e.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for event %q", name)
+	return recordedEvent{}
+}
+
+func (e *testEmitter) assertNoEvent(t *testing.T, name string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		e.mu.Lock()
+		var matched *recordedEvent
+		for i := range e.events {
+			if e.events[i].name == name {
+				matched = &e.events[i]
+				break
+			}
+		}
+		e.mu.Unlock()
+		if matched != nil {
+			t.Fatalf("unexpected event %q within %v: %#v", name, timeout, *matched)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func configureWatcherManagerForTest(svc *Service) {
+	if svc.watcherManager == nil {
+		return
+	}
+	svc.watcherManager.debounceInterval = testWatcherDebounceInterval
 }
 
 func TestResolveAndValidatePath(t *testing.T) {
@@ -132,6 +204,9 @@ func TestListDir(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmpDir, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -155,20 +230,24 @@ func TestListDir(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		entryByName := make(map[string]FileEntry, len(entries))
 		for _, entry := range entries {
 			if entry.Name == ".git" || entry.Name == "node_modules" {
 				t.Fatalf("excluded directory %q should not appear in listing", entry.Name)
 			}
+			entryByName[entry.Name] = entry
 		}
-		names := make(map[string]bool)
-		for _, e := range entries {
-			names[e.Name] = true
-		}
-		if !names["src"] {
+		if _, ok := entryByName["src"]; !ok {
 			t.Fatal("expected 'src' directory in listing")
 		}
-		if !names["main.go"] {
+		if _, ok := entryByName["main.go"]; !ok {
 			t.Fatal("expected 'main.go' in listing")
+		}
+		if !entryByName["src"].HasChildren {
+			t.Fatal("expected src directory to report children")
+		}
+		if entryByName["empty"].HasChildren {
+			t.Fatal("expected empty directory to report no children")
 		}
 	})
 
@@ -223,6 +302,385 @@ func TestListDir(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestListDirCacheInvalidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test-session", tmpDir)
+
+	entries, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("initial ListDir failed: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("initial entry count = %d, want 2", len(entries))
+	}
+
+	if _, err := svc.CreateFile("test-session", "created.txt"); err != nil {
+		t.Fatalf("CreateFile failed: %v", err)
+	}
+
+	entriesAfterCreate, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("ListDir after CreateFile failed: %v", err)
+	}
+	if !slices.ContainsFunc(entriesAfterCreate, func(entry FileEntry) bool { return entry.Path == "created.txt" }) {
+		t.Fatal("expected created file to appear after cache invalidation")
+	}
+
+	if err := svc.RenameFile("test-session", "created.txt", "renamed.txt"); err != nil {
+		t.Fatalf("RenameFile failed: %v", err)
+	}
+
+	entriesAfterRename, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("ListDir after RenameFile failed: %v", err)
+	}
+	if slices.ContainsFunc(entriesAfterRename, func(entry FileEntry) bool { return entry.Path == "created.txt" }) {
+		t.Fatal("old path should not remain after rename")
+	}
+	if !slices.ContainsFunc(entriesAfterRename, func(entry FileEntry) bool { return entry.Path == "renamed.txt" }) {
+		t.Fatal("expected renamed file to appear after cache invalidation")
+	}
+
+	if err := svc.DeleteFile("test-session", "renamed.txt"); err != nil {
+		t.Fatalf("DeleteFile failed: %v", err)
+	}
+
+	entriesAfterDelete, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("ListDir after DeleteFile failed: %v", err)
+	}
+	if slices.ContainsFunc(entriesAfterDelete, func(entry FileEntry) bool { return entry.Path == "renamed.txt" }) {
+		t.Fatal("deleted file should not remain after cache invalidation")
+	}
+}
+
+func TestParentPanelPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "root", path: "", want: ""},
+		{name: "single segment", path: "src", want: ""},
+		{name: "nested path", path: "src/components", want: "src"},
+		{name: "normalizes separators", path: `src\components\file.ts`, want: "src/components"},
+		{name: "cleans current dir", path: "./src/components", want: "src"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parentPanelPath(tt.path); got != tt.want {
+				t.Fatalf("parentPanelPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDirHasVisibleChildren(t *testing.T) {
+	t.Run("empty directory", func(t *testing.T) {
+		dir := t.TempDir()
+		hasChildren, err := dirHasVisibleChildren(dir)
+		if err != nil {
+			t.Fatalf("dirHasVisibleChildren returned error: %v", err)
+		}
+		if hasChildren {
+			t.Fatal("expected empty directory to report no visible children")
+		}
+	})
+
+	t.Run("excluded directories only", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		hasChildren, err := dirHasVisibleChildren(dir)
+		if err != nil {
+			t.Fatalf("dirHasVisibleChildren returned error: %v", err)
+		}
+		if hasChildren {
+			t.Fatal("expected excluded directories to be ignored")
+		}
+	})
+
+	t.Run("file named like excluded directory remains visible", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "node_modules"), []byte("visible"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		hasChildren, err := dirHasVisibleChildren(dir)
+		if err != nil {
+			t.Fatalf("dirHasVisibleChildren returned error: %v", err)
+		}
+		if !hasChildren {
+			t.Fatal("expected regular files to count as visible children")
+		}
+	})
+}
+
+func TestIsExcludedWatchPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "root", path: "", want: false},
+		{name: "top level git", path: ".git", want: true},
+		{name: "nested git", path: "vendor/.git/modules", want: true},
+		{name: "nested node_modules", path: "packages/node_modules/pkg", want: true},
+		{name: "similar file name", path: "src/.gitignore", want: false},
+		{name: "similar directory name", path: "src/node_modulez", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isExcludedWatchPath(tt.path); got != tt.want {
+				t.Fatalf("isExcludedWatchPath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServiceWatcherReferenceCounting(t *testing.T) {
+	tmpDir := t.TempDir()
+	svc := newTestService("test-session", tmpDir)
+	configureWatcherManagerForTest(svc)
+
+	if err := svc.StartWatcher("test-session"); err != nil {
+		t.Fatalf("StartWatcher first call failed: %v", err)
+	}
+	if err := svc.StartWatcher("test-session"); err != nil {
+		t.Fatalf("StartWatcher second call failed: %v", err)
+	}
+
+	svc.watcherManager.mu.Lock()
+	entry, ok := svc.watcherManager.watchers["test-session"]
+	if !ok {
+		svc.watcherManager.mu.Unlock()
+		t.Fatal("expected watcher entry after StartWatcher")
+	}
+	if entry.refCount != 2 {
+		svc.watcherManager.mu.Unlock()
+		t.Fatalf("watcher refCount = %d, want 2", entry.refCount)
+	}
+	svc.watcherManager.mu.Unlock()
+
+	if err := svc.StopWatcher("test-session"); err != nil {
+		t.Fatalf("StopWatcher first call failed: %v", err)
+	}
+
+	svc.watcherManager.mu.Lock()
+	entry, ok = svc.watcherManager.watchers["test-session"]
+	if !ok {
+		svc.watcherManager.mu.Unlock()
+		t.Fatal("expected watcher entry to remain after first StopWatcher")
+	}
+	if entry.refCount != 1 {
+		svc.watcherManager.mu.Unlock()
+		t.Fatalf("watcher refCount after first stop = %d, want 1", entry.refCount)
+	}
+	svc.watcherManager.mu.Unlock()
+
+	if err := svc.StopWatcher("test-session"); err != nil {
+		t.Fatalf("StopWatcher second call failed: %v", err)
+	}
+
+	svc.watcherManager.mu.Lock()
+	_, ok = svc.watcherManager.watchers["test-session"]
+	svc.watcherManager.mu.Unlock()
+	if ok {
+		t.Fatal("watcher entry should be removed after final StopWatcher")
+	}
+}
+
+func TestServiceCleanupSessionStopsAllWatchersAndClearsCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	svc := newTestService("test-session", tmpDir)
+	configureWatcherManagerForTest(svc)
+
+	if err := svc.StartWatcher("test-session"); err != nil {
+		t.Fatalf("StartWatcher first call failed: %v", err)
+	}
+	if err := svc.StartWatcher("test-session"); err != nil {
+		t.Fatalf("StartWatcher second call failed: %v", err)
+	}
+
+	svc.dirCache.Set("test-session", "", []FileEntry{{Name: "src", Path: "src", IsDir: true}})
+	svc.dirCache.Set("test-session", "src", []FileEntry{{Name: "nested", Path: "src/nested", IsDir: true}})
+
+	if err := svc.CleanupSession("test-session"); err != nil {
+		t.Fatalf("CleanupSession failed: %v", err)
+	}
+
+	svc.watcherManager.mu.Lock()
+	_, ok := svc.watcherManager.watchers["test-session"]
+	svc.watcherManager.mu.Unlock()
+	if ok {
+		t.Fatal("watcher entry should be removed after CleanupSession")
+	}
+	if _, ok := svc.dirCache.Get("test-session", ""); ok {
+		t.Fatal("root cache should be invalidated after CleanupSession")
+	}
+	if _, ok := svc.dirCache.Get("test-session", "src"); ok {
+		t.Fatal("descendant cache should be invalidated after CleanupSession")
+	}
+}
+
+func TestServiceWatcherEmitsInvalidatedParentPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	emitter := &testEmitter{}
+	svc := NewService(Deps{
+		ResolveSessionDir: func(name string, _ bool) (string, error) {
+			if name != "test-session" {
+				return "", errors.New("session not found")
+			}
+			return tmpDir, nil
+		},
+		IsPathWithinBase: testIsPathWithinBase,
+		Emitter:          emitter,
+	})
+	configureWatcherManagerForTest(svc)
+
+	if err := svc.StartWatcher("test-session"); err != nil {
+		t.Fatalf("StartWatcher failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = svc.StopWatcher("test-session")
+	})
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "root.txt"), []byte("root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested.txt"), []byte("nested"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	event := emitter.waitForEvent(t, treeInvalidatedEventName, 5*time.Second)
+	payload, ok := event.payload.(TreeInvalidationEvent)
+	if !ok {
+		t.Fatalf("payload type = %T, want TreeInvalidationEvent", event.payload)
+	}
+	if payload.SessionName != "test-session" {
+		t.Fatalf("payload SessionName = %q, want %q", payload.SessionName, "test-session")
+	}
+	if !slices.Contains(payload.Paths, "") {
+		t.Fatalf("payload paths %v should include root path", payload.Paths)
+	}
+	if !slices.Contains(payload.Paths, "src") {
+		t.Fatalf("payload paths %v should include src", payload.Paths)
+	}
+}
+
+func TestServiceWatcherSkipsExcludedDirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+	gitDir := filepath.Join(tmpDir, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	emitter := &testEmitter{}
+	svc := NewService(Deps{
+		ResolveSessionDir: func(name string, _ bool) (string, error) {
+			if name != "test-session" {
+				return "", errors.New("session not found")
+			}
+			return tmpDir, nil
+		},
+		IsPathWithinBase: testIsPathWithinBase,
+		Emitter:          emitter,
+	})
+	configureWatcherManagerForTest(svc)
+
+	if err := svc.StartWatcher("test-session"); err != nil {
+		t.Fatalf("StartWatcher failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = svc.StopWatcher("test-session")
+	})
+
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("ignored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	emitter.assertNoEvent(t, treeInvalidatedEventName, testWatcherDebounceInterval*4)
+}
+
+func TestServiceWatcherSkipsNestedExcludedDirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+	nestedExcludedDir := filepath.Join(tmpDir, "packages", "node_modules")
+	if err := os.MkdirAll(nestedExcludedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	emitter := &testEmitter{}
+	svc := NewService(Deps{
+		ResolveSessionDir: func(name string, _ bool) (string, error) {
+			if name != "test-session" {
+				return "", errors.New("session not found")
+			}
+			return tmpDir, nil
+		},
+		IsPathWithinBase: testIsPathWithinBase,
+		Emitter:          emitter,
+	})
+	configureWatcherManagerForTest(svc)
+
+	if err := svc.StartWatcher("test-session"); err != nil {
+		t.Fatalf("StartWatcher failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = svc.StopWatcher("test-session")
+	})
+
+	if err := os.WriteFile(filepath.Join(nestedExcludedDir, "ignored.js"), []byte("ignored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	emitter.assertNoEvent(t, treeInvalidatedEventName, testWatcherDebounceInterval*4)
+}
+
+func BenchmarkServiceListDirLargeDirectory(b *testing.B) {
+	tmpDir := b.TempDir()
+	for i := range 256 {
+		dirName := "pkg" + strconv.Itoa(i)
+		dirPath := filepath.Join(tmpDir, dirName)
+		if err := os.MkdirAll(dirPath, 0o755); err != nil {
+			b.Fatalf("MkdirAll(%q) failed: %v", dirPath, err)
+		}
+		filePath := filepath.Join(dirPath, "main.go")
+		if err := os.WriteFile(filePath, []byte("package main\n"), 0o644); err != nil {
+			b.Fatalf("WriteFile(%q) failed: %v", filePath, err)
+		}
+	}
+
+	svc := newTestService("bench-session", tmpDir)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		svc.dirCache.InvalidateAll("bench-session")
+		if _, err := svc.ListDir("bench-session", ""); err != nil {
+			b.Fatalf("ListDir failed: %v", err)
+		}
+	}
 }
 
 func TestReadFile(t *testing.T) {
@@ -309,7 +767,7 @@ func TestReadFile(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFileEntryFieldCountGuard(t *testing.T) {
-	const expectedFieldCount = 4
+	const expectedFieldCount = 5
 	got := reflect.TypeFor[FileEntry]().NumField()
 	if got != expectedFieldCount {
 		t.Fatalf("FileEntry field count = %d, want %d; update frontend fileTreeTypes.ts", got, expectedFieldCount)
@@ -321,6 +779,22 @@ func TestFileContentFieldCountGuard(t *testing.T) {
 	got := reflect.TypeFor[FileContent]().NumField()
 	if got != expectedFieldCount {
 		t.Fatalf("FileContent field count = %d, want %d; update frontend fileTreeTypes.ts", got, expectedFieldCount)
+	}
+}
+
+func TestFileMetadataFieldCountGuard(t *testing.T) {
+	const expectedFieldCount = 3
+	got := reflect.TypeFor[FileMetadata]().NumField()
+	if got != expectedFieldCount {
+		t.Fatalf("FileMetadata field count = %d, want %d; update frontend editor types", got, expectedFieldCount)
+	}
+}
+
+func TestWriteFileResultFieldCountGuard(t *testing.T) {
+	const expectedFieldCount = 2
+	got := reflect.TypeFor[WriteFileResult]().NumField()
+	if got != expectedFieldCount {
+		t.Fatalf("WriteFileResult field count = %d, want %d; update frontend editor types", got, expectedFieldCount)
 	}
 }
 
@@ -378,6 +852,425 @@ func TestPullResultFieldCountGuard(t *testing.T) {
 	if got != expectedFieldCount {
 		t.Fatalf("PullResult field count = %d, want %d; update frontend model", got, expectedFieldCount)
 	}
+}
+
+func TestGetFileInfo(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "folder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test", tmpDir)
+
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+		errMsg  string
+		check   func(t *testing.T, meta FileMetadata)
+	}{
+		{
+			name: "file metadata",
+			path: "test.txt",
+			check: func(t *testing.T, meta FileMetadata) {
+				t.Helper()
+				if meta.Path != "test.txt" {
+					t.Fatalf("Path = %q, want %q", meta.Path, "test.txt")
+				}
+				if meta.IsDir {
+					t.Fatal("expected file metadata, got directory")
+				}
+				if meta.Size != 5 {
+					t.Fatalf("Size = %d, want 5", meta.Size)
+				}
+			},
+		},
+		{
+			name: "directory metadata",
+			path: "folder",
+			check: func(t *testing.T, meta FileMetadata) {
+				t.Helper()
+				if !meta.IsDir {
+					t.Fatal("expected directory metadata")
+				}
+				if meta.Path != "folder" {
+					t.Fatalf("Path = %q, want %q", meta.Path, "folder")
+				}
+			},
+		},
+		{
+			name:    "missing path",
+			path:    "missing.txt",
+			wantErr: true,
+			errMsg:  "path does not exist",
+		},
+		{
+			name:    "path traversal rejected",
+			path:    "../escape.txt",
+			wantErr: true,
+			errMsg:  "path is not local",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta, err := svc.GetFileInfo("test", tt.path)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.errMsg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.check != nil {
+				tt.check(t, meta)
+			}
+		})
+	}
+}
+
+func TestWriteFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "existing.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test", tmpDir)
+
+	t.Run("creates file and parent directories", func(t *testing.T) {
+		result, err := svc.WriteFile("test", filepath.Join("nested", "child.txt"), "hello")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Path != "nested/child.txt" {
+			t.Fatalf("Path = %q, want %q", result.Path, "nested/child.txt")
+		}
+		if result.Size != 5 {
+			t.Fatalf("Size = %d, want 5", result.Size)
+		}
+
+		data, readErr := os.ReadFile(filepath.Join(tmpDir, "nested", "child.txt"))
+		if readErr != nil {
+			t.Fatalf("failed to read created file: %v", readErr)
+		}
+		if string(data) != "hello" {
+			t.Fatalf("content = %q, want %q", string(data), "hello")
+		}
+		info, statErr := os.Stat(filepath.Join(tmpDir, "nested", "child.txt"))
+		if statErr != nil {
+			t.Fatalf("failed to stat created file: %v", statErr)
+		}
+		if result.Size != info.Size() {
+			t.Fatalf("Size = %d, want %d", result.Size, info.Size())
+		}
+	})
+
+	t.Run("overwrites existing file", func(t *testing.T) {
+		result, err := svc.WriteFile("test", "existing.txt", "updated")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Size != int64(len("updated")) {
+			t.Fatalf("Size = %d, want %d", result.Size, len("updated"))
+		}
+
+		data, readErr := os.ReadFile(filepath.Join(tmpDir, "existing.txt"))
+		if readErr != nil {
+			t.Fatalf("failed to read updated file: %v", readErr)
+		}
+		if string(data) != "updated" {
+			t.Fatalf("content = %q, want %q", string(data), "updated")
+		}
+		info, statErr := os.Stat(filepath.Join(tmpDir, "existing.txt"))
+		if statErr != nil {
+			t.Fatalf("failed to stat updated file: %v", statErr)
+		}
+		if result.Size != info.Size() {
+			t.Fatalf("Size = %d, want %d", result.Size, info.Size())
+		}
+	})
+
+	t.Run("directory target rejected", func(t *testing.T) {
+		_, err := svc.WriteFile("test", "dir", "x")
+		if err == nil {
+			t.Fatal("expected error for directory target")
+		}
+		if !strings.Contains(err.Error(), "directory, not a file") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("session root rejected", func(t *testing.T) {
+		_, err := svc.WriteFile("test", ".", "x")
+		if err == nil {
+			t.Fatal("expected error for session root path")
+		}
+		if !strings.Contains(err.Error(), "must not refer to the session root") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("path traversal rejected", func(t *testing.T) {
+		_, err := svc.WriteFile("test", "../escape.txt", "x")
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+		if !strings.Contains(err.Error(), "not local") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestCreateFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "existing.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test", tmpDir)
+
+	t.Run("creates empty file with parents", func(t *testing.T) {
+		result, err := svc.CreateFile("test", filepath.Join("nested", "new.txt"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Path != "nested/new.txt" {
+			t.Fatalf("Path = %q, want %q", result.Path, "nested/new.txt")
+		}
+
+		info, statErr := os.Stat(filepath.Join(tmpDir, "nested", "new.txt"))
+		if statErr != nil {
+			t.Fatalf("failed to stat created file: %v", statErr)
+		}
+		if info.Size() != 0 {
+			t.Fatalf("Size = %d, want 0", info.Size())
+		}
+	})
+
+	t.Run("existing path rejected", func(t *testing.T) {
+		_, err := svc.CreateFile("test", "existing.txt")
+		if err == nil {
+			t.Fatal("expected error for existing file")
+		}
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("path traversal rejected", func(t *testing.T) {
+		_, err := svc.CreateFile("test", "../escape.txt")
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+	})
+}
+
+func TestCreateDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "existing"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test", tmpDir)
+
+	t.Run("creates nested directory", func(t *testing.T) {
+		err := svc.CreateDirectory("test", filepath.Join("nested", "child"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		info, statErr := os.Stat(filepath.Join(tmpDir, "nested", "child"))
+		if statErr != nil {
+			t.Fatalf("failed to stat created directory: %v", statErr)
+		}
+		if !info.IsDir() {
+			t.Fatal("created path is not a directory")
+		}
+	})
+
+	t.Run("existing path rejected", func(t *testing.T) {
+		err := svc.CreateDirectory("test", "existing")
+		if err == nil {
+			t.Fatal("expected error for existing directory")
+		}
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("session root rejected", func(t *testing.T) {
+		err := svc.CreateDirectory("test", ".")
+		if err == nil {
+			t.Fatal("expected error for session root")
+		}
+	})
+}
+
+func TestRenameFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "source.txt"), []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "existing.txt"), []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "archive"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test", tmpDir)
+
+	t.Run("renames file", func(t *testing.T) {
+		err := svc.RenameFile("test", "source.txt", filepath.Join("archive", "renamed.txt"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(tmpDir, "source.txt")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("source still exists after rename: %v", statErr)
+		}
+		if _, statErr := os.Stat(filepath.Join(tmpDir, "archive", "renamed.txt")); statErr != nil {
+			t.Fatalf("renamed file missing: %v", statErr)
+		}
+	})
+
+	t.Run("source missing", func(t *testing.T) {
+		err := svc.RenameFile("test", "missing.txt", "other.txt")
+		if err == nil {
+			t.Fatal("expected error for missing source")
+		}
+	})
+
+	t.Run("destination exists", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(tmpDir, "again.txt"), []byte("again"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := svc.RenameFile("test", "again.txt", "existing.txt")
+		if err == nil {
+			t.Fatal("expected error for existing destination")
+		}
+		if !strings.Contains(err.Error(), "destination already exists") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("same path rejected", func(t *testing.T) {
+		err := svc.RenameFile("test", "existing.txt", "existing.txt")
+		if err == nil {
+			t.Fatal("expected error for identical paths")
+		}
+		if !strings.Contains(err.Error(), "must differ") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestDeleteFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "dir", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "dir", "nested", "child.txt"), []byte("child"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test", tmpDir)
+
+	t.Run("deletes file", func(t *testing.T) {
+		err := svc.DeleteFile("test", "file.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(tmpDir, "file.txt")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("file still exists after delete: %v", statErr)
+		}
+	})
+
+	t.Run("deletes directory recursively", func(t *testing.T) {
+		err := svc.DeleteFile("test", "dir")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(tmpDir, "dir")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("directory still exists after delete: %v", statErr)
+		}
+	})
+
+	t.Run("missing path rejected", func(t *testing.T) {
+		err := svc.DeleteFile("test", "missing.txt")
+		if err == nil {
+			t.Fatal("expected error for missing path")
+		}
+	})
+
+	t.Run("session root rejected", func(t *testing.T) {
+		err := svc.DeleteFile("test", ".")
+		if err == nil {
+			t.Fatal("expected error for session root")
+		}
+	})
+}
+
+func TestResolveAndValidateNewPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test", tmpDir)
+
+	t.Run("missing path under root resolves", func(t *testing.T) {
+		resolvedRoot, err := filepath.EvalSymlinks(tmpDir)
+		if err != nil {
+			t.Fatalf("failed to resolve root: %v", err)
+		}
+
+		got, err := svc.ResolveAndValidateNewPath(tmpDir, filepath.Join("nested", "new.txt"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		want := filepath.Join(resolvedRoot, "nested", "new.txt")
+		if got != want {
+			t.Fatalf("resolved path = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("path traversal rejected", func(t *testing.T) {
+		_, err := svc.ResolveAndValidateNewPath(tmpDir, filepath.Join("..", "escape.txt"))
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+		if !strings.Contains(err.Error(), "path is not local") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("symlink escape rejected", func(t *testing.T) {
+		linkPath := filepath.Join(tmpDir, "escape-link")
+		createDirectorySymlinkOrSkip(t, outsideDir, linkPath)
+
+		_, err := svc.ResolveAndValidateNewPath(tmpDir, filepath.Join("escape-link", "child.txt"))
+		if err == nil {
+			t.Fatal("expected error for symlink escape")
+		}
+		if !strings.Contains(err.Error(), "escapes root directory") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -2310,3 +3203,11 @@ func (f fakeFileInfo) Mode() os.FileMode  { return f.mode }
 func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (f fakeFileInfo) IsDir() bool        { return f.mode.IsDir() }
 func (f fakeFileInfo) Sys() any           { return nil }
+
+func createDirectorySymlinkOrSkip(t *testing.T, targetDir, linkPath string) {
+	t.Helper()
+
+	if err := os.Symlink(targetDir, linkPath); err != nil {
+		t.Skipf("directory symlink is not available in this environment: %v", err)
+	}
+}

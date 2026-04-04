@@ -102,10 +102,11 @@
 .tree-node-arrow {
     width: 14px;
     flex-shrink: 0;
-    text-align: center;
-    font-size: 0.7rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     color: var(--fg-dim);
-    transition: transform 0.15s;
+    transition: transform 0.15s ease;
 }
 
 .tree-node-arrow.expanded {

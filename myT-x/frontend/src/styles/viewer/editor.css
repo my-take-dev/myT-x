@@ -1,0 +1,312 @@
+.editor-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.editor-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.editor-file-tree {
+    width: var(--sidebar-width);
+    min-width: 200px;
+    min-height: 0;
+    border-right: 1px solid var(--line);
+    background: var(--bg-panel);
+    display: flex;
+    flex-direction: column;
+}
+
+.editor-file-tree-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--line);
+}
+
+.editor-file-tree-action {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    transition: color 0.15s, background 0.15s;
+}
+
+.editor-file-tree-action:hover {
+    color: var(--fg-main);
+    background: var(--accent-06);
+}
+
+.editor-file-tree-action:disabled {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.editor-file-tree-status {
+    margin-left: auto;
+    font-size: 0.72rem;
+    color: var(--fg-dim);
+    white-space: nowrap;
+}
+
+.editor-file-tree-list {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.editor-pane {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.editor-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-panel);
+}
+
+.editor-toolbar-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.editor-toolbar-file {
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: var(--fg-main);
+    white-space: nowrap;
+}
+
+.editor-toolbar-dirty {
+    color: var(--warning);
+    font-weight: 700;
+}
+
+.editor-toolbar-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--fg-dim);
+    font-size: 0.74rem;
+}
+
+.editor-toolbar-path {
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+}
+
+.editor-toolbar-language,
+.editor-toolbar-size {
+    white-space: nowrap;
+}
+
+.editor-toolbar-spacer {
+    flex: 1;
+    min-width: 0;
+}
+
+.editor-toolbar-btn {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.editor-toolbar-btn--primary {
+    background: var(--accent-10);
+    color: var(--accent);
+    border-color: var(--accent-20);
+}
+
+.editor-toolbar-btn:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.editor-toolbar-warning {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 180, 0, 0.08);
+    color: var(--warning);
+    font-size: 0.76rem;
+}
+
+.editor-monaco-wrapper {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+}
+
+.editor-overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(12, 16, 24, 0.72);
+    color: var(--fg-dim);
+    text-align: center;
+}
+
+.editor-overlay--error {
+    color: var(--danger);
+}
+
+.editor-overlay-message {
+    max-width: 420px;
+    line-height: 1.5;
+}
+
+.editor-context-menu {
+    position: fixed;
+    z-index: var(--z-context-menu);
+    min-width: 180px;
+    padding: 4px 0;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--bg-elev);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.editor-context-menu-item {
+    display: block;
+    width: 100%;
+    padding: 7px 12px;
+    border: none;
+    background: transparent;
+    color: var(--fg-main);
+    font-size: 0.8rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.editor-context-menu-item:hover {
+    background: var(--accent-04);
+}
+
+.editor-context-menu-item--danger {
+    color: var(--danger);
+}
+
+.editor-context-menu-divider {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--line);
+}
+
+.editor-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.editor-dialog {
+    width: min(420px, calc(100vw - 32px));
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg-panel);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.editor-dialog-title {
+    margin: 0 0 12px;
+    font-size: 0.95rem;
+    color: var(--fg-main);
+}
+
+.editor-dialog-message,
+.editor-dialog-warning {
+    margin: 0 0 12px;
+    font-size: 0.82rem;
+    color: var(--fg-main);
+}
+
+.editor-dialog-warning {
+    color: var(--warning);
+}
+
+.editor-dialog-path {
+    font-family: var(--font-mono);
+    color: var(--accent);
+}
+
+.editor-dialog-input {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--bg-base);
+    color: var(--fg-main);
+    font: inherit;
+    box-sizing: border-box;
+}
+
+.editor-dialog-error {
+    margin: 10px 0 0;
+    color: var(--danger);
+    font-size: 0.78rem;
+}
+
+.editor-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.editor-dialog-btn {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.editor-dialog-btn--secondary {
+    background: transparent;
+    color: var(--fg-main);
+}
+
+.editor-dialog-btn--primary {
+    background: var(--accent-10);
+    border-color: var(--accent-20);
+    color: var(--accent);
+}
+
+.editor-dialog-btn--danger {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+}

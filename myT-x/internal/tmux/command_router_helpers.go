@@ -47,6 +47,52 @@ func mustInt(value any, defaultValue int) int {
 	return defaultValue
 }
 
+// resolveDimension resolves absolute and percentage-based pane dimensions.
+// reference is the base size used for percentage values such as "50%".
+// defaultValue is returned when the input is empty, invalid, non-positive, or overflows.
+func resolveDimension(value any, reference int, defaultValue int) int {
+	resolveAbsolute := func(size int) int {
+		if size <= 0 {
+			return defaultValue
+		}
+		return size
+	}
+
+	switch v := value.(type) {
+	case int:
+		return resolveAbsolute(v)
+	case float64:
+		return resolveAbsolute(int(v))
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return defaultValue
+		}
+		if strings.HasSuffix(trimmed, "%") {
+			if reference <= 0 {
+				return defaultValue
+			}
+			percentText := strings.TrimSpace(strings.TrimSuffix(trimmed, "%"))
+			percent, err := strconv.Atoi(percentText)
+			if err != nil || percent <= 0 {
+				return defaultValue
+			}
+			maxInt := int(^uint(0) >> 1)
+			if reference > maxInt/percent {
+				return defaultValue
+			}
+			return resolveAbsolute(reference * percent / 100)
+		}
+		size, err := strconv.Atoi(trimmed)
+		if err != nil {
+			return defaultValue
+		}
+		return resolveAbsolute(size)
+	default:
+		return defaultValue
+	}
+}
+
 func mustString(value any) string {
 	switch v := value.(type) {
 	case string:

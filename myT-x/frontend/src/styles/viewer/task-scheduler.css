@@ -427,6 +427,28 @@
     margin-top: 2px;
 }
 
+.task-scheduler-config-hint-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+.task-scheduler-config-link {
+    font: inherit;
+    font-size: 0.78rem;
+    color: var(--accent-strong);
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.task-scheduler-config-link:hover {
+    color: var(--accent);
+}
+
 /* ── Alert screen ── */
 .task-scheduler-alert {
     display: flex;
@@ -477,4 +499,159 @@
 
 .task-scheduler-register-btn:hover {
     opacity: 0.9;
+}
+
+/* ── Settings button (toolbar left) ── */
+.task-scheduler-settings-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-right: auto;
+}
+
+.task-scheduler-settings-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Template list (settings screen) ── */
+.task-scheduler-template-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.task-scheduler-template-empty {
+    text-align: center;
+    color: var(--fg-dim);
+    font-size: 0.84rem;
+    padding: 16px 0;
+}
+
+.task-scheduler-template-item {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.task-scheduler-template-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.task-scheduler-template-item-name {
+    font-weight: 600;
+    font-size: 0.86rem;
+    color: var(--fg-main);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.task-scheduler-template-item-message {
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+}
+
+.task-scheduler-template-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.task-scheduler-template-form-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.task-scheduler-template-save-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: var(--bg-main, var(--bg-panel));
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.task-scheduler-template-save-btn:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+.task-scheduler-template-save-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.task-scheduler-template-cancel-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.task-scheduler-template-cancel-btn:hover {
+    opacity: 0.8;
+}
+
+.task-scheduler-template-add-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px dashed var(--line);
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s;
+}
+
+.task-scheduler-template-add-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* ── Template select (task form) ── */
+.task-scheduler-template-select {
+    font: inherit;
+    font-size: 0.84rem;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--bg-input, var(--bg-main, var(--bg-panel)));
+    color: var(--fg-dim);
+    cursor: pointer;
+    margin-bottom: 4px;
+}
+
+.task-scheduler-template-select:focus {
+    outline: none;
+    border-color: var(--accent);
 }

@@ -1,4 +1,24 @@
+import type React from "react";
 import type {QueueConfig} from "./useTaskScheduler";
+
+const numericKeyAllowList = new Set([
+    "Backspace", "Delete", "Tab", "Escape", "Enter",
+    "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+    "Home", "End",
+]);
+
+export function blockNonNumericKeys(event: React.KeyboardEvent<HTMLInputElement>): void {
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+    }
+    if (numericKeyAllowList.has(event.key)) {
+        return;
+    }
+    if (event.key >= "0" && event.key <= "9") {
+        return;
+    }
+    event.preventDefault();
+}
 
 const defaultPreExecResetDelay = 10;
 const defaultPreExecIdleTimeout = 120;

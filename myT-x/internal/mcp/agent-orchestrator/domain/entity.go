@@ -12,9 +12,22 @@ type TaskStatus = string
 // TaskStatus の定数定義。
 const (
 	TaskStatusPending   TaskStatus = "pending"
+	TaskStatusBlocked   TaskStatus = "blocked"
 	TaskStatusCompleted TaskStatus = "completed"
 	TaskStatusFailed    TaskStatus = "failed"
 	TaskStatusAbandoned TaskStatus = "abandoned"
+	TaskStatusCancelled TaskStatus = "cancelled"
+	TaskStatusExpired   TaskStatus = "expired"
+)
+
+// AgentWorkStatus represents the current activity state of an agent.
+type AgentWorkStatus = string
+
+const (
+	AgentWorkStatusUnknown AgentWorkStatus = "unknown"
+	AgentWorkStatusIdle    AgentWorkStatus = "idle"
+	AgentWorkStatusBusy    AgentWorkStatus = "busy"
+	AgentWorkStatusWorking AgentWorkStatus = "working"
 )
 
 // VirtualPaneIDPrefix is the prefix for virtual pane IDs that do not
@@ -60,6 +73,22 @@ type Agent struct {
 	MCPInstanceID string  `json:"mcp_instance_id,omitempty"`
 }
 
+// AgentStatus stores the last reported work status for an agent.
+type AgentStatus struct {
+	AgentName     string `json:"agent_name"`
+	Status        string `json:"status"`
+	CurrentTaskID string `json:"current_task_id,omitempty"`
+	Note          string `json:"note,omitempty"`
+	UpdatedAt     string `json:"updated_at,omitempty"`
+}
+
+// TaskGroup stores metadata for a batch of related tasks.
+type TaskGroup struct {
+	ID        string `json:"group_id"`
+	Label     string `json:"label,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
 // Task はタスク情報を表す。
 type Task struct {
 	ID               string `json:"task_id"`
@@ -72,8 +101,18 @@ type Task struct {
 	SendResponseID   string `json:"send_response_id,omitempty"`
 	Status           string `json:"status"`
 	SentAt           string `json:"sent_at"`
-	CompletedAt      string `json:"completed_at,omitempty"`
-	IsNowSession     bool   `json:"is_now_session"`
+	// CompletedAt stores the terminal timestamp for any finished task state,
+	// including completed, cancelled, expired, failed, and abandoned.
+	CompletedAt       string `json:"completed_at,omitempty"`
+	AcknowledgedAt    string `json:"acknowledged_at,omitempty"`
+	CancelledAt       string `json:"cancelled_at,omitempty"`
+	CancelReason      string `json:"cancel_reason,omitempty"`
+	ProgressPct       *int   `json:"progress_pct,omitempty"`
+	ProgressNote      string `json:"progress_note,omitempty"`
+	ProgressUpdatedAt string `json:"progress_updated_at,omitempty"`
+	ExpiresAt         string `json:"expires_at,omitempty"`
+	GroupID           string `json:"group_id,omitempty"`
+	IsNowSession      bool   `json:"is_now_session"`
 }
 
 // TaskMessage はタスクメッセージを表す。

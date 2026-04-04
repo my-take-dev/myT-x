@@ -68,6 +68,7 @@ var commandSpecs = map[string]commandSpec{
 		flags: map[string]flagKind{
 			"-t": flagString,
 			"-T": flagString,
+			"-P": flagString,
 			"-U": flagBool,
 			"-D": flagBool,
 			"-L": flagBool,
@@ -127,13 +128,23 @@ var commandSpecs = map[string]commandSpec{
 		// Note: -t is optional for resize-pane (defaults to current pane).
 		flags: map[string]flagKind{
 			"-t": flagString,
-			"-x": flagInt,
-			"-y": flagInt,
+			"-x": flagString,
+			"-y": flagString,
 			"-U": flagBool, // resize up
 			"-D": flagBool, // resize down
 			"-L": flagBool, // resize left
 			"-R": flagBool, // resize right
 			"-Z": flagBool, // toggle zoom
+		},
+	},
+	"select-layout": {
+		description: "Select a predefined layout. Accepted for tmux compatibility as a no-op.",
+		flags: map[string]flagKind{
+			"-t": flagString,
+			"-E": flagBool,
+			"-n": flagBool,
+			"-p": flagBool,
+			"-o": flagBool,
 		},
 	},
 	"show-environment": {
@@ -149,6 +160,21 @@ var commandSpecs = map[string]commandSpec{
 			"-t": flagString,
 			"-u": flagBool,
 			"-g": flagBool,
+		},
+	},
+	"set-option": {
+		description: "Set a tmux option. Accepted for tmux compatibility as a no-op.",
+		flags: map[string]flagKind{
+			"-p": flagBool,
+			"-w": flagBool,
+			"-s": flagBool,
+			"-g": flagBool,
+			"-u": flagBool,
+			"-o": flagBool,
+			"-q": flagBool,
+			"-a": flagBool,
+			"-F": flagBool,
+			"-t": flagString,
 		},
 	},
 	"list-windows": {
@@ -295,8 +321,10 @@ var commandOrder = []string{
 	"kill-pane",
 	"rename-session",
 	"resize-pane",
+	"select-layout",
 	"show-environment",
 	"set-environment",
+	"set-option",
 	"list-windows",
 	"rename-window",
 	"new-window",

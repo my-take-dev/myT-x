@@ -372,6 +372,8 @@ Claude Code: tmux new-session -s myname -d
 | `WorktreeConfig` | Worktree有効化、セットアップスクリプト、コピー対象 |
 | `ClaudeEnvConfig` | Claude Code専用環境変数 + デフォルト有効フラグ |
 | `MCPServerConfig` | MCP定義: コマンド、引数、env、config_params |
+| `TaskSchedulerConfig` | タスクスケジューラ設定: pre-exec待ち時間、対象ペイン、メッセージテンプレート |
+| `MessageTemplate` | 再利用可能なメッセージテンプレート: 名前 + メッセージ本文 |
 
 ### フロントエンド (`frontend/src/types/`)
 

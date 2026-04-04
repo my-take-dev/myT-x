@@ -1,5 +1,6 @@
 import {memo} from "react";
 import type {ListChildComponentProps} from "react-window";
+import {ChevronIcon} from "../../icons/ChevronIcon";
 import type {OperationType, StagingListItem} from "./sourceControlTypes";
 
 interface StagingRowData {
@@ -55,7 +56,7 @@ export const StagingRow = memo(function StagingRow({
                 }}
             >
                 <span className={`staging-group-arrow${item.isExpanded ? " expanded" : ""}`}>
-                    &#x25B6;
+                    <ChevronIcon size={8} />
                 </span>
                 <span className="staging-group-label">
                     {item.group === "staged" ? "Staged Changes" : "Changes"}

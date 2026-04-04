@@ -44,16 +44,17 @@ type Config struct {
 	SessionAllPanes bool
 
 	// DI注入点（nil の場合はデフォルト実装を使用）
-	AgentRepo    domain.AgentRepository
-	TaskRepo     domain.TaskRepository
-	MessageRepo  domain.MessageRepository
-	Sender       domain.PaneSender
-	Lister       domain.PaneLister
-	Capturer     domain.PaneCapturer
-	SelfResolver domain.SelfPaneResolver
-	TitleSetter  domain.PaneTitleSetter
-	Splitter     domain.PaneSplitter
-	PasteSender  domain.PanePasteSender
+	AgentRepo       domain.AgentRepository
+	AgentStatusRepo domain.AgentStatusRepository
+	TaskRepo        domain.TaskRepository
+	MessageRepo     domain.MessageRepository
+	Sender          domain.PaneSender
+	Lister          domain.PaneLister
+	Capturer        domain.PaneCapturer
+	SelfResolver    domain.SelfPaneResolver
+	TitleSetter     domain.PaneTitleSetter
+	Splitter        domain.PaneSplitter
+	PasteSender     domain.PanePasteSender
 }
 
 // Runtime は MCP サーバーとライフサイクルを管理する。
@@ -92,6 +93,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 
 	var st *store.Store
 	agentRepo := normalized.AgentRepo
+	agentStatusRepo := normalized.AgentStatusRepo
 	taskRepo := normalized.TaskRepo
 	messageRepo := normalized.MessageRepo
 	sender := normalized.Sender
@@ -100,7 +102,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	resolver := normalized.SelfResolver
 	titleSetter := normalized.TitleSetter
 	// デフォルト実装の生成
-	if agentRepo == nil || taskRepo == nil || messageRepo == nil {
+	if agentRepo == nil || agentStatusRepo == nil || taskRepo == nil || messageRepo == nil {
 		var err error
 		st, err = store.Open(normalized.DBPath)
 		if err != nil {
@@ -114,6 +116,9 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		}
 		if agentRepo == nil {
 			agentRepo = st
+		}
+		if agentStatusRepo == nil {
+			agentStatusRepo = st
 		}
 		if taskRepo == nil {
 			taskRepo = st
@@ -158,10 +163,12 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	stickyResolver := newStickySelfResolver(resolver, normalized.Logger)
 
 	// usecase サービス構築
-	agentSvc := usecase.NewAgentService(agentRepo, stickyResolver, lister, titleSetter, normalized.Logger)
-	dispatchSvc := usecase.NewTaskDispatchService(agentRepo, taskRepo, messageRepo, sender, normalized.Logger)
-	querySvc := usecase.NewTaskQueryService(agentRepo, taskRepo, messageRepo, stickyResolver, normalized.Logger)
+	agentSvc := usecase.NewAgentService(agentRepo, agentStatusRepo, stickyResolver, lister, titleSetter, normalized.Logger)
+	dispatchSvc := usecase.NewTaskDispatchService(agentRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
+	querySvc := usecase.NewTaskQueryService(agentRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
+	taskUpdateSvc := usecase.NewTaskUpdateService(agentRepo, taskRepo, stickyResolver, normalized.Logger)
 	responseSvc := usecase.NewResponseService(agentRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
+	statusSvc := usecase.NewStatusService(agentRepo, agentStatusRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
 	captureSvc := usecase.NewCaptureService(agentRepo, capturer, stickyResolver, normalized.Logger)
 
 	// projectRoot: DBPath を絶対パスに変換してから2階層上を導出
@@ -184,7 +191,7 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		agentRepo, stickyResolver, splitter, titleSetter, sender, pasteSender, projectRoot, normalized.Logger,
 	)
 
-	handler := mcptool.NewHandler(agentSvc, dispatchSvc, querySvc, responseSvc, captureSvc, memberSvc, instanceID)
+	handler := mcptool.NewHandler(agentSvc, dispatchSvc, querySvc, taskUpdateSvc, responseSvc, statusSvc, captureSvc, memberSvc, instanceID)
 	registry, err := handler.BuildRegistry()
 	if err != nil {
 		var cleanupErrs []error

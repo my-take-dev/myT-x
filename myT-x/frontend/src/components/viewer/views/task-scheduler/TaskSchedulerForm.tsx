@@ -1,10 +1,11 @@
-import {useState, useCallback} from "react";
+import {useState, useCallback, useRef} from "react";
 import {useI18n} from "../../../../i18n";
 import type {PaneSnapshot} from "../../../../types/tmux";
-import {isEditableStatus, type QueueItem} from "./useTaskScheduler";
+import {isEditableStatus, type QueueItem, type MessageTemplate} from "./useTaskScheduler";
 
 interface TaskSchedulerFormProps {
     availablePanes: PaneSnapshot[];
+    messageTemplates: MessageTemplate[];
     editingItem: QueueItem | null;
     onSave: (title: string, message: string, targetPaneID: string, clearBefore: boolean, clearCommand: string) => Promise<void>;
     onBack: () => void;
@@ -12,6 +13,7 @@ interface TaskSchedulerFormProps {
 
 export function TaskSchedulerForm({
     availablePanes,
+    messageTemplates,
     editingItem,
     onSave,
     onBack,
@@ -26,7 +28,19 @@ export function TaskSchedulerForm({
     const [clearBefore, setClearBefore] = useState(editingItem?.clear_before ?? false);
     const [clearCommand, setClearCommand] = useState(editingItem?.clear_command ?? "");
     const [submitting, setSubmitting] = useState(false);
+    const templateSelectRef = useRef<HTMLSelectElement>(null);
     const isEditingLocked = !isEditableStatus(editingItem?.status);
+
+    const handleTemplateSelect = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+        const idx = Number(e.target.value);
+        if (Number.isNaN(idx) || idx < 0 || idx >= messageTemplates.length) return;
+        const templateMessage = messageTemplates[idx].message;
+        setMessage((prev) => (prev.trim() ? prev + "\n" + templateMessage : templateMessage));
+        // Reset the select back to the placeholder after appending.
+        if (templateSelectRef.current) {
+            templateSelectRef.current.value = "";
+        }
+    }, [messageTemplates]);
 
     const canSubmit = title.trim() !== "" && message.trim() !== "" && targetPaneID !== "" && !submitting;
 
@@ -43,27 +57,44 @@ export function TaskSchedulerForm({
     return (
         <div className="task-scheduler-form">
             <button type="button" className="task-scheduler-back-btn" onClick={onBack}>
-                ← {tr("viewer.taskScheduler.back", "戻る", "Back")}
+                {"\u2190 "}{tr("viewer.taskScheduler.back", "\u623b\u308b", "Back")}
             </button>
 
             <div className="form-group">
                 <label className="form-label">
-                    {tr("viewer.taskScheduler.title", "タイトル", "Title")}
+                    {tr("viewer.taskScheduler.title", "\u30bf\u30a4\u30c8\u30eb", "Title")}
                 </label>
                 <input
                     className="form-input"
                     type="text"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    placeholder={tr("viewer.taskScheduler.titlePlaceholder", "タスク名", "Task name")}
+                    placeholder={tr("viewer.taskScheduler.titlePlaceholder", "\u30bf\u30b9\u30af\u540d", "Task name")}
                     disabled={isEditingLocked}
                 />
             </div>
 
             <div className="form-group">
                 <label className="form-label">
-                    {tr("viewer.taskScheduler.message", "メッセージ", "Message")}
+                    {tr("viewer.taskScheduler.message", "\u30e1\u30c3\u30bb\u30fc\u30b8", "Message")}
                 </label>
+                {messageTemplates.length > 0 && !isEditingLocked && (
+                    <select
+                        ref={templateSelectRef}
+                        className="task-scheduler-template-select"
+                        onChange={handleTemplateSelect}
+                        defaultValue=""
+                    >
+                        <option value="">
+                            {tr("viewer.taskScheduler.selectTemplate", "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u304b\u3089\u8ffd\u52a0...", "Add from template...")}
+                        </option>
+                        {messageTemplates.map((tmpl, idx) => (
+                            <option key={idx} value={String(idx)}>
+                                {tmpl.name}
+                            </option>
+                        ))}
+                    </select>
+                )}
                 <textarea
                     className="task-scheduler-textarea"
                     value={message}
@@ -75,7 +106,7 @@ export function TaskSchedulerForm({
 
             <div className="form-group">
                 <label className="form-label">
-                    {tr("viewer.taskScheduler.targetPane", "ターゲットペイン", "Target Pane")}
+                    {tr("viewer.taskScheduler.targetPane", "\u30bf\u30fc\u30b2\u30c3\u30c8\u30da\u30a4\u30f3", "Target Pane")}
                 </label>
                 <select
                     className="form-select"
@@ -84,7 +115,7 @@ export function TaskSchedulerForm({
                     disabled={isEditingLocked}
                 >
                     <option value="">
-                        {tr("viewer.taskScheduler.selectPane", "ペインを選択", "Select pane")}
+                        {tr("viewer.taskScheduler.selectPane", "\u30da\u30a4\u30f3\u3092\u9078\u629e", "Select pane")}
                     </option>
                     {availablePanes.map((pane) => (
                         <option key={pane.id} value={pane.id}>
@@ -104,7 +135,7 @@ export function TaskSchedulerForm({
                     />
                     <span>
                         {tr("viewer.taskScheduler.clearBefore",
-                            "タスク開始前にコンテキストクリア",
+                            "\u30bf\u30b9\u30af\u958b\u59cb\u524d\u306b\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u30af\u30ea\u30a2",
                             "Clear context before this task")}
                     </span>
                 </label>
@@ -113,7 +144,7 @@ export function TaskSchedulerForm({
             {clearBefore && (
                 <div className="form-group">
                     <label className="form-label">
-                        {tr("viewer.taskScheduler.clearCommand", "クリアコマンド", "Clear Command")}
+                        {tr("viewer.taskScheduler.clearCommand", "\u30af\u30ea\u30a2\u30b3\u30de\u30f3\u30c9", "Clear Command")}
                     </label>
                     <input
                         className="form-input"
@@ -125,7 +156,7 @@ export function TaskSchedulerForm({
                     />
                     <span className="task-scheduler-config-hint">
                         {tr("viewer.taskScheduler.clearCommandHint",
-                            "未入力時は /new がデフォルト",
+                            "\u672a\u5165\u529b\u6642\u306f /new \u304c\u30c7\u30d5\u30a9\u30eb\u30c8",
                             "Defaults to /new if empty")}
                     </span>
                 </div>
@@ -138,8 +169,8 @@ export function TaskSchedulerForm({
                 disabled={!canSubmit}
             >
                 {editingItem
-                    ? tr("viewer.taskScheduler.update", "更新", "Update")
-                    : tr("viewer.taskScheduler.add", "追加", "Add")
+                    ? tr("viewer.taskScheduler.update", "\u66f4\u65b0", "Update")
+                    : tr("viewer.taskScheduler.add", "\u8ffd\u52a0", "Add")
                 }
             </button>
         </div>

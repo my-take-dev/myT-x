@@ -3,6 +3,7 @@ package tmux
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -459,4 +460,50 @@ func TestWriteToPanesInWindow_PaneKilledDuringWrite(t *testing.T) {
 	}
 	// Verify the error is from the terminal write, not a nil dereference panic.
 	// (If we reach this line, no panic occurred — test passes.)
+}
+
+// TestListPanesByWindowTargetByID_NonZeroID verifies that bare numeric targets
+// in ListPanesByWindowTarget are resolved by window.ID (not slice index).
+func TestListPanesByWindowTargetByID_NonZeroID(t *testing.T) {
+	manager := NewSessionManager()
+
+	// First session: window.ID=0.
+	if _, _, err := manager.CreateSession("first", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession(first) error = %v", err)
+	}
+
+	// Second session: window.ID=1 (global counter).
+	_, secondPane, err := manager.CreateSession("second", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(second) error = %v", err)
+	}
+
+	// "second:1" must find window by ID=1, not slice index.
+	panes, listErr := manager.ListPanesByWindowTarget("second:1", -1, false)
+	if listErr != nil {
+		t.Fatalf("ListPanesByWindowTarget(%q) error = %v", "second:1", listErr)
+	}
+	if len(panes) != 1 {
+		t.Fatalf("pane count = %d, want 1", len(panes))
+	}
+	if panes[0].ID != secondPane.ID {
+		t.Fatalf("pane ID = %d, want %d", panes[0].ID, secondPane.ID)
+	}
+}
+
+// TestListPanesByWindowTargetByID_NotFound verifies that a non-existent window
+// ID returns an error.
+func TestListPanesByWindowTargetByID_NotFound(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	_, listErr := manager.ListPanesByWindowTarget("demo:999", -1, false)
+	if listErr == nil {
+		t.Fatal("ListPanesByWindowTarget(demo:999) expected error, got nil")
+	}
+	if !strings.Contains(listErr.Error(), "window id not found") {
+		t.Fatalf("error = %q, want substring %q", listErr.Error(), "window id not found")
+	}
 }

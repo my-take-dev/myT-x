@@ -63,6 +63,7 @@ Quake Mode のショートカットキーです。デフォルトは `Ctrl+Shift
 
 | ビューア | デフォルト |
 |---------|-----------|
+| Editor | `Ctrl+Shift+W` |
 | File Tree | `Ctrl+Shift+E` |
 | Git Graph | `Ctrl+Shift+G` |
 | Diff | `Ctrl+Shift+D` |

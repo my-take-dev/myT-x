@@ -562,6 +562,7 @@ func TestBuildMemberBootstrapMessage(t *testing.T) {
 		"%5",
 		"worker",
 		"ワークフロー",
+		"30-60秒ごと",
 	}
 	for _, check := range checks {
 		if !strings.Contains(msg, check) {

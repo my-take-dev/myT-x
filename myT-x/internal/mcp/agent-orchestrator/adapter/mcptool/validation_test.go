@@ -1,6 +1,7 @@
 package mcptool
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -134,6 +135,7 @@ func TestOptionalStatusFilterRejectsInvalidValue(t *testing.T) {
 	}{
 		{"default", nil, "all", false},
 		{"valid", "failed", "failed", false},
+		{"valid blocked", "blocked", "blocked", false},
 		{"invalid", "running", "", true},
 	}
 
@@ -151,6 +153,55 @@ func TestOptionalStatusFilterRejectsInvalidValue(t *testing.T) {
 				t.Fatalf("optionalStatusFilter = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestOptionalTaskIDList(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    map[string]any
+		want    []string
+		wantErr bool
+	}{
+		{name: "nil", args: map[string]any{}, want: nil},
+		{name: "valid", args: map[string]any{"depends_on": []any{"t-a", "t-b"}}, want: []string{"t-a", "t-b"}},
+		{name: "duplicate", args: map[string]any{"depends_on": []any{"t-a", "t-a"}}, wantErr: true},
+		{name: "invalid id", args: map[string]any{"depends_on": []any{"bad"}}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := optionalTaskIDList(tt.args, "depends_on", maxDependsOnTasks)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("optionalTaskIDList error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("optionalTaskIDList = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRequiredBatchTasks(t *testing.T) {
+	args := map[string]any{
+		"tasks": []any{
+			map[string]any{"agent_name": "worker-a", "message": "task 1"},
+			map[string]any{"agent_name": "worker-b", "message": "task 2", "include_response_instructions": false},
+		},
+	}
+
+	got, err := requiredBatchTasks(args, "tasks")
+	if err != nil {
+		t.Fatalf("requiredBatchTasks: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	if got[0].AgentName != "worker-a" || got[0].Message != "task 1" || !got[0].IncludeResponseInstructions {
+		t.Fatalf("unexpected first item: %+v", got[0])
+	}
+	if got[1].AgentName != "worker-b" || got[1].IncludeResponseInstructions {
+		t.Fatalf("unexpected second item: %+v", got[1])
 	}
 }
 

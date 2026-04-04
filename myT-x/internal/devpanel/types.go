@@ -2,10 +2,11 @@ package devpanel
 
 // FileEntry represents a single file or directory in a directory listing.
 type FileEntry struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"` // root-relative path
-	IsDir bool   `json:"is_dir"`
-	Size  int64  `json:"size"` // file size in bytes (0 for directories)
+	Name        string `json:"name"`
+	Path        string `json:"path"` // root-relative path
+	IsDir       bool   `json:"is_dir"`
+	Size        int64  `json:"size"` // file size in bytes (0 for directories)
+	HasChildren bool   `json:"has_children,omitempty"`
 }
 
 // FileContent represents the contents of a file read from disk.
@@ -16,6 +17,19 @@ type FileContent struct {
 	Size      int64  `json:"size"`
 	Truncated bool   `json:"truncated"` // true if file exceeded 1MB limit
 	Binary    bool   `json:"binary"`    // true if binary content detected
+}
+
+// FileMetadata represents stat information for a file-system entry.
+type FileMetadata struct {
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+	IsDir bool   `json:"is_dir"`
+}
+
+// WriteFileResult represents the outcome of a write/create operation.
+type WriteFileResult struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
 }
 
 // GitGraphCommit represents a single commit for graph rendering.

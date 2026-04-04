@@ -3,6 +3,8 @@ import {FixedSizeList, type ListChildComponentProps} from "react-window";
 import {useContainerHeight} from "../../../../hooks/useContainerHeight";
 import {makeTreeOuter} from "../shared/TreeOuter";
 import {useVirtualizedTreeFocus} from "../shared/useVirtualizedTreeFocus";
+import {TreeNodeRow} from "../file-tree/TreeNodeRow";
+import type {FlatNode} from "../file-tree/fileTreeTypes";
 import type {DiffTreeNode} from "./diffViewTypes";
 
 interface DiffFileSidebarProps {
@@ -63,83 +65,42 @@ const Row = memo(function Row({index, style, data}: ListChildComponentProps<RowD
     const isSelected = data.selectedPath === node.path;
     const isFocusable = data.focusedIndex === index;
     const statusMeta = !node.isDir ? getStatusMeta(node.file.status) : null;
+    const treeRowNode: FlatNode = node.isDir
+        ? {
+            path: node.path,
+            name: node.name,
+            isDir: true,
+            depth: node.depth,
+            hasChildren: true,
+            isExpanded: node.isExpanded,
+            isLoading: false,
+        }
+        : {
+            path: node.path,
+            name: node.name,
+            isDir: false,
+            depth: node.depth,
+            size: 0,
+        };
     const nodeAriaLabel = node.isDir
         ? `Directory ${node.name}`
         : `File ${node.name}, ${statusMeta?.label ?? "modified"}, +${node.file.additions}, -${node.file.deletions}`;
 
-    const handleClick = () => {
-        data.focusIndex(index);
-        if (node.isDir) {
-            data.onToggleDir(node.path);
-        } else {
-            data.onSelectFile(node.path);
-        }
-    };
-
     return (
-        <div
-            role="treeitem"
-            tabIndex={isFocusable ? 0 : -1}
-            aria-selected={isSelected}
-            aria-expanded={node.isDir ? node.isExpanded : undefined}
-            aria-label={nodeAriaLabel}
-            className={`tree-node-row${isSelected ? " selected" : ""}`}
-            style={{...style, paddingLeft: 8 + node.depth * 16}}
-            onClick={handleClick}
-            onFocus={() => data.focusIndex(index)}
-            onKeyDown={(e) => {
-                switch (e.key) {
-                    case "Enter":
-                    case " ": {
-                        e.preventDefault();
-                        handleClick();
-                        return;
-                    }
-                    case "ArrowDown": {
-                        e.preventDefault();
-                        data.focusIndex(index + 1);
-                        return;
-                    }
-                    case "ArrowUp": {
-                        e.preventDefault();
-                        data.focusIndex(index - 1);
-                        return;
-                    }
-                    case "ArrowRight": {
-                        // Always prevent default to claim ArrowRight as a tree-navigation key,
-                        // avoiding unwanted horizontal scroll even when no action fires.
-                        e.preventDefault();
-                        if (node.isDir && !node.isExpanded) {
-                            data.onToggleDir(node.path);
-                        }
-                        return;
-                    }
-                    case "ArrowLeft": {
-                        if (node.isDir && node.isExpanded) {
-                            e.preventDefault();
-                            data.onToggleDir(node.path);
-                            return;
-                        }
-                        const parentIndex = data.findParentIndex(index);
-                        if (parentIndex >= 0) {
-                            e.preventDefault();
-                            data.focusIndex(parentIndex);
-                        }
-                        return;
-                    }
-                }
-            }}
-        >
-            <span className={`tree-node-arrow${node.isDir && node.isExpanded ? " expanded" : ""}`}>
-                {node.isDir ? "\u25B6" : ""}
-            </span>
-            <span
-                className="tree-node-name"
-                style={!node.isDir ? {color: statusMeta?.color ?? "var(--fg-main)"} : undefined}
-            >
-                {node.name}
-            </span>
-            {!node.isDir && (
+        <TreeNodeRow
+            node={treeRowNode}
+            style={style}
+            isSelected={isSelected}
+            isFocusable={isFocusable}
+            onToggleDir={data.onToggleDir}
+            onSelectFile={data.onSelectFile}
+            onFocusIndex={data.focusIndex}
+            index={index}
+            findParentIndex={data.findParentIndex}
+            ariaLabel={nodeAriaLabel}
+            nameStyle={!node.isDir ? {color: statusMeta?.color ?? "var(--fg-main)"} : undefined}
+            renderIcon={() => null}
+            renderExtra={() => node.isDir ? null : (
                 <span className="diff-tree-stats">
                     {node.file.additions > 0 && (
                         <span className="diff-tree-additions">+{node.file.additions}</span>
@@ -149,7 +110,7 @@ const Row = memo(function Row({index, style, data}: ListChildComponentProps<RowD
                     )}
                 </span>
             )}
-        </div>
+        />
     );
 }, (prev, next) => {
     if (prev.index !== next.index || prev.style !== next.style) return false;

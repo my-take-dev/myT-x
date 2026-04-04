@@ -54,6 +54,18 @@ websocket_port: 0
 # viewer_sidebar_mode: right viewer sidebar layout mode
 # overlay = full-screen overlay (default), docked = right-side panel
 # viewer_sidebar_mode: overlay
+# task_scheduler: タスクスケジューラの設定
+# pre_exec_reset_delay_s: /new後の待機時間（秒、0-60、未設定時フロントエンドデフォルト: 10）
+# pre_exec_idle_timeout_s: アイドル待機タイムアウト（秒、10-600、未設定時フロントエンドデフォルト: 120）
+# pre_exec_target_mode: 対象ペイン（task_panes / all_panes）
+# message_templates: 固定メッセージテンプレート
+# task_scheduler:
+#   pre_exec_reset_delay_s: 10
+#   pre_exec_idle_timeout_s: 120
+#   pre_exec_target_mode: task_panes
+#   message_templates:
+#     - name: "コードレビュー"
+#       message: "コードをレビューして問題点を指摘してください"
 # mcp_servers: MCP (Model Context Protocol) サーバーの設定
 # 各エントリはセッションごとにオン・オフ可能なMCPサーバーを定義します
 # mcp_servers:

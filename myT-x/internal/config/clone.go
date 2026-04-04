@@ -58,6 +58,21 @@ func Clone(src Config) Config {
 		}
 	}
 
+	if src.TaskScheduler != nil {
+		tsCopy := *src.TaskScheduler
+		tsCopy.MessageTemplates = cloneMessageTemplates(src.TaskScheduler.MessageTemplates)
+		dst.TaskScheduler = &tsCopy
+	}
+
+	return dst
+}
+
+func cloneMessageTemplates(src []MessageTemplate) []MessageTemplate {
+	if src == nil {
+		return nil
+	}
+	dst := make([]MessageTemplate, len(src))
+	copy(dst, src)
 	return dst
 }
 

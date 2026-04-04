@@ -1,5 +1,119 @@
 # Changelog
 
+## v1.0.3
+
+### MCPオーケストレーター
+
+- **ツール大幅拡張**（10 → 18ツール）
+  - `get_task_detail` 追加（タスク詳細・応答内容・進捗・依存関係を1件ずつ取得）
+  - `acknowledge_task` 追加（タスク受領確認の記録、冪等実装）
+  - `update_status` / `get_agent_status` 追加（エージェントアイドル状態管理）
+  - `cancel_task` 追加（送信者によるキャンセル、`blocked` 状態も対応）
+  - `update_task_progress` 追加（進捗率・進捗メモの更新）
+  - `send_tasks` 追加（複数エージェントへの一括タスク送信、`group_id` 管理）
+  - 依存関係タスク機能追加（`send_task` の `depends_on` 拡張 + `activate_ready_tasks` ツール）
+  - タスク有効期限機能追加（`send_task` の `expires_after_minutes` 拡張、遅延評価方式）
+
+- **ツール名リネーム**（破壊的変更）
+  - `get_my_task` → `get_task_message`（`get_my_tasks` との1文字差の混同を解消）
+  - `check_tasks` → `list_all_tasks`（全体監視の意図を名前で明示）
+  - `check_ready_tasks` → `activate_ready_tasks`（状態変更の副作用を名前で明示）
+
+- **ツール説明文の英語化**
+  - 全18ツールの `Description` と InputSchema パラメータ説明を英語に変換（AIのトークン効率向上）
+  - 日本語説明はGoコメントとして保持（開発者向け）
+  - `help.go` の日本語ヘルプシステムは維持
+
+- **メッセージ配信信頼性向上**（3層防御）
+  - ブートストラップメッセージ強化（ポーリング・status報告の行動指針を追加）
+  - `get_my_tasks` インライン配信（`max_inline` パラメータで未確認タスクのメッセージを確実に届ける）
+  - `update_status(idle)` 時の自動再配信（未配信タスクを自動SendKeys再注入、`redelivered_count` 返却）
+  - `activate_ready_tasks` でのSendKeys配信（blocked→pending遷移後にメッセージを担当ペインへ配信）
+
+- **説明文品質改善**
+  - SQLite実装詳細の除去（目的・動作に焦点を当てた記述に変更）
+  - `check_ready_tasks` → `activate_ready_tasks` の呼び出しタイミングガイダンス追加
+  - ツール使い分けの明確化（`get_my_tasks` vs `list_all_tasks`、`get_task_message` vs `get_task_detail`）
+
+### エディタービュー
+
+- 右サイドバーにMonaco Editorベースのエディタビューを追加
+  - ファイルツリー + コードエディタの2ペインレイアウト
+  - ファイルCRUD操作対応（新規作成・リネーム・削除）
+  - コンテキストメニュー（New File / New Folder / Rename / Delete / Copy Path）
+  - 未保存変更インジケータ（`*`）と Ctrl+S 保存
+  - 1MB超ファイルのtruncated警告表示
+  - 高速ファイル切替時のAbortControllerによる競合防止
+  - devpanelサービスへの書き込み系API追加（WriteFile / CreateFile / CreateDirectory / RenameFile / DeleteFile / GetFileInfo）
+  - Windows固有のファイルロックリトライ機能（指数バックオフ: 10〜160ms, 最大5回）
+
+- エディタービューにファイル検索機能を追加
+  - 既存 `useFileSearch` + `FileSearchPanel` を再利用（変更なし）
+  - ヘッダーの🔍ボタンで検索モードに切り替え
+  - セッション変更時に検索モード自動リセット
+
+### ファイルツリー改善
+
+- ファイルツリーの展開矢印をSVGシェブロンに置き換え（`ChevronIcon.tsx` 新規作成）
+  - Unicodeの▶文字からSVGへの変更でサブピクセルジッターを解消
+  - CSS `transition: transform 0.15s ease` による滑らかな90度回転アニメーション
+  - FileTree / EditorFileTree / DiffFileSidebar / StagingFileRow / DiffViewerで統一
+
+- ファイルツリー状態管理をZustandに移行（安定性向上）
+  - `createFileTreeStore()` ファクトリ関数でFileTree/Editorが独立インスタンスを使用
+  - `useFileTreeActions.ts` 共通フックで重複コードを統合（useFileTree.ts 340行 + useEditor.ts 277行 → 共通150行）
+  - refミラーパターン全廃（`expandedPathsRef`, `childrenCacheRef` 等を削除）
+
+- ファイルツリー階層ツリー構造への移行（flat cache廃止）
+  - `FileNode` インターフェース + `mergeChildrenIntoTree` でキャッシュ参照不整合を解消
+  - `hasChildren` フラグ追加（空ディレクトリは展開矢印を非表示）
+
+- バックエンドディレクトリキャッシュ追加（TTL 5秒）
+  - `sync.RWMutex` + TTLキャッシュで連続展開/折りたたみのファイルシステムI/Oを削減
+  - CRUD操作後に影響パスを自動無効化
+
+- ファイルウォッチャー統合（fsnotify）
+  - セッション作業ディレクトリの再帰監視
+  - 外部からのファイル変更を自動検知してツリーを更新
+  - 100msデバウンスで高頻度イベントをバッチ処理
+  - `.git`, `node_modules` 除外
+
+### タスクスケジューラー
+
+- 設定画面の追加（ツールバー左端の設定ボタンから遷移）
+  - 待ち時間設定（preExecResetDelay, preExecIdleTimeout, targetMode）を `config.yaml` に永続化
+  - メッセージテンプレートのCRUD管理（名前 + 本文）
+  - タスク作成フォームにテンプレート選択ドロップダウン追加（メッセージ末尾に追記）
+  - `blockNonNumericKeys` を共通化して両コンポーネントで再利用
+
+- 秒数入力欄をテキスト入力に変更（`type="number"` → `type="text"`）
+  - ブラウザのスピナー（上下ボタン）を除去
+  - `onKeyDown` で数字・制御キー以外をブロック
+
+### tmux互換性改善
+
+- Agent Teams window IDバグを修正（2セッション目以降でlist-panesが失敗する問題）
+  - `#{window_index}` の出力（window ID）をsliceインデックスとして参照していた不一致を解消
+  - `findWindowByID` でID参照に統一
+
+- tmux shimパースエラーの修正（Agent Teams起動時の4カテゴリエラーを解消）
+  - `resize-pane -x/-y` がパーセント値（`30%`）を受け付けるよう対応（`flagInt` → `flagString`）
+  - `select-pane -P` フラグ追加（ペインスタイル設定、no-op実装）
+  - `set-option` コマンド追加（ペインボーダー色設定、no-op実装）
+  - `select-layout` コマンド追加（レイアウト整列、no-op実装）
+
+### 開発ツール
+
+- Claude Code ログ解析ツール追加（`tools/claude-log-analyzer/`）
+  - JSONL形式のセッションログからエージェント・スキル使用統計を集計・表示
+  - フィルタ: `--type`, `--top`, `--since`, `--branch`, `--project`
+
+- Codex ログ解析ツール追加（`tools/codex-log-analyzer/`）
+  - SQLite（`logs_1.sqlite`, `state_5.sqlite`）+ `history.jsonl` からCodexの使用統計を集計
+  - データソース優先順位: SQLite → history.jsonl → codex-tui.log
+
+---
+
 ## v1.0.2
 
 ### タスクスケジューラー

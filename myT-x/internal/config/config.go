@@ -41,6 +41,9 @@ type Config struct {
 	// ChatOverlayPercentage controls the height of the expanded chat overlay
 	// as a percentage of the terminal area (30-95). Default is 80.
 	ChatOverlayPercentage int `yaml:"chat_overlay_percentage,omitempty" json:"chat_overlay_percentage,omitempty"`
+	// TaskScheduler holds persisted task scheduler settings.
+	// nil means no custom settings — the frontend uses its compiled-in defaults.
+	TaskScheduler *TaskSchedulerConfig `yaml:"task_scheduler,omitempty" json:"task_scheduler,omitempty"`
 }
 
 // DefaultConfig returns default values aligned with spec.
@@ -72,6 +75,20 @@ func DefaultConfig() Config {
 // agent_model.overrides[*].name.
 func MinOverrideNameLen() int {
 	return minOverrideNameLen
+}
+
+// TaskSchedulerConfig holds persisted task scheduler settings.
+type TaskSchedulerConfig struct {
+	PreExecResetDelay  int               `yaml:"pre_exec_reset_delay_s" json:"pre_exec_reset_delay_s"`
+	PreExecIdleTimeout int               `yaml:"pre_exec_idle_timeout_s" json:"pre_exec_idle_timeout_s"`
+	PreExecTargetMode  string            `yaml:"pre_exec_target_mode" json:"pre_exec_target_mode"`
+	MessageTemplates   []MessageTemplate `yaml:"message_templates,omitempty" json:"message_templates,omitempty"`
+}
+
+// MessageTemplate is a reusable message pattern for task creation.
+type MessageTemplate struct {
+	Name    string `yaml:"name" json:"name"`
+	Message string `yaml:"message" json:"message"`
 }
 
 func isZeroConfig(cfg Config) bool {

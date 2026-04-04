@@ -90,7 +90,7 @@ export function useFileSearch(): UseFileSearchResult {
                 if (!mountedRef.current) return;
                 if (sessionRef.current?.trim() !== capturedSession) return;
                 if (searchRequestRef.current !== reqId) return;
-                setResults(searchResults);
+                setResults(searchResults ?? []);
             })
             .catch((err: unknown) => {
                 if (!mountedRef.current) return;

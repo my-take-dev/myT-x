@@ -1368,7 +1368,7 @@ func BuildBootstrapMessage(teamName string, member TeamMember, paneID, agentName
 	builder.WriteString("4. get_my_tasks → 自分宛タスクを確認（デフォルト: pending のみ）\n")
 	builder.WriteString("5. send_response → タスクに返信し completed に更新（task_id 必須）\n")
 	builder.WriteString("\nタスク状態: pending → completed / failed / abandoned\n")
-	builder.WriteString("確認: check_tasks で全タスク一覧、capture_pane で相手の画面を取得\n")
+	builder.WriteString("確認: list_all_tasks で全タスク一覧、capture_pane で相手の画面を取得\n")
 	builder.WriteString("注意: send_task は応答テンプレートを自動付与（include_response_instructions=false で無効化可）\n")
 
 	return builder.String()

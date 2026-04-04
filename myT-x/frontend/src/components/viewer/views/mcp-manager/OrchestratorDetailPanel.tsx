@@ -77,9 +77,9 @@ export function OrchestratorDetailPanel({representativeMCP, activeSession}: Orch
             ),
         },
         {
-            name: "check_tasks",
+            name: "list_all_tasks",
             desc: tr(
-                "viewer.orchDetail.tool.checkTasks",
+                "viewer.orchDetail.tool.listAllTasks",
                 "全タスクの状態監視",
                 "Monitor the status of all tasks",
             ),
@@ -124,7 +124,7 @@ export function OrchestratorDetailPanel({representativeMCP, activeSession}: Orch
                         {tr("viewer.orchDetail.section.recommendedFlow", "推奨フロー", "Recommended flow")}
                     </h4>
                     <pre className="mcp-detail-usage-pre">
-                        <code>register_agent → list_agents → send_task → get_my_tasks → send_response → check_tasks</code>
+                        <code>register_agent → list_agents → send_task → get_my_tasks → send_response → list_all_tasks</code>
                     </pre>
                 </div>
 

@@ -1340,8 +1340,8 @@ func TestAllowedShellListIsSorted(t *testing.T) {
 }
 
 func TestConfigStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeFor[Config]().NumField(); got != 16 {
-		t.Fatalf("Config field count = %d, want 16; update isZeroConfig tests for new fields", got)
+	if got := reflect.TypeFor[Config]().NumField(); got != 17 {
+		t.Fatalf("Config field count = %d, want 17; update isZeroConfig tests for new fields", got)
 	}
 	if got := reflect.TypeFor[WorktreeConfig]().NumField(); got != 5 {
 		t.Fatalf("WorktreeConfig field count = %d, want 5 (enabled, force_cleanup, setup_scripts, copy_files, copy_dirs)", got)
@@ -2564,6 +2564,65 @@ func TestCloneMCPServers(t *testing.T) {
 		}
 		if dst.MCPServers[0].ConfigParams != nil {
 			t.Errorf("ConfigParams = %v, want nil", dst.MCPServers[0].ConfigParams)
+		}
+	})
+}
+
+func TestCloneTaskScheduler(t *testing.T) {
+	t.Run("nil TaskScheduler stays nil", func(t *testing.T) {
+		src := DefaultConfig()
+		dst := Clone(src)
+		if dst.TaskScheduler != nil {
+			t.Errorf("TaskScheduler = %v, want nil", dst.TaskScheduler)
+		}
+	})
+
+	t.Run("deep copy independence", func(t *testing.T) {
+		src := DefaultConfig()
+		src.TaskScheduler = &TaskSchedulerConfig{
+			PreExecResetDelay:  15,
+			PreExecIdleTimeout: 200,
+			PreExecTargetMode:  "all_panes",
+			MessageTemplates: []MessageTemplate{
+				{Name: "review", Message: "Please review the code"},
+				{Name: "test", Message: "Run all tests"},
+			},
+		}
+		dst := Clone(src)
+
+		if !reflect.DeepEqual(src.TaskScheduler, dst.TaskScheduler) {
+			t.Fatal("Clone did not preserve TaskScheduler content")
+		}
+
+		// Mutate cloned pointer — source must stay unchanged.
+		dst.TaskScheduler.PreExecResetDelay = 99
+		if src.TaskScheduler.PreExecResetDelay != 15 {
+			t.Fatalf("source PreExecResetDelay mutated: %d", src.TaskScheduler.PreExecResetDelay)
+		}
+
+		// Mutate cloned MessageTemplates element — source must stay unchanged.
+		dst.TaskScheduler.MessageTemplates[0].Name = "changed"
+		if src.TaskScheduler.MessageTemplates[0].Name != "review" {
+			t.Fatalf("source MessageTemplates[0].Name mutated: %q", src.TaskScheduler.MessageTemplates[0].Name)
+		}
+
+		// Append to cloned MessageTemplates — source length must stay unchanged.
+		dst.TaskScheduler.MessageTemplates = append(dst.TaskScheduler.MessageTemplates, MessageTemplate{Name: "extra", Message: "extra"})
+		if len(src.TaskScheduler.MessageTemplates) != 2 {
+			t.Fatalf("source MessageTemplates length changed: %d", len(src.TaskScheduler.MessageTemplates))
+		}
+	})
+
+	t.Run("nil MessageTemplates stays nil", func(t *testing.T) {
+		src := DefaultConfig()
+		src.TaskScheduler = &TaskSchedulerConfig{
+			PreExecResetDelay:  10,
+			PreExecIdleTimeout: 120,
+			PreExecTargetMode:  "task_panes",
+		}
+		dst := Clone(src)
+		if dst.TaskScheduler.MessageTemplates != nil {
+			t.Errorf("MessageTemplates = %v, want nil", dst.TaskScheduler.MessageTemplates)
 		}
 	})
 }
