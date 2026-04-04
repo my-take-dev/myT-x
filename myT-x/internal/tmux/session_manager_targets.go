@@ -100,7 +100,7 @@ func (m *SessionManager) resolveTargetCore(target string, callerPaneID int) (pan
 	}
 
 	// Window:pane target — delegate to resolveWindowPaneTarget.
-	p, _, resolveErr := m.resolveWindowPaneTarget(sess, target, rem)
+	p, _, resolveErr := m.resolveWindowPaneTarget(sess, rem)
 	return p, false, nil, resolveErr
 }
 
@@ -132,32 +132,12 @@ func (m *SessionManager) resolveTargetRLocked(target string, callerPaneID int) (
 // already-held lock (either RLock or Lock).
 //
 // REQUIRES: m.mu must be held by the caller in some mode (RLock or Lock).
-func (m *SessionManager) resolveWindowPaneTarget(session *TmuxSession, target, remainder string) (*TmuxPane, bool, error) {
+func (m *SessionManager) resolveWindowPaneTarget(session *TmuxSession, remainder string) (*TmuxPane, bool, error) {
 	windowPart, panePart, hasPane := strings.Cut(remainder, ".")
-	windowPart = strings.TrimSpace(windowPart)
 	var window *TmuxWindow
-	if after, ok := strings.CutPrefix(windowPart, "@"); ok {
-		windowIDText := strings.TrimSpace(after)
-		windowID, err := strconv.Atoi(windowIDText)
-		if err != nil || windowID < 0 {
-			return nil, false, fmt.Errorf("invalid window id: %s", windowPart)
-		}
-		window, _ = findWindowByID(session.Windows, windowID)
-		if window == nil {
-			return nil, false, fmt.Errorf("window id not found: %d", windowID)
-		}
-	} else {
-		windowIdx, err := strconv.Atoi(windowPart)
-		if err != nil {
-			return nil, false, fmt.Errorf("invalid window index: %s", windowPart)
-		}
-		if windowIdx < 0 || windowIdx >= len(session.Windows) {
-			return nil, false, fmt.Errorf("window index out of range: %d", windowIdx)
-		}
-		window = session.Windows[windowIdx]
-	}
-	if window == nil {
-		return nil, false, fmt.Errorf("window not found in target: %s", target)
+	window, err := resolveWindowByTargetID(session.Windows, windowPart)
+	if err != nil {
+		return nil, false, err
 	}
 
 	if !hasPane || strings.TrimSpace(panePart) == "" {

@@ -1,6 +1,7 @@
 import {memo, useMemo, useRef, useState} from "react";
 import {computeHunkGaps, diffHeaderToFilePath, parseDiffFiles, type ParsedDiffFile} from "../../../../utils/diffParser";
 import {toErrorMessage} from "../../../../utils/errorUtils";
+import {ChevronIcon} from "../../icons/ChevronIcon";
 import {DiffHunkSection} from "../shared/DiffHunkSection";
 
 /** Collapse all diff sections when file count exceeds this threshold to reduce initial render cost. */
@@ -37,7 +38,9 @@ const DiffFileSection = memo(function DiffFileSection({
         <div>
             <button type="button" className="diff-file-header" onClick={() => setCollapsed(!collapsed)}
                     aria-expanded={!collapsed}>
-                <span className="diff-file-toggle">{collapsed ? "\u25B6" : "\u25BC"}</span>
+                <span className={`diff-file-toggle${collapsed ? "" : " expanded"}`}>
+                    <ChevronIcon size={8} />
+                </span>
                 <span>{filePath}</span>
             </button>
             {!collapsed && file.hunks.map((hunk, hi) => (

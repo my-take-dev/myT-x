@@ -404,6 +404,7 @@ func TestHandleSelectPaneTitle(t *testing.T) {
 	tests := []struct {
 		name             string
 		title            string
+		paneStyle        string
 		setEmptyTitle    bool
 		omitTarget       bool
 		seedTitle        string
@@ -481,6 +482,21 @@ func TestHandleSelectPaneTitle(t *testing.T) {
 			wantRenameEvent: true,
 			wantFocusEvent:  false,
 		},
+		{
+			name:           "pane style flag is ignored without affecting focus",
+			paneStyle:      "bg=default,fg=colour33",
+			wantExitCode:   0,
+			wantTitle:      "",
+			wantFocusEvent: true,
+		},
+		{
+			name:           "pane style only without target resolves current pane",
+			paneStyle:      "bg=default,fg=colour33",
+			omitTarget:     true,
+			wantExitCode:   0,
+			wantTitle:      "",
+			wantFocusEvent: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -513,6 +529,9 @@ func TestHandleSelectPaneTitle(t *testing.T) {
 				flags["-T"] = ""
 			} else if tt.title != "" {
 				flags["-T"] = tt.title
+			}
+			if tt.paneStyle != "" {
+				flags["-P"] = tt.paneStyle
 			}
 
 			resp := router.Execute(ipc.TmuxRequest{
@@ -825,7 +844,7 @@ func TestHandleResizePane(t *testing.T) {
 		{
 			name:         "resize both width and height",
 			target:       "%0",
-			flags:        map[string]any{"-x": 100, "-y": 30},
+			flags:        map[string]any{"-x": "100", "-y": "30"},
 			wantExitCode: 0,
 			wantWidth:    100,
 			wantHeight:   30,
@@ -833,7 +852,7 @@ func TestHandleResizePane(t *testing.T) {
 		{
 			name:         "resize only width keeps original height",
 			target:       "%0",
-			flags:        map[string]any{"-x": 80},
+			flags:        map[string]any{"-x": "80"},
 			wantExitCode: 0,
 			wantWidth:    80,
 			wantHeight:   40,
@@ -841,15 +860,39 @@ func TestHandleResizePane(t *testing.T) {
 		{
 			name:         "resize only height keeps original width",
 			target:       "%0",
-			flags:        map[string]any{"-y": 25},
+			flags:        map[string]any{"-y": "25"},
 			wantExitCode: 0,
 			wantWidth:    120,
 			wantHeight:   25,
 		},
 		{
+			name:         "percentage width uses current pane width as reference",
+			target:       "%0",
+			flags:        map[string]any{"-x": "50%"},
+			wantExitCode: 0,
+			wantWidth:    60,
+			wantHeight:   40,
+		},
+		{
+			name:         "invalid width falls back to current pane width",
+			target:       "%0",
+			flags:        map[string]any{"-x": "notint"},
+			wantExitCode: 0,
+			wantWidth:    120,
+			wantHeight:   40,
+		},
+		{
+			name:         "zero percent falls back to current pane width",
+			target:       "%0",
+			flags:        map[string]any{"-x": "0%"},
+			wantExitCode: 0,
+			wantWidth:    120,
+			wantHeight:   40,
+		},
+		{
 			name:             "non-existent pane returns error",
 			target:           "%99",
-			flags:            map[string]any{"-x": 100, "-y": 30},
+			flags:            map[string]any{"-x": "100", "-y": "30"},
 			wantExitCode:     1,
 			wantErrSubstring: "not found",
 		},

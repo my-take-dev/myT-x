@@ -82,6 +82,22 @@ export function DevPanelCommitDiff(arg1, arg2) {
   return window['go']['main']['App']['DevPanelCommitDiff'](arg1, arg2);
 }
 
+export function DevPanelCreateDirectory(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelCreateDirectory'](arg1, arg2);
+}
+
+export function DevPanelCreateFile(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelCreateFile'](arg1, arg2);
+}
+
+export function DevPanelDeleteFile(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelDeleteFile'](arg1, arg2);
+}
+
+export function DevPanelGetFileInfo(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelGetFileInfo'](arg1, arg2);
+}
+
 export function DevPanelGitCommit(arg1, arg2) {
   return window['go']['main']['App']['DevPanelGitCommit'](arg1, arg2);
 }
@@ -138,12 +154,28 @@ export function DevPanelReadFile(arg1, arg2) {
   return window['go']['main']['App']['DevPanelReadFile'](arg1, arg2);
 }
 
+export function DevPanelRenameFile(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DevPanelRenameFile'](arg1, arg2, arg3);
+}
+
 export function DevPanelSearchFiles(arg1, arg2) {
   return window['go']['main']['App']['DevPanelSearchFiles'](arg1, arg2);
 }
 
+export function DevPanelStartWatcher(arg1) {
+  return window['go']['main']['App']['DevPanelStartWatcher'](arg1);
+}
+
+export function DevPanelStopWatcher(arg1) {
+  return window['go']['main']['App']['DevPanelStopWatcher'](arg1);
+}
+
 export function DevPanelWorkingDiff(arg1) {
   return window['go']['main']['App']['DevPanelWorkingDiff'](arg1);
+}
+
+export function DevPanelWriteFile(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DevPanelWriteFile'](arg1, arg2, arg3);
 }
 
 export function EnsureUnaffiliatedTeam(arg1, arg2) {
@@ -220,6 +252,10 @@ export function GetSessionErrorLog() {
 
 export function GetSessionLogFilePath() {
   return window['go']['main']['App']['GetSessionLogFilePath']();
+}
+
+export function GetTaskSchedulerSettings() {
+  return window['go']['main']['App']['GetTaskSchedulerSettings']();
 }
 
 export function GetTaskSchedulerStatus() {
@@ -364,6 +400,10 @@ export function SaveOrchestratorTeam(arg1, arg2) {
 
 export function SaveSchedulerTemplate(arg1, arg2) {
   return window['go']['main']['App']['SaveSchedulerTemplate'](arg1, arg2);
+}
+
+export function SaveTaskSchedulerSettings(arg1) {
+  return window['go']['main']['App']['SaveTaskSchedulerSettings'](arg1);
 }
 
 export function SaveUnaffiliatedTeamMembers(arg1, arg2) {

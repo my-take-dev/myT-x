@@ -20,11 +20,13 @@ const (
 	BootstrapDelayMin = 1000
 	// BootstrapDelayMax はブートストラップ遅延の最大値（ms）。
 	BootstrapDelayMax = 30000
+	// DefaultMemberTeamName is the default team name used by add_member.
+	DefaultMemberTeamName = "動的チーム"
 
 	shellInitDelay = 500 * time.Millisecond
 	cdDelay        = 300 * time.Millisecond
 
-	defaultTeamName = "動的チーム"
+	defaultTeamName = DefaultMemberTeamName
 )
 
 // AddMemberCmd は add_member ツールのコマンドパラメータ。
@@ -300,7 +302,13 @@ func buildMemberBootstrapMessage(teamName string, cmd AddMemberCmd, paneID, agen
 	b.WriteString("4. get_my_tasks → 自分宛タスクを確認（デフォルト: pending のみ）\n")
 	b.WriteString("5. send_response → タスクに返信し completed に更新（task_id 必須）\n")
 	b.WriteString("\nタスク状態: pending → completed / failed / abandoned\n")
-	b.WriteString("確認: check_tasks で全タスク一覧、capture_pane で相手の画面を取得\n")
+	b.WriteString("確認: list_all_tasks で全タスク一覧、capture_pane で相手の画面を取得\n")
+
+	b.WriteString("\n--- アイドル時の行動（重要） ---\n")
+	b.WriteString("- タスク完了後、またはアイドル中は30-60秒ごとに: get_my_tasks を呼んで自分宛タスクを確認\n")
+	b.WriteString("- 作業開始時: update_status(status=\"busy\") で状態を報告\n")
+	b.WriteString("- 作業完了・待機時: update_status(status=\"idle\") で状態を報告（未ackの pending タスクがあれば再配信されます）\n")
+	b.WriteString("- send_task のメッセージ配信はベストエフォートです。確実に受信するには get_my_tasks を定期確認してください\n")
 
 	return b.String()
 }

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 
 	"myT-x/internal/terminal"
@@ -19,7 +18,7 @@ import (
 //
 // TODO(T-23): This method uses independent target resolution logic that
 // partially duplicates resolveTargetCore. A future refactoring should unify
-// the window-resolution path (bare session name, session:windowIdx,
+// the window-resolution path (bare session name, session:windowID,
 // session:@windowID) with resolveTargetCore, extracting a shared
 // resolveWindowTarget helper. The current implementation is kept because
 // resolveTargetCore returns a single pane, whereas this method needs the
@@ -104,31 +103,9 @@ func (m *SessionManager) ListPanesByWindowTarget(target string, callerPaneID int
 
 	// I-16: Support @stableID format (e.g., "session:@5") to match
 	// resolveWindowPaneTarget behaviour.
-	if after, ok := strings.CutPrefix(windowPart, "@"); ok {
-		windowIDText := strings.TrimSpace(after)
-		windowID, parseErr := strconv.Atoi(windowIDText)
-		if parseErr != nil || windowID < 0 {
-			return nil, fmt.Errorf("invalid window id: %s", windowPart)
-		}
-		window, _ := findWindowByID(session.Windows, windowID)
-		if window == nil {
-			return nil, fmt.Errorf("window id not found: %d", windowID)
-		}
-		return copyPaneSlice(window.Panes), nil
-	}
-
-	windowIdx, err := strconv.Atoi(windowPart)
+	window, err := resolveWindowByTargetID(session.Windows, windowPart)
 	if err != nil {
-		return nil, fmt.Errorf("invalid window index: %s", windowPart)
-	}
-	if windowIdx < 0 || windowIdx >= len(session.Windows) {
-		return nil, fmt.Errorf("window index out of range: %d", windowIdx)
-	}
-	// I-05: nil guard for the integer index path. session.Windows[windowIdx]
-	// may be nil if the window slice was partially cleared or corrupted.
-	window := session.Windows[windowIdx]
-	if window == nil {
-		return nil, fmt.Errorf("window at index %d is nil", windowIdx)
+		return nil, err
 	}
 	return copyPaneSlice(window.Panes), nil
 }

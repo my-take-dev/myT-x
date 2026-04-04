@@ -63,6 +63,56 @@ export namespace config {
 	        this.vars = source["vars"];
 	    }
 	}
+	export class MessageTemplate {
+	    name: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MessageTemplate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.message = source["message"];
+	    }
+	}
+	export class TaskSchedulerConfig {
+	    pre_exec_reset_delay_s: number;
+	    pre_exec_idle_timeout_s: number;
+	    pre_exec_target_mode: string;
+	    message_templates?: MessageTemplate[];
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskSchedulerConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pre_exec_reset_delay_s = source["pre_exec_reset_delay_s"];
+	        this.pre_exec_idle_timeout_s = source["pre_exec_idle_timeout_s"];
+	        this.pre_exec_target_mode = source["pre_exec_target_mode"];
+	        this.message_templates = this.convertValues(source["message_templates"], MessageTemplate);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MCPServerConfigParam {
 	    key: string;
 	    label: string;
@@ -164,6 +214,7 @@ export namespace config {
 	    default_session_dir?: string;
 	    mcp_servers?: MCPServerConfig[];
 	    chat_overlay_percentage?: number;
+	    task_scheduler?: TaskSchedulerConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -187,6 +238,7 @@ export namespace config {
 	        this.default_session_dir = source["default_session_dir"];
 	        this.mcp_servers = this.convertValues(source["mcp_servers"], MCPServerConfig);
 	        this.chat_overlay_percentage = source["chat_overlay_percentage"];
+	        this.task_scheduler = this.convertValues(source["task_scheduler"], TaskSchedulerConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -207,6 +259,8 @@ export namespace config {
 		    return a;
 		}
 	}
+	
+	
 	
 	
 
@@ -255,6 +309,7 @@ export namespace devpanel {
 	    path: string;
 	    is_dir: boolean;
 	    size: number;
+	    has_children?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FileEntry(source);
@@ -266,6 +321,23 @@ export namespace devpanel {
 	        this.path = source["path"];
 	        this.is_dir = source["is_dir"];
 	        this.size = source["size"];
+	        this.has_children = source["has_children"];
+	    }
+	}
+	export class FileMetadata {
+	    path: string;
+	    size: number;
+	    is_dir: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileMetadata(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.size = source["size"];
+	        this.is_dir = source["is_dir"];
 	    }
 	}
 	export class GitGraphCommit {
@@ -455,6 +527,20 @@ export namespace devpanel {
 		    }
 		    return a;
 		}
+	}
+	export class WriteFileResult {
+	    path: string;
+	    size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new WriteFileResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.size = source["size"];
+	    }
 	}
 
 }
@@ -713,6 +799,13 @@ export namespace main {
 	}
 	export class ValidationRules {
 	    min_override_name_len: number;
+	    min_pre_exec_reset_delay: number;
+	    max_pre_exec_reset_delay: number;
+	    min_pre_exec_idle_timeout: number;
+	    max_pre_exec_idle_timeout: number;
+	    max_message_templates: number;
+	    max_template_name_len: number;
+	    max_template_message_len: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ValidationRules(source);
@@ -721,6 +814,13 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.min_override_name_len = source["min_override_name_len"];
+	        this.min_pre_exec_reset_delay = source["min_pre_exec_reset_delay"];
+	        this.max_pre_exec_reset_delay = source["max_pre_exec_reset_delay"];
+	        this.min_pre_exec_idle_timeout = source["min_pre_exec_idle_timeout"];
+	        this.max_pre_exec_idle_timeout = source["max_pre_exec_idle_timeout"];
+	        this.max_message_templates = source["max_message_templates"];
+	        this.max_template_name_len = source["max_template_name_len"];
+	        this.max_template_message_len = source["max_template_message_len"];
 	    }
 	}
 

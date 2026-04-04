@@ -10,8 +10,10 @@ import {
     ReorderTaskSchedulerItems,
     UpdateTaskSchedulerItem,
     CheckTaskSchedulerOrchestratorReady,
+    GetTaskSchedulerSettings,
+    SaveTaskSchedulerSettings,
 } from "../../../../../wailsjs/go/main/App";
-import {main, taskscheduler} from "../../../../../wailsjs/go/models";
+import {config, main, taskscheduler} from "../../../../../wailsjs/go/models";
 import {EventsOn} from "../../../../../wailsjs/runtime";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
 import type {PaneSnapshot} from "../../../../types/tmux";
@@ -19,6 +21,8 @@ import type {PaneSnapshot} from "../../../../types/tmux";
 export type QueueStatus = taskscheduler.QueueStatus;
 export type QueueItem = taskscheduler.QueueItem;
 export type QueueConfig = taskscheduler.QueueConfig;
+export type TaskSchedulerSettings = config.TaskSchedulerConfig;
+export type MessageTemplate = config.MessageTemplate;
 
 export type OrchestratorReadiness = main.TaskSchedulerOrchestratorReadiness;
 
@@ -84,6 +88,7 @@ export function useTaskScheduler() {
 
     const [status, setStatus] = useState<QueueStatus | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [settings, setSettings] = useState<TaskSchedulerSettings | null>(null);
     const isMountedRef = useRef(true);
 
     const availablePanes: PaneSnapshot[] = useMemo(() => {
@@ -222,6 +227,44 @@ export function useTaskScheduler() {
         }
     }, []);
 
+    const loadSettings = useCallback(() => {
+        void GetTaskSchedulerSettings()
+            .then((result) => {
+                if (!isMountedRef.current) return;
+                setSettings(result);
+            })
+            .catch((err) => {
+                if (!isMountedRef.current) return;
+                console.warn("[task-scheduler] failed to load settings", err);
+            });
+    }, []);
+
+    const saveSettings = useCallback(async (s: TaskSchedulerSettings): Promise<boolean> => {
+        setError(null);
+        try {
+            await SaveTaskSchedulerSettings(s);
+            // Re-fetch from backend to get the normalized (trimmed) values
+            // rather than using the pre-normalization input directly.
+            loadSettings();
+            return true;
+        } catch (e) {
+            setError(String(e));
+            return false;
+        }
+    }, [loadSettings]);
+
+    // Load settings on mount and sync when config changes externally.
+    useEffect(() => {
+        loadSettings();
+        const cancelConfigUpdated = EventsOn("config:updated", () => {
+            if (!isMountedRef.current) return;
+            loadSettings();
+        });
+        return () => {
+            cancelConfigUpdated();
+        };
+    }, [loadSettings]);
+
     const checkOrchestratorReady = useCallback(async (): Promise<OrchestratorReadiness> => {
         try {
             return await CheckTaskSchedulerOrchestratorReady();
@@ -237,6 +280,7 @@ export function useTaskScheduler() {
         error,
         setError,
         availablePanes,
+        settings,
         start,
         stop,
         pause,
@@ -247,5 +291,6 @@ export function useTaskScheduler() {
         updateItem,
         refreshStatus,
         checkOrchestratorReady,
+        saveSettings,
     };
 }

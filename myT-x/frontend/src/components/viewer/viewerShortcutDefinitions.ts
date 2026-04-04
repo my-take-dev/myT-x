@@ -15,6 +15,7 @@ export const VIEWER_SHORTCUTS: readonly ViewerShortcutDef[] = [
     {viewId: "mcp-manager", label: "MCP Manager", defaultShortcut: "Ctrl+Shift+M"},
     {viewId: "pane-scheduler", label: "Schedule", defaultShortcut: "Ctrl+Shift+K"},
     {viewId: "task-scheduler", label: "Task Queue", defaultShortcut: "Ctrl+Shift+Q"},
+    {viewId: "editor", label: "Editor", defaultShortcut: "Ctrl+Shift+O"},
     {viewId: "orchestrator-teams", label: "Teams", defaultShortcut: "Ctrl+Shift+T"},
 ];
 

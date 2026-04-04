@@ -1,9 +1,7 @@
 import {useState, useCallback, useMemo} from "react";
 import {useI18n} from "../../../../i18n";
-import type {QueueConfig, QueueItem} from "./useTaskScheduler";
+import type {QueueConfig, QueueItem, TaskSchedulerSettings} from "./useTaskScheduler";
 import {
-    preExecFieldBounds,
-    readNumberInput,
     resolveInitialPreExecIdleTimeout,
     resolveInitialPreExecResetDelay,
     resolveInitialPreExecTargetMode,
@@ -12,15 +10,19 @@ import {
 interface TaskSchedulerConfigProps {
     items: QueueItem[];
     initialConfig?: QueueConfig | null;
+    savedSettings: TaskSchedulerSettings | null;
     onStart: (config: QueueConfig, items: QueueItem[]) => Promise<void>;
     onBack: () => void;
+    onOpenSettings: () => void;
 }
 
 export function TaskSchedulerConfig({
                                         items,
                                         initialConfig,
+                                        savedSettings,
                                         onStart,
                                         onBack,
+                                        onOpenSettings,
                                     }: TaskSchedulerConfigProps) {
     const {language, t} = useI18n();
     const tr = (key: string, jaText: string, enText: string) =>
@@ -28,15 +30,6 @@ export function TaskSchedulerConfig({
 
     const [submitting, setSubmitting] = useState(false);
     const [preExecEnabled, setPreExecEnabled] = useState(initialConfig?.pre_exec_enabled ?? false);
-    const [preExecTargetMode, setPreExecTargetMode] = useState(
-        resolveInitialPreExecTargetMode(initialConfig?.pre_exec_target_mode),
-    );
-    const [preExecResetDelay, setPreExecResetDelay] = useState(
-        resolveInitialPreExecResetDelay(initialConfig?.pre_exec_reset_delay_s),
-    );
-    const [preExecIdleTimeout, setPreExecIdleTimeout] = useState(
-        resolveInitialPreExecIdleTimeout(initialConfig?.pre_exec_idle_timeout_s),
-    );
 
     const pendingItems = useMemo(
         () => items.filter((i) => i.status === "pending"),
@@ -44,42 +37,39 @@ export function TaskSchedulerConfig({
     );
     const canStart = pendingItems.length > 0 && !submitting;
 
+    // Resolve timing values from saved settings (persisted in config.yaml).
+    const resetDelay = resolveInitialPreExecResetDelay(savedSettings?.pre_exec_reset_delay_s);
+    const idleTimeout = resolveInitialPreExecIdleTimeout(savedSettings?.pre_exec_idle_timeout_s);
+    const targetMode = resolveInitialPreExecTargetMode(savedSettings?.pre_exec_target_mode);
+
     const handleStart = useCallback(async () => {
         if (!canStart) return;
         setSubmitting(true);
         try {
             await onStart({
                 pre_exec_enabled: preExecEnabled,
-                pre_exec_target_mode: preExecTargetMode,
-                pre_exec_reset_delay_s: resolveInitialPreExecResetDelay(preExecResetDelay),
-                pre_exec_idle_timeout_s: resolveInitialPreExecIdleTimeout(preExecIdleTimeout),
+                pre_exec_target_mode: targetMode,
+                pre_exec_reset_delay_s: resetDelay,
+                pre_exec_idle_timeout_s: idleTimeout,
             }, pendingItems);
         } finally {
             setSubmitting(false);
         }
-    }, [
-        canStart,
-        onStart,
-        pendingItems,
-        preExecEnabled,
-        preExecIdleTimeout,
-        preExecResetDelay,
-        preExecTargetMode,
-    ]);
+    }, [canStart, onStart, pendingItems, preExecEnabled, targetMode, resetDelay, idleTimeout]);
 
     return (
         <div className="task-scheduler-form">
             <button type="button" className="task-scheduler-back-btn" onClick={onBack}>
-                ← {tr("viewer.taskScheduler.back", "戻る", "Back")}
+                {"\u2190 "}{tr("viewer.taskScheduler.back", "\u623b\u308b", "Back")}
             </button>
 
             <h3 className="task-scheduler-config-title">
-                {tr("viewer.taskScheduler.queueConfig", "キュー設定", "Queue Settings")}
+                {tr("viewer.taskScheduler.queueConfig", "\u30ad\u30e5\u30fc\u8a2d\u5b9a", "Queue Settings")}
             </h3>
 
             <div className="task-scheduler-config-summary">
                 {tr("viewer.taskScheduler.pendingCount",
-                    `${pendingItems.length} 件のタスクを実行`,
+                    `${pendingItems.length} \u4ef6\u306e\u30bf\u30b9\u30af\u3092\u5b9f\u884c`,
                     `${pendingItems.length} task(s) to execute`)}
             </div>
 
@@ -92,7 +82,7 @@ export function TaskSchedulerConfig({
                 <span>
                     {tr(
                         "viewer.taskScheduler.preExecEnabled",
-                        "セッションリセット+役割リマインダーを実行する",
+                        "\u30bb\u30c3\u30b7\u30e7\u30f3\u30ea\u30bb\u30c3\u30c8+\u5f79\u5272\u30ea\u30de\u30a4\u30f3\u30c0\u30fc\u3092\u5b9f\u884c\u3059\u308b",
                         "Run session reset and role reminders",
                     )}
                 </span>
@@ -100,102 +90,21 @@ export function TaskSchedulerConfig({
 
             {preExecEnabled && (
                 <div className="task-scheduler-config-section">
-                    <div className="task-scheduler-config-group">
-                        <div className="task-scheduler-config-label">
+                    <div className="task-scheduler-config-hint-row">
+                        <div className="task-scheduler-config-hint">
                             {tr(
-                                "viewer.taskScheduler.preExecTarget",
-                                "対象ペイン",
-                                "Target panes",
+                                "viewer.taskScheduler.preExecSettingsHint",
+                                `\u5f85\u6a5f\u6642\u9593: ${resetDelay}\u79d2 / \u30bf\u30a4\u30e0\u30a2\u30a6\u30c8: ${idleTimeout}\u79d2 / \u5bfe\u8c61: ${targetMode === "all_panes" ? "\u5168\u30da\u30a4\u30f3" : "\u30bf\u30b9\u30af\u30da\u30a4\u30f3\u306e\u307f"}`,
+                                `Delay: ${resetDelay}s / Timeout: ${idleTimeout}s / Target: ${targetMode === "all_panes" ? "all panes" : "task panes only"}`,
                             )}
                         </div>
-                        <label className="task-scheduler-radio-label">
-                            <input
-                                type="radio"
-                                name="task-scheduler-preexec-target"
-                                checked={preExecTargetMode === "task_panes"}
-                                onChange={() => setPreExecTargetMode("task_panes")}
-                            />
-                            <span>
-                                {tr(
-                                    "viewer.taskScheduler.preExecTaskPanes",
-                                    "タスクで使用するペインのみ",
-                                    "Only panes used by tasks",
-                                )}
-                            </span>
-                        </label>
-                        <label className="task-scheduler-radio-label">
-                            <input
-                                type="radio"
-                                name="task-scheduler-preexec-target"
-                                checked={preExecTargetMode === "all_panes"}
-                                onChange={() => setPreExecTargetMode("all_panes")}
-                            />
-                            <span>
-                                {tr(
-                                    "viewer.taskScheduler.preExecAllPanes",
-                                    "セッション内の全ペイン",
-                                    "All panes in the session",
-                                )}
-                            </span>
-                        </label>
-                    </div>
-
-                    <div className="task-scheduler-config-group">
-                        <label className="task-scheduler-config-field">
-                            <span className="task-scheduler-config-label">
-                                {tr(
-                                    "viewer.taskScheduler.preExecResetDelay",
-                                    "/new 後の待機時間 (秒)",
-                                    "Wait after /new (seconds)",
-                                )}
-                            </span>
-                            <input
-                                type="number"
-                                step={1}
-                                min={preExecFieldBounds.resetDelay.min}
-                                max={preExecFieldBounds.resetDelay.max}
-                                value={preExecResetDelay}
-                                onChange={(event) => {
-                                    setPreExecResetDelay((previousValue) =>
-                                        readNumberInput(
-                                            event.target.value,
-                                            previousValue,
-                                            preExecFieldBounds.resetDelay.min,
-                                            preExecFieldBounds.resetDelay.max,
-                                        ),
-                                    );
-                                }}
-                                className="task-scheduler-config-input"
-                            />
-                        </label>
-
-                        <label className="task-scheduler-config-field">
-                            <span className="task-scheduler-config-label">
-                                {tr(
-                                    "viewer.taskScheduler.preExecIdleTimeout",
-                                    "アイドル待機タイムアウト (秒)",
-                                    "Idle wait timeout (seconds)",
-                                )}
-                            </span>
-                            <input
-                                type="number"
-                                step={1}
-                                min={preExecFieldBounds.idleTimeout.min}
-                                max={preExecFieldBounds.idleTimeout.max}
-                                value={preExecIdleTimeout}
-                                onChange={(event) => {
-                                    setPreExecIdleTimeout((previousValue) =>
-                                        readNumberInput(
-                                            event.target.value,
-                                            previousValue,
-                                            preExecFieldBounds.idleTimeout.min,
-                                            preExecFieldBounds.idleTimeout.max,
-                                        ),
-                                    );
-                                }}
-                                className="task-scheduler-config-input"
-                            />
-                        </label>
+                        <button
+                            type="button"
+                            className="task-scheduler-config-link"
+                            onClick={onOpenSettings}
+                        >
+                            {tr("viewer.taskScheduler.editInSettings", "\u8a2d\u5b9a\u753b\u9762\u3067\u7de8\u96c6", "Edit in Settings")}
+                        </button>
                     </div>
                 </div>
             )}
@@ -206,7 +115,7 @@ export function TaskSchedulerConfig({
                 onClick={() => void handleStart()}
                 disabled={!canStart}
             >
-                {tr("viewer.taskScheduler.startQueue", "キュー開始", "Start Queue")}
+                {tr("viewer.taskScheduler.startQueue", "\u30ad\u30e5\u30fc\u958b\u59cb", "Start Queue")}
             </button>
         </div>
     );

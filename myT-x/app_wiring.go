@@ -175,6 +175,7 @@ func buildDevPanelServiceDeps(app *App) devpanel.Deps {
 	return devpanel.Deps{
 		ResolveSessionDir: app.sessionService.ResolveSessionDir,
 		IsPathWithinBase:  worktree.IsPathWithinBase,
+		Emitter:           newAppRuntimeEventEmitterAdapter(app),
 	}
 }
 

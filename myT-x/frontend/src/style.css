@@ -20,4 +20,5 @@
 @import "./styles/viewer/scheduler.css";
 @import "./styles/viewer/task-scheduler.css";
 @import "./styles/viewer/orchestrator-teams.css";
+@import "./styles/viewer/editor.css";
 @import "./styles/chat.css";

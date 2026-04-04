@@ -63,6 +63,7 @@ Customize keyboard shortcuts for each viewer:
 
 | Viewer | Default |
 |--------|---------|
+| Editor | `Ctrl+Shift+W` |
 | File Tree | `Ctrl+Shift+E` |
 | Git Graph | `Ctrl+Shift+G` |
 | Diff | `Ctrl+Shift+D` |

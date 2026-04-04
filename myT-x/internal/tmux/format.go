@@ -191,16 +191,13 @@ func lookupFormatVariable(name string, pane *TmuxPane) string {
 	case "pane_title":
 		return pane.Title
 	case "window_index":
-		// COMPATIBILITY DEVIATION (I-13): tmux's #{window_index} returns a
-		// 0-based sequential position that shifts when windows are reordered
-		// or removed. This implementation intentionally deviates by returning
-		// the stable window.ID, which never changes for the lifetime of a
-		// window. This means:
-		//   - tmux: window_index may be 0,1,2 and can reset after removal
-		//   - myT-x: window_index equals window.ID (monotonically increasing, never reused)
-		// Callers that need the positional index should compute it from the
-		// session's Windows slice. Callers targeting a specific window should
-		// use #{window_id} (prefixed with '@') for unambiguous targeting.
+		// Returns the stable window.ID (monotonically increasing, never reused).
+		// In real tmux, window_index is a positional index that can shift on
+		// removal/reorder. myT-x uses window.ID instead, which is stable.
+		// Target resolution (resolveWindowPaneTarget, ListPanesByWindowTarget)
+		// treats bare numeric targets as window IDs, so the output of
+		// #{window_index} is directly usable as a target — matching real tmux
+		// behavior where #{window_index} output round-trips through -t targeting.
 		if window == nil {
 			return "0"
 		}

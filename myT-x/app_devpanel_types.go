@@ -8,6 +8,8 @@ import "myT-x/internal/devpanel"
 // discover them without exposing the internal package directly.
 type FileEntry = devpanel.FileEntry
 type FileContent = devpanel.FileContent
+type FileMetadata = devpanel.FileMetadata
+type WriteFileResult = devpanel.WriteFileResult
 type GitGraphCommit = devpanel.GitGraphCommit
 type GitStatusResult = devpanel.GitStatusResult
 

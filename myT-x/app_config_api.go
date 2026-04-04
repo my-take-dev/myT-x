@@ -11,6 +11,14 @@ import (
 // ValidationRules contains validation parameters shared between backend and frontend.
 type ValidationRules struct {
 	MinOverrideNameLen int `json:"min_override_name_len"`
+	// Task scheduler validation boundaries.
+	MinPreExecResetDelay  int `json:"min_pre_exec_reset_delay"`
+	MaxPreExecResetDelay  int `json:"max_pre_exec_reset_delay"`
+	MinPreExecIdleTimeout int `json:"min_pre_exec_idle_timeout"`
+	MaxPreExecIdleTimeout int `json:"max_pre_exec_idle_timeout"`
+	MaxMessageTemplates   int `json:"max_message_templates"`
+	MaxTemplateNameLen    int `json:"max_template_name_len"`
+	MaxTemplateMessageLen int `json:"max_template_message_len"`
 }
 
 // GetConfig returns loaded config.
@@ -129,7 +137,14 @@ func (a *App) GetAllowedShells() []string {
 // GetValidationRules returns frontend validation parameters shared with backend checks.
 func (a *App) GetValidationRules() ValidationRules {
 	return ValidationRules{
-		MinOverrideNameLen: config.MinOverrideNameLen(),
+		MinOverrideNameLen:    config.MinOverrideNameLen(),
+		MinPreExecResetDelay:  minPreExecResetDelay,
+		MaxPreExecResetDelay:  maxPreExecResetDelay,
+		MinPreExecIdleTimeout: minPreExecIdleTimeout,
+		MaxPreExecIdleTimeout: maxPreExecIdleTimeout,
+		MaxMessageTemplates:   maxMessageTemplates,
+		MaxTemplateNameLen:    maxTemplateNameLen,
+		MaxTemplateMessageLen: maxTemplateMessageLen,
 	}
 }
 

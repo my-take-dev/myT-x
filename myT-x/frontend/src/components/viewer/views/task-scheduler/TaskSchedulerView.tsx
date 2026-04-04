@@ -14,8 +14,9 @@ import {TaskSchedulerList} from "./TaskSchedulerList";
 import {TaskSchedulerForm} from "./TaskSchedulerForm";
 import {TaskSchedulerConfig} from "./TaskSchedulerConfig";
 import {TaskSchedulerAlert} from "./TaskSchedulerAlert";
+import {TaskSchedulerSettingsPanel} from "./TaskSchedulerSettings";
 
-type Screen = "list" | "form" | "config" | "alert";
+type Screen = "list" | "form" | "config" | "alert" | "settings";
 
 export function TaskSchedulerView() {
     const {language, t} = useI18n();
@@ -68,6 +69,11 @@ export function TaskSchedulerView() {
         setScreen("config");
     }, [hook.setError]);
 
+    const handleOpenSettings = useCallback(() => {
+        hook.setError(null);
+        setScreen("settings");
+    }, [hook.setError]);
+
     const handleStart = useCallback(async (config: QueueConfig, items: QueueItem[]) => {
         const ok = await hook.start(config, items);
         if (ok) {
@@ -92,7 +98,7 @@ export function TaskSchedulerView() {
     return (
         <ViewerPanelShell
             className="task-scheduler-view"
-            title={tr("viewer.taskScheduler.title", "タスクスケジューラ", "Task Scheduler")}
+            title={tr("viewer.taskScheduler.title", "\u30bf\u30b9\u30af\u30b9\u30b1\u30b8\u30e5\u30fc\u30e9", "Task Scheduler")}
             onClose={closeView}
             onRefresh={hook.refreshStatus}
         >
@@ -101,7 +107,7 @@ export function TaskSchedulerView() {
                     <div className="task-scheduler-error">
                         <span>{hook.error}</span>
                         <button type="button" onClick={() => hook.setError(null)}>
-                            {tr("viewer.taskScheduler.dismiss", "閉じる", "Dismiss")}
+                            {tr("viewer.taskScheduler.dismiss", "\u9589\u3058\u308b", "Dismiss")}
                         </button>
                     </div>
                 )}
@@ -116,6 +122,7 @@ export function TaskSchedulerView() {
                         onStop={hook.stop}
                         onPause={hook.pause}
                         onResume={hook.resume}
+                        onSettings={handleOpenSettings}
                         isRunning={isRunning}
                     />
                 )}
@@ -123,6 +130,7 @@ export function TaskSchedulerView() {
                 {screen === "form" && (
                     <TaskSchedulerForm
                         availablePanes={hook.availablePanes}
+                        messageTemplates={hook.settings?.message_templates ?? []}
                         editingItem={editingItemID && hook.status
                             ? hook.status.items.find((i) => i.id === editingItemID) ?? null
                             : null
@@ -143,7 +151,17 @@ export function TaskSchedulerView() {
                     <TaskSchedulerConfig
                         items={hook.status?.items ?? []}
                         initialConfig={hook.status?.config ?? null}
+                        savedSettings={hook.settings}
                         onStart={handleStart}
+                        onBack={handleBack}
+                        onOpenSettings={handleOpenSettings}
+                    />
+                )}
+
+                {screen === "settings" && (
+                    <TaskSchedulerSettingsPanel
+                        initialSettings={hook.settings}
+                        onSave={hook.saveSettings}
                         onBack={handleBack}
                     />
                 )}

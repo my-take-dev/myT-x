@@ -140,8 +140,8 @@ func (r *CommandRouter) handleResizePane(req ipc.TmuxRequest) ipc.TmuxResponse {
 		fallbackRows = preCtx.PaneHeight
 	}
 
-	cols := mustInt(req.Flags["-x"], fallbackCols)
-	rows := mustInt(req.Flags["-y"], fallbackRows)
+	cols := resolveDimension(req.Flags["-x"], fallbackCols, fallbackCols)
+	rows := resolveDimension(req.Flags["-y"], fallbackRows, fallbackRows)
 
 	if resizeErr := r.sessions.ResizePane(target.IDString(), cols, rows); resizeErr != nil {
 		return errResp(resizeErr)

@@ -55,6 +55,14 @@ export function DetachSession(arg1:string):Promise<void>;
 
 export function DevPanelCommitDiff(arg1:string,arg2:string):Promise<string>;
 
+export function DevPanelCreateDirectory(arg1:string,arg2:string):Promise<void>;
+
+export function DevPanelCreateFile(arg1:string,arg2:string):Promise<devpanel.WriteFileResult>;
+
+export function DevPanelDeleteFile(arg1:string,arg2:string):Promise<void>;
+
+export function DevPanelGetFileInfo(arg1:string,arg2:string):Promise<devpanel.FileMetadata>;
+
 export function DevPanelGitCommit(arg1:string,arg2:string):Promise<devpanel.CommitResult>;
 
 export function DevPanelGitDiscard(arg1:string,arg2:string):Promise<void>;
@@ -83,9 +91,17 @@ export function DevPanelListDir(arg1:string,arg2:string):Promise<Array<devpanel.
 
 export function DevPanelReadFile(arg1:string,arg2:string):Promise<devpanel.FileContent>;
 
+export function DevPanelRenameFile(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function DevPanelSearchFiles(arg1:string,arg2:string):Promise<Array<devpanel.SearchFileResult>>;
 
+export function DevPanelStartWatcher(arg1:string):Promise<void>;
+
+export function DevPanelStopWatcher(arg1:string):Promise<void>;
+
 export function DevPanelWorkingDiff(arg1:string):Promise<devpanel.WorkingDiffResult>;
+
+export function DevPanelWriteFile(arg1:string,arg2:string,arg3:string):Promise<devpanel.WriteFileResult>;
 
 export function EnsureUnaffiliatedTeam(arg1:string,arg2:string):Promise<orchestrator.TeamDefinition>;
 
@@ -124,6 +140,8 @@ export function GetSessionEnv(arg1:string):Promise<Record<string, string>>;
 export function GetSessionErrorLog():Promise<Array<sessionlog.Entry>>;
 
 export function GetSessionLogFilePath():Promise<string>;
+
+export function GetTaskSchedulerSettings():Promise<config.TaskSchedulerConfig>;
 
 export function GetTaskSchedulerStatus():Promise<taskscheduler.QueueStatus>;
 
@@ -196,6 +214,8 @@ export function SaveConfig(arg1:config.Config):Promise<void>;
 export function SaveOrchestratorTeam(arg1:orchestrator.TeamDefinition,arg2:string):Promise<void>;
 
 export function SaveSchedulerTemplate(arg1:string,arg2:scheduler.Template):Promise<void>;
+
+export function SaveTaskSchedulerSettings(arg1:config.TaskSchedulerConfig):Promise<void>;
 
 export function SaveUnaffiliatedTeamMembers(arg1:Array<orchestrator.TeamMember>,arg2:string):Promise<void>;
 

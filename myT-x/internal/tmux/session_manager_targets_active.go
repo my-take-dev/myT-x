@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -130,6 +131,25 @@ func findWindowByID(windows []*TmuxWindow, activeWindowID int) (window *TmuxWind
 		}
 	}
 	return window, fallback
+}
+
+func resolveWindowByTargetID(windows []*TmuxWindow, windowPart string) (*TmuxWindow, error) {
+	windowPart = strings.TrimSpace(windowPart)
+	windowIDText := windowPart
+	if after, ok := strings.CutPrefix(windowPart, "@"); ok {
+		windowIDText = strings.TrimSpace(after)
+	}
+
+	windowID, err := strconv.Atoi(windowIDText)
+	if err != nil || windowID < 0 {
+		return nil, fmt.Errorf("invalid window id: %s", windowPart)
+	}
+
+	window, _ := findWindowByID(windows, windowID)
+	if window == nil {
+		return nil, fmt.Errorf("window id not found: %d", windowID)
+	}
+	return window, nil
 }
 
 // activeWindowInSessionLocked resolves the active window under exclusive Lock.

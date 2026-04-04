@@ -266,6 +266,12 @@ func (r *CommandRouter) applyPaneTitle(target *TmuxPane, fallbackSessionName str
 }
 
 func (r *CommandRouter) handleSelectPane(req ipc.TmuxRequest) ipc.TmuxResponse {
+	if paneStyle, ok := req.Flags["-P"]; ok {
+		slog.Debug("[DEBUG-SELECTPANE] select-pane -P ignored (style unsupported)",
+			"style", mustString(paneStyle),
+		)
+	}
+
 	targetSpecified := strings.TrimSpace(mustString(req.Flags["-t"])) != ""
 	directionalSelection := hasSelectPaneDirectionalFlag(req)
 	title, hasPaneTitle := selectPaneTitle(req)

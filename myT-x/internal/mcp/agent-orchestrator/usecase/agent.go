@@ -43,6 +43,7 @@ type AgentEntry struct {
 	PaneID string
 	Role   string
 	Skills []domain.Skill
+	Status string
 }
 
 // OrchestratorEntry はオーケストレーター情報。
@@ -53,6 +54,7 @@ type OrchestratorEntry struct {
 // AgentService はエージェントの登録・一覧を管理する。
 type AgentService struct {
 	agents      domain.AgentRepository
+	statuses    domain.AgentStatusRepository
 	resolver    domain.SelfPaneResolver
 	lister      domain.PaneLister
 	titleSetter domain.PaneTitleSetter
@@ -62,6 +64,7 @@ type AgentService struct {
 // NewAgentService は AgentService を構築する。
 func NewAgentService(
 	agents domain.AgentRepository,
+	statuses domain.AgentStatusRepository,
 	resolver domain.SelfPaneResolver,
 	lister domain.PaneLister,
 	titleSetter domain.PaneTitleSetter,
@@ -69,6 +72,7 @@ func NewAgentService(
 ) *AgentService {
 	return &AgentService{
 		agents:      agents,
+		statuses:    statuses,
 		resolver:    resolver,
 		lister:      lister,
 		titleSetter: titleSetter,
@@ -132,6 +136,14 @@ func (s *AgentService) List(ctx context.Context) (ListAgentsResult, error) {
 	if err != nil {
 		return ListAgentsResult{}, operationError(s.logger, "failed to list agents", err)
 	}
+	statuses, err := s.statuses.ListAgentStatuses(ctx)
+	if err != nil {
+		return ListAgentsResult{}, operationError(s.logger, "failed to list agent statuses", err)
+	}
+	statusByAgent := make(map[string]string, len(statuses))
+	for _, status := range statuses {
+		statusByAgent[status.AgentName] = status.Status
+	}
 
 	registeredPaneIDs := make(map[string]bool)
 	var result ListAgentsResult
@@ -146,11 +158,16 @@ func (s *AgentService) List(ctx context.Context) (ListAgentsResult, error) {
 		if a.Name == orchestratorAgentName {
 			result.Orchestrator = &OrchestratorEntry{PaneID: a.PaneID}
 		} else {
+			agentStatus := statusByAgent[a.Name]
+			if agentStatus == "" {
+				agentStatus = domain.AgentWorkStatusUnknown
+			}
 			result.Agents = append(result.Agents, AgentEntry{
 				Name:   a.Name,
 				PaneID: a.PaneID,
 				Role:   a.Role,
 				Skills: a.Skills,
+				Status: agentStatus,
 			})
 		}
 	}

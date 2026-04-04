@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"path/filepath"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -15,14 +14,10 @@ import (
 // NOTE: This file overrides the package-level function variable
 // runtimeEventsEmitFn. Do not use t.Parallel() here.
 
+// newConfigPathForAPITest is a thin wrapper over the shared newConfigPathForTest helper.
 func newConfigPathForAPITest(t *testing.T, fileName string) string {
 	t.Helper()
-	localAppData := t.TempDir()
-	t.Setenv("LOCALAPPDATA", localAppData)
-	t.Setenv("APPDATA", "")
-
-	defaultPath := config.DefaultPath()
-	return filepath.Join(filepath.Dir(defaultPath), fileName)
+	return newConfigPathForTest(t, fileName)
 }
 
 func TestSaveConfigEmitsUpdatedConfigEvent(t *testing.T) {
@@ -455,15 +450,32 @@ func TestGetValidationRules(t *testing.T) {
 	app := NewApp()
 	rules := app.GetValidationRules()
 
-	if got := reflect.TypeFor[ValidationRules]().NumField(); got != 1 {
-		t.Fatalf("ValidationRules field count = %d, want 1; update TestGetValidationRules for new fields", got)
+	if got := reflect.TypeFor[ValidationRules]().NumField(); got != 8 {
+		t.Fatalf("ValidationRules field count = %d, want 8; update TestGetValidationRules for new fields", got)
 	}
 	if rules.MinOverrideNameLen != config.MinOverrideNameLen() {
-		t.Fatalf(
-			"min_override_name_len = %d, want %d",
-			rules.MinOverrideNameLen,
-			config.MinOverrideNameLen(),
-		)
+		t.Fatalf("min_override_name_len = %d, want %d", rules.MinOverrideNameLen, config.MinOverrideNameLen())
+	}
+	if rules.MinPreExecResetDelay != minPreExecResetDelay {
+		t.Fatalf("min_pre_exec_reset_delay = %d, want %d", rules.MinPreExecResetDelay, minPreExecResetDelay)
+	}
+	if rules.MaxPreExecResetDelay != maxPreExecResetDelay {
+		t.Fatalf("max_pre_exec_reset_delay = %d, want %d", rules.MaxPreExecResetDelay, maxPreExecResetDelay)
+	}
+	if rules.MinPreExecIdleTimeout != minPreExecIdleTimeout {
+		t.Fatalf("min_pre_exec_idle_timeout = %d, want %d", rules.MinPreExecIdleTimeout, minPreExecIdleTimeout)
+	}
+	if rules.MaxPreExecIdleTimeout != maxPreExecIdleTimeout {
+		t.Fatalf("max_pre_exec_idle_timeout = %d, want %d", rules.MaxPreExecIdleTimeout, maxPreExecIdleTimeout)
+	}
+	if rules.MaxMessageTemplates != maxMessageTemplates {
+		t.Fatalf("max_message_templates = %d, want %d", rules.MaxMessageTemplates, maxMessageTemplates)
+	}
+	if rules.MaxTemplateNameLen != maxTemplateNameLen {
+		t.Fatalf("max_template_name_len = %d, want %d", rules.MaxTemplateNameLen, maxTemplateNameLen)
+	}
+	if rules.MaxTemplateMessageLen != maxTemplateMessageLen {
+		t.Fatalf("max_template_message_len = %d, want %d", rules.MaxTemplateMessageLen, maxTemplateMessageLen)
 	}
 }
 

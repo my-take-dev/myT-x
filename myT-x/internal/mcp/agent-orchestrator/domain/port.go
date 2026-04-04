@@ -17,13 +17,29 @@ type AgentRepository interface {
 	DeleteAgentsByPaneID(ctx context.Context, paneID string) error
 }
 
+// AgentStatusRepository persists the latest reported status for agents.
+type AgentStatusRepository interface {
+	UpsertAgentStatus(ctx context.Context, status AgentStatus) error
+	GetAgentStatus(ctx context.Context, agentName string) (AgentStatus, error)
+	ListAgentStatuses(ctx context.Context) ([]AgentStatus, error)
+}
+
 // TaskRepository はタスクの永続化操作を定義する。
 type TaskRepository interface {
 	CreateTask(ctx context.Context, task Task) error
+	CreateTaskGroup(ctx context.Context, group TaskGroup) error
+	DeleteTaskGroup(ctx context.Context, groupID string) error
+	CreateTaskWithDependencies(ctx context.Context, task Task, dependencyTaskIDs []string) error
 	GetTask(ctx context.Context, taskID string) (Task, error)
+	GetTaskDependencies(ctx context.Context, taskID string) ([]string, error)
 	ListTasks(ctx context.Context, filter TaskFilter) ([]Task, error)
+	ActivateReadyTasks(ctx context.Context, now string, agentName string) ([]Task, int, error)
 	CompleteTask(ctx context.Context, taskID string, responseID string, completedAt string) error
 	MarkTaskFailed(ctx context.Context, taskID string) error
+	AcknowledgeTask(ctx context.Context, taskID string, acknowledgedAt string) error
+	CancelTask(ctx context.Context, taskID string, cancelledAt string, reason string) error
+	UpdateTaskProgress(ctx context.Context, taskID string, progressPct *int, progressNote *string, progressUpdatedAt string) error
+	ExpirePendingTasks(ctx context.Context, now string) (int64, error)
 	AbandonTasksByPaneID(ctx context.Context, paneID string) error
 	EndSessionByInstanceID(ctx context.Context, instanceID string) error
 	GetTaskBySendMessageID(ctx context.Context, sendMessageID string) (Task, error)
@@ -34,6 +50,7 @@ type MessageRepository interface {
 	SaveMessage(ctx context.Context, msg TaskMessage) error
 	SaveResponse(ctx context.Context, msg TaskMessage) error
 	GetMessage(ctx context.Context, id string) (TaskMessage, error)
+	GetResponse(ctx context.Context, id string) (TaskMessage, error)
 }
 
 // InstanceRegistry は MCP インスタンスの生存追跡とstaleデータのクリーンアップを提供する。

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
@@ -136,6 +137,12 @@ func TestDeleteAgentsByPaneID(t *testing.T) {
 	st.UpsertAgent(ctx, domain.Agent{Name: "a", PaneID: "%1"})
 	st.UpsertAgent(ctx, domain.Agent{Name: "b", PaneID: "%1"})
 	st.UpsertAgent(ctx, domain.Agent{Name: "c", PaneID: "%2"})
+	if err := st.UpsertAgentStatus(ctx, domain.AgentStatus{AgentName: "a", Status: domain.AgentWorkStatusBusy, UpdatedAt: "2026-04-02T10:00:00Z"}); err != nil {
+		t.Fatalf("UpsertAgentStatus(a): %v", err)
+	}
+	if err := st.UpsertAgentStatus(ctx, domain.AgentStatus{AgentName: "c", Status: domain.AgentWorkStatusIdle, UpdatedAt: "2026-04-02T10:00:00Z"}); err != nil {
+		t.Fatalf("UpsertAgentStatus(c): %v", err)
+	}
 
 	if err := st.DeleteAgentsByPaneID(ctx, "%1"); err != nil {
 		t.Fatalf("DeleteAgentsByPaneID: %v", err)
@@ -144,6 +151,14 @@ func TestDeleteAgentsByPaneID(t *testing.T) {
 	agents, _ := st.ListAgents(ctx)
 	if len(agents) != 1 || agents[0].Name != "c" {
 		t.Errorf("got %+v", agents)
+	}
+
+	statuses, err := st.ListAgentStatuses(ctx)
+	if err != nil {
+		t.Fatalf("ListAgentStatuses: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].AgentName != "c" {
+		t.Fatalf("statuses = %+v", statuses)
 	}
 }
 
@@ -313,6 +328,7 @@ func TestAbandonTasksByPaneID(t *testing.T) {
 	st.UpsertAgent(ctx, domain.Agent{Name: "a", PaneID: "%1"})
 	st.UpsertAgent(ctx, domain.Agent{Name: "b", PaneID: "%2"})
 	st.CreateTask(ctx, domain.Task{ID: "t-1", AgentName: "a", AssigneePaneID: "%1", Status: "pending", SentAt: "2026-03-07T10:00:00Z"})
+	st.CreateTask(ctx, domain.Task{ID: "t-1b", AgentName: "a", AssigneePaneID: "%1", Status: "blocked", SentAt: "2026-03-07T10:30:00Z"})
 	st.CreateTask(ctx, domain.Task{ID: "t-2", AgentName: "a", Status: "completed", SentAt: "2026-03-07T11:00:00Z"})
 	st.CreateTask(ctx, domain.Task{ID: "t-3", AgentName: "b", Status: "pending", SentAt: "2026-03-07T12:00:00Z"})
 
@@ -326,6 +342,10 @@ func TestAbandonTasksByPaneID(t *testing.T) {
 
 	if t1.Status != "abandoned" {
 		t.Errorf("t-1 status = %s, want abandoned", t1.Status)
+	}
+	t1b, _ := st.GetTask(ctx, "t-1b")
+	if t1b.Status != "abandoned" {
+		t.Errorf("t-1b status = %s, want abandoned", t1b.Status)
 	}
 	if t2.Status != "completed" {
 		t.Errorf("t-2 status = %s, want completed (should not change)", t2.Status)
@@ -583,6 +603,15 @@ func TestCleanupStaleAgents(t *testing.T) {
 	st.UpsertAgent(ctx, domain.Agent{Name: "alive-agent", PaneID: "%1", MCPInstanceID: "mcp-alive"})
 	st.UpsertAgent(ctx, domain.Agent{Name: "stale-agent", PaneID: "%2", MCPInstanceID: "mcp-dead"})
 	st.UpsertAgent(ctx, domain.Agent{Name: "legacy-agent", PaneID: "%3"}) // MCPInstanceID なし（旧データ）
+	if err := st.UpsertAgentStatus(ctx, domain.AgentStatus{AgentName: "alive-agent", Status: domain.AgentWorkStatusBusy, UpdatedAt: "2026-04-02T10:00:00Z"}); err != nil {
+		t.Fatalf("UpsertAgentStatus(alive-agent): %v", err)
+	}
+	if err := st.UpsertAgentStatus(ctx, domain.AgentStatus{AgentName: "stale-agent", Status: domain.AgentWorkStatusIdle, UpdatedAt: "2026-04-02T10:00:00Z"}); err != nil {
+		t.Fatalf("UpsertAgentStatus(stale-agent): %v", err)
+	}
+	if err := st.UpsertAgentStatus(ctx, domain.AgentStatus{AgentName: "legacy-agent", Status: domain.AgentWorkStatusIdle, UpdatedAt: "2026-04-02T10:00:00Z"}); err != nil {
+		t.Fatalf("UpsertAgentStatus(legacy-agent): %v", err)
+	}
 
 	n, err := st.CleanupStaleAgents(ctx, []string{"mcp-alive"})
 	if err != nil {
@@ -600,6 +629,14 @@ func TestCleanupStaleAgents(t *testing.T) {
 	if agents[0].Name != "alive-agent" {
 		t.Fatalf("expected alive-agent, got %s", agents[0].Name)
 	}
+
+	statuses, err := st.ListAgentStatuses(ctx)
+	if err != nil {
+		t.Fatalf("ListAgentStatuses: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].AgentName != "alive-agent" {
+		t.Fatalf("statuses = %+v", statuses)
+	}
 }
 
 func TestCleanupStaleAgentsNoActiveInstances(t *testing.T) {
@@ -608,6 +645,12 @@ func TestCleanupStaleAgentsNoActiveInstances(t *testing.T) {
 
 	st.UpsertAgent(ctx, domain.Agent{Name: "agent1", PaneID: "%1", MCPInstanceID: "mcp-dead"})
 	st.UpsertAgent(ctx, domain.Agent{Name: "legacy", PaneID: "%2"})
+	if err := st.UpsertAgentStatus(ctx, domain.AgentStatus{AgentName: "agent1", Status: domain.AgentWorkStatusBusy, UpdatedAt: "2026-04-02T10:00:00Z"}); err != nil {
+		t.Fatalf("UpsertAgentStatus(agent1): %v", err)
+	}
+	if err := st.UpsertAgentStatus(ctx, domain.AgentStatus{AgentName: "legacy", Status: domain.AgentWorkStatusIdle, UpdatedAt: "2026-04-02T10:00:00Z"}); err != nil {
+		t.Fatalf("UpsertAgentStatus(legacy): %v", err)
+	}
 
 	n, err := st.CleanupStaleAgents(ctx, []string{})
 	if err != nil {
@@ -622,6 +665,14 @@ func TestCleanupStaleAgentsNoActiveInstances(t *testing.T) {
 	if len(agents) != 0 {
 		t.Fatalf("expected no remaining agents, got %v", agents)
 	}
+
+	statuses, err := st.ListAgentStatuses(ctx)
+	if err != nil {
+		t.Fatalf("ListAgentStatuses: %v", err)
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("expected no remaining statuses, got %+v", statuses)
+	}
 }
 
 func TestCleanupStaleTasks(t *testing.T) {
@@ -633,6 +684,7 @@ func TestCleanupStaleTasks(t *testing.T) {
 
 	st.CreateTask(ctx, domain.Task{ID: "t-alive", AgentName: "a1", SenderInstanceID: "mcp-alive", Status: "pending", SentAt: "2026-01-01T00:00:00Z"})
 	st.CreateTask(ctx, domain.Task{ID: "t-stale", AgentName: "a2", SenderInstanceID: "mcp-dead", Status: "pending", SentAt: "2026-01-01T00:00:00Z"})
+	st.CreateTask(ctx, domain.Task{ID: "t-stale-blocked", AgentName: "a2", SenderInstanceID: "mcp-dead", Status: "blocked", SentAt: "2026-01-01T00:30:00Z"})
 	st.CreateTask(ctx, domain.Task{ID: "t-legacy", AgentName: "a1", Status: "pending", SentAt: "2026-01-01T00:00:00Z"})
 	st.CreateTask(ctx, domain.Task{ID: "t-done", AgentName: "a2", SenderInstanceID: "mcp-dead", Status: "completed", SentAt: "2026-01-01T00:00:00Z"})
 
@@ -640,14 +692,18 @@ func TestCleanupStaleTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CleanupStaleTasks: %v", err)
 	}
-	// Both t-stale (dead instance) and t-legacy (NULL instance) are abandoned.
-	if n != 2 {
-		t.Fatalf("expected 2 abandoned, got %d", n)
+	// t-stale, t-stale-blocked, and t-legacy are abandoned.
+	if n != 3 {
+		t.Fatalf("expected 3 abandoned, got %d", n)
 	}
 
 	task, _ := st.GetTask(ctx, "t-stale")
 	if task.Status != "abandoned" {
 		t.Fatalf("expected t-stale to be abandoned, got %s", task.Status)
+	}
+	blockedTask, _ := st.GetTask(ctx, "t-stale-blocked")
+	if blockedTask.Status != "abandoned" {
+		t.Fatalf("expected t-stale-blocked to be abandoned, got %s", blockedTask.Status)
 	}
 
 	// alive task should remain pending
@@ -666,6 +722,30 @@ func TestCleanupStaleTasks(t *testing.T) {
 	doneTask, _ := st.GetTask(ctx, "t-done")
 	if doneTask.Status != "completed" {
 		t.Fatalf("expected t-done to remain completed, got %s", doneTask.Status)
+	}
+}
+
+func TestCleanupStaleTasksWithoutActiveInstancesAbandonsBlockedTasks(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	st.UpsertAgent(ctx, domain.Agent{Name: "a1", PaneID: "%1"})
+	st.CreateTask(ctx, domain.Task{ID: "t-blocked", AgentName: "a1", Status: "blocked", SentAt: "2026-01-01T00:00:00Z"})
+
+	n, err := st.CleanupStaleTasks(ctx, nil)
+	if err != nil {
+		t.Fatalf("CleanupStaleTasks: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 abandoned, got %d", n)
+	}
+
+	task, err := st.GetTask(ctx, "t-blocked")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Status != "abandoned" {
+		t.Fatalf("expected t-blocked to be abandoned, got %s", task.Status)
 	}
 }
 
@@ -705,8 +785,328 @@ func TestDomainAgentFieldCount(t *testing.T) {
 }
 
 func TestDomainTaskFieldCount(t *testing.T) {
-	if got := reflect.TypeFor[domain.Task]().NumField(); got != 12 {
-		t.Fatalf("domain.Task has %d fields (expected 12). Update GetTask/ListTasks scan logic and this constant.", got)
+	if got := reflect.TypeFor[domain.Task]().NumField(); got != 20 {
+		t.Fatalf("domain.Task has %d fields (expected 20). Update GetTask/ListTasks scan logic and this constant.", got)
+	}
+}
+
+func TestTaskExtendedFieldsRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.UpsertAgent(ctx, domain.Agent{Name: "worker", PaneID: "%1"}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	if err := st.CreateTask(ctx, domain.Task{
+		ID:        "t-extended",
+		AgentName: "worker",
+		Status:    domain.TaskStatusPending,
+		SentAt:    "2026-04-02T10:00:00Z",
+		ExpiresAt: "2026-04-02T11:00:00Z",
+		GroupID:   "g-001",
+	}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	progressPct := 60
+	progressNote := "tests 4/7 complete"
+	if err := st.AcknowledgeTask(ctx, "t-extended", "2026-04-02T10:01:00Z"); err != nil {
+		t.Fatalf("AcknowledgeTask: %v", err)
+	}
+	if err := st.UpdateTaskProgress(ctx, "t-extended", &progressPct, &progressNote, "2026-04-02T10:03:00Z"); err != nil {
+		t.Fatalf("UpdateTaskProgress: %v", err)
+	}
+
+	got, err := st.GetTask(ctx, "t-extended")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.AcknowledgedAt != "2026-04-02T10:01:00Z" {
+		t.Fatalf("AcknowledgedAt = %q", got.AcknowledgedAt)
+	}
+	if got.ProgressPct == nil || *got.ProgressPct != 60 {
+		t.Fatalf("ProgressPct = %v", got.ProgressPct)
+	}
+	if got.ProgressNote != progressNote {
+		t.Fatalf("ProgressNote = %q", got.ProgressNote)
+	}
+	if got.ProgressUpdatedAt != "2026-04-02T10:03:00Z" {
+		t.Fatalf("ProgressUpdatedAt = %q", got.ProgressUpdatedAt)
+	}
+	if got.ExpiresAt != "2026-04-02T11:00:00Z" {
+		t.Fatalf("ExpiresAt = %q", got.ExpiresAt)
+	}
+	if got.GroupID != "g-001" {
+		t.Fatalf("GroupID = %q", got.GroupID)
+	}
+}
+
+func TestCancelTaskAllowsBlockedStatus(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.UpsertAgent(ctx, domain.Agent{Name: "worker", PaneID: "%1"}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	if err := st.CreateTask(ctx, domain.Task{
+		ID:        "t-blocked",
+		AgentName: "worker",
+		Status:    domain.TaskStatusBlocked,
+		SentAt:    "2026-04-02T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	if err := st.CancelTask(ctx, "t-blocked", "2026-04-02T10:05:00Z", "no longer needed"); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+
+	got, err := st.GetTask(ctx, "t-blocked")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Status != domain.TaskStatusCancelled {
+		t.Fatalf("Status = %q", got.Status)
+	}
+	if got.CancelledAt != "2026-04-02T10:05:00Z" || got.CompletedAt != "2026-04-02T10:05:00Z" {
+		t.Fatalf("timestamps = cancelled:%q completed:%q", got.CancelledAt, got.CompletedAt)
+	}
+	if got.CancelReason != "no longer needed" {
+		t.Fatalf("CancelReason = %q", got.CancelReason)
+	}
+}
+
+func TestCancelTaskRejectsCompletedAndFailedStatuses(t *testing.T) {
+	tests := []struct {
+		name   string
+		taskID string
+		status string
+	}{
+		{name: "completed", taskID: "t-completed", status: domain.TaskStatusCompleted},
+		{name: "failed", taskID: "t-failed", status: domain.TaskStatusFailed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newTestStore(t)
+			ctx := context.Background()
+
+			if err := st.UpsertAgent(ctx, domain.Agent{Name: "worker", PaneID: "%1"}); err != nil {
+				t.Fatalf("UpsertAgent: %v", err)
+			}
+			if err := st.CreateTask(ctx, domain.Task{
+				ID:        tt.taskID,
+				AgentName: "worker",
+				Status:    tt.status,
+				SentAt:    "2026-04-02T10:00:00Z",
+			}); err != nil {
+				t.Fatalf("CreateTask: %v", err)
+			}
+
+			err := st.CancelTask(ctx, tt.taskID, "2026-04-02T10:05:00Z", "should fail")
+			if err == nil || !strings.Contains(err.Error(), tt.status) {
+				t.Fatalf("CancelTask error = %v, want status %q", err, tt.status)
+			}
+
+			got, getErr := st.GetTask(ctx, tt.taskID)
+			if getErr != nil {
+				t.Fatalf("GetTask: %v", getErr)
+			}
+			if got.Status != tt.status {
+				t.Fatalf("Status = %q, want %q", got.Status, tt.status)
+			}
+		})
+	}
+}
+
+func TestCreateTaskWithDependenciesAndActivation(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.UpsertAgent(ctx, domain.Agent{Name: "worker", PaneID: "%1"}); err != nil {
+		t.Fatalf("UpsertAgent(worker): %v", err)
+	}
+	if err := st.CreateTask(ctx, domain.Task{
+		ID:        "t-dep-done",
+		AgentName: "worker",
+		Status:    domain.TaskStatusCompleted,
+		SentAt:    "2026-04-02T09:50:00Z",
+	}); err != nil {
+		t.Fatalf("CreateTask(dep-done): %v", err)
+	}
+	if err := st.CreateTask(ctx, domain.Task{
+		ID:        "t-dep-open",
+		AgentName: "worker",
+		Status:    domain.TaskStatusPending,
+		SentAt:    "2026-04-02T09:55:00Z",
+	}); err != nil {
+		t.Fatalf("CreateTask(dep-open): %v", err)
+	}
+	if err := st.CreateTaskWithDependencies(ctx, domain.Task{
+		ID:        "t-ready",
+		AgentName: "worker",
+		Status:    domain.TaskStatusBlocked,
+		SentAt:    "2026-04-02T10:00:00Z",
+	}, []string{"t-dep-done"}); err != nil {
+		t.Fatalf("CreateTaskWithDependencies(ready): %v", err)
+	}
+	if err := st.CreateTaskWithDependencies(ctx, domain.Task{
+		ID:        "t-blocked",
+		AgentName: "worker",
+		Status:    domain.TaskStatusBlocked,
+		SentAt:    "2026-04-02T10:01:00Z",
+	}, []string{"t-dep-open"}); err != nil {
+		t.Fatalf("CreateTaskWithDependencies(blocked): %v", err)
+	}
+
+	dependencyTaskIDs, err := st.GetTaskDependencies(ctx, "t-ready")
+	if err != nil {
+		t.Fatalf("GetTaskDependencies: %v", err)
+	}
+	if !reflect.DeepEqual(dependencyTaskIDs, []string{"t-dep-done"}) {
+		t.Fatalf("dependencyTaskIDs = %v", dependencyTaskIDs)
+	}
+
+	activated, stillBlocked, err := st.ActivateReadyTasks(ctx, "2026-04-02T10:05:00Z", "worker")
+	if err != nil {
+		t.Fatalf("ActivateReadyTasks: %v", err)
+	}
+	if len(activated) != 1 || activated[0].ID != "t-ready" {
+		t.Fatalf("activated = %+v", activated)
+	}
+	if stillBlocked != 1 {
+		t.Fatalf("stillBlocked = %d, want 1", stillBlocked)
+	}
+	readyTask, err := st.GetTask(ctx, "t-ready")
+	if err != nil {
+		t.Fatalf("GetTask(t-ready): %v", err)
+	}
+	if readyTask.Status != domain.TaskStatusPending {
+		t.Fatalf("ready task status = %q", readyTask.Status)
+	}
+	blockedTask, err := st.GetTask(ctx, "t-blocked")
+	if err != nil {
+		t.Fatalf("GetTask(t-blocked): %v", err)
+	}
+	if blockedTask.Status != domain.TaskStatusBlocked {
+		t.Fatalf("blocked task status = %q", blockedTask.Status)
+	}
+}
+
+func TestCreateTaskWithDependenciesRejectsMissingDependency(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.UpsertAgent(ctx, domain.Agent{Name: "worker", PaneID: "%1"}); err != nil {
+		t.Fatalf("UpsertAgent(worker): %v", err)
+	}
+
+	err := st.CreateTaskWithDependencies(ctx, domain.Task{
+		ID:        "t-invalid",
+		AgentName: "worker",
+		Status:    domain.TaskStatusBlocked,
+		SentAt:    "2026-04-02T10:00:00Z",
+	}, []string{"t-missing"})
+	if err == nil || !strings.Contains(err.Error(), "dependency task \"t-missing\" not found") {
+		t.Fatalf("CreateTaskWithDependencies error = %v", err)
+	}
+}
+
+func TestActivateReadyTasksCancelsBrokenDependencies(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.UpsertAgent(ctx, domain.Agent{Name: "worker", PaneID: "%1"}); err != nil {
+		t.Fatalf("UpsertAgent(worker): %v", err)
+	}
+	if err := st.CreateTask(ctx, domain.Task{
+		ID:        "t-dep-cancelled",
+		AgentName: "worker",
+		Status:    domain.TaskStatusCancelled,
+		SentAt:    "2026-04-02T09:50:00Z",
+	}); err != nil {
+		t.Fatalf("CreateTask(dep-cancelled): %v", err)
+	}
+	if err := st.CreateTaskWithDependencies(ctx, domain.Task{
+		ID:        "t-broken",
+		AgentName: "worker",
+		Status:    domain.TaskStatusBlocked,
+		SentAt:    "2026-04-02T10:00:00Z",
+	}, []string{"t-dep-cancelled"}); err != nil {
+		t.Fatalf("CreateTaskWithDependencies(broken): %v", err)
+	}
+
+	activated, stillBlocked, err := st.ActivateReadyTasks(ctx, "2026-04-02T10:05:00Z", "worker")
+	if err != nil {
+		t.Fatalf("ActivateReadyTasks: %v", err)
+	}
+	if len(activated) != 0 {
+		t.Fatalf("activated = %+v", activated)
+	}
+	if stillBlocked != 0 {
+		t.Fatalf("stillBlocked = %d, want 0", stillBlocked)
+	}
+
+	brokenTask, err := st.GetTask(ctx, "t-broken")
+	if err != nil {
+		t.Fatalf("GetTask(t-broken): %v", err)
+	}
+	if brokenTask.Status != domain.TaskStatusCancelled {
+		t.Fatalf("broken task status = %q", brokenTask.Status)
+	}
+	if brokenTask.CancelReason == "" {
+		t.Fatal("CancelReason should be populated")
+	}
+}
+
+func TestExpirePendingTasks(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.UpsertAgent(ctx, domain.Agent{Name: "worker", PaneID: "%1"}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	if err := st.CreateTask(ctx, domain.Task{
+		ID:        "t-expired",
+		AgentName: "worker",
+		Status:    domain.TaskStatusPending,
+		SentAt:    "2026-04-02T10:00:00Z",
+		ExpiresAt: "2026-04-02T10:05:00Z",
+	}); err != nil {
+		t.Fatalf("CreateTask(expired): %v", err)
+	}
+	if err := st.CreateTask(ctx, domain.Task{
+		ID:        "t-active",
+		AgentName: "worker",
+		Status:    domain.TaskStatusPending,
+		SentAt:    "2026-04-02T10:00:00Z",
+		ExpiresAt: "2026-04-02T10:20:00Z",
+	}); err != nil {
+		t.Fatalf("CreateTask(active): %v", err)
+	}
+
+	expired, err := st.ExpirePendingTasks(ctx, "2026-04-02T10:10:00Z")
+	if err != nil {
+		t.Fatalf("ExpirePendingTasks: %v", err)
+	}
+	if expired != 1 {
+		t.Fatalf("expired = %d, want 1", expired)
+	}
+
+	expiredTask, err := st.GetTask(ctx, "t-expired")
+	if err != nil {
+		t.Fatalf("GetTask(t-expired): %v", err)
+	}
+	if expiredTask.Status != domain.TaskStatusExpired {
+		t.Fatalf("expired task status = %q", expiredTask.Status)
+	}
+
+	activeTask, err := st.GetTask(ctx, "t-active")
+	if err != nil {
+		t.Fatalf("GetTask(t-active): %v", err)
+	}
+	if activeTask.Status != domain.TaskStatusPending {
+		t.Fatalf("active task status = %q", activeTask.Status)
 	}
 }
 

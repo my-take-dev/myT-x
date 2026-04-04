@@ -38,6 +38,7 @@ Press the prefix key → "PREFIX" appears in the status bar → Press the action
 
 | Key | Viewer |
 |-----|--------|
+| `Ctrl+Shift+W` | Editor |
 | `Ctrl+Shift+E` | File Tree |
 | `Ctrl+Shift+G` | Git Graph |
 | `Ctrl+Shift+D` | Diff |

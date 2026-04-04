@@ -26,6 +26,7 @@ import {useIsViewerDocked} from "./useIsViewerDocked";
 // 5. position: "bottom" は error-log 専用です。他のビューには使用しないでください。
 
 import "./views/file-tree";
+import "./views/editor";
 import "./views/git-graph";
 import "./views/diff-view";
 import "./views/input-history"; // DIFFの直下に配置

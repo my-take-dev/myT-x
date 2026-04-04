@@ -116,10 +116,20 @@ func (a *App) startup(ctx context.Context) {
 			if a.mcpManager != nil {
 				a.mcpManager.CleanupSession(sessionName)
 			}
+			if a.devpanelService != nil {
+				if err := a.devpanelService.CleanupSession(sessionName); err != nil {
+					slog.Warn("[DEVPANEL] session cleanup failed", "session", sessionName, "error", err)
+				}
+			}
 		},
 		OnSessionRenamed: func(oldName, _ string) {
 			if a.mcpManager != nil {
 				a.mcpManager.CleanupSession(oldName)
+			}
+			if a.devpanelService != nil {
+				if err := a.devpanelService.CleanupSession(oldName); err != nil {
+					slog.Warn("[DEVPANEL] session cleanup failed after rename", "session", oldName, "error", err)
+				}
 			}
 		},
 		ResolveMCPStdio:     a.ResolveMCPStdio,
@@ -280,6 +290,11 @@ func (a *App) shutdown(_ context.Context) {
 	if a.wsHub != nil {
 		if err := a.wsHub.Stop(); err != nil {
 			runtimeLogger.Warningf(logCtx, "websocket server stop failed: %v", err)
+		}
+	}
+	if a.devpanelService != nil {
+		if err := a.devpanelService.StopAllWatchers(); err != nil {
+			runtimeLogger.Warningf(logCtx, "devpanel watcher stop failed: %v", err)
 		}
 	}
 	if a.mcpManager != nil {

@@ -27,13 +27,18 @@
 }
 
 .diff-file-toggle {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 1em;
     margin-right: 4px;
-    font-size: 0.65em;
-    text-align: center;
-    /* Prevent layout shift between ▶ and ▼ glyphs */
     flex-shrink: 0;
+    color: var(--fg-dim);
+    transition: transform 0.15s ease;
+}
+
+.diff-file-toggle.expanded {
+    transform: rotate(90deg);
 }
 
 .diff-file-header:hover {
@@ -266,11 +271,12 @@
 }
 
 .staging-group-arrow {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 12px;
-    font-size: 0.6rem;
-    transition: transform 0.15s;
     color: var(--fg-dim);
+    transition: transform 0.15s ease;
 }
 
 .staging-group-arrow.expanded {

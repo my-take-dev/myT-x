@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,6 +12,19 @@ import (
 	"myT-x/internal/session"
 	"myT-x/internal/tmux"
 )
+
+// newConfigPathForTest sets up a temporary LOCALAPPDATA directory and returns
+// a config file path under the standard config directory for the given fileName.
+// This is the shared version of the per-file helpers (replaces duplicates in
+// app_config_api_test.go and app_task_scheduler_settings_api_test.go).
+func newConfigPathForTest(t *testing.T, fileName string) string {
+	t.Helper()
+	localAppData := t.TempDir()
+	t.Setenv("LOCALAPPDATA", localAppData)
+	t.Setenv("APPDATA", "")
+	defaultPath := config.DefaultPath()
+	return filepath.Join(filepath.Dir(defaultPath), fileName)
+}
 
 // newConfigStateForTest creates a StateService initialized with the given
 // config path and default config. This is a shared test helper that replaces

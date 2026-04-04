@@ -143,7 +143,7 @@ func validateRequired(command string, req ipc.TmuxRequest) error {
 
 func validateNonNegativeSizeFlags(command string, req ipc.TmuxRequest) error {
 	switch command {
-	case "new-session", "resize-pane":
+	case "new-session":
 		for _, flag := range []string{"-x", "-y"} {
 			rawValue, ok := req.Flags[flag]
 			if !ok {

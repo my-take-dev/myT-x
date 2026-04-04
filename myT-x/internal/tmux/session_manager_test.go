@@ -1246,3 +1246,78 @@ func TestCreateSessionNegativeDimensionsDefaultToSane(t *testing.T) {
 		t.Fatalf("negative dimensions should default to positive values: %dx%d", pane.Width, pane.Height)
 	}
 }
+
+// TestResolveTargetWindowByID_NonZeroID verifies that bare numeric window
+// targets are resolved by window.ID (not slice index). When two sessions exist,
+// the second session's window has ID=1 but is at slice position 0 within its
+// session — the target "second:1" must resolve successfully.
+func TestResolveTargetWindowByID_NonZeroID(t *testing.T) {
+	manager := NewSessionManager()
+
+	// First session gets window ID=0.
+	if _, _, err := manager.CreateSession("first", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession(first) error = %v", err)
+	}
+
+	// Second session gets window ID=1 (nextWindowID is global).
+	_, secondPane, err := manager.CreateSession("second", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(second) error = %v", err)
+	}
+
+	// "second:1" should resolve via window.ID=1, not slice index 1.
+	resolved, resolveErr := manager.ResolveTarget("second:1", -1)
+	if resolveErr != nil {
+		t.Fatalf("ResolveTarget(%q) error = %v", "second:1", resolveErr)
+	}
+	if resolved.ID != secondPane.ID {
+		t.Fatalf("resolved pane ID = %d, want %d", resolved.ID, secondPane.ID)
+	}
+}
+
+// TestResolveTargetWindowByID_RoundTrip simulates the Claude Code Agent Teams
+// flow: format #{session_name}:#{window_index}, then use the result as a target.
+func TestResolveTargetWindowByID_RoundTrip(t *testing.T) {
+	manager := NewSessionManager()
+
+	// Create two sessions so the second has window.ID != 0.
+	if _, _, err := manager.CreateSession("first", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession(first) error = %v", err)
+	}
+	_, secondPane, err := manager.CreateSession("second", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(second) error = %v", err)
+	}
+
+	// Expand format string as display-message would.
+	formatted := expandFormatSafe("#{session_name}:#{window_index}", secondPane.ID, manager)
+	if formatted != "second:1" {
+		t.Fatalf("expandFormatSafe() = %q, want %q", formatted, "second:1")
+	}
+
+	// Use the formatted string as a target — must round-trip successfully.
+	resolved, resolveErr := manager.ResolveTarget(formatted, -1)
+	if resolveErr != nil {
+		t.Fatalf("ResolveTarget(%q) error = %v", formatted, resolveErr)
+	}
+	if resolved.ID != secondPane.ID {
+		t.Fatalf("round-trip: resolved pane ID = %d, want %d", resolved.ID, secondPane.ID)
+	}
+}
+
+// TestResolveTargetWindowByID_NotFound verifies that a non-existent window ID
+// returns a clear error.
+func TestResolveTargetWindowByID_NotFound(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	_, resolveErr := manager.ResolveTarget("demo:999", -1)
+	if resolveErr == nil {
+		t.Fatal("ResolveTarget(demo:999) expected error, got nil")
+	}
+	if !strings.Contains(resolveErr.Error(), "window id not found") {
+		t.Fatalf("error = %q, want substring %q", resolveErr.Error(), "window id not found")
+	}
+}

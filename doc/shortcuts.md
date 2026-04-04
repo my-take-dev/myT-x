@@ -38,6 +38,7 @@
 
 | キー | ビューア |
 |------|---------|
+| `Ctrl+Shift+W` | Editor（エディタ） |
 | `Ctrl+Shift+E` | File Tree（ファイルツリー） |
 | `Ctrl+Shift+G` | Git Graph（Git グラフ） |
 | `Ctrl+Shift+D` | Diff（差分ビュー） |

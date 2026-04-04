@@ -10,17 +10,32 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 	"unicode/utf8"
 
+	"myT-x/internal/apptypes"
 	gitpkg "myT-x/internal/git"
 )
 
 // maxFileSize is the maximum file size returned by ReadFile (1 MB).
 const maxFileSize int64 = 1 << 20
+
+const (
+	retryBaseDelay = 10 * time.Millisecond
+	maxRetries     = 5
+)
+
+// Windows file errors that are often transient because of antivirus/indexer locks.
+const (
+	errorAccessDenied     syscall.Errno = 5
+	errorSharingViolation syscall.Errno = 32
+)
 
 // maxDirEntries is the maximum number of directory entries returned by ListDir.
 const maxDirEntries = 5000
@@ -65,12 +80,19 @@ type Deps struct {
 	// Both path and base must be resolved (e.g. via filepath.EvalSymlinks)
 	// before calling; passing unresolved paths may produce incorrect results.
 	IsPathWithinBase func(path, base string) bool
+
+	// Emitter broadcasts frontend runtime events.
+	// Defaults to a no-op emitter when nil.
+	Emitter apptypes.RuntimeEventEmitter
 }
 
 // Service provides developer panel file/directory browsing and git operations.
-// It holds no mutable state; all external dependencies are injected via Deps.
+// External dependencies are injected via Deps; short-lived directory cache and
+// watcher lifecycle state are owned internally to reduce repeated filesystem I/O.
 type Service struct {
-	deps Deps
+	deps           Deps
+	dirCache       *DirCache
+	watcherManager *watcherManager
 }
 
 // NewService creates a new devpanel Service with the given dependencies.
@@ -79,7 +101,16 @@ func NewService(deps Deps) *Service {
 	if deps.ResolveSessionDir == nil || deps.IsPathWithinBase == nil {
 		panic("devpanel.NewService: required function fields must be non-nil (ResolveSessionDir, IsPathWithinBase)")
 	}
-	return &Service{deps: deps}
+	if deps.Emitter == nil {
+		deps.Emitter = apptypes.NoopEmitter{}
+	}
+
+	dirCache := NewDirCache(defaultDirCacheTTL)
+	return &Service{
+		deps:           deps,
+		dirCache:       dirCache,
+		watcherManager: newWatcherManager(dirCache, deps.Emitter),
+	}
 }
 
 // resolveSessionWorkDir resolves the working directory for a session.
@@ -126,12 +157,210 @@ func (s *Service) ResolveAndValidatePath(rootDir, relPath string) (string, error
 	return resolved, nil
 }
 
+// ResolveAndValidateNewPath resolves relPath relative to rootDir and validates
+// that the final target path would stay within rootDir boundaries, even when
+// the target does not exist yet.
+func (s *Service) ResolveAndValidateNewPath(rootDir, relPath string) (string, error) {
+	cleaned := filepath.Clean(relPath)
+	if !filepath.IsLocal(cleaned) {
+		return "", fmt.Errorf("path is not local (absolute, traversal, or reserved): %s", relPath)
+	}
+
+	resolvedRoot, rootErr := filepath.EvalSymlinks(rootDir)
+	if rootErr != nil {
+		return "", fmt.Errorf("failed to resolve root directory: %w", rootErr)
+	}
+
+	absPath := filepath.Join(resolvedRoot, cleaned)
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		if !s.deps.IsPathWithinBase(resolved, resolvedRoot) {
+			return "", fmt.Errorf("path escapes root directory: %s", relPath)
+		}
+		return resolved, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	ancestor := absPath
+	var missingParts []string
+	for {
+		info, err := os.Lstat(ancestor)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || info.IsDir() || ancestor == absPath {
+				resolvedAncestor, resolveErr := filepath.EvalSymlinks(ancestor)
+				if resolveErr != nil {
+					return "", fmt.Errorf("failed to resolve path ancestor: %w", resolveErr)
+				}
+
+				resolvedTarget := resolvedAncestor
+				for i := len(missingParts) - 1; i >= 0; i-- {
+					resolvedTarget = filepath.Join(resolvedTarget, missingParts[i])
+				}
+				if !s.deps.IsPathWithinBase(resolvedTarget, resolvedRoot) {
+					return "", fmt.Errorf("path escapes root directory: %s", relPath)
+				}
+				return resolvedTarget, nil
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("failed to inspect path ancestor: %w", err)
+		}
+
+		if ancestor == resolvedRoot {
+			break
+		}
+
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			break
+		}
+		missingParts = append(missingParts, filepath.Base(ancestor))
+		ancestor = parent
+	}
+
+	return "", fmt.Errorf("path escapes root directory: %s", relPath)
+}
+
+func normalizePanelPath(relPath string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(relPath))
+	if cleaned == "." {
+		return ""
+	}
+	return filepath.ToSlash(cleaned)
+}
+
+func parentPanelPath(relPath string) string {
+	normalizedPath := normalizePanelPath(relPath)
+	if normalizedPath == "" {
+		return ""
+	}
+
+	parent := filepath.ToSlash(filepath.Dir(normalizedPath))
+	if parent == "." {
+		return ""
+	}
+	return parent
+}
+
+func (s *Service) invalidateDirCache(sessionName string, paths ...string) {
+	if s.dirCache == nil {
+		return
+	}
+
+	// Avoid repeated subtree scans when a mutation touches both a path and its
+	// parent within the same operation; Invalidate itself is idempotent.
+	invalidated := make(map[string]struct{}, len(paths)*2)
+	for _, path := range paths {
+		normalizedPath := normalizePanelPath(path)
+		if _, ok := invalidated[normalizedPath]; !ok {
+			s.dirCache.Invalidate(sessionName, normalizedPath)
+			invalidated[normalizedPath] = struct{}{}
+		}
+
+		parentPath := parentPanelPath(normalizedPath)
+		if _, ok := invalidated[parentPath]; ok {
+			continue
+		}
+		s.dirCache.Invalidate(sessionName, parentPath)
+		invalidated[parentPath] = struct{}{}
+	}
+}
+
+func (s *Service) suppressWatcherPaths(sessionName string, paths ...string) {
+	if s.watcherManager == nil {
+		return
+	}
+	s.watcherManager.ignorePaths(sessionName, paths...)
+}
+
+func dirHasVisibleChildren(dirPath string) (bool, error) {
+	dir, err := os.Open(dirPath)
+	if err != nil {
+		return false, err
+	}
+	defer dir.Close()
+
+	for {
+		entries, readErr := dir.ReadDir(16)
+		for _, entry := range entries {
+			if entry.IsDir() && slices.Contains(excludedDirs, entry.Name()) {
+				continue
+			}
+			return true, nil
+		}
+		if errors.Is(readErr, io.EOF) {
+			return false, nil
+		}
+		if readErr != nil {
+			return false, readErr
+		}
+	}
+}
+
+func validateMutationPath(relPath, fieldName string) (string, error) {
+	trimmed := strings.TrimSpace(relPath)
+	if trimmed == "" {
+		return "", fmt.Errorf("%s is required", fieldName)
+	}
+
+	cleaned := filepath.Clean(trimmed)
+	if cleaned == "." {
+		return "", fmt.Errorf("%s must not refer to the session root", fieldName)
+	}
+	if !filepath.IsLocal(cleaned) {
+		return "", fmt.Errorf("%s is not local (absolute, traversal, or reserved): %s", fieldName, relPath)
+	}
+	return cleaned, nil
+}
+
+func isRetryableFileError(err error) bool {
+	if err == nil || runtime.GOOS != "windows" {
+		return false
+	}
+
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch uint32(errno) {
+		case uint32(errorAccessDenied), uint32(errorSharingViolation):
+			return true
+		}
+	}
+	return false
+}
+
+// retryFileOperation retries transient Windows file-lock failures with exponential
+// backoff (10ms, 20ms, 40ms, 80ms, 160ms; about 310ms total wait).
+func retryFileOperation(operation func() error, operationName string) error {
+	var lastErr error
+	for attempt := range maxRetries {
+		lastErr = operation()
+		if lastErr == nil {
+			return nil
+		}
+		if !isRetryableFileError(lastErr) {
+			return lastErr
+		}
+		if attempt < maxRetries-1 {
+			time.Sleep(retryBaseDelay * time.Duration(1<<attempt))
+		}
+	}
+
+	return fmt.Errorf("%s failed after %d retries: %w", operationName, maxRetries, lastErr)
+}
+
 // ListDir returns the contents of a directory within a session's working directory.
 // Directories are listed first, sorted alphabetically. Lazy-loading friendly.
 func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, error) {
 	sessionName = strings.TrimSpace(sessionName)
 	if sessionName == "" {
 		return nil, errors.New("session name is required")
+	}
+
+	normalizedDirPath := normalizePanelPath(dirPath)
+
+	if s.dirCache != nil {
+		if cachedEntries, ok := s.dirCache.Get(sessionName, normalizedDirPath); ok {
+			return cachedEntries, nil
+		}
 	}
 
 	rootDir, err := s.resolveSessionWorkDir(sessionName)
@@ -141,8 +370,8 @@ func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, erro
 
 	// For root listing, dirPath is empty or ".".
 	targetDir := rootDir
-	if dirPath != "" && dirPath != "." {
-		resolved, resolveErr := s.ResolveAndValidatePath(rootDir, dirPath)
+	if normalizedDirPath != "" {
+		resolved, resolveErr := s.ResolveAndValidatePath(rootDir, normalizedDirPath)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -187,7 +416,17 @@ func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, erro
 			IsDir: entry.IsDir(),
 		}
 
-		if !entry.IsDir() {
+		if entry.IsDir() {
+			hasChildren, hasChildrenErr := dirHasVisibleChildren(filepath.Join(targetDir, name))
+			if hasChildrenErr != nil {
+				slog.Debug("[DEVPANEL] failed to inspect directory children", "path", relPath, "error", hasChildrenErr)
+				// Preserve the expander on transient filesystem errors so the
+				// frontend stays on the safe side and can retry lazily.
+				fe.HasChildren = true
+			} else {
+				fe.HasChildren = hasChildren
+			}
+		} else {
 			if info, infoErr := entry.Info(); infoErr == nil {
 				fe.Size = info.Size()
 			}
@@ -212,6 +451,11 @@ func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, erro
 	result := make([]FileEntry, 0, len(dirs)+len(files))
 	result = append(result, dirs...)
 	result = append(result, files...)
+
+	if s.dirCache != nil {
+		s.dirCache.Set(sessionName, normalizedDirPath, result)
+	}
+
 	return result, nil
 }
 
@@ -291,6 +535,288 @@ func (s *Service) ReadFile(sessionName string, filePath string) (FileContent, er
 	result.Content = string(data)
 	result.LineCount = strings.Count(result.Content, "\n") + 1
 	return result, nil
+}
+
+// GetFileInfo returns metadata for a file-system entry within a session's working directory.
+func (s *Service) GetFileInfo(sessionName, filePath string) (FileMetadata, error) {
+	sessionName = strings.TrimSpace(sessionName)
+	filePath = strings.TrimSpace(filePath)
+	if sessionName == "" {
+		return FileMetadata{}, errors.New("session name is required")
+	}
+	if filePath == "" {
+		return FileMetadata{}, errors.New("file path is required")
+	}
+
+	rootDir, err := s.resolveSessionWorkDir(sessionName)
+	if err != nil {
+		return FileMetadata{}, err
+	}
+
+	resolved, resolveErr := s.ResolveAndValidatePath(rootDir, filePath)
+	if resolveErr != nil {
+		return FileMetadata{}, resolveErr
+	}
+
+	info, statErr := os.Stat(resolved)
+	if statErr != nil {
+		return FileMetadata{}, fmt.Errorf("failed to stat path: %w", statErr)
+	}
+
+	return FileMetadata{
+		Path:  normalizePanelPath(filePath),
+		Size:  info.Size(),
+		IsDir: info.IsDir(),
+	}, nil
+}
+
+// WriteFile writes content to a file within a session's working directory.
+func (s *Service) WriteFile(sessionName, filePath, content string) (WriteFileResult, error) {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return WriteFileResult{}, errors.New("session name is required")
+	}
+
+	cleanedPath, cleanErr := validateMutationPath(filePath, "file path")
+	if cleanErr != nil {
+		return WriteFileResult{}, cleanErr
+	}
+
+	rootDir, err := s.resolveSessionWorkDir(sessionName)
+	if err != nil {
+		return WriteFileResult{}, err
+	}
+
+	resolved, resolveErr := s.ResolveAndValidateNewPath(rootDir, cleanedPath)
+	if resolveErr != nil {
+		return WriteFileResult{}, resolveErr
+	}
+
+	if info, statErr := os.Stat(resolved); statErr == nil && info.IsDir() {
+		return WriteFileResult{}, fmt.Errorf("path is a directory, not a file: %s", cleanedPath)
+	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return WriteFileResult{}, fmt.Errorf("failed to stat path: %w", statErr)
+	}
+
+	parentDir := filepath.Dir(resolved)
+	if mkdirErr := os.MkdirAll(parentDir, 0o755); mkdirErr != nil {
+		return WriteFileResult{}, fmt.Errorf("failed to create parent directory: %w", mkdirErr)
+	}
+
+	s.suppressWatcherPaths(sessionName, cleanedPath)
+	if writeErr := retryFileOperation(func() error {
+		return os.WriteFile(resolved, []byte(content), 0o644)
+	}, "write file"); writeErr != nil {
+		return WriteFileResult{}, fmt.Errorf("failed to write file: %w", writeErr)
+	}
+
+	info, statErr := os.Stat(resolved)
+	if statErr != nil {
+		return WriteFileResult{}, fmt.Errorf("failed to stat written file: %w", statErr)
+	}
+
+	s.invalidateDirCache(sessionName, cleanedPath)
+
+	return WriteFileResult{
+		Path: normalizePanelPath(cleanedPath),
+		Size: info.Size(),
+	}, nil
+}
+
+// CreateFile creates an empty file within a session's working directory.
+func (s *Service) CreateFile(sessionName, filePath string) (WriteFileResult, error) {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return WriteFileResult{}, errors.New("session name is required")
+	}
+
+	cleanedPath, cleanErr := validateMutationPath(filePath, "file path")
+	if cleanErr != nil {
+		return WriteFileResult{}, cleanErr
+	}
+
+	rootDir, err := s.resolveSessionWorkDir(sessionName)
+	if err != nil {
+		return WriteFileResult{}, err
+	}
+
+	resolved, resolveErr := s.ResolveAndValidateNewPath(rootDir, cleanedPath)
+	if resolveErr != nil {
+		return WriteFileResult{}, resolveErr
+	}
+
+	if _, statErr := os.Stat(resolved); statErr == nil {
+		return WriteFileResult{}, fmt.Errorf("path already exists: %s", cleanedPath)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return WriteFileResult{}, fmt.Errorf("failed to stat path: %w", statErr)
+	}
+
+	if mkdirErr := os.MkdirAll(filepath.Dir(resolved), 0o755); mkdirErr != nil {
+		return WriteFileResult{}, fmt.Errorf("failed to create parent directory: %w", mkdirErr)
+	}
+
+	s.suppressWatcherPaths(sessionName, cleanedPath)
+	if writeErr := retryFileOperation(func() error {
+		return os.WriteFile(resolved, nil, 0o644)
+	}, "create file"); writeErr != nil {
+		return WriteFileResult{}, fmt.Errorf("failed to create file: %w", writeErr)
+	}
+
+	s.invalidateDirCache(sessionName, cleanedPath)
+
+	return WriteFileResult{
+		Path: normalizePanelPath(cleanedPath),
+		Size: 0,
+	}, nil
+}
+
+// CreateDirectory creates a directory within a session's working directory.
+func (s *Service) CreateDirectory(sessionName, dirPath string) error {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return errors.New("session name is required")
+	}
+
+	cleanedPath, cleanErr := validateMutationPath(dirPath, "directory path")
+	if cleanErr != nil {
+		return cleanErr
+	}
+
+	rootDir, err := s.resolveSessionWorkDir(sessionName)
+	if err != nil {
+		return err
+	}
+
+	resolved, resolveErr := s.ResolveAndValidateNewPath(rootDir, cleanedPath)
+	if resolveErr != nil {
+		return resolveErr
+	}
+
+	if _, statErr := os.Stat(resolved); statErr == nil {
+		return fmt.Errorf("path already exists: %s", cleanedPath)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("failed to stat path: %w", statErr)
+	}
+
+	s.suppressWatcherPaths(sessionName, cleanedPath)
+	if mkdirErr := os.MkdirAll(resolved, 0o755); mkdirErr != nil {
+		return fmt.Errorf("failed to create directory: %w", mkdirErr)
+	}
+
+	s.invalidateDirCache(sessionName, cleanedPath)
+
+	return nil
+}
+
+// RenameFile renames or moves a file-system entry within a session's working directory.
+func (s *Service) RenameFile(sessionName, oldPath, newPath string) error {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return errors.New("session name is required")
+	}
+
+	cleanedOldPath, cleanOldErr := validateMutationPath(oldPath, "old path")
+	if cleanOldErr != nil {
+		return cleanOldErr
+	}
+	cleanedNewPath, cleanNewErr := validateMutationPath(newPath, "new path")
+	if cleanNewErr != nil {
+		return cleanNewErr
+	}
+	if normalizePanelPath(cleanedOldPath) == normalizePanelPath(cleanedNewPath) {
+		return errors.New("old path and new path must differ")
+	}
+
+	rootDir, err := s.resolveSessionWorkDir(sessionName)
+	if err != nil {
+		return err
+	}
+
+	resolvedOldPath, resolveOldErr := s.ResolveAndValidatePath(rootDir, cleanedOldPath)
+	if resolveOldErr != nil {
+		return resolveOldErr
+	}
+	resolvedNewPath, resolveNewErr := s.ResolveAndValidateNewPath(rootDir, cleanedNewPath)
+	if resolveNewErr != nil {
+		return resolveNewErr
+	}
+
+	if _, statErr := os.Stat(resolvedOldPath); statErr != nil {
+		return fmt.Errorf("failed to stat source path: %w", statErr)
+	}
+	if _, statErr := os.Stat(resolvedNewPath); statErr == nil {
+		return fmt.Errorf("destination already exists: %s", cleanedNewPath)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("failed to stat destination path: %w", statErr)
+	}
+
+	destinationDir := filepath.Dir(resolvedNewPath)
+	info, statErr := os.Stat(destinationDir)
+	if statErr != nil {
+		return fmt.Errorf("destination directory does not exist: %w", statErr)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("destination parent is not a directory: %s", filepath.ToSlash(filepath.Dir(cleanedNewPath)))
+	}
+
+	s.suppressWatcherPaths(sessionName, cleanedOldPath, cleanedNewPath)
+	if renameErr := retryFileOperation(func() error {
+		return os.Rename(resolvedOldPath, resolvedNewPath)
+	}, "rename file"); renameErr != nil {
+		return fmt.Errorf("failed to rename path: %w", renameErr)
+	}
+
+	s.invalidateDirCache(sessionName, cleanedOldPath, cleanedNewPath)
+
+	return nil
+}
+
+// DeleteFile deletes a file-system entry within a session's working directory.
+func (s *Service) DeleteFile(sessionName, filePath string) error {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return errors.New("session name is required")
+	}
+
+	cleanedPath, cleanErr := validateMutationPath(filePath, "file path")
+	if cleanErr != nil {
+		return cleanErr
+	}
+
+	rootDir, err := s.resolveSessionWorkDir(sessionName)
+	if err != nil {
+		return err
+	}
+
+	resolved, resolveErr := s.ResolveAndValidatePath(rootDir, cleanedPath)
+	if resolveErr != nil {
+		return resolveErr
+	}
+
+	info, statErr := os.Stat(resolved)
+	if statErr != nil {
+		return fmt.Errorf("failed to stat path: %w", statErr)
+	}
+
+	s.suppressWatcherPaths(sessionName, cleanedPath)
+	var removeErr error
+	if info.IsDir() {
+		slog.Info("devpanel delete directory", "path", resolved)
+		removeErr = retryFileOperation(func() error {
+			return os.RemoveAll(resolved)
+		}, "delete directory")
+	} else {
+		removeErr = retryFileOperation(func() error {
+			return os.Remove(resolved)
+		}, "delete file")
+	}
+	if removeErr != nil {
+		return fmt.Errorf("failed to delete path: %w", removeErr)
+	}
+
+	s.invalidateDirCache(sessionName, cleanedPath)
+
+	return nil
 }
 
 // GitLog returns the commit history for a session's repository.

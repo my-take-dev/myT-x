@@ -1,6 +1,6 @@
 # Viewer System
 
-Nine development tools accessible from the **Activity Strip** on the right edge.
+Ten development tools accessible from the **Activity Strip** on the right edge.
 Click an icon or use a keyboard shortcut to toggle. Press `Escape` to close.
 
 ## Display Modes
@@ -14,7 +14,53 @@ Toggle with the button at the bottom of the Activity Strip:
 
 ---
 
-## 1. File Tree
+## 1. Editor
+
+**Shortcut:** `Ctrl+Shift+W`
+
+A Monaco Editor-based code editor with a side-by-side file tree and editing area.
+
+### Left Panel (File Tree / Search)
+
+| Action | How |
+|--------|-----|
+| Expand/collapse folder | Click the folder icon |
+| Select file | Click the file name — opens in the right panel for editing |
+| Search files | Click the 🔍 button in the header to switch to search mode |
+
+#### Header Buttons
+
+| Button | Description |
+|--------|-------------|
+| 🔍 | Switch to file search mode |
+| +F | Create a new file |
+| +D | Create a new folder |
+| ↻ | Reload file tree |
+
+#### Context Menu (Right-click)
+
+| Item | Description |
+|------|-------------|
+| Copy Path / Copy Relative Path | Copy the path to clipboard |
+| New File / New Folder | Create under the selected directory |
+| Rename | Rename the file or folder |
+| Delete | Delete (confirmation required) |
+
+### Right Panel (Monaco Editor)
+
+| Element | Description |
+|---------|-------------|
+| File name + `*` | `*` indicates unsaved changes |
+| Language label | Language detected from file extension |
+| **Save** button | Save changes (`Ctrl+S` also works) |
+
+**Notes:**
+- Files larger than 1 MB are partially loaded; a warning appears in the toolbar
+- `Ctrl+F` opens Monaco's built-in search; use the 🔍 header button for file search
+
+---
+
+## 2. File Tree
 
 **Shortcut:** `Ctrl+Shift+E`
 
@@ -45,7 +91,7 @@ Displays files and folders in the session's working directory as a tree.
 
 ---
 
-## 2. Git Graph
+## 3. Git Graph
 
 **Shortcut:** `Ctrl+Shift+G`
 
@@ -80,7 +126,7 @@ Shows the current branch name and tracking information.
 
 ---
 
-## 3. Diff
+## 4. Diff
 
 **Shortcut:** `Ctrl+Shift+D`
 
@@ -140,7 +186,7 @@ All changed files in a flat list with staging controls:
 
 ---
 
-## 4. Input History
+## 5. Input History
 
 **Shortcut:** `Ctrl+Shift+H`
 
@@ -164,7 +210,7 @@ Shows a log of commands and messages sent to panes.
 
 ---
 
-## 5. MCP Manager
+## 6. MCP Manager
 
 **Shortcut:** `Ctrl+Shift+M`
 
@@ -188,9 +234,13 @@ Manage MCP (Model Context Protocol) servers available in the session.
 The MCP Manager shows connection info for external AI tools (Claude Code, Codex CLI, Gemini CLI).
 Usage of the `--session` flag is documented here.
 
+### Related Documentation
+
+- [MCP Orchestrator Tool Reference](mcp-orchestrator_en.md) — Complete specification of all 18 tools
+
 ---
 
-## 6. Pane Scheduler (Schedule)
+## 7. Pane Scheduler (Schedule)
 
 **Shortcut:** `Ctrl+Shift+K`
 
@@ -224,7 +274,7 @@ Sends messages to a pane at regular intervals.
 
 ---
 
-## 7. Task Scheduler (Task Queue)
+## 8. Task Scheduler (Task Queue)
 
 **Shortcut:** `Ctrl+Shift+Q`
 
@@ -263,7 +313,7 @@ Save and load frequently used task combinations as templates.
 
 ---
 
-## 8. Orchestrator Teams
+## 9. Orchestrator Teams
 
 **Shortcut:** `Ctrl+Shift+T`
 
@@ -272,7 +322,7 @@ See [Agent Teams](agent-teams_en.md) for details.
 
 ---
 
-## 9. Error Log
+## 10. Error Log
 
 **Shortcut:** `Ctrl+Shift+L`
 

@@ -4,6 +4,7 @@ export interface FileEntry {
     readonly path: string;
     readonly is_dir: boolean;
     readonly size: number;
+    readonly has_children?: boolean;
 }
 
 /** Backend FileContent returned by DevPanelReadFile. */
@@ -27,12 +28,23 @@ interface FlatNodeBase {
     readonly depth: number;
 }
 
+/** Hierarchical file-tree node used by frontend state. */
+export interface FileNode {
+    readonly name: string;
+    readonly path: string;
+    readonly isDir: boolean;
+    readonly hasChildren: boolean;
+    readonly children?: readonly FileNode[];
+    readonly size?: number;
+}
+
 /**
  * Flattened directory node for react-window virtualized rendering.
  * Note: directory size is intentionally omitted as it is not displayed in the tree view.
  */
 export interface FlatDirNode extends FlatNodeBase {
     readonly isDir: true;
+    readonly hasChildren: boolean;
     readonly isExpanded: boolean;
     readonly isLoading: boolean;
 }

@@ -54,6 +54,26 @@ Queue tasks and execute them one by one in order.
 - Stage-by-stage instructions for AI agents
 - Build → Test → Deploy pipelines
 
+### Scheduler Settings (Persistent Configuration)
+
+Open the settings screen from the **Settings** button on the left side of the toolbar. Settings are saved to `config.yaml` and persist across restarts.
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| Wait after /new (seconds) | Seconds to wait after sending /new during Pre-Execution (0–60) | 10 |
+| Idle wait timeout (seconds) | Timeout for idle detection (10–600) | 120 |
+| Target panes | `task_panes` (only task-assigned panes) / `all_panes` (all session panes) | task_panes |
+
+#### Message Templates
+
+Save frequently used messages with a name and select them when creating tasks.
+
+| Action | How |
+|--------|-----|
+| Add template | Click "+ Add template" in settings → enter name and body |
+| Use template | Select from the dropdown in the task form → appended to the message |
+| Edit / Delete | Manage from the template list in settings |
+
 ### Adding Tasks
 
 1. Open the **Task Scheduler** icon in the Activity Strip (`Ctrl+Shift+Q`)
