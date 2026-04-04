@@ -102,15 +102,6 @@
   - `set-option` コマンド追加（ペインボーダー色設定、no-op実装）
   - `select-layout` コマンド追加（レイアウト整列、no-op実装）
 
-### 開発ツール
-
-- Claude Code ログ解析ツール追加（`tools/claude-log-analyzer/`）
-  - JSONL形式のセッションログからエージェント・スキル使用統計を集計・表示
-  - フィルタ: `--type`, `--top`, `--since`, `--branch`, `--project`
-
-- Codex ログ解析ツール追加（`tools/codex-log-analyzer/`）
-  - SQLite（`logs_1.sqlite`, `state_5.sqlite`）+ `history.jsonl` からCodexの使用統計を集計
-  - データソース優先順位: SQLite → history.jsonl → codex-tui.log
 
 ---
 
