@@ -15,20 +15,38 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 const apiMock = vi.hoisted(() => ({
     DevPanelListDir: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
     DevPanelReadFile: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+    DevPanelStartWatcher: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+    DevPanelStopWatcher: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
 }));
+const watcherCleanupMock = vi.hoisted(() => vi.fn());
 
 let mockActiveSession: string | null = "test-session";
+let mockSessions = [
+    {
+        id: 1,
+        name: "test-session",
+        windows: [],
+    },
+];
 
 vi.mock("../src/api", () => ({
     api: {
         DevPanelListDir: (...args: unknown[]) => apiMock.DevPanelListDir(...args),
         DevPanelReadFile: (...args: unknown[]) => apiMock.DevPanelReadFile(...args),
+        DevPanelStartWatcher: (...args: unknown[]) => apiMock.DevPanelStartWatcher(...args),
+        DevPanelStopWatcher: (...args: unknown[]) => apiMock.DevPanelStopWatcher(...args),
     },
 }));
 
+const runtimeMock = vi.hoisted(() => ({
+    EventsOn: vi.fn(() => watcherCleanupMock),
+}));
+
+vi.mock("../wailsjs/runtime", () => runtimeMock);
+
 vi.mock("../src/stores/tmuxStore", () => ({
-    useTmuxStore: (selector: (state: { activeSession: string | null }) => unknown) =>
-        selector({activeSession: mockActiveSession}),
+    useTmuxStore: (selector: (state: { activeSession: string | null; sessions: unknown[] }) => unknown) =>
+        selector({activeSession: mockActiveSession, sessions: mockSessions}),
 }));
 
 import type {FileEntry} from "../src/components/viewer/views/file-tree/fileTreeTypes";
@@ -43,6 +61,7 @@ function FileTreeProbe() {
     return (
         <div>
             <output data-testid="dirError">{hookResult.dirError ?? ""}</output>
+            <output data-testid="watcherError">{hookResult.watcherError ?? ""}</output>
             <output data-testid="contentError">{hookResult.contentError ?? ""}</output>
             <output data-testid="error">{hookResult.error ?? ""}</output>
             <output data-testid="isRootLoading">{String(hookResult.isRootLoading)}</output>
@@ -57,8 +76,8 @@ function getProbeText(container: HTMLElement, testId: string): string {
 
 // ── Helpers ──
 
-function makeFileEntry(name: string, isDir: boolean): FileEntry {
-    return {name, path: name, is_dir: isDir, size: isDir ? 0 : 100};
+function makeFileEntry(name: string, isDir: boolean, hasChildren: boolean = isDir): FileEntry {
+    return {name, path: name, is_dir: isDir, size: isDir ? 0 : 100, has_children: isDir ? hasChildren : false};
 }
 
 // ── Tests ──
@@ -73,8 +92,15 @@ describe("useFileTree – dirError lifecycle (C-3)", () => {
         root = createRoot(container);
         hookResult = null;
         mockActiveSession = "test-session";
+        mockSessions = [{id: 1, name: "test-session", windows: []}];
         apiMock.DevPanelListDir.mockReset();
         apiMock.DevPanelReadFile.mockReset();
+        apiMock.DevPanelStartWatcher.mockReset();
+        apiMock.DevPanelStartWatcher.mockResolvedValue(undefined);
+        apiMock.DevPanelStopWatcher.mockReset();
+        apiMock.DevPanelStopWatcher.mockResolvedValue(undefined);
+        runtimeMock.EventsOn.mockClear();
+        watcherCleanupMock.mockReset();
         vi.spyOn(console, "error").mockImplementation(() => {});
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     });
@@ -114,6 +140,22 @@ describe("useFileTree – dirError lifecycle (C-3)", () => {
         // dirError should be set, but root-level error should remain null.
         expect(getProbeText(container, "dirError")).toContain("permission denied");
         expect(getProbeText(container, "error")).toBe("");
+    });
+
+    it("cleans watcher subscriptions on unmount", async () => {
+        apiMock.DevPanelListDir.mockResolvedValueOnce([]);
+
+        act(() => {
+            root.render(<FileTreeProbe/>);
+        });
+        await act(async () => {});
+
+        act(() => {
+            root.unmount();
+        });
+
+        // 3 subscriptions: tree-invalidated, watcher-failed, session-renamed.
+        expect(watcherCleanupMock).toHaveBeenCalledTimes(3);
     });
 
     it("clears dirError when a subsequent toggleDir expansion succeeds", async () => {
@@ -482,8 +524,15 @@ describe("useFileTree – expandedPaths ref sync (C-4)", () => {
         root = createRoot(container);
         hookResult = null;
         mockActiveSession = "test-session";
+        mockSessions = [{id: 1, name: "test-session", windows: []}];
         apiMock.DevPanelListDir.mockReset();
         apiMock.DevPanelReadFile.mockReset();
+        apiMock.DevPanelStartWatcher.mockReset();
+        apiMock.DevPanelStartWatcher.mockResolvedValue(undefined);
+        apiMock.DevPanelStopWatcher.mockReset();
+        apiMock.DevPanelStopWatcher.mockResolvedValue(undefined);
+        runtimeMock.EventsOn.mockClear();
+        watcherCleanupMock.mockReset();
         vi.spyOn(console, "error").mockImplementation(() => {});
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     });
@@ -620,8 +669,15 @@ describe("useFileTree – toggleDir loading lifecycle (I-5)", () => {
         root = createRoot(container);
         hookResult = null;
         mockActiveSession = "test-session";
+        mockSessions = [{id: 1, name: "test-session", windows: []}];
         apiMock.DevPanelListDir.mockReset();
         apiMock.DevPanelReadFile.mockReset();
+        apiMock.DevPanelStartWatcher.mockReset();
+        apiMock.DevPanelStartWatcher.mockResolvedValue(undefined);
+        apiMock.DevPanelStopWatcher.mockReset();
+        apiMock.DevPanelStopWatcher.mockResolvedValue(undefined);
+        runtimeMock.EventsOn.mockClear();
+        watcherCleanupMock.mockReset();
         vi.spyOn(console, "error").mockImplementation(() => {});
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     });
@@ -706,8 +762,15 @@ describe("useFileTree – toggleDir requestId guard (T-3)", () => {
         root = createRoot(container);
         hookResult = null;
         mockActiveSession = "test-session";
+        mockSessions = [{id: 1, name: "test-session", windows: []}];
         apiMock.DevPanelListDir.mockReset();
         apiMock.DevPanelReadFile.mockReset();
+        apiMock.DevPanelStartWatcher.mockReset();
+        apiMock.DevPanelStartWatcher.mockResolvedValue(undefined);
+        apiMock.DevPanelStopWatcher.mockReset();
+        apiMock.DevPanelStopWatcher.mockResolvedValue(undefined);
+        runtimeMock.EventsOn.mockClear();
+        watcherCleanupMock.mockReset();
         vi.spyOn(console, "error").mockImplementation(() => {});
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     });

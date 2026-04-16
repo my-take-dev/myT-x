@@ -266,12 +266,7 @@ func (r *CommandRouter) applyPaneTitle(target *TmuxPane, fallbackSessionName str
 }
 
 func (r *CommandRouter) handleSelectPane(req ipc.TmuxRequest) ipc.TmuxResponse {
-	if paneStyle, ok := req.Flags["-P"]; ok {
-		slog.Debug("[DEBUG-SELECTPANE] select-pane -P ignored (style unsupported)",
-			"style", mustString(paneStyle),
-		)
-	}
-
+	_, paneStyleRequested := req.Flags["-P"]
 	targetSpecified := strings.TrimSpace(mustString(req.Flags["-t"])) != ""
 	directionalSelection := hasSelectPaneDirectionalFlag(req)
 	title, hasPaneTitle := selectPaneTitle(req)
@@ -298,10 +293,22 @@ func (r *CommandRouter) handleSelectPane(req ipc.TmuxRequest) ipc.TmuxResponse {
 	if targetCtxErr != nil {
 		return errResp(targetCtxErr)
 	}
-	// tmux select-pane -T without -t/-U/-D/-L/-R updates the current pane title
-	// without changing focus.
-	if hasPaneTitle && !targetSpecified && !directionalSelection {
-		r.applyPaneTitle(target, targetCtx.SessionName, title)
+	pureStyleRequest := !targetSpecified && !directionalSelection
+	if paneStyleRequested {
+		slog.Debug("[DEBUG-SELECTPANE] select-pane -P style ignored (unsupported)",
+			"style", mustString(req.Flags["-P"]),
+		)
+		// When -P is combined with selection flags (-t or directional), ignore
+		// the unsupported style but continue with the pane selection.
+		// Without selection flags the command is a pure style request — return
+		// success (the style itself is a no-op) and honour any -T title.
+	}
+	// Pure style/title requests should not change focus. -P is a no-op, but we
+	// still honour -T when it is present on the same command.
+	if pureStyleRequest && (paneStyleRequested || hasPaneTitle) {
+		if hasPaneTitle {
+			r.applyPaneTitle(target, targetCtx.SessionName, title)
+		}
 		return okResp("")
 	}
 	if err := r.sessions.SetActivePane(target.ID); err != nil {

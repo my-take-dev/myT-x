@@ -193,7 +193,7 @@ func TestRunPreExecutionPhase_MultiPaneResetStaggersCommands(t *testing.T) {
 		{Title: "t2", Message: "m", TargetPaneID: "%1"},
 		{Title: "t3", Message: "m", TargetPaneID: "%2"},
 	}
-	ok := svc.runPreExecutionPhase(t.Context(), items, QueueConfig{
+	ok := svc.runPreExecutionPhase(t.Context(), svc.generationID, items, QueueConfig{
 		PreExecTargetMode:  PreExecTargetModeTaskPanes,
 		PreExecResetDelay:  0,
 		PreExecIdleTimeout: 1,
@@ -253,7 +253,7 @@ func TestRunPreExecutionPhase_ContextCancelDuringResetDelay(t *testing.T) {
 		{Title: "t1", Message: "m", TargetPaneID: "%0"},
 		{Title: "t2", Message: "m", TargetPaneID: "%1"},
 	}
-	ok := svc.runPreExecutionPhase(ctx, items, QueueConfig{
+	ok := svc.runPreExecutionPhase(ctx, svc.generationID, items, QueueConfig{
 		PreExecTargetMode:  PreExecTargetModeTaskPanes,
 		PreExecResetDelay:  0,
 		PreExecIdleTimeout: 10,
@@ -299,7 +299,7 @@ func TestRunPreExecutionPhase_ContextCancelDuringReminderDelay(t *testing.T) {
 		{Title: "t1", Message: "m", TargetPaneID: "%0"},
 		{Title: "t2", Message: "m", TargetPaneID: "%1"},
 	}
-	ok := svc.runPreExecutionPhase(ctx, items, QueueConfig{
+	ok := svc.runPreExecutionPhase(ctx, svc.generationID, items, QueueConfig{
 		PreExecTargetMode:  PreExecTargetModeTaskPanes,
 		PreExecResetDelay:  0,
 		PreExecIdleTimeout: 10,
@@ -333,7 +333,7 @@ func TestRunPreExecutionPhase_FailsWhenAllResetsFail(t *testing.T) {
 	svc.mu.Unlock()
 
 	items := []QueueItem{{Title: "task1", Message: "msg", TargetPaneID: "%0"}}
-	ok := svc.runPreExecutionPhase(t.Context(), items, QueueConfig{
+	ok := svc.runPreExecutionPhase(t.Context(), svc.generationID, items, QueueConfig{
 		PreExecTargetMode:  PreExecTargetModeTaskPanes,
 		PreExecResetDelay:  0,
 		PreExecIdleTimeout: 10,
@@ -361,7 +361,7 @@ func TestRunPreExecutionPhase_FailsWhenAllRemindersFail(t *testing.T) {
 	svc.mu.Unlock()
 
 	items := []QueueItem{{Title: "task1", Message: "msg", TargetPaneID: "%0"}}
-	ok := svc.runPreExecutionPhase(t.Context(), items, QueueConfig{
+	ok := svc.runPreExecutionPhase(t.Context(), svc.generationID, items, QueueConfig{
 		PreExecTargetMode:  PreExecTargetModeTaskPanes,
 		PreExecResetDelay:  0,
 		PreExecIdleTimeout: 10,
@@ -387,7 +387,7 @@ func TestStart_PreExecutionOrder(t *testing.T) {
 	events := make([]string, 0, 4)
 
 	deps := testDeps()
-	deps.ResolveOrchestratorDBPath = func() (string, error) { return dbPath, nil }
+	deps.ResolveOrchestratorDBPath = func(string) (string, error) { return dbPath, nil }
 	deps.IsAgentTeamSession = func(sessionName string) bool { return true }
 	deps.LaunchWorker = func(name string, ctx context.Context, fn func(ctx context.Context), opts workerutil.RecoveryOptions) {
 		go fn(ctx)

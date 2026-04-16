@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
+	"myT-x/internal/mcp/pipebridge"
 )
 
 type testResolver struct {
@@ -33,9 +34,15 @@ func (r *testAgentRepo) GetAgent(context.Context, string) (domain.Agent, error) 
 func (r *testAgentRepo) GetAgentByPaneID(context.Context, string) (domain.Agent, error) {
 	return domain.Agent{}, domain.ErrNotFound
 }
+func (r *testAgentRepo) GetAgentByMCPInstanceID(context.Context, string) (domain.Agent, error) {
+	return domain.Agent{}, domain.ErrNotFound
+}
 func (r *testAgentRepo) ListAgents(context.Context) ([]domain.Agent, error) { return nil, nil }
 func (r *testAgentRepo) DeleteAgentsByPaneID(_ context.Context, paneID string) error {
 	r.deleteCalls = append(r.deleteCalls, paneID)
+	return nil
+}
+func (r *testAgentRepo) ReplaceAgentRegistration(_ context.Context, _ domain.Agent, _ *domain.AgentStatus) error {
 	return nil
 }
 
@@ -46,7 +53,10 @@ type testTaskRepo struct {
 
 func (r *testTaskRepo) CreateTask(context.Context, domain.Task) error           { return nil }
 func (r *testTaskRepo) CreateTaskGroup(context.Context, domain.TaskGroup) error { return nil }
-func (r *testTaskRepo) DeleteTaskGroup(context.Context, string) error           { return nil }
+func (r *testTaskRepo) GetTaskGroup(context.Context, string) (domain.TaskGroup, error) {
+	return domain.TaskGroup{}, domain.ErrNotFound
+}
+func (r *testTaskRepo) DeleteTaskGroup(context.Context, string) error { return nil }
 func (r *testTaskRepo) CreateTaskWithDependencies(context.Context, domain.Task, []string) error {
 	return nil
 }
@@ -143,6 +153,27 @@ func TestRuntimeStartLogsResolverError(t *testing.T) {
 	}
 }
 
+func TestRuntimeStartUsesCallerPaneIDFromContext(t *testing.T) {
+	var logs bytes.Buffer
+	rt := &Runtime{
+		cfg: Config{
+			Logger: log.New(&logs, "", 0),
+		},
+		resolver: newStickySelfResolver(testResolver{err: errors.New("tmux missing")}, nil),
+	}
+
+	ctx := pipebridge.ContextWithCallerPaneID(context.Background(), "%7")
+	if err := rt.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if rt.selfPane != "%7" {
+		t.Fatalf("selfPane = %q, want %%7", rt.selfPane)
+	}
+	if strings.Contains(logs.String(), "自ペインID取得に失敗") {
+		t.Fatalf("unexpected resolver failure log: %q", logs.String())
+	}
+}
+
 type noopPaneOps struct{}
 
 func (noopPaneOps) SendKeys(context.Context, string, string) error                 { return nil }
@@ -165,6 +196,7 @@ func (testStatusRepo) ListAgentStatuses(context.Context) ([]domain.AgentStatus, 
 type testMessageRepo struct{}
 
 func (testMessageRepo) SaveMessage(context.Context, domain.TaskMessage) error { return nil }
+func (testMessageRepo) DeleteMessage(context.Context, string) error           { return nil }
 func (testMessageRepo) SaveResponse(context.Context, domain.TaskMessage) error {
 	return nil
 }

@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"crypto/rand"
-	"errors"
 	"log"
 	"time"
 
@@ -21,7 +20,7 @@ type SendResponseResult struct {
 	SentTo      string
 	SentToName  string
 	TaskID      string
-	TaskStatus  string
+	TaskStatus  domain.TaskStatus
 	CompletedAt string
 	Warning     string
 }
@@ -62,7 +61,7 @@ func NewResponseService(
 // Send はタスク送信者に応答を返す。
 func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendResponseResult, error) {
 	logf(s.logger, "send_response start task_id=%s message_length=%d", cmd.TaskID, len([]rune(cmd.Message)))
-	caller, err := resolveCaller(ctx, s.resolver, s.agents, s.logger)
+	caller, err := preflightAssigneeTaskCaller(ctx, s.resolver, s.agents, s.tasks, s.logger)
 	if err != nil {
 		return SendResponseResult{}, err
 	}
@@ -71,7 +70,7 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 	if err != nil {
 		return SendResponseResult{}, operationError(s.logger, "task is not available", err)
 	}
-	authMode, allowed := authorizeResponseCaller(task, caller)
+	authMode, allowed := authorizeAssigneeCaller(task, caller)
 	logf(
 		s.logger,
 		"send_response task loaded task_id=%s task_agent=%s task_assignee_pane=%s sender=%s status=%s caller=%s caller_pane=%s auth_mode=%s",
@@ -95,23 +94,25 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 			task.AssigneePaneID,
 			authMode,
 		)
-		return SendResponseResult{}, errors.New("access denied")
+		return SendResponseResult{}, accessDeniedError("caller is not the task assignee")
 	}
 	if task.Status != domain.TaskStatusPending {
 		logf(s.logger, "send_response rejected non-pending task_id=%s status=%s", task.ID, task.Status)
-		return SendResponseResult{}, errors.New("task is not pending")
+		return SendResponseResult{}, conflictError("task is not pending")
 	}
 
-	targetName := task.SenderName
-	if targetName == "" {
-		logf(s.logger, "send_response missing sender task_id=%s", task.ID)
-		return SendResponseResult{}, errors.New("task sender is unknown; cannot deliver response")
-	}
-	target, err := s.agents.GetAgent(ctx, targetName)
+	target, resolvedBy, err := s.resolveResponseTarget(ctx, task)
 	if err != nil {
-		return SendResponseResult{}, operationError(s.logger, "response target is not available", err)
+		return SendResponseResult{}, err
 	}
-	logf(s.logger, "send_response target resolved task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
+	logf(
+		s.logger,
+		"send_response target resolved task_id=%s target=%s pane_id=%s resolved_by=%s",
+		task.ID,
+		target.Name,
+		target.PaneID,
+		resolvedBy,
+	)
 
 	if domain.IsVirtualPaneID(target.PaneID) {
 		logf(s.logger, "send_response skip SendKeys for virtual pane task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
@@ -137,7 +138,7 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 	if err != nil {
 		result.Warning = "message delivered but response id generation failed"
 		logf(s.logger, "generate response id for task %s: %v", cmd.TaskID, err)
-		completeTaskBestEffort(s, ctx, cmd.TaskID, "", now, &result, "response id failure")
+		completeTaskBestEffort(s, ctx, cmd.TaskID, "", now, task.Status, &result, "response id failure")
 		return result, nil
 	}
 	if err := s.messages.SaveResponse(ctx, domain.TaskMessage{
@@ -147,13 +148,13 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 	}); err != nil {
 		result.Warning = "message delivered but response persistence failed"
 		logf(s.logger, "save response for task %s: %v", cmd.TaskID, err)
-		completeTaskBestEffort(s, ctx, cmd.TaskID, "", now, &result, "save response failure")
+		completeTaskBestEffort(s, ctx, cmd.TaskID, "", now, task.Status, &result, "save response failure")
 		return result, nil
 	}
 
 	if err := s.tasks.CompleteTask(ctx, cmd.TaskID, respID, now); err != nil {
 		result.Warning = "message delivered but task completion update failed"
-		result.TaskStatus = "unknown"
+		result.TaskStatus = task.Status
 		logf(s.logger, "complete task %s after response: %v", cmd.TaskID, err)
 	} else {
 		logf(s.logger, "send_response completed task_id=%s completed_at=%s", cmd.TaskID, now)
@@ -164,14 +165,48 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 	return result, nil
 }
 
+func (s *ResponseService) resolveResponseTarget(ctx context.Context, task domain.Task) (domain.Agent, string, error) {
+	if task.SenderInstanceID != "" {
+		target, err := s.agents.GetAgentByMCPInstanceID(ctx, task.SenderInstanceID)
+		if err == nil {
+			return target, "instance", nil
+		}
+		logf(
+			s.logger,
+			"send_response instance target lookup failed task_id=%s sender_instance_id=%s: %v",
+			task.ID,
+			task.SenderInstanceID,
+			err,
+		)
+	}
+
+	if task.SenderName == "" {
+		logf(s.logger, "send_response missing sender task_id=%s", task.ID)
+		return domain.Agent{}, "", conflictError("task sender is unknown; cannot deliver response")
+	}
+
+	target, err := s.agents.GetAgent(ctx, task.SenderName)
+	if err != nil {
+		return domain.Agent{}, "", operationError(s.logger, "response target is not available", err)
+	}
+	return target, "name", nil
+}
+
 // completeTaskBestEffort attempts to mark a task as completed after a non-fatal
 // error (e.g. response ID generation or persistence failure). On double-fault
-// (CompleteTask also fails), the task status is set to "unknown" and a warning
-// is logged indicating both the original and completion failures.
-func completeTaskBestEffort(s *ResponseService, ctx context.Context, taskID, respID, now string, result *SendResponseResult, context string) {
+// (CompleteTask also fails), the caller receives the last known persisted task
+// status and a warning describing the failed completion path.
+func completeTaskBestEffort(
+	s *ResponseService,
+	ctx context.Context,
+	taskID, respID, now string,
+	fallbackStatus domain.TaskStatus,
+	result *SendResponseResult,
+	context string,
+) {
 	if completeErr := s.tasks.CompleteTask(ctx, taskID, respID, now); completeErr != nil {
 		logf(s.logger, "double-fault: complete task %s after %s also failed: %v", taskID, context, completeErr)
-		result.TaskStatus = "unknown"
+		result.TaskStatus = fallbackStatus
 	} else {
 		result.TaskStatus = domain.TaskStatusCompleted
 		result.CompletedAt = now
@@ -179,6 +214,17 @@ func completeTaskBestEffort(s *ResponseService, ctx context.Context, taskID, res
 }
 
 func authorizeResponseCaller(task domain.Task, caller domain.Agent) (string, bool) {
+	return authorizeAssigneeCaller(task, caller)
+}
+
+// authorizeAssigneeCaller authorizes a caller against a task's assignee.
+//
+// Design intent: trusted callers (pipe bridge connections where TMUX_PANE is
+// unresolvable) may act as ANY assignee. This is required to make pipe bridge
+// and "direct inter-agent communication" (agent-orchestrator/CLAUDE.md L10)
+// work. DO NOT tighten this branch — it will break pipe bridge flows.
+// See /ACCEPTED_DESIGN_DECISIONS.md AD-001.
+func authorizeAssigneeCaller(task domain.Task, caller domain.Agent) (string, bool) {
 	if IsTrustedCaller(caller) {
 		return "trusted", true
 	}

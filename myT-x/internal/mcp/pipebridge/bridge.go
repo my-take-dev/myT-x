@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -53,7 +54,9 @@ func Bridge(ctx context.Context, in io.Reader, out io.Writer, conn io.ReadWriteC
 	var closeOnce sync.Once
 	closeConn := func() {
 		closeOnce.Do(func() {
-			_ = conn.Close()
+			if err := conn.Close(); err != nil {
+				slog.Warn("[PIPE-BRIDGE] failed to close pipe connection", "error", err)
+			}
 		})
 	}
 

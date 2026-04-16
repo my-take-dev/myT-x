@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// TaskStatus はタスクの状態を表す列挙型。
-type TaskStatus = string
+// TaskStatus はタスクの状態を表す defined type。
+type TaskStatus string
 
 // TaskStatus の定数定義。
 const (
@@ -20,13 +20,130 @@ const (
 	TaskStatusExpired   TaskStatus = "expired"
 )
 
-// AgentWorkStatus represents the current activity state of an agent.
-type AgentWorkStatus = string
+// IsTerminal returns true when the task has reached a final state.
+func (status TaskStatus) IsTerminal() bool {
+	switch status {
+	case TaskStatusCompleted, TaskStatusFailed, TaskStatusAbandoned, TaskStatusCancelled, TaskStatusExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+// TaskStatusFilter represents a task-list filter value.
+// It is intentionally separate from TaskStatus so sentinel values such as
+// "all" do not leak into the task lifecycle enum.
+type TaskStatusFilter string
 
 const (
+	TaskStatusFilterAll       TaskStatusFilter = "all"
+	TaskStatusFilterPending                    = TaskStatusFilter(TaskStatusPending)
+	TaskStatusFilterBlocked                    = TaskStatusFilter(TaskStatusBlocked)
+	TaskStatusFilterCompleted                  = TaskStatusFilter(TaskStatusCompleted)
+	TaskStatusFilterFailed                     = TaskStatusFilter(TaskStatusFailed)
+	TaskStatusFilterAbandoned                  = TaskStatusFilter(TaskStatusAbandoned)
+	TaskStatusFilterCancelled                  = TaskStatusFilter(TaskStatusCancelled)
+	TaskStatusFilterExpired                    = TaskStatusFilter(TaskStatusExpired)
+)
+
+var taskStatusFilterValues = []TaskStatusFilter{
+	TaskStatusFilterAll,
+	TaskStatusFilterPending,
+	TaskStatusFilterBlocked,
+	TaskStatusFilterCompleted,
+	TaskStatusFilterFailed,
+	TaskStatusFilterAbandoned,
+	TaskStatusFilterCancelled,
+	TaskStatusFilterExpired,
+}
+
+func IsValidTaskStatusFilter(value string) bool {
+	switch TaskStatusFilter(value) {
+	case TaskStatusFilterAll,
+		TaskStatusFilterPending,
+		TaskStatusFilterBlocked,
+		TaskStatusFilterCompleted,
+		TaskStatusFilterFailed,
+		TaskStatusFilterAbandoned,
+		TaskStatusFilterCancelled,
+		TaskStatusFilterExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+func TaskStatusFilterValues() []string {
+	values := make([]string, 0, len(taskStatusFilterValues))
+	for _, value := range taskStatusFilterValues {
+		values = append(values, string(value))
+	}
+	return values
+}
+
+func (filter TaskStatusFilter) MatchesTaskStatus(status TaskStatus) bool {
+	switch filter {
+	case "", TaskStatusFilterAll:
+		return true
+	case TaskStatusFilterPending:
+		return status == TaskStatusPending
+	case TaskStatusFilterBlocked:
+		return status == TaskStatusBlocked
+	case TaskStatusFilterCompleted:
+		return status == TaskStatusCompleted
+	case TaskStatusFilterFailed:
+		return status == TaskStatusFailed
+	case TaskStatusFilterAbandoned:
+		return status == TaskStatusAbandoned
+	case TaskStatusFilterCancelled:
+		return status == TaskStatusCancelled
+	case TaskStatusFilterExpired:
+		return status == TaskStatusExpired
+	default:
+		return false
+	}
+}
+
+// TaskStatusFilterFromString returns the canonical filter constant for a value
+// already validated by IsValidTaskStatusFilter. Unknown values are preserved so
+// legacy direct callers fail closed instead of silently broadening queries.
+func TaskStatusFilterFromString(value string) TaskStatusFilter {
+	switch TaskStatusFilter(value) {
+	case TaskStatusFilterAll:
+		return TaskStatusFilterAll
+	case TaskStatusFilterPending:
+		return TaskStatusFilterPending
+	case TaskStatusFilterBlocked:
+		return TaskStatusFilterBlocked
+	case TaskStatusFilterCompleted:
+		return TaskStatusFilterCompleted
+	case TaskStatusFilterFailed:
+		return TaskStatusFilterFailed
+	case TaskStatusFilterAbandoned:
+		return TaskStatusFilterAbandoned
+	case TaskStatusFilterCancelled:
+		return TaskStatusFilterCancelled
+	case TaskStatusFilterExpired:
+		return TaskStatusFilterExpired
+	default:
+		return TaskStatusFilter(value)
+	}
+}
+
+// AgentWorkStatus represents the current activity state of an agent.
+type AgentWorkStatus string
+
+const (
+	// AgentWorkStatusUnknown is the read-only fallback returned when the current
+	// agent status cannot be determined after registration reconciliation.
+	// External callers must not set this value.
 	AgentWorkStatusUnknown AgentWorkStatus = "unknown"
 	AgentWorkStatusIdle    AgentWorkStatus = "idle"
-	AgentWorkStatusBusy    AgentWorkStatus = "busy"
+	// AgentWorkStatusBusy means the agent cannot accept interactive work right now
+	// because it is occupied by non-task activity or external constraints.
+	AgentWorkStatusBusy AgentWorkStatus = "busy"
+	// AgentWorkStatusWorking means the agent is actively processing an assigned
+	// orchestrator task and can report task-linked progress or completion.
 	AgentWorkStatusWorking AgentWorkStatus = "working"
 )
 
@@ -75,11 +192,11 @@ type Agent struct {
 
 // AgentStatus stores the last reported work status for an agent.
 type AgentStatus struct {
-	AgentName     string `json:"agent_name"`
-	Status        string `json:"status"`
-	CurrentTaskID string `json:"current_task_id,omitempty"`
-	Note          string `json:"note,omitempty"`
-	UpdatedAt     string `json:"updated_at,omitempty"`
+	AgentName     string          `json:"agent_name"`
+	Status        AgentWorkStatus `json:"status"`
+	CurrentTaskID string          `json:"current_task_id,omitempty"`
+	Note          string          `json:"note,omitempty"`
+	UpdatedAt     string          `json:"updated_at,omitempty"`
 }
 
 // TaskGroup stores metadata for a batch of related tasks.
@@ -91,20 +208,22 @@ type TaskGroup struct {
 
 // Task はタスク情報を表す。
 type Task struct {
-	ID               string `json:"task_id"`
-	AgentName        string `json:"agent_name"`
-	AssigneePaneID   string `json:"assignee_pane_id,omitempty"`
-	SenderPaneID     string `json:"sender_pane_id,omitempty"`
-	SenderName       string `json:"sender_name,omitempty"`
-	SenderInstanceID string `json:"sender_instance_id,omitempty"`
-	SendMessageID    string `json:"send_message_id,omitempty"`
-	SendResponseID   string `json:"send_response_id,omitempty"`
-	Status           string `json:"status"`
-	SentAt           string `json:"sent_at"`
+	ID               string     `json:"task_id"`
+	AgentName        string     `json:"agent_name"`
+	AssigneePaneID   string     `json:"assignee_pane_id,omitempty"`
+	SenderPaneID     string     `json:"sender_pane_id,omitempty"`
+	SenderName       string     `json:"sender_name,omitempty"`
+	SenderInstanceID string     `json:"sender_instance_id,omitempty"`
+	SendMessageID    string     `json:"send_message_id,omitempty"`
+	SendResponseID   string     `json:"send_response_id,omitempty"`
+	Status           TaskStatus `json:"status"`
+	SentAt           string     `json:"sent_at"`
 	// CompletedAt stores the terminal timestamp for any finished task state,
 	// including completed, cancelled, expired, failed, and abandoned.
-	CompletedAt       string `json:"completed_at,omitempty"`
-	AcknowledgedAt    string `json:"acknowledged_at,omitempty"`
+	CompletedAt    string `json:"completed_at,omitempty"`
+	AcknowledgedAt string `json:"acknowledged_at,omitempty"`
+	// CancelledAt stores the dedicated cancellation timestamp for cancelled
+	// tasks. CompletedAt still records the terminal timestamp for that state.
 	CancelledAt       string `json:"cancelled_at,omitempty"`
 	CancelReason      string `json:"cancel_reason,omitempty"`
 	ProgressPct       *int   `json:"progress_pct,omitempty"`
@@ -124,7 +243,7 @@ type TaskMessage struct {
 
 // TaskFilter はタスク検索のフィルタ条件を表す。
 type TaskFilter struct {
-	Status       string
+	Status       TaskStatusFilter
 	AgentName    string
 	IsNowSession *bool // nil=フィルタなし, true/false でフィルタ
 }

@@ -1,3 +1,7 @@
+function normalizeEditorPath(path: string): string {
+    return path.replaceAll("\\", "/");
+}
+
 export function parentDirOf(path: string): string {
     const separatorIndex = path.lastIndexOf("/");
     return separatorIndex >= 0 ? path.slice(0, separatorIndex) : "";
@@ -5,6 +9,19 @@ export function parentDirOf(path: string): string {
 
 export function joinRelativePath(parentDir: string, name: string): string {
     return parentDir ? `${parentDir}/${name}` : name;
+}
+
+export function remapDescendantPath(path: string, oldPath: string, newPath: string): string {
+    const normalizedPath = normalizeEditorPath(path);
+    const normalizedOldPath = normalizeEditorPath(oldPath);
+    const normalizedNewPath = normalizeEditorPath(newPath);
+    if (normalizedPath === normalizedOldPath) {
+        return normalizedNewPath;
+    }
+    if (!normalizedPath.startsWith(`${normalizedOldPath}/`)) {
+        return normalizedPath;
+    }
+    return `${normalizedNewPath}${normalizedPath.slice(normalizedOldPath.length)}`;
 }
 
 export function toWindowsPath(path: string): string {

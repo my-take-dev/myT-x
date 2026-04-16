@@ -34,10 +34,11 @@ func (r *Registry) Register(def Definition) error {
 	if name == "" {
 		return fmt.Errorf("mcp definition name is required (id=%q)", id)
 	}
+	kind := DefinitionKind(strings.TrimSpace(string(def.Kind)))
 	command := strings.TrimSpace(def.Command)
-	// Non-LSP definitions (e.g. orchestrator) use RuntimeFactory instead of
-	// an external command, so Command is allowed to be empty when Kind is set.
-	if command == "" && strings.TrimSpace(def.Kind) == "" {
+	// Embedded-runtime definitions use RuntimeFactory instead of an external
+	// command. All other definitions, including custom kinds, are command-backed.
+	if command == "" && !kind.UsesEmbeddedRuntime() {
 		return fmt.Errorf("mcp definition command is required (id=%q)", id)
 	}
 
@@ -50,6 +51,7 @@ func (r *Registry) Register(def Definition) error {
 	def.ID = id
 	def.Name = name
 	def.Command = command
+	def.Kind = kind
 	r.definitions[id] = cloneDefinition(def)
 	return nil
 }

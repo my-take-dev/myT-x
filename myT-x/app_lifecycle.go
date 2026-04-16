@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -40,6 +41,273 @@ func (a *App) consumePendingConfigLoadWarning() string {
 	message := strings.Join(a.configLoadWarnings, "\n")
 	a.configLoadWarnings = nil
 	return message
+}
+
+type sessionScopedLifecycleParticipant struct {
+	name    string
+	cleanup func(sessionName string) error
+	rename  func(oldName, newName string) error
+}
+
+const expectedSessionScopedLifecycleParticipantCount = 4
+
+func (a *App) emitSessionCleanupDegraded(component, sessionName string, err error) {
+	if err == nil {
+		return
+	}
+
+	a.emitBackendEvent("session:cleanup-degraded", map[string]string{
+		"component":    component,
+		"session_name": sessionName,
+		"message":      err.Error(),
+	})
+}
+
+func (a *App) cleanupSessionScopedParticipants(sessionName string, participants []sessionScopedLifecycleParticipant) {
+	for _, participant := range participants {
+		if err := participant.cleanup(sessionName); err != nil {
+			slog.Warn("[SESSION] scoped cleanup failed",
+				"component", participant.name,
+				"session", sessionName,
+				"error", err,
+			)
+			a.emitSessionCleanupDegraded(participant.name, sessionName, err)
+		}
+	}
+}
+
+func (a *App) reconcileSessionRenameRollbackFailure(oldName, newName string) error {
+	oldName = strings.TrimSpace(oldName)
+	newName = strings.TrimSpace(newName)
+	if oldName == "" || newName == "" || oldName == newName {
+		return nil
+	}
+
+	if strings.TrimSpace(a.sessionService.GetActiveSessionName()) == oldName {
+		a.sessionService.SetActiveSessionName(newName)
+	}
+
+	var reconcileErrs []error
+	for _, participant := range a.sessionScopedLifecycleParticipants() {
+		if err := participant.rename(oldName, newName); err != nil {
+			wrappedErr := fmt.Errorf("%s session rename reconciliation failed: %w", participant.name, err)
+			slog.Warn("[SESSION] rename rollback reconciliation failed",
+				"component", participant.name,
+				"oldSession", oldName,
+				"newSession", newName,
+				"error", err,
+			)
+			a.emitSessionCleanupDegraded(participant.name, newName, wrappedErr)
+			reconcileErrs = append(reconcileErrs, wrappedErr)
+		}
+	}
+
+	a.emitBackendEvent("tmux:session-renamed", map[string]any{
+		"oldName": oldName,
+		"newName": newName,
+	})
+	return errors.Join(reconcileErrs...)
+}
+
+// sessionScopedLifecycleParticipants returns the session-bound subsystems that
+// must move together during session cleanup and rename flows.
+func (a *App) sessionScopedLifecycleParticipants() []sessionScopedLifecycleParticipant {
+	participants := make([]sessionScopedLifecycleParticipant, 0, expectedSessionScopedLifecycleParticipantCount)
+	if a.taskSchedulerManager != nil {
+		participants = append(participants, sessionScopedLifecycleParticipant{
+			name: "task scheduler",
+			cleanup: func(sessionName string) error {
+				a.taskSchedulerManager.Remove(sessionName)
+				return nil
+			},
+			rename: func(oldName, newName string) error {
+				return a.taskSchedulerManager.Rename(oldName, newName)
+			},
+		})
+	}
+	if a.singleTaskRunnerManager != nil {
+		participants = append(participants, sessionScopedLifecycleParticipant{
+			name: "single task runner",
+			cleanup: func(sessionName string) error {
+				a.singleTaskRunnerManager.Remove(sessionName)
+				return nil
+			},
+			rename: func(oldName, newName string) error {
+				return a.singleTaskRunnerManager.Rename(oldName, newName)
+			},
+		})
+	}
+	if a.devpanelService != nil {
+		participants = append(participants, sessionScopedLifecycleParticipant{
+			name:    "devpanel",
+			cleanup: a.devpanelService.CleanupSession,
+			rename:  a.devpanelService.RenameSession,
+		})
+	}
+	if a.mcpManager != nil {
+		participants = append(participants, sessionScopedLifecycleParticipant{
+			name:    "mcp",
+			cleanup: a.mcpManager.CleanupSession,
+			rename:  a.mcpManager.RenameSession,
+		})
+	}
+	return participants
+}
+
+// handleSessionRenamed applies follow-up state updates after a tmux session has
+// already been renamed. Follow-up steps are transactional: if one subsystem
+// fails, previously migrated subsystems are rolled back before the error is
+// returned to the caller.
+func (a *App) handleSessionRenamed(oldName, newName string) (retErr error) {
+	type renameStep struct {
+		name     string
+		apply    func() error
+		rollback func() error
+	}
+
+	participants := a.sessionScopedLifecycleParticipants()
+	steps := make([]renameStep, 0, len(participants))
+	for _, participant := range participants {
+		steps = append(steps, renameStep{
+			name:  participant.name,
+			apply: func() error { return participant.rename(oldName, newName) },
+			rollback: func() error {
+				return participant.rename(newName, oldName)
+			},
+		})
+	}
+
+	applied := make([]renameStep, 0, len(steps))
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		for i := len(applied) - 1; i >= 0; i-- {
+			step := applied[i]
+			if err := step.rollback(); err != nil {
+				slog.Warn("[SESSION] follow-up rollback failed",
+					"component", step.name,
+					"oldSession", oldName,
+					"newSession", newName,
+					"error", err,
+				)
+				retErr = errors.Join(retErr, fmt.Errorf("rollback failed for %s: %w", step.name, err))
+			}
+		}
+	}()
+
+	for _, step := range steps {
+		if err := step.apply(); err != nil {
+			return fmt.Errorf("%s session rename migration failed: %w", step.name, err)
+		}
+		applied = append(applied, step)
+	}
+	return nil
+}
+
+// Router-driven session lifecycle changes bypass session.Service, so the router
+// callbacks must keep active-session state aligned with the renamed/destroyed session.
+func (a *App) finalizeSessionDestroyed(sessionName string) {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return
+	}
+	if strings.TrimSpace(a.sessionService.GetActiveSessionName()) == sessionName {
+		a.sessionService.SetActive("")
+	}
+	a.cleanupSessionScopedParticipants(sessionName, a.sessionScopedLifecycleParticipants())
+	sessions, err := a.requireSessions()
+	if err != nil {
+		slog.Warn("[SESSION] stale pane cleanup skipped after destroy",
+			"session", sessionName,
+			"error", err,
+		)
+		return
+	}
+	if a.snapshotService == nil {
+		slog.Warn("[SESSION] stale pane cleanup skipped after destroy",
+			"session", sessionName,
+			"reason", "snapshot service is nil",
+		)
+		return
+	}
+	a.snapshotService.CleanupDetachedPaneStates(
+		a.snapshotService.DetachStaleOutputBuffers(sessions.ActivePaneIDs()),
+	)
+}
+
+// Router-driven session lifecycle changes bypass session.Service, so the router
+// callbacks must keep active-session state aligned with the renamed/destroyed session.
+func (a *App) handleRouterSessionDestroyed(sessionName string) {
+	a.finalizeSessionDestroyed(sessionName)
+}
+
+// handleRouterSessionRenameRollbackFailed reconciles App state when the router
+// could not roll a failed rename back to the original tmux session name.
+func (a *App) handleRouterSessionRenameRollbackFailed(oldName, newName string) {
+	if err := a.reconcileSessionRenameRollbackFailure(oldName, newName); err != nil {
+		slog.Warn("[SESSION] rename rollback failure left degraded participants",
+			"oldSession", oldName,
+			"newSession", newName,
+			"error", err,
+		)
+	}
+}
+
+func (a *App) handleRouterSessionRenamed(oldName, newName string) (retErr error) {
+	oldName = strings.TrimSpace(oldName)
+	newName = strings.TrimSpace(newName)
+	if oldName == "" || newName == "" || oldName == newName {
+		return nil
+	}
+
+	activeSessionRenamed := strings.TrimSpace(a.sessionService.GetActiveSessionName()) == oldName
+	if activeSessionRenamed {
+		// Pre-update the active session name so participant rename hooks observe
+		// the new name while handleSessionRenamed migrates session-scoped state.
+		// SetActiveSessionName must stay emit-free here. SetActive runs only after
+		// migration succeeds so the frontend rename event is emitted exactly once.
+		a.sessionService.SetActiveSessionName(newName)
+	}
+	defer func() {
+		if retErr != nil && activeSessionRenamed {
+			a.sessionService.SetActiveSessionName(oldName)
+		}
+	}()
+
+	if err := a.handleSessionRenamed(oldName, newName); err != nil {
+		return err
+	}
+	if activeSessionRenamed {
+		a.sessionService.SetActive(newName)
+	}
+	return nil
+}
+
+func (a *App) newRouterOptions(cfg config.Config) tmux.RouterOptions {
+	var claudeEnvVars map[string]string
+	if cfg.ClaudeEnv != nil {
+		claudeEnvVars = cfg.ClaudeEnv.Vars
+	}
+
+	return tmux.RouterOptions{
+		DefaultShell: cfg.Shell,
+		PipeName:     ipc.DefaultPipeName(),
+		HostPID:      os.Getpid(),
+		PaneEnv:      cfg.PaneEnv,
+		ClaudeEnv:    claudeEnvVars,
+		OnSessionDestroyed: func(sessionName string) {
+			a.handleRouterSessionDestroyed(sessionName)
+		},
+		OnSessionRenamed: func(oldName, newName string) error {
+			return a.handleRouterSessionRenamed(oldName, newName)
+		},
+		OnSessionRenameRollbackFailed: func(oldName, newName string) {
+			a.handleRouterSessionRenameRollbackFailed(oldName, newName)
+		},
+		ResolveMCPStdio:     a.ResolveMCPStdio,
+		ResolveSessionByCwd: a.sessionService.ResolveSessionByCwd,
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -102,39 +370,7 @@ func (a *App) startup(ctx context.Context) {
 	a.configState.Initialize(configPath, cfg)
 
 	a.sessions = tmux.NewSessionManager()
-	var claudeEnvVars map[string]string
-	if cfg.ClaudeEnv != nil {
-		claudeEnvVars = cfg.ClaudeEnv.Vars
-	}
-	routerOpts := tmux.RouterOptions{
-		DefaultShell: cfg.Shell,
-		PipeName:     ipc.DefaultPipeName(),
-		HostPID:      os.Getpid(),
-		PaneEnv:      cfg.PaneEnv,
-		ClaudeEnv:    claudeEnvVars,
-		OnSessionDestroyed: func(sessionName string) {
-			if a.mcpManager != nil {
-				a.mcpManager.CleanupSession(sessionName)
-			}
-			if a.devpanelService != nil {
-				if err := a.devpanelService.CleanupSession(sessionName); err != nil {
-					slog.Warn("[DEVPANEL] session cleanup failed", "session", sessionName, "error", err)
-				}
-			}
-		},
-		OnSessionRenamed: func(oldName, _ string) {
-			if a.mcpManager != nil {
-				a.mcpManager.CleanupSession(oldName)
-			}
-			if a.devpanelService != nil {
-				if err := a.devpanelService.CleanupSession(oldName); err != nil {
-					slog.Warn("[DEVPANEL] session cleanup failed after rename", "session", oldName, "error", err)
-				}
-			}
-		},
-		ResolveMCPStdio:     a.ResolveMCPStdio,
-		ResolveSessionByCwd: a.sessionService.ResolveSessionByCwd,
-	}
+	routerOpts := a.newRouterOptions(cfg)
 	slog.Debug("[CONFIG] agent model mapping is handled by tmux-shim")
 	a.router = tmux.NewCommandRouter(
 		a.sessions,
@@ -158,12 +394,18 @@ func (a *App) startup(ctx context.Context) {
 	// Register built-in orchestrator MCP definitions.
 	orchDefs := orchestratorMCPDefinitions()
 	for _, loadErr := range a.mcpRegistry.LoadFromConfig(orchDefs) {
-		slog.Debug("[DEBUG-MCP] skipped orchestrator registration", "error", loadErr)
+		slog.Debug("[DEBUG-MCP] skipped built-in orchestrator registration (config override or duplicate id)", "error", loadErr)
+	}
+	// Register built-in single-task-runner MCP definitions.
+	strDefs := singleTaskRunnerMCPDefinitions()
+	for _, loadErr := range a.mcpRegistry.LoadFromConfig(strDefs) {
+		slog.Debug("[DEBUG-MCP] skipped built-in single-task-runner registration (duplicate id — user config takes priority)", "error", loadErr)
 	}
 	a.mcpManager = mcp.NewManager(mcp.ManagerConfig{
-		Registry:       a.mcpRegistry,
-		EmitFn:         a.emitBackendEvent,
-		ResolveWorkDir: a.sessionService.ResolveSessionWorkDir,
+		Registry:                a.mcpRegistry,
+		EmitFn:                  a.emitBackendEvent,
+		ResolveWorkDir:          a.sessionService.ResolveSessionWorkDir,
+		SingleTaskRunnerManager: a.singleTaskRunnerManager,
 	})
 
 	a.pipeServer = newPipeServerFn(a.router.PipeName(), a.router)
@@ -249,17 +491,28 @@ func (a *App) shutdown(_ context.Context) {
 	a.snapshotService.StopPaneFeedWorker()
 	a.snapshotService.ClearSnapshotRequestTimer()
 
-	a.StopAllSchedulers()
-	a.taskSchedulerManager.StopAll()
+	if err := a.StopAllSchedulers(); err != nil {
+		slog.Warn("[SCHEDULER] stop-all during shutdown failed", "error", err)
+	}
+	if a.taskSchedulerManager != nil {
+		a.taskSchedulerManager.StopAll()
+	}
+	if a.singleTaskRunnerManager != nil {
+		a.singleTaskRunnerManager.StopAll()
+	}
 
 	if a.idleCancel != nil {
 		a.idleCancel()
 		a.idleCancel = nil
 	}
+	canceledSetupWorkers := a.cancelTrackedSetupWorkers()
+	if canceledSetupWorkers > 0 {
+		slog.Debug("[DEBUG-GIT] canceled active setup workers during shutdown", "count", canceledSetupWorkers)
+	}
 	if !waitWithTimeout(a.bgWG.Wait, shutdownWaitTimeout) {
 		runtimeLogger.Warningf(logCtx, "timed out waiting for background workers during shutdown")
 	}
-	if !waitWithTimeout(a.setupWG.Wait, shutdownWaitTimeout) {
+	if !waitWithTimeout(a.setupWG.Wait, config.SetupScriptCancellationWait) {
 		runtimeLogger.Warningf(logCtx, "timed out waiting for setup workers during shutdown")
 	}
 

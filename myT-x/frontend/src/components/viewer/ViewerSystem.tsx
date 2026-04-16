@@ -1,6 +1,7 @@
 import {useEffect, useMemo, useRef, useState} from "react";
 import {ActivityStrip} from "./ActivityStrip";
 import {ViewOverlay} from "./ViewOverlay";
+import {getViewerShortcutValue} from "./viewerShortcutDefinitions";
 import {useViewerStore} from "./viewerStore";
 import {getRegisteredViews, subscribeRegistry} from "./viewerRegistry";
 import {
@@ -32,8 +33,11 @@ import "./views/diff-view";
 import "./views/input-history"; // DIFFの直下に配置
 import "./views/mcp-manager";
 import "./views/pane-scheduler";
+import "./views/prompt-presets";
 import "./views/orchestrator-teams";
+import "./views/single-task-runner";
 import "./views/task-scheduler";
+import "./views/usage-dashboard";
 
 // ---------------------------------------------------------
 // これより下にはエラーログ表示以外のアイコンを追加しないこと
@@ -67,7 +71,7 @@ export function ViewerSystem() {
         const duplicates: string[] = [];
         for (const view of views) {
             const effectiveShortcut = getEffectiveViewerShortcut(
-                viewerShortcutsConfig?.[view.id],
+                getViewerShortcutValue(viewerShortcutsConfig, view.id),
                 view.shortcut,
             );
             if (!effectiveShortcut) {

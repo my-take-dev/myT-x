@@ -63,15 +63,18 @@ Customize keyboard shortcuts for each viewer:
 
 | Viewer | Default |
 |--------|---------|
-| Editor | `Ctrl+Shift+W` |
-| File Tree | `Ctrl+Shift+E` |
+| Editor | `Ctrl+Shift+O` |
+| File View | `Ctrl+Shift+E` |
 | Git Graph | `Ctrl+Shift+G` |
 | Diff | `Ctrl+Shift+D` |
 | Input History | `Ctrl+Shift+H` |
 | MCP Manager | `Ctrl+Shift+M` |
 | Pane Scheduler | `Ctrl+Shift+K` |
 | Task Scheduler | `Ctrl+Shift+Q` |
+| Single Task Runner | `Ctrl+Shift+J` |
 | Teams | `Ctrl+Shift+T` |
+| Usage Dashboard | `Ctrl+Shift+U` |
+| Prompt Presets | `Ctrl+Shift+P` |
 | Error Log | `Ctrl+Shift+L` |
 
 ---

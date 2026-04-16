@@ -94,11 +94,13 @@ func TestLookupFormatVariableAllVariables(t *testing.T) {
 		{name: "pane_active_suffix when active", variable: "pane_active_suffix", want: " (active)"},
 		{name: "pane_title", variable: "pane_title", want: "my-pane"},
 		// --- window variables ---
-		{name: "window_index returns stable window ID", variable: "window_index", want: "5"},
+		{name: "window_id", variable: "window_id", want: "@5"},
+		{name: "window_index returns session-local window index", variable: "window_index", want: "0"},
 		{name: "window_name", variable: "window_name", want: "editor"},
 		{name: "window_panes", variable: "window_panes", want: "1"},
 		{name: "window_active when active", variable: "window_active", want: "1"},
 		// --- session variables ---
+		{name: "session_id", variable: "session_id", want: "$10"},
 		{name: "session_name", variable: "session_name", want: "test-session"},
 		{name: "session_windows", variable: "session_windows", want: "1"},
 		{name: "session_created", variable: "session_created", want: strconv.FormatInt(session.CreatedAt.Unix(), 10)},
@@ -189,7 +191,9 @@ func TestLookupFormatVariableNilPane(t *testing.T) {
 		want     string
 	}{
 		{name: "session_name", variable: "session_name", want: ""},
+		{name: "session_id", variable: "session_id", want: ""},
 		{name: "window_name", variable: "window_name", want: ""},
+		{name: "window_id", variable: "window_id", want: ""},
 		{name: "pane_id", variable: "pane_id", want: ""},
 		{name: "pane_tty", variable: "pane_tty", want: ""},
 		{name: "session_windows", variable: "session_windows", want: "0"},
@@ -233,6 +237,7 @@ func TestLookupFormatVariableNilWindow(t *testing.T) {
 		want     string
 	}{
 		{name: "window_index nil window", variable: "window_index", want: "0"},
+		{name: "window_id nil window", variable: "window_id", want: ""},
 		{name: "window_name nil window", variable: "window_name", want: ""},
 		{name: "window_panes nil window", variable: "window_panes", want: "0"},
 		{name: "window_active nil window", variable: "window_active", want: "0"},
@@ -276,8 +281,10 @@ func TestLookupFormatVariableNilSession(t *testing.T) {
 		want     string
 	}{
 		{name: "session_name nil session", variable: "session_name", want: ""},
+		{name: "session_id nil session", variable: "session_id", want: ""},
 		{name: "session_windows nil session", variable: "session_windows", want: "0"},
 		{name: "session_created nil session", variable: "session_created", want: "0"},
+		{name: "window_id with nil session", variable: "window_id", want: "@1"},
 		{name: "window_active nil session", variable: "window_active", want: "0"},
 		{name: "window_name with nil session", variable: "window_name", want: "main"},
 		{name: "window_panes with nil session", variable: "window_panes", want: "1"},
@@ -385,8 +392,19 @@ func TestExpandFormatNilPane(t *testing.T) {
 	}
 }
 
+func TestExpandFormatSessionAndWindowIDs(t *testing.T) {
+	session, window, pane := newTestFixture()
+	session.ID = 12
+	window.ID = 34
+
+	got := expandFormat("#{session_id}:#{window_id}:#{pane_id}", pane)
+	if got != "$12:@34:%3" {
+		t.Fatalf("expandFormat(session/window ids) = %q, want %q", got, "$12:@34:%3")
+	}
+}
+
 func TestExpandFormatWindowIndex(t *testing.T) {
-	// #{window_index} returns the stable window ID, not a positional index.
+	// #{window_index} returns the session-local positional index.
 	session := &TmuxSession{
 		ID:             0,
 		Name:           "demo",
@@ -412,8 +430,8 @@ func TestExpandFormatWindowIndex(t *testing.T) {
 	session.Windows = []*TmuxWindow{window}
 
 	got := expandFormat("#{window_index}", pane)
-	if got != "42" {
-		t.Fatalf("#{window_index} should return stable window ID: got %q, want %q", got, "42")
+	if got != "0" {
+		t.Fatalf("#{window_index} should return the session-local index: got %q, want %q", got, "0")
 	}
 }
 

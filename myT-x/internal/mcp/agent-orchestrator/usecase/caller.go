@@ -11,6 +11,8 @@ import (
 
 const trustedCallerName = "_trusted"
 
+var errCallerNotRegistered = errors.New("caller is not registered")
+
 // IsTrustedCaller returns true when the agent represents a pipe-bridge caller
 // that bypassed pane-based authentication.
 func IsTrustedCaller(agent domain.Agent) bool {
@@ -35,7 +37,12 @@ func resolveCaller(ctx context.Context, resolver domain.SelfPaneResolver, repo d
 	agent, err := repo.GetAgentByPaneID(ctx, paneID)
 	if err != nil {
 		logf(logger, "caller is not registered: %v", err)
-		return domain.Agent{}, errors.New("caller is not registered")
+		return domain.Agent{}, domain.NewOrchestratorError(
+			domain.ErrCodeAccessDenied,
+			"caller is not registered",
+			"caller is not registered",
+			errCallerNotRegistered,
+		)
 	}
 	logf(logger, "resolved caller agent=%s pane_id=%s", agent.Name, agent.PaneID)
 	return agent, nil
@@ -56,7 +63,26 @@ func logf(logger *log.Logger, format string, args ...any) {
 
 func operationError(logger *log.Logger, public string, err error) error {
 	logf(logger, "%s: %v", public, err)
-	return errors.New(public)
+	var orchErr *domain.OrchestratorError
+	if errors.As(err, &orchErr) {
+		return err
+	}
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.NewOrchestratorError(domain.ErrCodeNotFound, public, public, err)
+	}
+	return domain.NewOrchestratorError(domain.ErrCodeInternal, public, "internal failure", err)
+}
+
+func accessDeniedError(reason string) error {
+	return domain.NewOrchestratorError(domain.ErrCodeAccessDenied, "access denied", reason, nil)
+}
+
+func validationError(message string) error {
+	return domain.NewOrchestratorError(domain.ErrCodeValidation, message, message, nil)
+}
+
+func conflictError(message string) error {
+	return domain.NewOrchestratorError(domain.ErrCodeConflict, message, message, nil)
 }
 
 // sleepContext はコンテキストキャンセルに対応した sleep。

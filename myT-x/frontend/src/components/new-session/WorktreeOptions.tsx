@@ -128,7 +128,13 @@ export function WorktreeOptions({s, dispatch, onSelectWorktree}: WorktreeOptions
                                     type="checkbox"
                                     id="pull-before"
                                     checked={s.pullBefore}
-                                    onChange={(e) => dispatch({type: "SET_FIELD", field: "pullBefore", value: e.target.checked})}
+                                    onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        dispatch({type: "SET_FIELD", field: "pullBefore", value: checked});
+                                        if (!checked) {
+                                            dispatch({type: "SET_FIELD", field: "continueOnPullFailure", value: false});
+                                        }
+                                    }}
                                 />
                                 <label htmlFor="pull-before">
                                     {isEn
@@ -136,6 +142,21 @@ export function WorktreeOptions({s, dispatch, onSelectWorktree}: WorktreeOptions
                                         : t("newSession.worktree.pullBefore", "作成前に pull（最新取得）")}
                                 </label>
                             </div>
+                            {s.pullBefore && (
+                                <div className="form-checkbox-row indented">
+                                    <input
+                                        type="checkbox"
+                                        id="continue-on-pull-failure"
+                                        checked={s.continueOnPullFailure}
+                                        onChange={(e) => dispatch({type: "SET_FIELD", field: "continueOnPullFailure", value: e.target.checked})}
+                                    />
+                                    <label htmlFor="continue-on-pull-failure">
+                                        {isEn
+                                            ? "If pull fails, continue with local checkout state"
+                                            : t("newSession.worktree.continueOnPullFailure", "pull に失敗した場合はローカル状態で続行する")}
+                                    </label>
+                                </div>
+                            )}
 
                             {/* Base branch */}
                             <div className="form-group">

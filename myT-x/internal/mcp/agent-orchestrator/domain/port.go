@@ -13,8 +13,11 @@ type AgentRepository interface {
 	UpsertAgent(ctx context.Context, agent Agent) error
 	GetAgent(ctx context.Context, name string) (Agent, error)
 	GetAgentByPaneID(ctx context.Context, paneID string) (Agent, error)
+	GetAgentByMCPInstanceID(ctx context.Context, instanceID string) (Agent, error)
 	ListAgents(ctx context.Context) ([]Agent, error)
 	DeleteAgentsByPaneID(ctx context.Context, paneID string) error
+	// ReplaceAgentRegistration atomically replaces the pane mapping and status row.
+	ReplaceAgentRegistration(ctx context.Context, agent Agent, defaultStatus *AgentStatus) error
 }
 
 // AgentStatusRepository persists the latest reported status for agents.
@@ -25,9 +28,21 @@ type AgentStatusRepository interface {
 }
 
 // TaskRepository はタスクの永続化操作を定義する。
+//
+// NOTE: When adding or modifying a method here, keep all four implementations
+// in sync (see defensive-coding-checklist #164 — sibling API consistency):
+//   - production:  myT-x/internal/mcp/agent-orchestrator/store/sqlite.go
+//   - app test:    myT-x/internal/mcp/agent-orchestrator/app_test.go
+//   - usecase test:myT-x/internal/mcp/agent-orchestrator/usecase/usecase_test.go
+//   - handler test:myT-x/internal/mcp/agent-orchestrator/adapter/mcptool/handler_test.go
+//
+// Missing a method in any one of them causes a compile error only where used,
+// so reviewers may suspect a silent gap — run `grep -n 'func.*GetTaskGroup'`
+// across the four files above to confirm parity before flagging.
 type TaskRepository interface {
 	CreateTask(ctx context.Context, task Task) error
 	CreateTaskGroup(ctx context.Context, group TaskGroup) error
+	GetTaskGroup(ctx context.Context, groupID string) (TaskGroup, error)
 	DeleteTaskGroup(ctx context.Context, groupID string) error
 	CreateTaskWithDependencies(ctx context.Context, task Task, dependencyTaskIDs []string) error
 	GetTask(ctx context.Context, taskID string) (Task, error)
@@ -49,6 +64,7 @@ type TaskRepository interface {
 type MessageRepository interface {
 	SaveMessage(ctx context.Context, msg TaskMessage) error
 	SaveResponse(ctx context.Context, msg TaskMessage) error
+	DeleteMessage(ctx context.Context, id string) error
 	GetMessage(ctx context.Context, id string) (TaskMessage, error)
 	GetResponse(ctx context.Context, id string) (TaskMessage, error)
 }

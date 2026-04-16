@@ -1,10 +1,12 @@
 package tmux
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"myT-x/internal/ipc"
@@ -294,7 +296,7 @@ func (r *CommandRouter) removePartialSaveBufferFile(path string, appendMode bool
 
 // handleCapturePane captures pane output and stores it in a buffer or prints to stdout.
 // Flags: -p (print to stdout), -b (buffer name), -t (target pane), -q (quiet errors).
-// No-op flags: -e, -J, -N, -T, -a, -C, -P, -M, -S, -E (raw output mode).
+// No-op flags: -e, -J, -N, -T, -a, -C, -P, -M (raw output mode).
 func (r *CommandRouter) handleCapturePane(req ipc.TmuxRequest) ipc.TmuxResponse {
 	printToStdout := mustBool(req.Flags["-p"])
 	bufferName := mustString(req.Flags["-b"])
@@ -319,14 +321,17 @@ func (r *CommandRouter) handleCapturePane(req ipc.TmuxRequest) ipc.TmuxResponse 
 		return errResp(fmt.Errorf("pane has no output history: %s", targetPaneID))
 	}
 
-	data := historyRef.Capture()
-	// Compatibility deviation: myT-x currently ignores -S/-E and always returns
-	// the full retained history for capture-pane.
-	if _, hasStartRange := req.Flags["-S"]; hasStartRange {
-		slog.Debug("[DEBUG-BUFFER] capture-pane: -S flag ignored (full history returned)", "pane", targetPaneID)
-	}
-	if _, hasEndRange := req.Flags["-E"]; hasEndRange {
-		slog.Debug("[DEBUG-BUFFER] capture-pane: -E flag ignored (full history returned)", "pane", targetPaneID)
+	data, err := selectCapturePaneLines(historyRef.Capture(), req.Flags["-S"], req.Flags["-E"])
+	if err != nil {
+		// tmux-shim policy (CLAUDE.md §tmux-shim について): on -q, parse errors
+		// are swallowed and empty output is returned — errors go to log only.
+		// DO NOT convert this into an error response — it will break tmux-shim
+		// transparency contracts. See /ACCEPTED_DESIGN_DECISIONS.md AD-003.
+		if quiet {
+			slog.Debug("[DEBUG-BUFFER] capture-pane: parse failed, quiet swallow", "pane", targetPaneID, "err", err)
+			return okResp("")
+		}
+		return errResp(err)
 	}
 
 	if printToStdout {
@@ -338,4 +343,89 @@ func (r *CommandRouter) handleCapturePane(req ipc.TmuxRequest) ipc.TmuxResponse 
 	r.buffers.Set(bufferName, data, false)
 	slog.Debug("[DEBUG-BUFFER] capture-pane: stored in buffer", "pane", targetPaneID, "buffer", bufferName, "size", len(data))
 	return okResp("")
+}
+
+type capturePaneLineSpan struct {
+	start int
+	end   int
+}
+
+func selectCapturePaneLines(data []byte, startFlag any, endFlag any) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	lineSpans := capturePaneLineSpans(data)
+	if len(lineSpans) == 0 {
+		return nil, nil
+	}
+
+	startIndex, err := resolveCapturePaneLineIndex(startFlag, len(lineSpans), true)
+	if err != nil {
+		return nil, err
+	}
+	endIndex, err := resolveCapturePaneLineIndex(endFlag, len(lineSpans), false)
+	if err != nil {
+		return nil, err
+	}
+	if startIndex > endIndex {
+		return nil, nil
+	}
+
+	selected := data[lineSpans[startIndex].start:lineSpans[endIndex].end]
+	return append([]byte(nil), selected...), nil
+}
+
+func capturePaneLineSpans(data []byte) []capturePaneLineSpan {
+	lineCount := bytes.Count(data, []byte{'\n'})
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		lineCount++
+	}
+	spans := make([]capturePaneLineSpan, 0, lineCount)
+	lineStart := 0
+	for idx, ch := range data {
+		if ch != '\n' {
+			continue
+		}
+		spans = append(spans, capturePaneLineSpan{start: lineStart, end: idx + 1})
+		lineStart = idx + 1
+	}
+	if lineStart < len(data) {
+		spans = append(spans, capturePaneLineSpan{start: lineStart, end: len(data)})
+	}
+	return spans
+}
+
+func resolveCapturePaneLineIndex(flag any, lineCount int, isStart bool) (int, error) {
+	if lineCount <= 0 {
+		return 0, nil
+	}
+
+	defaultIndex := 0
+	label := "start"
+	if !isStart {
+		defaultIndex = lineCount - 1
+		label = "end"
+	}
+
+	text := strings.TrimSpace(mustString(flag))
+	if text == "" || text == "-" {
+		return defaultIndex, nil
+	}
+
+	value, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s line for capture-pane: %q", label, text)
+	}
+
+	if value < 0 {
+		value = lineCount + value
+	}
+	if value < 0 {
+		return 0, nil
+	}
+	if value >= lineCount {
+		return lineCount - 1, nil
+	}
+	return value, nil
 }

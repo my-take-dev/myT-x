@@ -606,8 +606,325 @@ func TestRenameSessionCleansUpMCPStateForOldSessionName(t *testing.T) {
 	if len(newSnapshots) != 1 {
 		t.Fatalf("SnapshotForSession(new-name) length = %d, want 1", len(newSnapshots))
 	}
-	if newSnapshots[0].Enabled {
-		t.Fatal("new session MCP state should start from default disabled state")
+	if !newSnapshots[0].Enabled {
+		t.Fatal("new session MCP state should preserve enabled MCP state after rename")
+	}
+}
+
+func TestRenameSessionMigratesTaskSchedulerAndSingleTaskRunner(t *testing.T) {
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.taskSchedulerManager = newLifecycleTaskSchedulerManager()
+	app.singleTaskRunnerManager = newLifecycleSingleTaskRunnerManager()
+	app.sessionService = newSessionServiceForTest(app)
+	if _, _, err := app.sessions.CreateSession("old-name", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := app.taskSchedulerManager.GetOrCreate("old-name").AddItem("Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("taskScheduler AddItem failed: %v", err)
+	}
+	if err := app.singleTaskRunnerManager.GetOrCreate("old-name").AddItem("Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("singleTaskRunner AddItem failed: %v", err)
+	}
+
+	if err := app.RenameSession("old-name", "new-name"); err != nil {
+		t.Fatalf("RenameSession() error = %v", err)
+	}
+
+	if got := app.taskSchedulerManager.GetStatus("new-name"); got.SessionName != "new-name" || len(got.Items) != 1 {
+		t.Fatalf("taskScheduler GetStatus(new-name) = %+v, want migrated queue state", got)
+	}
+	if got := app.taskSchedulerManager.GetStatus("old-name"); len(got.Items) != 0 {
+		t.Fatalf("taskScheduler GetStatus(old-name) = %+v, want empty queue state after rename", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("new-name"); got.SessionName != "new-name" || len(got.Items) != 1 {
+		t.Fatalf("singleTaskRunner GetStatus(new-name) = %+v, want migrated queue state after rename", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("old-name"); len(got.Items) != 0 {
+		t.Fatalf("singleTaskRunner GetStatus(old-name) = %+v, want old queue state removed after rename", got)
+	}
+}
+
+func TestRenameSessionRollsBackWhenFollowUpMigrationFails(t *testing.T) {
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.taskSchedulerManager = newLifecycleTaskSchedulerManager()
+	app.singleTaskRunnerManager = newLifecycleSingleTaskRunnerManager()
+	app.sessionService = newSessionServiceForTest(app)
+	if _, _, err := app.sessions.CreateSession("old-name", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	app.sessionService.SetActiveSessionName("old-name")
+	if err := app.taskSchedulerManager.GetOrCreate("old-name").AddItem("Old Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("taskScheduler AddItem(old) failed: %v", err)
+	}
+	if err := app.taskSchedulerManager.GetOrCreate("new-name").AddItem("New Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("taskScheduler AddItem(new) failed: %v", err)
+	}
+
+	err := app.RenameSession("old-name", "new-name")
+	if err == nil {
+		t.Fatal("RenameSession() expected follow-up migration failure")
+	}
+	if !strings.Contains(err.Error(), "task scheduler session rename migration failed") {
+		t.Fatalf("RenameSession() error = %v, want task scheduler migration failure", err)
+	}
+	if got := app.sessionService.GetActiveSessionName(); got != "old-name" {
+		t.Fatalf("active session = %q, want %q after rollback", got, "old-name")
+	}
+
+	var foundOld, foundNew bool
+	for _, snapshot := range app.sessions.Snapshot() {
+		switch snapshot.Name {
+		case "old-name":
+			foundOld = true
+		case "new-name":
+			foundNew = true
+		}
+	}
+	if !foundOld {
+		t.Fatal("old-name should remain after rollback")
+	}
+	if foundNew {
+		t.Fatal("new-name should not remain after rollback")
+	}
+
+	if got := app.taskSchedulerManager.GetStatus("old-name"); got.SessionName != "old-name" || len(got.Items) != 1 || got.Items[0].Title != "Old Task" {
+		t.Fatalf("taskScheduler GetStatus(old-name) = %+v, want original queue state after rollback", got)
+	}
+	if got := app.taskSchedulerManager.GetStatus("new-name"); got.SessionName != "new-name" || len(got.Items) != 1 || got.Items[0].Title != "New Task" {
+		t.Fatalf("taskScheduler GetStatus(new-name) = %+v, want pre-existing target queue state preserved", got)
+	}
+}
+
+func TestRenameSessionRollsBackEarlierParticipantsWhenMCPMigrationFails(t *testing.T) {
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.taskSchedulerManager = newLifecycleTaskSchedulerManager()
+	app.singleTaskRunnerManager = newLifecycleSingleTaskRunnerManager()
+	registry := mcp.NewRegistry()
+	if err := registry.Register(mcp.MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register(memory) error = %v", err)
+	}
+	app.mcpManager = mcp.NewManager(mcp.ManagerConfig{
+		Registry: registry,
+		EmitFn:   func(string, any) {},
+		ResolveWorkDir: func(string) (string, error) {
+			return ".", nil
+		},
+	})
+	app.sessionService = newSessionServiceForTest(app)
+
+	if _, _, err := app.sessions.CreateSession("old-name", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	app.sessionService.SetActiveSessionName("old-name")
+	if err := app.taskSchedulerManager.GetOrCreate("old-name").AddItem("Old Scheduler Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("taskScheduler AddItem(old-name) failed: %v", err)
+	}
+	if err := app.singleTaskRunnerManager.GetOrCreate("old-name").AddItem("Old Runner Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("singleTaskRunner AddItem(old-name) failed: %v", err)
+	}
+	if err := app.mcpManager.SetEnabled("old-name", "memory", true); err != nil {
+		t.Fatalf("SetEnabled(old-name) error = %v", err)
+	}
+	if err := app.mcpManager.SetEnabled("new-name", "memory", true); err != nil {
+		t.Fatalf("SetEnabled(new-name) error = %v", err)
+	}
+
+	err := app.RenameSession("old-name", "new-name")
+	if err == nil {
+		t.Fatal("RenameSession() expected MCP migration failure")
+	}
+	if !strings.Contains(err.Error(), "mcp session rename migration failed") {
+		t.Fatalf("RenameSession() error = %v, want MCP migration failure", err)
+	}
+	if got := app.sessionService.GetActiveSessionName(); got != "old-name" {
+		t.Fatalf("active session = %q, want %q after rollback", got, "old-name")
+	}
+
+	var foundOld, foundNew bool
+	for _, snapshot := range app.sessions.Snapshot() {
+		switch snapshot.Name {
+		case "old-name":
+			foundOld = true
+		case "new-name":
+			foundNew = true
+		}
+	}
+	if !foundOld {
+		t.Fatal("old-name should remain after rollback")
+	}
+	if foundNew {
+		t.Fatal("new-name should not remain after rollback")
+	}
+
+	if got := app.taskSchedulerManager.GetStatus("old-name"); got.SessionName != "old-name" || len(got.Items) != 1 || got.Items[0].Title != "Old Scheduler Task" {
+		t.Fatalf("taskScheduler GetStatus(old-name) = %+v, want original queue state after rollback", got)
+	}
+	if got := app.taskSchedulerManager.GetStatus("new-name"); got.SessionName != "new-name" || len(got.Items) != 0 {
+		t.Fatalf("taskScheduler GetStatus(new-name) = %+v, want untouched target queue state after rollback", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("old-name"); got.SessionName != "old-name" || len(got.Items) != 1 || got.Items[0].Title != "Old Runner Task" {
+		t.Fatalf("singleTaskRunner GetStatus(old-name) = %+v, want original queue state after rollback", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("new-name"); got.SessionName != "new-name" || len(got.Items) != 0 {
+		t.Fatalf("singleTaskRunner GetStatus(new-name) = %+v, want untouched target queue state after rollback", got)
+	}
+
+	oldDetail, err := app.mcpManager.GetDetail("old-name", "memory")
+	if err != nil {
+		t.Fatalf("GetDetail(old-name) error = %v", err)
+	}
+	if !oldDetail.Enabled {
+		t.Fatalf("GetDetail(old-name) = %+v, want enabled state preserved after rollback", oldDetail)
+	}
+	newDetail, err := app.mcpManager.GetDetail("new-name", "memory")
+	if err != nil {
+		t.Fatalf("GetDetail(new-name) error = %v", err)
+	}
+	if !newDetail.Enabled {
+		t.Fatalf("GetDetail(new-name) = %+v, want pre-existing target state preserved", newDetail)
+	}
+}
+
+func TestRenameSessionRollsBackStartingMCPWhenRestartFails(t *testing.T) {
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	app.taskSchedulerManager = newLifecycleTaskSchedulerManager()
+	app.singleTaskRunnerManager = newLifecycleSingleTaskRunnerManager()
+	registry := mcp.NewRegistry()
+	if err := registry.Register(mcp.MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register(memory) error = %v", err)
+	}
+	resolveEntered := make(chan struct{})
+	releaseInitialResolve := make(chan struct{})
+	var oldResolveCalls int
+	var resolveMu sync.Mutex
+	app.mcpManager = mcp.NewManager(mcp.ManagerConfig{
+		Registry: registry,
+		EmitFn:   func(string, any) {},
+		ResolveWorkDir: func(sessionName string) (string, error) {
+			if sessionName == "new-name" {
+				return "", errors.New("new session work dir unavailable")
+			}
+			resolveMu.Lock()
+			oldResolveCalls++
+			callNumber := oldResolveCalls
+			resolveMu.Unlock()
+			if callNumber == 1 {
+				close(resolveEntered)
+				<-releaseInitialResolve
+			}
+			return ".", nil
+		},
+	})
+	app.sessionService = newSessionServiceForTest(app)
+
+	if _, _, err := app.sessions.CreateSession("old-name", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	app.sessionService.SetActiveSessionName("old-name")
+	if err := app.taskSchedulerManager.GetOrCreate("old-name").AddItem("Old Scheduler Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("taskScheduler AddItem(old-name) failed: %v", err)
+	}
+	if err := app.singleTaskRunnerManager.GetOrCreate("old-name").AddItem("Old Runner Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("singleTaskRunner AddItem(old-name) failed: %v", err)
+	}
+	if err := app.mcpManager.SetEnabled("old-name", "memory", true); err != nil {
+		t.Fatalf("SetEnabled(old-name) error = %v", err)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		detail, err := app.mcpManager.GetDetail("old-name", "memory")
+		return err == nil && detail.Status == mcp.StatusStarting
+	}, "mcp manager should enter starting state before rename")
+	<-resolveEntered
+
+	err := app.RenameSession("old-name", "new-name")
+	close(releaseInitialResolve)
+	if err == nil {
+		t.Fatal("RenameSession() expected MCP restart failure")
+	}
+	if !strings.Contains(err.Error(), "mcp session rename migration failed") {
+		t.Fatalf("RenameSession() error = %v, want MCP migration failure", err)
+	}
+	if got := app.sessionService.GetActiveSessionName(); got != "old-name" {
+		t.Fatalf("active session = %q, want %q after rollback", got, "old-name")
+	}
+
+	waitForCondition(t, time.Second, func() bool {
+		detail, err := app.mcpManager.GetDetail("old-name", "memory")
+		return err == nil && detail.Enabled
+	}, "mcp manager should remain enabled on the original session after rollback")
+
+	if got := app.taskSchedulerManager.GetStatus("old-name"); got.SessionName != "old-name" || len(got.Items) != 1 || got.Items[0].Title != "Old Scheduler Task" {
+		t.Fatalf("taskScheduler GetStatus(old-name) = %+v, want original queue state after rollback", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("old-name"); got.SessionName != "old-name" || len(got.Items) != 1 || got.Items[0].Title != "Old Runner Task" {
+		t.Fatalf("singleTaskRunner GetStatus(old-name) = %+v, want original queue state after rollback", got)
+	}
+
+	oldDetail, err := app.mcpManager.GetDetail("old-name", "memory")
+	if err != nil {
+		t.Fatalf("GetDetail(old-name) error = %v", err)
+	}
+	if !oldDetail.Enabled || oldDetail.Status == mcp.StatusStopped {
+		t.Fatalf("GetDetail(old-name) = %+v, want enabled non-stopped state restored after rollback", oldDetail)
+	}
+	newDetail, err := app.mcpManager.GetDetail("new-name", "memory")
+	if err != nil {
+		t.Fatalf("GetDetail(new-name) error = %v", err)
+	}
+	if newDetail.Enabled || newDetail.Status != mcp.StatusStopped {
+		t.Fatalf("GetDetail(new-name) = %+v, want default stopped snapshot after rollback", newDetail)
+	}
+}
+
+func TestRenameSessionMigratesMCPState(t *testing.T) {
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	reg := mcp.NewRegistry()
+	if err := reg.Register(mcp.MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register(memory) error = %v", err)
+	}
+	app.mcpManager = mcp.NewManager(mcp.ManagerConfig{
+		Registry: reg,
+		EmitFn:   func(string, any) {},
+		ResolveWorkDir: func(string) (string, error) {
+			return "", errors.New("resolve workdir failed")
+		},
+	})
+	app.sessionService = newSessionServiceForTest(app)
+
+	if _, _, err := app.sessions.CreateSession("old-name", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := app.mcpManager.SetEnabled("old-name", "memory", true); err != nil {
+		t.Fatalf("SetEnabled(old-name) error = %v", err)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		detail, err := app.mcpManager.GetDetail("old-name", "memory")
+		return err == nil && detail.Status == mcp.StatusError
+	}, "mcp manager should enter error state before rename")
+
+	if err := app.RenameSession("old-name", "new-name"); err != nil {
+		t.Fatalf("RenameSession() error = %v", err)
+	}
+
+	detail, err := app.mcpManager.GetDetail("new-name", "memory")
+	if err != nil {
+		t.Fatalf("GetDetail(new-name) error = %v", err)
+	}
+	if !detail.Enabled || detail.Status != mcp.StatusError {
+		t.Fatalf("GetDetail(new-name) = %+v, want enabled error state migrated", detail)
+	}
+
+	oldDetail, err := app.mcpManager.GetDetail("old-name", "memory")
+	if err != nil {
+		t.Fatalf("GetDetail(old-name) error = %v", err)
+	}
+	if oldDetail.Enabled || oldDetail.Status != mcp.StatusStopped {
+		t.Fatalf("GetDetail(old-name) = %+v, want default stopped snapshot after rename", oldDetail)
 	}
 }
 

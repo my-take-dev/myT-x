@@ -1,12 +1,14 @@
 package mcp
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 
 	orchestrator "myT-x/internal/mcp/agent-orchestrator"
+	"myT-x/internal/singletaskrunner"
 )
 
 // orchestratorRuntimeFactory creates a RuntimeFactory that produces
@@ -38,24 +40,39 @@ func configParamValue(params []ConfigParam, key, fallback string) string {
 	return fallback
 }
 
+type pipeConfigContext struct {
+	rootDir                 string
+	sessionName             string
+	singleTaskRunnerManager *singletaskrunner.ServiceManager
+}
+
 // buildPipeConfig constructs an MCPPipeConfig for the given definition.
-// For orchestrator-kind definitions it uses RuntimeFactory instead of the
-// LSP command path.
-func buildPipeConfig(pipeName, rootDir, sessionName string, def Definition) MCPPipeConfig {
+// For orchestrator-kind and single-task-runner-kind definitions it uses
+// RuntimeFactory instead of the external command path. All other kinds,
+// including custom config-defined kinds, use the external command path.
+func buildPipeConfig(pipeName string, def Definition, ctx pipeConfigContext) (MCPPipeConfig, error) {
 	switch def.Kind {
-	case "orchestrator":
-		dbPath := filepath.Join(rootDir, ".myT-x", "orchestrator.db")
+	case DefinitionKindOrchestrator:
+		dbPath := filepath.Join(ctx.rootDir, ".myT-x", "orchestrator.db")
 		allPanes := configParamValue(def.ConfigParams, "session_all_panes", "false") == "true"
 		return MCPPipeConfig{
 			PipeName:       pipeName,
-			RuntimeFactory: orchestratorRuntimeFactory(dbPath, sessionName, allPanes),
+			RuntimeFactory: orchestratorRuntimeFactory(dbPath, ctx.sessionName, allPanes),
+		}, nil
+	case DefinitionKindSingleTaskRunner:
+		if ctx.singleTaskRunnerManager == nil {
+			return MCPPipeConfig{}, fmt.Errorf("single-task-runner manager is required for pipe %s", pipeName)
 		}
-	default: // "" = LSP
+		return MCPPipeConfig{
+			PipeName:       pipeName,
+			RuntimeFactory: singleTaskRunnerRuntimeFactory(ctx.sessionName, ctx.singleTaskRunnerManager),
+		}, nil
+	default:
 		return MCPPipeConfig{
 			PipeName:   pipeName,
 			LSPCommand: def.Command,
 			LSPArgs:    append([]string(nil), def.Args...),
-			RootDir:    rootDir,
-		}
+			RootDir:    ctx.rootDir,
+		}, nil
 	}
 }

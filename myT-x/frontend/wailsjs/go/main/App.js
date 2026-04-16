@@ -6,8 +6,12 @@ export function AddMemberToUnaffiliatedTeam(arg1, arg2, arg3) {
   return window['go']['main']['App']['AddMemberToUnaffiliatedTeam'](arg1, arg2, arg3);
 }
 
-export function AddTaskSchedulerItem(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['AddTaskSchedulerItem'](arg1, arg2, arg3, arg4, arg5);
+export function AddSingleTaskRunnerItem(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['AddSingleTaskRunnerItem'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function AddTaskSchedulerItem(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['AddTaskSchedulerItem'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function ApplyLayoutPreset(arg1, arg2) {
@@ -26,8 +30,8 @@ export function CheckDirectoryConflict(arg1) {
   return window['go']['main']['App']['CheckDirectoryConflict'](arg1);
 }
 
-export function CheckTaskSchedulerOrchestratorReady() {
-  return window['go']['main']['App']['CheckTaskSchedulerOrchestratorReady']();
+export function CheckTaskSchedulerOrchestratorReady(arg1) {
+  return window['go']['main']['App']['CheckTaskSchedulerOrchestratorReady'](arg1);
 }
 
 export function CheckWorktreePathConflict(arg1) {
@@ -64,6 +68,10 @@ export function CreateSessionWithWorktree(arg1, arg2, arg3) {
 
 export function DeleteOrchestratorTeam(arg1, arg2, arg3) {
   return window['go']['main']['App']['DeleteOrchestratorTeam'](arg1, arg2, arg3);
+}
+
+export function DeletePromptPreset(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DeletePromptPreset'](arg1, arg2, arg3);
 }
 
 export function DeleteScheduler(arg1) {
@@ -150,6 +158,10 @@ export function DevPanelListDir(arg1, arg2) {
   return window['go']['main']['App']['DevPanelListDir'](arg1, arg2);
 }
 
+export function DevPanelReadBinary(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelReadBinary'](arg1, arg2);
+}
+
 export function DevPanelReadFile(arg1, arg2) {
   return window['go']['main']['App']['DevPanelReadFile'](arg1, arg2);
 }
@@ -160,6 +172,18 @@ export function DevPanelRenameFile(arg1, arg2, arg3) {
 
 export function DevPanelSearchFiles(arg1, arg2) {
   return window['go']['main']['App']['DevPanelSearchFiles'](arg1, arg2);
+}
+
+export function DevPanelSqliteExportCSV(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DevPanelSqliteExportCSV'](arg1, arg2, arg3, arg4);
+}
+
+export function DevPanelSqliteListTables(arg1, arg2) {
+  return window['go']['main']['App']['DevPanelSqliteListTables'](arg1, arg2);
+}
+
+export function DevPanelSqliteQueryTable(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['DevPanelSqliteQueryTable'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function DevPanelStartWatcher(arg1) {
@@ -254,12 +278,24 @@ export function GetSessionLogFilePath() {
   return window['go']['main']['App']['GetSessionLogFilePath']();
 }
 
+export function GetSingleTaskRunnerClearDelay(arg1) {
+  return window['go']['main']['App']['GetSingleTaskRunnerClearDelay'](arg1);
+}
+
+export function GetSingleTaskRunnerStatus(arg1) {
+  return window['go']['main']['App']['GetSingleTaskRunnerStatus'](arg1);
+}
+
 export function GetTaskSchedulerSettings() {
   return window['go']['main']['App']['GetTaskSchedulerSettings']();
 }
 
-export function GetTaskSchedulerStatus() {
-  return window['go']['main']['App']['GetTaskSchedulerStatus']();
+export function GetTaskSchedulerStatus(arg1) {
+  return window['go']['main']['App']['GetTaskSchedulerStatus'](arg1);
+}
+
+export function GetUsageDashboard(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetUsageDashboard'](arg1, arg2, arg3);
 }
 
 export function GetValidationRules() {
@@ -322,6 +358,10 @@ export function LoadOrchestratorTeams(arg1) {
   return window['go']['main']['App']['LoadOrchestratorTeams'](arg1);
 }
 
+export function LoadPromptPresets(arg1) {
+  return window['go']['main']['App']['LoadPromptPresets'](arg1);
+}
+
 export function LoadSchedulerTemplates(arg1) {
   return window['go']['main']['App']['LoadSchedulerTemplates'](arg1);
 }
@@ -334,8 +374,8 @@ export function OpenDirectoryInExplorer(arg1) {
   return window['go']['main']['App']['OpenDirectoryInExplorer'](arg1);
 }
 
-export function PauseTaskScheduler() {
-  return window['go']['main']['App']['PauseTaskScheduler']();
+export function PauseTaskScheduler(arg1) {
+  return window['go']['main']['App']['PauseTaskScheduler'](arg1);
 }
 
 export function PickSessionDirectory() {
@@ -354,8 +394,12 @@ export function RecoverIMEWindowFocus() {
   return window['go']['main']['App']['RecoverIMEWindowFocus']();
 }
 
-export function RemoveTaskSchedulerItem(arg1) {
-  return window['go']['main']['App']['RemoveTaskSchedulerItem'](arg1);
+export function RemoveSingleTaskRunnerItem(arg1, arg2) {
+  return window['go']['main']['App']['RemoveSingleTaskRunnerItem'](arg1, arg2);
+}
+
+export function RemoveTaskSchedulerItem(arg1, arg2) {
+  return window['go']['main']['App']['RemoveTaskSchedulerItem'](arg1, arg2);
 }
 
 export function RenamePane(arg1, arg2) {
@@ -370,8 +414,16 @@ export function ReorderOrchestratorTeams(arg1, arg2, arg3) {
   return window['go']['main']['App']['ReorderOrchestratorTeams'](arg1, arg2, arg3);
 }
 
-export function ReorderTaskSchedulerItems(arg1) {
-  return window['go']['main']['App']['ReorderTaskSchedulerItems'](arg1);
+export function ReorderPromptPresets(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ReorderPromptPresets'](arg1, arg2, arg3);
+}
+
+export function ReorderSingleTaskRunnerItems(arg1, arg2) {
+  return window['go']['main']['App']['ReorderSingleTaskRunnerItems'](arg1, arg2);
+}
+
+export function ReorderTaskSchedulerItems(arg1, arg2) {
+  return window['go']['main']['App']['ReorderTaskSchedulerItems'](arg1, arg2);
 }
 
 export function ResizePane(arg1, arg2, arg3) {
@@ -386,8 +438,8 @@ export function ResumeScheduler(arg1) {
   return window['go']['main']['App']['ResumeScheduler'](arg1);
 }
 
-export function ResumeTaskScheduler() {
-  return window['go']['main']['App']['ResumeTaskScheduler']();
+export function ResumeTaskScheduler(arg1) {
+  return window['go']['main']['App']['ResumeTaskScheduler'](arg1);
 }
 
 export function SaveConfig(arg1) {
@@ -396,6 +448,10 @@ export function SaveConfig(arg1) {
 
 export function SaveOrchestratorTeam(arg1, arg2) {
   return window['go']['main']['App']['SaveOrchestratorTeam'](arg1, arg2);
+}
+
+export function SavePromptPreset(arg1, arg2) {
+  return window['go']['main']['App']['SavePromptPreset'](arg1, arg2);
 }
 
 export function SaveSchedulerTemplate(arg1, arg2) {
@@ -426,6 +482,10 @@ export function SetActiveSession(arg1) {
   return window['go']['main']['App']['SetActiveSession'](arg1);
 }
 
+export function SetSingleTaskRunnerClearDelay(arg1, arg2) {
+  return window['go']['main']['App']['SetSingleTaskRunnerClearDelay'](arg1, arg2);
+}
+
 export function SplitPane(arg1, arg2) {
   return window['go']['main']['App']['SplitPane'](arg1, arg2);
 }
@@ -438,8 +498,12 @@ export function StartScheduler(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['StartScheduler'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function StartTaskScheduler(arg1, arg2) {
-  return window['go']['main']['App']['StartTaskScheduler'](arg1, arg2);
+export function StartSingleTaskRunner(arg1) {
+  return window['go']['main']['App']['StartSingleTaskRunner'](arg1);
+}
+
+export function StartTaskScheduler(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartTaskScheduler'](arg1, arg2, arg3);
 }
 
 export function StopAllSchedulers() {
@@ -450,8 +514,12 @@ export function StopScheduler(arg1) {
   return window['go']['main']['App']['StopScheduler'](arg1);
 }
 
-export function StopTaskScheduler() {
-  return window['go']['main']['App']['StopTaskScheduler']();
+export function StopSingleTaskRunner(arg1) {
+  return window['go']['main']['App']['StopSingleTaskRunner'](arg1);
+}
+
+export function StopTaskScheduler(arg1) {
+  return window['go']['main']['App']['StopTaskScheduler'](arg1);
 }
 
 export function SwapPanes(arg1, arg2) {
@@ -466,6 +534,10 @@ export function ToggleViewerSidebarMode() {
   return window['go']['main']['App']['ToggleViewerSidebarMode']();
 }
 
-export function UpdateTaskSchedulerItem(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['UpdateTaskSchedulerItem'](arg1, arg2, arg3, arg4, arg5, arg6);
+export function UpdateSingleTaskRunnerItem(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['UpdateSingleTaskRunnerItem'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+}
+
+export function UpdateTaskSchedulerItem(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['UpdateTaskSchedulerItem'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }

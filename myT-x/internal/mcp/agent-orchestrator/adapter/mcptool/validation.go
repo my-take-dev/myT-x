@@ -26,9 +26,10 @@ const (
 	maxArgLen           = 200
 	maxStatusNoteLen    = 200
 	maxCancelReasonLen  = 500
-	maxProgressNoteLen  = 500
+	maxProgressNoteLen  = usecase.MaxTaskProgressNoteLen
 	maxGroupLabelLen    = 120
 	maxBatchTasks       = 10
+	maxBatchMembers     = 10
 	maxDependsOnTasks   = 20
 )
 
@@ -36,6 +37,9 @@ var (
 	agentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	taskIDPattern        = regexp.MustCompile(`^t-[A-Za-z0-9]+$`)
 	sendMessageIDPattern = regexp.MustCompile(`^m-[A-Za-z0-9]+$`)
+	taskStatusFilters    = domain.TaskStatusFilterValues()
+	taskStatusFilterDesc = `"` + strings.Join(taskStatusFilters, `" / "`) + `"`
+	taskStatusFilterList = strings.Join(taskStatusFilters, ", ")
 )
 
 func requiredAgentName(args map[string]any, key string) (string, error) {
@@ -283,6 +287,65 @@ func requiredBatchTasks(args map[string]any, key string) ([]usecase.SendTaskBatc
 	return items, nil
 }
 
+// requiredBatchMembers は add_members のメンバー配列をバリデーション・パースする。
+func requiredBatchMembers(args map[string]any, key string) ([]usecase.AddMemberBatchItemCmd, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return nil, fmt.Errorf("%s is required", key)
+	}
+	raw, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be an array", key)
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("%s must contain at least 1 item", key)
+	}
+	if len(raw) > maxBatchMembers {
+		return nil, fmt.Errorf("%s must contain %d items or fewer", key, maxBatchMembers)
+	}
+
+	items := make([]usecase.AddMemberBatchItemCmd, 0, len(raw))
+	for i, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s[%d] must be an object", key, i)
+		}
+		paneTitle, err := requiredString(entry, "pane_title", maxPaneTitleLen)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", key, i, err)
+		}
+		role, err := requiredString(entry, "role", maxRoleLen)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", key, i, err)
+		}
+		command, err := requiredString(entry, "command", maxCommandLen)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", key, i, err)
+		}
+		cmdArgs, err := optionalStringList(entry, "args", maxArgs, maxArgLen)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", key, i, err)
+		}
+		customMessage, err := optionalBoundedString(entry, "custom_message", maxCustomMessageLen)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", key, i, err)
+		}
+		skills, err := optionalSkillList(entry, "skills", maxSkills)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", key, i, err)
+		}
+		items = append(items, usecase.AddMemberBatchItemCmd{
+			PaneTitle:     paneTitle,
+			Role:          role,
+			Command:       command,
+			Args:          cmdArgs,
+			CustomMessage: customMessage,
+			Skills:        skills,
+		})
+	}
+	return items, nil
+}
+
 // optionalSkillList はスキル配列をパースする。
 // オブジェクト配列 [{"name":"x","description":"y"}] とレガシー文字列配列 ["x"] の両方を受け付ける。
 func optionalSkillList(args map[string]any, key string, maxItems int) ([]domain.Skill, error) {
@@ -371,12 +434,10 @@ func optionalStatusFilter(args map[string]any, key string, defaultValue string) 
 	if !ok {
 		return "", fmt.Errorf("%s must be a string", key)
 	}
-	switch status {
-	case "all", "pending", "blocked", "completed", "failed", "abandoned", "cancelled", "expired":
-		return status, nil
-	default:
-		return "", fmt.Errorf("%s must be one of all, pending, blocked, completed, failed, abandoned, cancelled, expired", key)
+	if !domain.IsValidTaskStatusFilter(status) {
+		return "", fmt.Errorf("%s must be one of %s", key, taskStatusFilterList)
 	}
+	return string(domain.TaskStatusFilterFromString(status)), nil
 }
 
 func requiredAgentWorkStatus(args map[string]any, key string) (string, error) {
@@ -384,7 +445,7 @@ func requiredAgentWorkStatus(args map[string]any, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	switch value {
+	switch domain.AgentWorkStatus(value) {
 	case domain.AgentWorkStatusIdle, domain.AgentWorkStatusBusy, domain.AgentWorkStatusWorking:
 		return value, nil
 	default:
@@ -444,8 +505,8 @@ func optionalProgressPct(args map[string]any, key string) (*int, error) {
 		return nil, fmt.Errorf("%s must be an integer", key)
 	}
 	progressPct := int(number)
-	if progressPct < 0 || progressPct > 100 {
-		return nil, fmt.Errorf("%s must be between 0 and 100", key)
+	if progressPct < usecase.TaskProgressPctMin || progressPct > usecase.TaskProgressPctMax {
+		return nil, fmt.Errorf("%s must be between %d and %d", key, usecase.TaskProgressPctMin, usecase.TaskProgressPctMax)
 	}
 	return &progressPct, nil
 }

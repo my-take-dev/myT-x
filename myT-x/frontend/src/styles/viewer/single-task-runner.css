@@ -1,0 +1,301 @@
+/* ── Single Task Runner View ── */
+
+.single-task-runner-view {
+    --single-task-runner-accent: #7ed4ae;
+    --single-task-runner-accent-soft: rgba(126, 212, 174, 0.14);
+    --single-task-runner-accent-border: rgba(126, 212, 174, 0.38);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.single-task-runner-body {
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.single-task-runner-error {
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: rgba(255, 80, 80, 0.1);
+    color: var(--danger);
+    font-size: 0.84rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.single-task-runner-error button {
+    font: inherit;
+    font-size: 0.78rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+}
+
+.single-task-runner-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.single-task-runner-delay-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.single-task-runner-delay-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.single-task-runner-delay-input {
+    max-width: 96px;
+}
+
+.single-task-runner-delay-unit,
+.single-task-runner-delay-hint,
+.single-task-runner-form-hint {
+    color: var(--fg-dim);
+    font-size: 0.78rem;
+}
+
+.single-task-runner-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.single-task-runner-new-btn,
+.single-task-runner-start-btn,
+.single-task-runner-stop-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.single-task-runner-new-btn {
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+}
+
+.single-task-runner-start-btn {
+    border: 1px solid var(--single-task-runner-accent-border);
+    background: var(--single-task-runner-accent-soft);
+    color: var(--single-task-runner-accent);
+}
+
+.single-task-runner-stop-btn {
+    border: 1px solid var(--danger);
+    background: transparent;
+    color: var(--danger);
+}
+
+.single-task-runner-new-btn:hover,
+.single-task-runner-start-btn:hover,
+.single-task-runner-stop-btn:hover {
+    opacity: 0.85;
+}
+
+.single-task-runner-empty {
+    text-align: center;
+    color: var(--fg-dim);
+    font-size: 0.88rem;
+    padding: 32px 0;
+}
+
+.single-task-runner-empty-desc {
+    margin: 8px 0 0;
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+    opacity: 0.7;
+}
+
+.single-task-runner-card {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.single-task-runner-card-active {
+    border-color: var(--single-task-runner-accent-border);
+    background: var(--single-task-runner-accent-soft);
+}
+
+.single-task-runner-card-failed {
+    background: rgba(255, 80, 80, 0.08);
+    border-color: rgba(255, 80, 80, 0.35);
+}
+
+.single-task-runner-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.single-task-runner-card-status {
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.single-task-runner-card-title {
+    flex: 1;
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: var(--fg-main);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.single-task-runner-card-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.single-task-runner-edit-btn,
+.single-task-runner-delete-btn {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.single-task-runner-edit-btn {
+    border: 1px solid rgba(163, 184, 204, 0.55);
+    background: transparent;
+    color: var(--fg-dim);
+}
+
+.single-task-runner-delete-btn {
+    border: 1px solid rgba(255, 130, 130, 0.55);
+    background: rgba(255, 80, 80, 0.08);
+    color: var(--danger);
+}
+
+.single-task-runner-card-meta {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding-left: 28px;
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+}
+
+.single-task-runner-card-clear {
+    font-size: 0.72rem;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--single-task-runner-accent-border);
+    background: var(--single-task-runner-accent-soft);
+    color: var(--single-task-runner-accent);
+}
+
+.single-task-runner-card-error {
+    color: var(--danger);
+}
+
+.single-task-runner-card-result {
+    margin-left: 28px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(163, 184, 204, 0.24);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--fg-main);
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.single-task-runner-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.single-task-runner-back-btn {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 0;
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+    width: fit-content;
+}
+
+.single-task-runner-back-btn:hover {
+    text-decoration: underline;
+}
+
+.single-task-runner-checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--fg-main);
+}
+
+.single-task-runner-textarea {
+    min-height: 120px;
+    max-height: 320px;
+    resize: vertical;
+    font: inherit;
+    font-size: 0.88rem;
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--bg-input, var(--bg-main, var(--bg-panel)));
+    color: var(--fg-main);
+    line-height: 1.45;
+}
+
+.single-task-runner-textarea:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+
+.single-task-runner-submit-btn {
+    font: inherit;
+    font-size: 0.88rem;
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: var(--bg-main, var(--bg-panel));
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.single-task-runner-submit-btn:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+.single-task-runner-submit-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

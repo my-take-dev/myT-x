@@ -1,6 +1,10 @@
 package taskscheduler
 
-import "sync"
+import (
+	"errors"
+	"strings"
+	"sync"
+)
 
 // DepsFactory creates a Deps for a given session name.
 type DepsFactory func(sessionName string) Deps
@@ -12,6 +16,7 @@ type ServiceManager struct {
 	mu       sync.Mutex
 	services map[string]*Service
 	factory  DepsFactory
+	rename   func(*Service, string) error
 }
 
 // NewServiceManager creates a ServiceManager with the given factory.
@@ -23,6 +28,7 @@ func NewServiceManager(factory DepsFactory) *ServiceManager {
 	return &ServiceManager{
 		services: make(map[string]*Service),
 		factory:  factory,
+		rename:   func(svc *Service, sessionName string) error { return svc.RenameSession(sessionName) },
 	}
 }
 
@@ -53,6 +59,7 @@ func (m *ServiceManager) GetStatus(sessionName string) QueueStatus {
 			RunStatus:    QueueIdle,
 			CurrentIndex: -1,
 			SessionName:  sessionName,
+			GenerationID: "",
 		}
 	}
 	return svc.GetStatus()
@@ -73,10 +80,13 @@ func (m *ServiceManager) StopAll() {
 }
 
 // Remove stops and removes the service for the given session.
+// Retire is called inside the lock to prevent a concurrent GetOrCreate from
+// recreating a service while the old one is still live.
 func (m *ServiceManager) Remove(sessionName string) {
 	m.mu.Lock()
 	svc, ok := m.services[sessionName]
 	if ok {
+		svc.Retire()
 		delete(m.services, sessionName)
 	}
 	m.mu.Unlock()
@@ -84,4 +94,33 @@ func (m *ServiceManager) Remove(sessionName string) {
 	if ok {
 		svc.StopAll()
 	}
+}
+
+// Rename rekeys a session service without discarding the existing queue state.
+func (m *ServiceManager) Rename(oldName, newName string) error {
+	oldName = strings.TrimSpace(oldName)
+	newName = strings.TrimSpace(newName)
+	if oldName == "" || newName == "" || oldName == newName {
+		return nil
+	}
+
+	m.mu.Lock()
+	svc, ok := m.services[oldName]
+	if !ok {
+		m.mu.Unlock()
+		return nil
+	}
+	if _, exists := m.services[newName]; exists {
+		m.mu.Unlock()
+		return errors.New("task scheduler service already exists for renamed session")
+	}
+	if err := m.rename(svc, newName); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	delete(m.services, oldName)
+	m.services[newName] = svc
+	m.mu.Unlock()
+
+	return nil
 }

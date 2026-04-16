@@ -138,6 +138,13 @@ export function TaskSchedulerList({
             {items.length === 0 ? (
                 <div className="task-scheduler-empty">
                     {tr("viewer.taskScheduler.empty", "\u30bf\u30b9\u30af\u304c\u3042\u308a\u307e\u305b\u3093", "No tasks")}
+                    <p className="task-scheduler-empty-desc">
+                        {tr(
+                            "viewer.taskScheduler.emptyDesc",
+                            "\u30aa\u30fc\u30b1\u30b9\u30c8\u30ec\u30fc\u30bf\u30fcMCP\u63a5\u7d9a\u5c02\u7528\u30bf\u30b9\u30af\u30e9\u30f3\u30ca\u30fc\u3067\u3059\u3002",
+                            "Task runner dedicated to Orchestrator MCP connections.",
+                        )}
+                    </p>
                 </div>
             ) : (
                 items.map((item) => (
@@ -175,7 +182,12 @@ export function TaskSchedulerList({
                             <span>{item.target_pane_id}</span>
                             {item.clear_before && (
                                 <span className="task-scheduler-card-clear">
-                                    Clear{item.clear_command && item.clear_command !== "/new" ? `: ${item.clear_command}` : ""}
+                                    {tr(
+                                        "viewer.taskScheduler.clearBestEffort",
+                                        "Clear (\u30d9\u30b9\u30c8\u30a8\u30d5\u30a9\u30fc\u30c8)",
+                                        "Clear first",
+                                    )}
+                                    {item.clear_command && item.clear_command !== "/new" ? `: ${item.clear_command}` : ""}
                                 </span>
                             )}
                             {item.error_message && (

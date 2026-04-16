@@ -3,8 +3,11 @@ import {api} from "../api";
 import {useEscapeClose} from "../hooks/useEscapeClose";
 import {useI18n} from "../i18n";
 import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
+import {suggestSessionName} from "../utils/sanitizeSessionName";
+import {formatWorktreeErrorMessage} from "../utils/worktreeErrorMessage";
 import type {git} from "../../wailsjs/go/models";
 import {INITIAL_STATE, newSessionReducer} from "./new-session/newSessionReducer";
+import {buildCreateSessionWithWorktreeOptions} from "./new-session/createSessionOptions";
 import {NewSessionForm} from "./new-session/NewSessionForm";
 import {WorktreeOptions} from "./new-session/WorktreeOptions";
 
@@ -101,7 +104,7 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
             dispatch({
                 type: "PICK_DIRECTORY",
                 directory: dir,
-                sessionName: dir.split(/[\\/]/).filter(Boolean).pop() || "",
+                sessionName: suggestSessionName(dir.split(/[\\/]/).filter(Boolean).pop() || "", "session"),
             });
 
             dispatch({type: "SET_FIELD", field: "gitCheckLoading", value: true});
@@ -138,9 +141,18 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                 dispatch({type: "SET_FIELD", field: "gitCheckLoading", value: false});
             }
         } catch (err) {
-            dispatch({type: "SET_FIELD", field: "error", value: String(err)});
+            dispatch({
+                type: "SET_FIELD",
+                field: "error",
+                value: formatWorktreeErrorMessage(
+                    err,
+                    {language, t},
+                    "フォルダの選択に失敗しました。",
+                    "Failed to select a folder.",
+                ),
+            });
         }
-    }, []);
+    }, [language, t]);
 
     const worktreeCheckSeqRef = useRef(0);
     const handleSelectWorktree = useCallback(async (wt: git.WorktreeInfo) => {
@@ -148,7 +160,7 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
         dispatch({
             type: "SELECT_WORKTREE",
             worktree: wt,
-            sessionName: wt.branch ? wt.branch.replace(/\//g, "-") : "",
+            sessionName: wt.branch ? suggestSessionName(wt.branch, "worktree-session") : "",
         });
         try {
             const conflict = await api.CheckWorktreePathConflict(wt.path);
@@ -181,15 +193,7 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
                             use_session_pane_scope: s.useSessionPaneScope,
                         });
                 } else {
-                    const opts = {
-                        branch_name: s.branchName.trim(),
-                        base_branch: s.baseBranch,
-                        pull_before_create: s.pullBefore,
-                        enable_agent_team: s.enableAgentTeam,
-                        use_claude_env: s.useClaudeEnv,
-                        use_pane_env: s.usePaneEnv,
-                        use_session_pane_scope: s.useSessionPaneScope,
-                    };
+                    const opts = buildCreateSessionWithWorktreeOptions(s);
                     created = await api.CreateSessionWithWorktree(s.directory, s.sessionName.trim(), opts);
                 }
             } else {
@@ -203,11 +207,20 @@ export function NewSessionModal({open, onClose, onCreated}: NewSessionModalProps
             onCreated(created.name);
             onClose();
         } catch (err) {
-            dispatch({type: "SET_FIELD", field: "error", value: String(err)});
+            dispatch({
+                type: "SET_FIELD",
+                field: "error",
+                value: formatWorktreeErrorMessage(
+                    err,
+                    {language, t},
+                    "セッションの作成に失敗しました。",
+                    "Failed to create the session.",
+                ),
+            });
         } finally {
             dispatch({type: "SET_FIELD", field: "loading", value: false});
         }
-    }, [s, onCreated, onClose]);
+    }, [language, onClose, onCreated, s, t]);
 
     const canSubmit = useMemo(() => {
         if (!s.directory || !s.sessionName.trim() || s.loading || s.worktreeDataLoading || s.gitCheckLoading) return false;

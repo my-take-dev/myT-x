@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"myT-x/internal/config"
 	gitpkg "myT-x/internal/git"
 	"myT-x/internal/tmux"
 )
@@ -36,6 +37,8 @@ func (s *Service) CreateSessionWithWorktree(
 	if sessionName == "" {
 		return tmux.SessionSnapshot{}, errors.New("session name is required")
 	}
+	sessionName, releaseSessionName := s.reserveAvailableSessionName(sessionName)
+	defer releaseSessionName()
 	validatedBranchName, err := validateAndTrimWorktreeBranchName(opts.BranchName)
 	if err != nil {
 		return tmux.SessionSnapshot{}, err
@@ -45,9 +48,11 @@ func (s *Service) CreateSessionWithWorktree(
 	createdName := ""
 	wtPath := ""
 	worktreeCreated := false
+	setupScriptsStopped := true
 	var repo *gitpkg.Repository
 	var setupScriptsCancel context.CancelFunc
 	var setupScriptsDone chan struct{}
+	setupTimeout := cfg.Worktree.SetupScriptTimeout()
 	// NOTE: Emit snapshots on both success and rollback paths so frontend
 	// subscribers stay synchronized even when RPC return values are not consumed.
 	defer func() {
@@ -56,10 +61,18 @@ func (s *Service) CreateSessionWithWorktree(
 		}
 		if setupScriptsCancel != nil {
 			setupScriptsCancel()
-			if !waitForSetupScriptsCancellation(setupScriptsDone, 3*time.Second) {
+			if !waitForSetupScriptsCancellation(setupScriptsDone, config.SetupScriptCancellationWait) {
+				setupScriptsStopped = false
+				eventSessionName := strings.TrimSpace(createdName)
+				if eventSessionName == "" {
+					eventSessionName = strings.TrimSpace(sessionName)
+				}
+				s.deps.EmitWorktreeCleanupFailure(eventSessionName, wtPath,
+					errors.New("setup scripts did not stop before rollback timeout"))
 				slog.Warn("[WARN-GIT] timed out waiting for setup scripts to stop during rollback; "+
-					"setup script errors may follow as the worktree directory is being removed",
-					"session", createdName, "worktree", wtPath)
+					"skipping worktree cleanup to avoid deleting the directory while scripts may still be running",
+					"session", eventSessionName, "worktree", wtPath, "timeout", config.SetupScriptCancellationWait)
+				retErr = fmt.Errorf("%w (setup scripts did not stop before rollback; worktree cleanup skipped)", retErr)
 			}
 		}
 		if createdName != "" {
@@ -69,7 +82,7 @@ func (s *Service) CreateSessionWithWorktree(
 			// Notify frontend after session rollback for UI consistency (#69).
 			s.deps.RequestSnapshot(true)
 		}
-		if worktreeCreated && repo != nil && wtPath != "" {
+		if worktreeCreated && repo != nil && wtPath != "" && setupScriptsStopped {
 			if rollbackErr := rollbackWorktree(repo, wtPath, opts.BranchName); rollbackErr != nil {
 				eventSessionName := strings.TrimSpace(createdName)
 				if eventSessionName == "" {
@@ -89,24 +102,12 @@ func (s *Service) CreateSessionWithWorktree(
 		return tmux.SessionSnapshot{}, fmt.Errorf("not a git repository: %s", repoPath)
 	}
 
-	// Deduplicate session name BEFORE creating the worktree to avoid
-	// orphaned branches when session creation fails due to name collision.
-	sessionName = s.deps.FindAvailableSessionName(sessionName)
-
 	repo, err = gitpkg.Open(repoPath)
 	if err != nil {
 		return tmux.SessionSnapshot{}, fmt.Errorf("failed to open repository: %w", err)
 	}
 
-	emitProgress := func(stage, message string) {
-		s.deps.Emitter.Emit("worktree:progress", map[string]any{
-			"sessionName": sessionName,
-			"stage":       stage,
-			"message":     message,
-		})
-	}
-
-	wtResult, err := createWorktreeForSession(repo, repoPath, sessionName, opts, emitProgress)
+	wtResult, err := createWorktreeForSession(repo, repoPath, sessionName, opts, s.deps.CurrentBranch)
 	if err != nil {
 		return tmux.SessionSnapshot{}, err
 	}
@@ -145,7 +146,6 @@ func (s *Service) CreateSessionWithWorktree(
 	}
 
 	// Copy configured files (e.g. .env) from repo to worktree.
-	emitProgress("copying-files", "Copying files...")
 	if copyFailures := s.CopyConfigFilesToWorktree(repoPath, wtPath, cfg.Worktree.CopyFiles); len(copyFailures) > 0 {
 		slog.Warn("[WARN-GIT] failed to copy one or more configured files to worktree",
 			"session", createdName, "path", wtPath, "files", copyFailures)
@@ -156,7 +156,6 @@ func (s *Service) CreateSessionWithWorktree(
 	}
 
 	// Copy configured directories (e.g. .vscode) from repo to worktree.
-	emitProgress("copying-dirs", "Copying directories...")
 	if copyDirFailures := s.CopyConfigDirsToWorktree(repoPath, wtPath, cfg.Worktree.CopyDirs); len(copyDirFailures) > 0 {
 		slog.Warn("[WARN-GIT] failed to copy one or more configured directories to worktree",
 			"session", createdName, "path", wtPath, "dirs", copyDirFailures)
@@ -173,7 +172,6 @@ func (s *Service) CreateSessionWithWorktree(
 
 	// Run setup scripts asynchronously if configured.
 	if len(cfg.Worktree.SetupScripts) > 0 {
-		emitProgress("setup-scripts", "Running setup scripts...")
 		parentCtx := context.Background()
 		if appCtx := s.deps.RuntimeContext(); appCtx != nil {
 			parentCtx = appCtx
@@ -181,19 +179,36 @@ func (s *Service) CreateSessionWithWorktree(
 		setupScriptsCtx, cancel := context.WithCancel(parentCtx)
 		setupScriptsCancel = cancel
 		setupScriptsDone = make(chan struct{})
-		s.deps.SetupWGAdd(1)
-		go func(ctx context.Context, cancel context.CancelFunc, done chan struct{}) {
-			defer close(done)
-			defer s.deps.SetupWGDone()
-			defer cancel()
-			defer func() {
-				s.deps.RecoverBackgroundPanic("worktree-setup-scripts", recover())
-			}()
-			s.runSetupScriptsWithParentContext(ctx, wtPath, createdName, cfg.Shell, cfg.Worktree.SetupScripts)
-		}(setupScriptsCtx, cancel, setupScriptsDone)
+		releaseTrackedCancel := func() {}
+		skipSetupWorkerDone := false
+		shouldStartSetupWorker := true
+		if s.deps.RegisterSetupWorker != nil {
+			releaseTrackedCancel, shouldStartSetupWorker = s.deps.RegisterSetupWorker(cancel)
+			skipSetupWorkerDone = true
+		} else {
+			s.deps.SetupWGAdd(1)
+			if s.deps.TrackSetupCancel != nil {
+				releaseTrackedCancel = s.deps.TrackSetupCancel(cancel)
+			}
+		}
+		if !shouldStartSetupWorker {
+			close(setupScriptsDone)
+		} else {
+			go func(ctx context.Context, cancel context.CancelFunc, done chan struct{}, release func(), skipDone bool) {
+				defer close(done)
+				if !skipDone {
+					defer s.deps.SetupWGDone()
+				}
+				defer release()
+				defer cancel()
+				defer func() {
+					s.deps.RecoverBackgroundPanic("worktree-setup-scripts", recover())
+				}()
+				s.runSetupScriptsWithTimeout(ctx, wtPath, createdName, cfg.Shell, cfg.Worktree.SetupScripts, setupTimeout)
+			}(setupScriptsCtx, cancel, setupScriptsDone, releaseTrackedCancel, skipSetupWorkerDone)
+		}
 	}
 
-	emitProgress("activating", "Activating session...")
 	snapshot, retErr = s.deps.ActivateCreatedSession(createdName)
 	if retErr == nil {
 		s.deps.RequestSnapshot(true)
@@ -231,6 +246,8 @@ func (s *Service) CreateSessionWithExistingWorktree(
 	if worktreePath == "" {
 		return tmux.SessionSnapshot{}, errors.New("worktree path is required")
 	}
+	sessionName, releaseSessionName := s.reserveAvailableSessionName(sessionName)
+	defer releaseSessionName()
 	cfg := s.deps.GetConfigSnapshot()
 
 	if !cfg.Worktree.Enabled {
@@ -249,8 +266,6 @@ func (s *Service) CreateSessionWithExistingWorktree(
 		return tmux.SessionSnapshot{}, fmt.Errorf(
 			"worktree path is already in use by session %q: %s", conflict, worktreePath)
 	}
-
-	sessionName = s.deps.FindAvailableSessionName(sessionName)
 
 	// Detect current branch of the existing worktree.
 	var branchName string
@@ -313,10 +328,24 @@ func (s *Service) CreateSessionWithExistingWorktree(
 	return snapshot, retErr
 }
 
-// runSetupScriptsWithParentContext runs setup scripts sequentially with a
-// per-script timeout. Called asynchronously from CreateSessionWithWorktree.
+// runSetupScriptsWithParentContext runs setup scripts sequentially with the
+// default per-script timeout. Tests call this helper directly.
 func (s *Service) runSetupScriptsWithParentContext(parentCtx context.Context, wtPath, sessionName, shell string, scripts []string) {
-	const setupTimeout = 5 * time.Minute
+	s.runSetupScriptsWithTimeout(parentCtx, wtPath, sessionName, shell, scripts,
+		config.WorktreeConfig{}.SetupScriptTimeout())
+}
+
+// runSetupScriptsWithTimeout runs setup scripts sequentially with a per-script
+// timeout. Called asynchronously from CreateSessionWithWorktree.
+func (s *Service) runSetupScriptsWithTimeout(
+	parentCtx context.Context,
+	wtPath, sessionName, shell string,
+	scripts []string,
+	setupTimeout time.Duration,
+) {
+	if setupTimeout <= 0 {
+		setupTimeout = config.WorktreeConfig{}.SetupScriptTimeout()
+	}
 	if strings.TrimSpace(shell) == "" {
 		shell = "powershell.exe"
 	}

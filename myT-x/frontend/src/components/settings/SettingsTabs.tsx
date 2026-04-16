@@ -7,6 +7,7 @@ import {PaneEnvSettings} from "./PaneEnvSettings";
 import {ClaudeEnvSettings} from "./ClaudeEnvSettings";
 import {useSettingsI18n} from "./settingsI18n";
 import type {FormDispatch, FormState, SettingsCategory} from "./types";
+import type {ValidationRules} from "../../types/tmux";
 
 interface SettingsCategoryDefinition {
     readonly id: SettingsCategory;
@@ -27,9 +28,10 @@ const SETTINGS_CATEGORIES: SettingsCategoryDefinition[] = [
 interface SettingsTabsProps {
     readonly s: FormState;
     readonly dispatch: FormDispatch;
+    readonly validationRules?: ValidationRules | null;
 }
 
-export function SettingsTabs({s, dispatch}: SettingsTabsProps) {
+export function SettingsTabs({s, dispatch, validationRules}: SettingsTabsProps) {
     const {t} = useSettingsI18n();
 
     const handleCategoryKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, category: SettingsCategory) => {
@@ -68,13 +70,13 @@ export function SettingsTabs({s, dispatch}: SettingsTabsProps) {
     };
 
     const categoryPanels = useMemo<Record<SettingsCategory, () => JSX.Element>>(() => ({
-        general: () => <GeneralSettings s={s} dispatch={dispatch}/>,
+        general: () => <GeneralSettings s={s} dispatch={dispatch} validationRules={validationRules}/>,
         keybinds: () => <KeybindSettings s={s} dispatch={dispatch}/>,
         worktree: () => <WorktreeSettings s={s} dispatch={dispatch}/>,
         "agent-model": () => <AgentModelSettings s={s} dispatch={dispatch}/>,
         "claude-env": () => <ClaudeEnvSettings s={s} dispatch={dispatch}/>,
         "pane-env": () => <PaneEnvSettings s={s} dispatch={dispatch}/>,
-    }), [s, dispatch]);
+    }), [dispatch, s, validationRules]);
 
     return (
         <div className="settings-layout">

@@ -48,6 +48,11 @@ type Deps struct {
 	// FindAvailableSessionName deduplicates session names by appending suffixes.
 	FindAvailableSessionName func(name string) string
 
+	// ReserveAvailableSessionName reserves a deduplicated session name until the
+	// returned release function is called. Optional: when nil, callers fall back
+	// to FindAvailableSessionName without an in-flight reservation.
+	ReserveAvailableSessionName func(name string) (reservedName string, release func())
+
 	// CreateSession creates a tmux session in the given directory.
 	// The router is managed internally by the implementation.
 	//
@@ -81,11 +86,23 @@ type Deps struct {
 	// CleanupOrphanedLocalBranch removes orphaned branches after worktree cleanup.
 	CleanupOrphanedLocalBranch func(sessionName string, repo *gitpkg.Repository, branchName string)
 
+	// RegisterSetupWorker atomically marks a setup worker as active for shutdown.
+	// The returned release callback must be called exactly once when the worker
+	// exits. When shouldStart is false, the caller must skip launching the worker
+	// because shutdown has already started and the cancel function has been fired.
+	// Optional: when nil, callers fall back to SetupWGAdd/SetupWGDone and
+	// TrackSetupCancel separately.
+	RegisterSetupWorker func(cancel context.CancelFunc) (release func(), shouldStart bool)
+
 	// SetupWGAdd increments the setup WaitGroup counter for async scripts.
 	SetupWGAdd func(delta int)
 
 	// SetupWGDone decrements the setup WaitGroup counter.
 	SetupWGDone func()
+
+	// TrackSetupCancel registers an active setup-script cancel function until the
+	// returned release callback is invoked. Optional.
+	TrackSetupCancel func(cancel context.CancelFunc) (release func())
 
 	// RecoverBackgroundPanic handles panics in background goroutines.
 	RecoverBackgroundPanic func(worker string, recovered any) bool
@@ -147,6 +164,16 @@ type CopyDeps struct {
 // No App-level or Service-level mutex is needed.
 type Service struct {
 	deps Deps
+}
+
+func (s *Service) reserveAvailableSessionName(name string) (string, func()) {
+	if s.deps.ReserveAvailableSessionName != nil {
+		return s.deps.ReserveAvailableSessionName(name)
+	}
+	if s.deps.FindAvailableSessionName == nil {
+		return name, func() {}
+	}
+	return s.deps.FindAvailableSessionName(name), func() {}
 }
 
 // NewService creates a worktree service with the given dependencies.

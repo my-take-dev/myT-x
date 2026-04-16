@@ -41,8 +41,8 @@ function validateEntryName(name: string): string | null {
     if (trimmed === "") {
         return "A name is required.";
     }
-    if (trimmed === "." || trimmed.includes("..") || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
-        return "Name cannot contain path separators, \"..\", or null characters.";
+    if (trimmed === "." || trimmed === ".." || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
+        return "Name cannot be \".\", \"..\", contain path separators, or null characters.";
     }
     return null;
 }
@@ -61,9 +61,13 @@ function EditorDialogShell({ariaLabel, children, onCancel, title}: EditorDialogS
         document.addEventListener("keydown", handleEscape);
         return () => {
             document.removeEventListener("keydown", handleEscape);
-            if (previousFocusRef.current instanceof HTMLElement) {
+            if (
+                previousFocusRef.current instanceof HTMLElement &&
+                document.body.contains(previousFocusRef.current)
+            ) {
                 previousFocusRef.current.focus();
             }
+            previousFocusRef.current = null;
         };
     }, [onCancel]);
 

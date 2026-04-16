@@ -483,6 +483,40 @@ func TestHandleKillWindow(t *testing.T) {
 	}
 }
 
+func TestHandleKillWindowDoesNotCallOnSessionDestroyedWhenLastWindowEmptiesSession(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	if _, _, err := sessions.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	calledCount := 0
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{
+		ShimAvailable: true,
+		OnSessionDestroyed: func(sessionName string) {
+			calledCount++
+		},
+	})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "kill-window",
+		Flags:   map[string]any{"-t": "demo:0"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	if calledCount != 0 {
+		t.Fatalf("OnSessionDestroyed call count = %d, want 0", calledCount)
+	}
+	if !sessions.HasSession("demo") {
+		t.Fatal("session 'demo' should remain after the last window is removed")
+	}
+	if got := emitter.EventNames(); len(got) != 1 || got[0] != "tmux:session-emptied" {
+		t.Fatalf("events = %v, want [tmux:session-emptied]", got)
+	}
+}
+
 func TestHandleNewWindow(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -1076,6 +1110,13 @@ func TestHandleListWindowsFilter(t *testing.T) {
 			wantExitCode: 0,
 			wantContains: []string{"demo:main", "other:secondary"},
 			wantLines:    2,
+		},
+		{
+			name:         "window_id is available in list output",
+			flags:        map[string]any{"-t": "demo", "-F": "#{window_id}: #{window_name}"},
+			wantExitCode: 0,
+			wantContains: []string{"@0: main"},
+			wantLines:    1,
 		},
 	}
 

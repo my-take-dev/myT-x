@@ -2,6 +2,7 @@ import {useCallback, useEffect, useState} from "react";
 import {api} from "../api";
 import {useEscapeClose} from "../hooks/useEscapeClose";
 import {useI18n} from "../i18n";
+import {formatWorktreeErrorMessage} from "../utils/worktreeErrorMessage";
 
 interface PromoteBranchModalProps {
     open: boolean;
@@ -36,11 +37,18 @@ export function PromoteBranchModal({open, sessionName, onClose, onPromoted}: Pro
             onPromoted();
             onClose();
         } catch (err) {
-            setError(String(err));
+            setError(
+                formatWorktreeErrorMessage(
+                    err,
+                    {language, t},
+                    "ブランチへの昇格に失敗しました。",
+                    "Failed to promote the worktree to a branch.",
+                ),
+            );
         } finally {
             setLoading(false);
         }
-    }, [branchName, sessionName, onPromoted, onClose]);
+    }, [branchName, language, onClose, onPromoted, sessionName, t]);
 
     if (!open) return null;
 

@@ -21,11 +21,17 @@ export interface UseEditorFileResult {
     readonly handleChange: (value: string | undefined) => void;
     readonly handleEditorMount: OnMount;
     readonly loadFile: (path: string) => Promise<void>;
-    readonly saveFile: () => Promise<void>;
+    readonly saveFile: () => Promise<boolean>;
 }
 
 export function useEditorFile(): UseEditorFileResult {
+    const sessions = useTmuxStore((state) => state.sessions);
     const activeSession = useTmuxStore((state) => state.activeSession);
+    const activeSessionSnapshot = useMemo(
+        () => (activeSession ? sessions.find((entry) => entry.name === activeSession) ?? null : null),
+        [sessions, activeSession],
+    );
+    const activeSessionKey = activeSessionSnapshot ? `${activeSessionSnapshot.name}:${activeSessionSnapshot.id}` : "";
 
     const [currentPath, setCurrentPath] = useState<string | null>(null);
     const [loadingState, setLoadingState] = useState<LoadingState>("idle");
@@ -43,12 +49,17 @@ export function useEditorFile(): UseEditorFileResult {
     const layoutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const mountedRef = useRef(true);
     const sessionRef = useRef(activeSession);
+    const latestSessionKeyRef = useRef(activeSessionKey);
     const requestIDRef = useRef(0);
     const saveRequestIDRef = useRef(0);
-    const prevSessionRef = useRef<string | null>(null);
-    const saveFileRef = useRef<(() => Promise<void>) | null>(null);
+    const prevSessionKeyRef = useRef<string | null>(null);
+    const saveFileRef = useRef<(() => Promise<boolean>) | null>(null);
+    const loadedSessionKeyRef = useRef<string | null>(null);
+    const loadingStateRef = useRef<LoadingState>(loadingState);
+    const truncatedRef = useRef(truncated);
 
-    sessionRef.current = activeSession;
+    loadingStateRef.current = loadingState;
+    truncatedRef.current = truncated;
 
     const clearScheduledLayout = useCallback(() => {
         if (layoutTimeoutRef.current !== null) {
@@ -79,6 +90,7 @@ export function useEditorFile(): UseEditorFileResult {
         abortControllerRef.current = null;
         requestIDRef.current += 1;
         saveRequestIDRef.current += 1;
+        loadedSessionKeyRef.current = null;
         currentPathRef.current = "";
         currentContentRef.current = "";
         originalContentRef.current = "";
@@ -101,14 +113,27 @@ export function useEditorFile(): UseEditorFileResult {
     }, [clearScheduledLayout]);
 
     useEffect(() => {
-        if (prevSessionRef.current === activeSession) {
+        sessionRef.current = activeSession;
+        latestSessionKeyRef.current = activeSessionKey;
+    }, [activeSession, activeSessionKey]);
+
+    useEffect(() => {
+        if (prevSessionKeyRef.current === activeSessionKey) {
             return;
         }
-        prevSessionRef.current = activeSession;
-        clearFile();
-    }, [activeSession, clearFile]);
+        const previousSessionKey = prevSessionKeyRef.current;
+        prevSessionKeyRef.current = activeSessionKey;
+        abortControllerRef.current?.abort();
+        abortControllerRef.current = null;
+        requestIDRef.current += 1;
+        saveRequestIDRef.current += 1;
+        if (previousSessionKey !== null && currentPathRef.current !== "") {
+            loadedSessionKeyRef.current = previousSessionKey;
+        }
+    }, [activeSessionKey]);
 
     const loadFile = useCallback(async (path: string) => {
+        const capturedSessionKey = latestSessionKeyRef.current;
         const capturedSession = sessionRef.current?.trim();
         if (!capturedSession) {
             clearFile();
@@ -135,10 +160,12 @@ export function useEditorFile(): UseEditorFileResult {
         setTruncated(false);
         originalContentRef.current = "";
         currentContentRef.current = "";
+        loadedSessionKeyRef.current = null;
 
         const shouldIgnore = () => (
             abortController.signal.aborted
             || !mountedRef.current
+            || latestSessionKeyRef.current !== capturedSessionKey
             || sessionRef.current?.trim() !== capturedSession
             || requestIDRef.current !== requestID
             || currentPathRef.current !== path
@@ -172,6 +199,7 @@ export function useEditorFile(): UseEditorFileResult {
 
             setEditorValue(content.content);
             originalContentRef.current = content.content;
+            loadedSessionKeyRef.current = capturedSessionKey;
             setTruncated(content.truncated);
             setIsModified(false);
             setError(null);
@@ -188,29 +216,34 @@ export function useEditorFile(): UseEditorFileResult {
         }
     }, [clearFile, setEditorValue]);
 
-    const saveFile = useCallback(async () => {
+    const saveFile = useCallback(async (): Promise<boolean> => {
+        const capturedSessionKey = latestSessionKeyRef.current;
         const capturedSession = sessionRef.current?.trim();
         const capturedPath = currentPathRef.current;
 
         if (!capturedSession) {
-            const saveError = new Error("No active session.");
-            setError(saveError.message);
-            throw saveError;
+            setError("No active session.");
+            return false;
+        }
+        if (!capturedSessionKey) {
+            setError("Active session key is unavailable.");
+            return false;
         }
         if (!capturedPath) {
-            const saveError = new Error("No file selected.");
-            setError(saveError.message);
-            throw saveError;
+            setError("No file selected.");
+            return false;
         }
-        if (loadingState === "preview" || truncated) {
-            const saveError = new Error("Large files are opened in preview mode and cannot be saved.");
-            setError(saveError.message);
-            throw saveError;
+        if (loadedSessionKeyRef.current !== null && loadedSessionKeyRef.current !== latestSessionKeyRef.current) {
+            setError("The open file no longer belongs to the active session.");
+            return false;
+        }
+        if (loadingStateRef.current !== "loaded" || truncatedRef.current) {
+            setError("Only fully loaded text files can be saved.");
+            return false;
         }
         if (!editorRef.current) {
-            const saveError = new Error("Editor is not ready.");
-            setError(saveError.message);
-            throw saveError;
+            setError("Editor is not ready.");
+            return false;
         }
 
         const requestID = ++saveRequestIDRef.current;
@@ -218,6 +251,7 @@ export function useEditorFile(): UseEditorFileResult {
         currentContentRef.current = value;
         const shouldIgnore = () => (
             !mountedRef.current
+            || latestSessionKeyRef.current !== capturedSessionKey
             || sessionRef.current?.trim() !== capturedSession
             || saveRequestIDRef.current !== requestID
             || currentPathRef.current !== capturedPath
@@ -225,9 +259,9 @@ export function useEditorFile(): UseEditorFileResult {
 
         try {
             setError(null);
-            const result = await api.DevPanelWriteFile(capturedSession, capturedPath, value);
+            const result = await api.DevPanelWriteFile(capturedSessionKey, capturedPath, value);
             if (shouldIgnore()) {
-                return;
+                return false;
             }
 
             originalContentRef.current = value;
@@ -236,16 +270,17 @@ export function useEditorFile(): UseEditorFileResult {
             setIsModified(false);
             setTruncated(false);
             setLoadingState("loaded");
+            return true;
         } catch (err: unknown) {
             if (shouldIgnore()) {
-                return;
+                return false;
             }
 
             const message = toErrorMessage(err, `Failed to save file: ${capturedPath}`);
             setError(message);
-            throw err instanceof Error ? err : new Error(message);
+            return false;
         }
-    }, [loadingState, truncated]);
+    }, []);
 
     useEffect(() => {
         saveFileRef.current = saveFile;
@@ -262,8 +297,7 @@ export function useEditorFile(): UseEditorFileResult {
             if (!currentSave) {
                 return;
             }
-            void currentSave().catch(() => {
-            });
+            void currentSave();
         });
 
         editor.focus();
@@ -291,7 +325,7 @@ export function useEditorFile(): UseEditorFileResult {
         fileSize,
         isModified,
         loadingState,
-        readOnly: loadingState === "loading" || loadingState === "preview" || currentPath === null,
+        readOnly: loadingState !== "loaded" || currentPath === null,
         truncated,
         clearFile,
         handleChange,

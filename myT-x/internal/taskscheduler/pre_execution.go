@@ -51,13 +51,14 @@ func buildRoleReminderMessage(isTeam bool) string {
 func (s *Service) preExecTargetPanes(items []QueueItem, config QueueConfig) ([]string, error) {
 	switch config.PreExecTargetMode {
 	case PreExecTargetModeAllPanes:
-		paneIDs, err := s.deps.GetSessionPaneIDs(s.deps.SessionName)
+		sessionName := s.sessionNameSnapshot()
+		paneIDs, err := s.deps.GetSessionPaneIDs(sessionName)
 		if err != nil {
 			return nil, err
 		}
 		paneIDs = uniqueNonEmptyStrings(paneIDs)
 		if len(paneIDs) == 0 {
-			return nil, fmt.Errorf("no panes found in session %s", s.deps.SessionName)
+			return nil, fmt.Errorf("no panes found in session %s", sessionName)
 		}
 		return paneIDs, nil
 	case PreExecTargetModeTaskPanes:
@@ -100,8 +101,9 @@ func (s *Service) waitForAllPanesIdle(ctx context.Context, paneIDs []string, tim
 		case <-ctx.Done():
 			return idleWaitCanceled
 		case <-timer.C:
-			slog.Warn("[DEBUG-TASK-SCHEDULER] pre-execution idle wait timed out",
-				"session", s.deps.SessionName,
+			sessionName := s.sessionNameSnapshot()
+			slog.Debug("[DEBUG-TASK-SCHEDULER] pre-execution idle wait timed out",
+				"session", sessionName,
 				"timeout", timeout,
 				"paneCount", len(paneIDs))
 			return idleWaitTimedOut
@@ -113,19 +115,20 @@ func (s *Service) waitForAllPanesIdle(ctx context.Context, paneIDs []string, tim
 	}
 }
 
-func (s *Service) runPreExecutionPhase(ctx context.Context, items []QueueItem, config QueueConfig) bool {
+func (s *Service) runPreExecutionPhase(ctx context.Context, generationID string, items []QueueItem, config QueueConfig) bool {
 	paneIDs, err := s.preExecTargetPanes(items, config)
 	if err != nil {
-		s.failPreExecution(fmt.Sprintf("resolve pre-execution panes: %v", err))
+		s.failPreExecution(generationID, fmt.Sprintf("resolve pre-execution panes: %v", err))
 		return false
 	}
 
-	s.setPreExecProgress(preExecProgressResetting)
+	s.setPreExecProgress(generationID, preExecProgressResetting)
 	resetSuccessCount := 0
 	for i, paneID := range paneIDs {
 		if err := s.deps.SendClearCommand(paneID, defaultClearCommand); err != nil {
-			slog.Warn("[DEBUG-TASK-SCHEDULER] pre-execution reset failed",
-				"session", s.deps.SessionName,
+			sessionName := s.sessionNameSnapshot()
+			slog.Warn("[WARN-TASK-SCHEDULER] pre-execution reset failed",
+				"session", sessionName,
 				"paneID", paneID,
 				"error", err)
 			continue
@@ -139,18 +142,19 @@ func (s *Service) runPreExecutionPhase(ctx context.Context, items []QueueItem, c
 		}
 	}
 	if resetSuccessCount == 0 {
-		s.failPreExecution("pre-execution reset failed for all target panes")
+		s.failPreExecution(generationID, "pre-execution reset failed for all target panes")
 		return false
 	}
 
-	s.setPreExecProgress(preExecProgressWaitingReset)
+	s.setPreExecProgress(generationID, preExecProgressWaitingReset)
 	resetDelay := time.Duration(config.PreExecResetDelay) * time.Second
 	if !waitForDuration(ctx, resetDelay) {
 		return false
 	}
 
-	s.setPreExecProgress(preExecProgressSendingReminders)
-	reminder := buildRoleReminderMessage(s.deps.IsAgentTeamSession(s.deps.SessionName))
+	s.setPreExecProgress(generationID, preExecProgressSendingReminders)
+	sessionName := s.sessionNameSnapshot()
+	reminder := buildRoleReminderMessage(s.deps.IsAgentTeamSession(sessionName))
 	reminderSuccessCount := 0
 	for i, paneID := range paneIDs {
 		// Stagger reminders to prevent ConPTY contention across panes.
@@ -160,8 +164,8 @@ func (s *Service) runPreExecutionPhase(ctx context.Context, items []QueueItem, c
 			}
 		}
 		if err := s.deps.SendMessagePaste(paneID, reminder); err != nil {
-			slog.Warn("[DEBUG-TASK-SCHEDULER] pre-execution reminder failed",
-				"session", s.deps.SessionName,
+			slog.Warn("[WARN-TASK-SCHEDULER] pre-execution reminder failed",
+				"session", sessionName,
 				"paneID", paneID,
 				"error", err)
 			continue
@@ -169,37 +173,45 @@ func (s *Service) runPreExecutionPhase(ctx context.Context, items []QueueItem, c
 		reminderSuccessCount++
 	}
 	if reminderSuccessCount == 0 {
-		s.failPreExecution("pre-execution reminders failed for all target panes")
+		s.failPreExecution(generationID, "pre-execution reminders failed for all target panes")
 		return false
 	}
 
-	s.setPreExecProgress(preExecProgressWaitingIdle)
+	s.setPreExecProgress(generationID, preExecProgressWaitingIdle)
 	switch s.waitForAllPanesIdle(ctx, paneIDs, time.Duration(config.PreExecIdleTimeout)*time.Second) {
 	case idleWaitCanceled:
 		return false
 	case idleWaitTimedOut:
-		s.setPreExecProgress(preExecProgressIdleTimeout)
+		s.setPreExecProgress(generationID, preExecProgressIdleTimeout)
 	default:
-		s.setPreExecProgress("")
+		s.setPreExecProgress(generationID, "")
 	}
 
 	return true
 }
 
-func (s *Service) failPreExecution(reason string) {
+func (s *Service) failPreExecution(generationID string, reason string) {
+	eventSessionName := ""
+	eventGenerationID := ""
 	s.mu.Lock()
+	if !s.isCurrentGenerationLocked(generationID) {
+		s.mu.Unlock()
+		return
+	}
 	s.runStatus = QueueIdle
 	s.currentIndex = -1
 	s.preExecProgress = ""
+	eventSessionName = s.sessionName
+	eventGenerationID = s.generationID
 	s.mu.Unlock()
 
-	s.emitStopped(reason)
+	s.emitStopped(reason, eventSessionName, eventGenerationID)
 	s.emitUpdated()
 }
 
-func (s *Service) setPreExecProgress(progress string) {
+func (s *Service) setPreExecProgress(generationID string, progress string) {
 	s.mu.Lock()
-	if s.runStatus != QueuePreparing {
+	if s.runStatus != QueuePreparing || !s.isCurrentGenerationLocked(generationID) {
 		s.mu.Unlock()
 		return
 	}

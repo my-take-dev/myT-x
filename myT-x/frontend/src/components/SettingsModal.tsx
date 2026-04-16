@@ -1,6 +1,7 @@
-import {useEffect, useLayoutEffect, useReducer, useRef} from "react";
+import {useEffect, useLayoutEffect, useReducer, useRef, useState} from "react";
 import {api} from "../api";
 import {useEscapeClose} from "../hooks/useEscapeClose";
+import type {ValidationRules} from "../types/tmux";
 import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
 import {MIN_OVERRIDE_NAME_LEN_FALLBACK} from "./settings/constants";
 import {INITIAL_FORM, formReducer} from "./settings/settingsReducer";
@@ -27,6 +28,7 @@ function getFocusableElements(root: HTMLElement | null): HTMLElement[] {
 export function SettingsModal({open, onClose}: SettingsModalProps) {
     const {t} = useSettingsI18n();
     const [s, dispatch] = useReducer(formReducer, INITIAL_FORM);
+    const [validationRules, setValidationRules] = useState<ValidationRules | null>(null);
     const panelRef = useRef<HTMLDivElement | null>(null);
     const previouslyFocusedRef = useRef<HTMLElement | null>(null);
     const prevOpenForResetRef = useRef(false);
@@ -39,6 +41,7 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
     useLayoutEffect(() => {
         if (open && !prevOpenForResetRef.current) {
             dispatch({type: "RESET_FOR_LOAD"});
+            setValidationRules(null);
         }
         prevOpenForResetRef.current = open;
     }, [open]);
@@ -61,6 +64,7 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
                 if (cancelled) return;
 
                 dispatch({type: "LOAD_CONFIG", config: cfg, shells});
+                setValidationRules(rules);
                 const minOverrideNameLen =
                     typeof rules?.min_override_name_len === "number" &&
                     Number.isFinite(rules.min_override_name_len)
@@ -160,7 +164,7 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
                 {s.loading ? (
                     <div className="modal-loading">{t("settings.modal.loading", "設定を読み込み中...", "Loading settings...")}</div>
                 ) : (
-                    <SettingsTabs s={s} dispatch={dispatch}/>
+                    <SettingsTabs s={s} dispatch={dispatch} validationRules={validationRules}/>
                 )}
 
                 <div className="settings-footer">

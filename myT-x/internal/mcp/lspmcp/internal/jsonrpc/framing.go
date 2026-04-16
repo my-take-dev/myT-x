@@ -2,7 +2,9 @@ package jsonrpc
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -18,6 +20,12 @@ const (
 	FramingLineJSON
 )
 
+const MaxFrameBytes int64 = 4 << 20
+const maxHeaderBytes int64 = 16 << 10
+const maxHeaderLineBytes int64 = 4096
+
+var ErrFrameTooLarge = fmt.Errorf("json-rpc frame exceeds %d bytes", MaxFrameBytes)
+
 // ReadMessage は Content-Length または行区切り JSON 形式で 1 件の JSON-RPC メッセージを読み込む。
 func ReadMessage(reader *bufio.Reader) ([]byte, error) {
 	payload, _, err := ReadMessageWithFraming(reader)
@@ -27,7 +35,7 @@ func ReadMessage(reader *bufio.Reader) ([]byte, error) {
 // ReadMessageWithFraming は 1 件の JSON-RPC メッセージを読み込み、使用されたフレーミングを返す。
 func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 	for {
-		line, err := reader.ReadString('\n')
+		line, used, err := readLineWithLimit(reader, MaxFrameBytes+1)
 		if err != nil {
 			return nil, FramingUnknown, err
 		}
@@ -40,7 +48,13 @@ func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 		// 一部の MCP stdio クライアントが使う行区切り JSON-RPC をサポート。
 		linePayload := strings.TrimSpace(trimmed)
 		if strings.HasPrefix(linePayload, "{") || strings.HasPrefix(linePayload, "[") {
+			if int64(len(linePayload)) > MaxFrameBytes {
+				return nil, FramingUnknown, ErrFrameTooLarge
+			}
 			return []byte(linePayload), FramingLineJSON, nil
+		}
+		if used > maxHeaderLineBytes || used > maxHeaderBytes {
+			return nil, FramingUnknown, ErrFrameTooLarge
 		}
 
 		contentLength, err := parseContentLengthHeader(trimmed)
@@ -48,11 +62,16 @@ func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 			return nil, FramingUnknown, err
 		}
 
+		headerBytesRemaining := maxHeaderBytes - used
 		for {
-			line, err = reader.ReadString('\n')
+			if headerBytesRemaining <= 0 {
+				return nil, FramingUnknown, ErrFrameTooLarge
+			}
+			line, used, err = readLineWithLimit(reader, minInt64(maxHeaderLineBytes, headerBytesRemaining))
 			if err != nil {
 				return nil, FramingUnknown, err
 			}
+			headerBytesRemaining -= used
 
 			trimmed = strings.TrimRight(line, "\r\n")
 			// Accept both CRLF and LF-only header delimiters.
@@ -72,6 +91,9 @@ func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 		if contentLength < 0 {
 			return nil, FramingUnknown, fmt.Errorf("missing Content-Length header")
 		}
+		if int64(contentLength) > MaxFrameBytes {
+			return nil, FramingUnknown, ErrFrameTooLarge
+		}
 
 		payload := make([]byte, contentLength)
 		if _, err := io.ReadFull(reader, payload); err != nil {
@@ -80,6 +102,44 @@ func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 
 		return payload, FramingContentLength, nil
 	}
+}
+
+func readLineWithLimit(reader *bufio.Reader, maxBytes int64) (string, int64, error) {
+	var builder bytes.Buffer
+	var used int64
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if int64(len(chunk)) > maxBytes-used {
+			return "", 0, ErrFrameTooLarge
+		}
+		if len(chunk) > 0 {
+			used += int64(len(chunk))
+			builder.Write(chunk)
+		}
+		switch {
+		case err == nil:
+			return builder.String(), used, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			if used >= maxBytes {
+				return "", 0, ErrFrameTooLarge
+			}
+			continue
+		case errors.Is(err, io.EOF):
+			if used == 0 {
+				return "", 0, io.EOF
+			}
+			return "", 0, io.ErrUnexpectedEOF
+		default:
+			return "", 0, err
+		}
+	}
+}
+
+func minInt64(a int64, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // parseContentLengthHeader は Content-Length ヘッダー行を解析する。

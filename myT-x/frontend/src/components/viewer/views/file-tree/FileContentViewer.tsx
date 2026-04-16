@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from "react";
 import {FixedSizeList} from "react-window";
 import {useContainerHeight} from "../../../../hooks/useContainerHeight";
 import {useCopyPathNotice} from "../../../../hooks/useCopyPathNotice";
@@ -19,10 +19,16 @@ import {FileContentRow, type FileContentRowData} from "./FileContentRow";
 import {FileContentHeader} from "./FileContentHeader";
 import {useRowHeight} from "./useRowHeight";
 import {useFileContentSelection} from "./useFileContentSelection";
+import {canPreviewDocumentKind, type DocumentKind, type RenderMode} from "./documentTypes";
 
-interface FileContentViewerProps {
-    content: FileContentResult | null;
-    isLoading: boolean;
+export interface FileContentViewerProps {
+    readonly content: FileContentResult | null;
+    readonly isLoading: boolean;
+    readonly documentKind?: DocumentKind | null;
+    readonly renderMode?: RenderMode;
+    readonly canPreview?: boolean;
+    readonly onRenderModeChange?: (mode: RenderMode) => void;
+    readonly previewRenderer?: (content: FileContentResult, kind: DocumentKind) => ReactNode;
 }
 
 /**
@@ -36,8 +42,16 @@ const FileContentListOuter = makeScrollStableOuter({
     overflowX: "scroll",
 });
 
-export function FileContentViewer({content, isLoading}: FileContentViewerProps) {
-    const [isPreviewMode, setIsPreviewMode] = useState(false);
+export function FileContentViewer({
+    content,
+    isLoading,
+    documentKind,
+    renderMode,
+    canPreview,
+    onRenderModeChange,
+    previewRenderer,
+}: FileContentViewerProps) {
+    const [internalRenderMode, setInternalRenderMode] = useState<RenderMode>("raw");
     const listBodyRef = useRef<HTMLDivElement>(null);
     // 12 rows keeps the viewer usable before the first ResizeObserver callback.
     // noiseThresholdPx: 1 suppresses ±1px RO churn that causes scroll jitter.
@@ -57,18 +71,30 @@ export function FileContentViewer({content, isLoading}: FileContentViewerProps) 
     // - no selection handlers or resize observers will activate. (checklist #92 safe fallback)
     const isTextBodyVisible = Boolean(!isLoading && content && !content.binary);
 
-    // Reset preview mode when the viewed file changes.
-    useEffect(() => {
-        setIsPreviewMode(false);
-    }, [content?.path]);
-
     // Detect markdown file using the authoritative extension map in shikiHighlighter.
-    const isMarkdownFile = useMemo(() => {
-        if (!content?.path) return false;
-        return isMarkdownLang(pathToShikiLang(content.path));
+    const defaultDocumentKind = useMemo<DocumentKind | null>(() => {
+        if (!content?.path) return null;
+        return isMarkdownLang(pathToShikiLang(content.path)) ? "markdown" : null;
     }, [content?.path]);
 
-    const shouldShowVirtualizedBody = isTextBodyVisible && (!isMarkdownFile || !isPreviewMode);
+    const effectiveDocumentKind = documentKind ?? defaultDocumentKind;
+    const isControlledRenderMode = renderMode !== undefined && onRenderModeChange !== undefined;
+    const effectiveCanPreview = canPreview ?? canPreviewDocumentKind(effectiveDocumentKind);
+    const effectiveRenderMode = isControlledRenderMode ? renderMode : internalRenderMode;
+    const isPreviewMode = effectiveCanPreview && effectiveRenderMode === "preview";
+    const shouldShowVirtualizedBody = isTextBodyVisible && !isPreviewMode;
+
+    useEffect(() => {
+        if (!isControlledRenderMode) {
+            setInternalRenderMode(effectiveDocumentKind === "sqlite" ? "preview" : "raw");
+        }
+    }, [content?.path, effectiveDocumentKind, isControlledRenderMode]);
+
+    useEffect(() => {
+        if (!isControlledRenderMode && !effectiveCanPreview) {
+            setInternalRenderMode("raw");
+        }
+    }, [effectiveCanPreview, isControlledRenderMode]);
 
     // Syntax highlighting for all code files (including .md in raw mode).
     // Skip highlighting when in markdown preview mode to avoid wasting resources.
@@ -89,10 +115,8 @@ export function FileContentViewer({content, isLoading}: FileContentViewerProps) 
                 return `Syntax highlighting is intentionally disabled. Showing plain text because line count ${skipInfo.actual} exceeds limit ${skipInfo.limit}.`;
             case "line-length-limit":
                 return `Syntax highlighting is intentionally disabled. Showing plain text because max line length ${skipInfo.actual} exceeds limit ${skipInfo.limit}.`;
-            default: {
-                const _exhaustive: never = reason;
-                return `Syntax highlighting is intentionally disabled. Showing plain text (unknown reason: ${String(_exhaustive)}).`;
-            }
+            default:
+                return "Syntax highlighting is intentionally disabled. Showing plain text.";
         }
     }, [skipInfo]);
 
@@ -138,8 +162,16 @@ export function FileContentViewer({content, isLoading}: FileContentViewerProps) 
         : "file-content-highlight-warning";
 
     const handleTogglePreview = useCallback(() => {
-        setIsPreviewMode((prev) => !prev);
-    }, []);
+        if (!effectiveCanPreview) {
+            return;
+        }
+        const nextMode: RenderMode = isPreviewMode ? "raw" : "preview";
+        if (isControlledRenderMode) {
+            onRenderModeChange(nextMode);
+            return;
+        }
+        setInternalRenderMode(nextMode);
+    }, [effectiveCanPreview, isControlledRenderMode, isPreviewMode, onRenderModeChange]);
 
     const listViewportHeight = Math.max(bodyHeight, rowHeight, FILE_CONTENT_ROW_HEIGHT_FALLBACK);
 
@@ -163,8 +195,16 @@ export function FileContentViewer({content, isLoading}: FileContentViewerProps) 
     }
 
     if (content.binary) {
-        return <div className="file-content-binary">Binary file ({formatFileSize(content.size)})</div>;
+        if (!(effectiveDocumentKind === "sqlite" && isPreviewMode && previewRenderer)) {
+            return <div className="file-content-binary">Binary file ({formatFileSize(content.size)})</div>;
+        }
     }
+
+    const previewContent = effectiveDocumentKind && isPreviewMode
+        ? previewRenderer
+            ? previewRenderer(content, effectiveDocumentKind)
+            : <MarkdownPreview content={content.content}/>
+        : null;
 
     return (
         <div className="file-content-viewer">
@@ -172,7 +212,7 @@ export function FileContentViewer({content, isLoading}: FileContentViewerProps) 
                 path={content.path}
                 pathCopyState={pathCopyState}
                 onCopyPath={copyPath}
-                isMarkdownFile={isMarkdownFile}
+                canPreview={effectiveCanPreview}
                 isPreviewMode={isPreviewMode}
                 onTogglePreview={handleTogglePreview}
                 size={content.size}
@@ -180,9 +220,9 @@ export function FileContentViewer({content, isLoading}: FileContentViewerProps) 
                 headerNotice={headerNotice}
                 headerNoticeClass={headerNoticeClass}
             />
-            {isMarkdownFile && isPreviewMode ? (
+            {previewContent ? (
                 <div className="file-content-body" tabIndex={0}>
-                    <MarkdownPreview content={content.content}/>
+                    {previewContent}
                 </div>
             ) : (
                 <div

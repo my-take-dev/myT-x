@@ -38,15 +38,18 @@ Press the prefix key → "PREFIX" appears in the status bar → Press the action
 
 | Key | Viewer |
 |-----|--------|
-| `Ctrl+Shift+W` | Editor |
-| `Ctrl+Shift+E` | File Tree |
+| `Ctrl+Shift+O` | Editor |
+| `Ctrl+Shift+E` | File View |
 | `Ctrl+Shift+G` | Git Graph |
 | `Ctrl+Shift+D` | Diff |
 | `Ctrl+Shift+H` | Input History |
 | `Ctrl+Shift+M` | MCP Manager |
 | `Ctrl+Shift+K` | Pane Scheduler |
 | `Ctrl+Shift+Q` | Task Scheduler |
+| `Ctrl+Shift+J` | Single Task Runner |
 | `Ctrl+Shift+T` | Orchestrator Teams |
+| `Ctrl+Shift+U` | Usage Dashboard |
+| `Ctrl+Shift+P` | Prompt Presets |
 | `Ctrl+Shift+L` | Error Log |
 
 ---
@@ -81,7 +84,7 @@ Press the prefix key → "PREFIX" appears in the status bar → Press the action
 
 ---
 
-## Inside File Tree
+## Inside File View
 
 | Key | Action |
 |-----|--------|

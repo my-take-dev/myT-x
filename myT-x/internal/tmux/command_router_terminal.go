@@ -152,7 +152,7 @@ func (r *CommandRouter) attachTerminal(pane *TmuxPane, workDir string, env map[s
 
 func addTmuxEnvironment(env map[string]string, pipeName string, hostPID int, sessionIndex int, paneID int, shimAvailable bool, sessionName string) {
 	tmuxValue := fmt.Sprintf(`%s,%d,%d`, pipeName, hostPID, sessionIndex)
-	paneValue := fmt.Sprintf("%%%d", paneID)
+	paneValue := formatPaneID(paneID)
 
 	// myT-x 内部用: 常に設定
 	env["GO_TMUX"] = tmuxValue

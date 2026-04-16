@@ -120,14 +120,17 @@ Save and load frequently used task combinations as templates.
 
 ---
 
-## Choosing Between the Two Schedulers
+## Choosing the Right Scheduler
 
-| | Pane Scheduler | Task Scheduler |
-|---|---|---|
-| **Pattern** | Same message repeated | Different tasks in sequence |
-| **Use case** | Periodic execution, monitoring | Pipelines, staged instructions |
-| **Completion** | Count limit or manual stop | All tasks done or manual stop |
-| **Complexity** | Simple | Detailed per-task settings |
+| | Pane Scheduler | Task Scheduler | Single Task Runner |
+|---|---|---|---|
+| **Pattern** | Same message repeated | Different tasks in sequence | Sequential via MCP |
+| **Use case** | Periodic execution, monitoring | Pipelines, staged instructions | AI-driven autonomous task management |
+| **Completion** | Count limit or manual stop | All tasks done or manual stop | AI reports task completion |
+| **Complexity** | Simple | Detailed per-task settings | MCP tool calls |
+| **Orchestrator** | Not required | Not required | Not required (single pane) |
+
+> **Single Task Runner** is a lightweight runner that manages tasks via MCP tools on a single pane without needing an Agent Teams orchestrator. See [Viewer System > Single Task Runner](viewer-system_en.md#9-single-task-runner) for details.
 
 ---
 

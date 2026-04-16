@@ -1,7 +1,8 @@
-import {useCallback, useEffect} from "react";
+import {useCallback, useEffect, useRef} from "react";
 import {api} from "../api";
 import type {FileTreeStore} from "../stores/fileTreeStore";
 import {toErrorMessage} from "../utils/errorUtils";
+import {matchesCapturedSessionKey} from "../utils/sessionGuard";
 import {fileEntriesToNodes, findNodeByPath} from "../components/viewer/views/file-tree/treeUtils";
 import {EventsOn} from "../../wailsjs/runtime";
 
@@ -11,6 +12,7 @@ interface RefreshDirectoryOptions {
 
 interface UseFileTreeActionsOptions {
     readonly activeSession: string | null;
+    readonly activeSessionKey: string;
     readonly loadFileContent: boolean;
 }
 
@@ -23,12 +25,39 @@ interface RequestState {
 // WeakMap keeps request bookkeeping outside the Zustand snapshot while still
 // allowing per-store cleanup once the store instance is garbage-collected.
 const requestStateByStore = new WeakMap<FileTreeStore, RequestState>();
-const latestSessionByStore = new WeakMap<FileTreeStore, string | null>();
+const latestSessionKeyByStore = new WeakMap<FileTreeStore, string>();
 const treeInvalidatedEventName = "devpanel:tree-invalidated";
+const watcherFailedEventName = "devpanel:watcher-failed";
 
 interface TreeInvalidationEvent {
     readonly session_name?: unknown;
     readonly paths?: unknown;
+}
+
+interface WatcherFailedEvent {
+    readonly session_name?: unknown;
+    readonly message?: unknown;
+}
+
+interface SessionRenamedEvent {
+    readonly oldName?: unknown;
+    readonly newName?: unknown;
+}
+
+interface RenderSnapshot {
+    readonly activeSession: string | null;
+    readonly activeSessionKey: string;
+}
+
+function renameSessionKey(sessionKey: string, oldName: string, newName: string): string {
+    if (sessionKey === "") {
+        return sessionKey;
+    }
+    const keyPrefix = `${oldName}:`;
+    if (!sessionKey.startsWith(keyPrefix)) {
+        return sessionKey;
+    }
+    return `${newName}:${sessionKey.slice(keyPrefix.length)}`;
 }
 
 function getRequestState(store: FileTreeStore): RequestState {
@@ -53,8 +82,8 @@ function invalidateRequestState(store: FileTreeStore): void {
     requestState.toggleByPath.clear();
 }
 
-function getCurrentSessionName(store: FileTreeStore): string | null {
-    return latestSessionByStore.get(store) ?? null;
+function getCurrentSessionKey(store: FileTreeStore): string {
+    return latestSessionKeyByStore.get(store) ?? "";
 }
 
 // Frontend only normalizes backend-supplied relative panel paths for lookup
@@ -119,6 +148,40 @@ function parseTreeInvalidationEvent(payload: unknown): { sessionName: string; pa
     };
 }
 
+function parseWatcherFailedEvent(payload: unknown): { sessionName: string; message: string } | null {
+    if (!payload || typeof payload !== "object") {
+        return null;
+    }
+
+    const event = payload as WatcherFailedEvent;
+    if (typeof event.session_name !== "string" || typeof event.message !== "string") {
+        return null;
+    }
+    const sessionName = event.session_name.trim();
+    const message = event.message.trim();
+    if (sessionName === "" || message === "") {
+        return null;
+    }
+    return {sessionName, message};
+}
+
+function parseSessionRenamedEvent(payload: unknown): { oldName: string; newName: string } | null {
+    if (!payload || typeof payload !== "object") {
+        return null;
+    }
+
+    const event = payload as SessionRenamedEvent;
+    if (typeof event.oldName !== "string" || typeof event.newName !== "string") {
+        return null;
+    }
+    const oldName = event.oldName.trim();
+    const newName = event.newName.trim();
+    if (oldName === "" || newName === "" || oldName === newName) {
+        return null;
+    }
+    return {oldName, newName};
+}
+
 function reconcileSelection(store: FileTreeStore): void {
     const state = store.getState();
     const selectedPath = state.selectedPath;
@@ -136,10 +199,20 @@ function reconcileSelection(store: FileTreeStore): void {
 
 export function useFileTreeActions(
     store: FileTreeStore,
-    {activeSession, loadFileContent}: UseFileTreeActionsOptions,
+    {activeSession, activeSessionKey, loadFileContent}: UseFileTreeActionsOptions,
 ) {
+    const latestRenderSnapshotRef = useRef<RenderSnapshot>({
+        activeSession: activeSession?.trim() ?? null,
+        activeSessionKey,
+    });
+    latestRenderSnapshotRef.current = {
+        activeSession: activeSession?.trim() ?? null,
+        activeSessionKey,
+    };
+
     const refreshDirectory = useCallback(async (dirPath: string, options?: RefreshDirectoryOptions) => {
         const capturedSession = activeSession?.trim();
+        const capturedSessionKey = activeSessionKey;
         if (!capturedSession) {
             store.getState().setError("No active session");
             throw new Error("No active session.");
@@ -156,23 +229,21 @@ export function useFileTreeActions(
 
             try {
                 const entries = await api.DevPanelListDir(capturedSession, "");
-                if (getCurrentSessionName(store) !== capturedSession || getRequestState(store).root !== requestID) {
+                if (getCurrentSessionKey(store) !== capturedSessionKey || getRequestState(store).root !== requestID) {
                     return;
                 }
 
                 store.getState().setRootNodes(fileEntriesToNodes(entries));
                 reconcileSelection(store);
             } catch (err: unknown) {
-                if (getCurrentSessionName(store) !== capturedSession || getRequestState(store).root !== requestID) {
+                if (getCurrentSessionKey(store) !== capturedSessionKey || getRequestState(store).root !== requestID) {
                     return;
                 }
 
-                store.getState().setRootNodes([]);
-                reconcileSelection(store);
                 store.getState().setError(toErrorMessage(err, "Failed to load file tree."));
                 throw err;
             } finally {
-                if (getCurrentSessionName(store) === capturedSession && getRequestState(store).root === requestID) {
+                if (getCurrentSessionKey(store) === capturedSessionKey && getRequestState(store).root === requestID) {
                     store.getState().setIsRootLoading(false);
                 }
             }
@@ -186,7 +257,7 @@ export function useFileTreeActions(
 
         try {
             const entries = await api.DevPanelListDir(capturedSession, dirPath);
-            if (getCurrentSessionName(store) !== capturedSession || getRequestState(store).toggleByPath.get(dirPath) !== requestID) {
+            if (getCurrentSessionKey(store) !== capturedSessionKey || getRequestState(store).toggleByPath.get(dirPath) !== requestID) {
                 return;
             }
 
@@ -196,24 +267,26 @@ export function useFileTreeActions(
                 store.getState().setExpanded(dirPath, true);
             }
         } catch (err: unknown) {
-            if (getCurrentSessionName(store) !== capturedSession || getRequestState(store).toggleByPath.get(dirPath) !== requestID) {
+            if (getCurrentSessionKey(store) !== capturedSessionKey || getRequestState(store).toggleByPath.get(dirPath) !== requestID) {
                 return;
             }
             throw err;
         } finally {
-            if (getCurrentSessionName(store) === capturedSession && getRequestState(store).toggleByPath.get(dirPath) === requestID) {
+            if (getCurrentSessionKey(store) === capturedSessionKey && getRequestState(store).toggleByPath.get(dirPath) === requestID) {
                 store.getState().setLoadingPath(dirPath, false);
             }
         }
-    }, [activeSession, store]);
+    }, [activeSession, activeSessionKey, store]);
 
     const loadRoot = useCallback(() => {
-        void refreshDirectory("").catch(() => {
+        void refreshDirectory("").catch((err: unknown) => {
+            console.error("[FILE-TREE] loadRoot failed", err);
         });
     }, [refreshDirectory]);
 
     const toggleDir = useCallback((path: string) => {
         const capturedSession = activeSession?.trim();
+        const capturedSessionKey = activeSessionKey;
         const state = store.getState();
         const node = findNodeByPath(state.tree, path);
         if (!node?.isDir) {
@@ -238,7 +311,7 @@ export function useFileTreeActions(
         }
 
         void refreshDirectory(path, {expandOnSuccess: true}).catch((err: unknown) => {
-            if (getCurrentSessionName(store) !== capturedSession) {
+            if (!matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store))) {
                 return;
             }
 
@@ -249,7 +322,7 @@ export function useFileTreeActions(
             });
             store.getState().setDirError(toErrorMessage(err, `Failed to load directory: ${path}`));
         });
-    }, [activeSession, refreshDirectory, store]);
+    }, [activeSession, activeSessionKey, refreshDirectory, store]);
 
     const selectFile = useCallback((path: string) => {
         store.getState().setSelectedPath(path);
@@ -261,6 +334,7 @@ export function useFileTreeActions(
         }
 
         const capturedSession = activeSession?.trim();
+        const capturedSessionKey = activeSessionKey;
         if (!capturedSession) {
             store.getState().setContentError("No active session");
             store.getState().setIsLoadingContent(false);
@@ -276,13 +350,13 @@ export function useFileTreeActions(
 
         void api.DevPanelReadFile(capturedSession, path)
             .then((content) => {
-                if (getCurrentSessionName(store) !== capturedSession || getRequestState(store).select !== requestID) {
+                if (!matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store)) || getRequestState(store).select !== requestID) {
                     return;
                 }
                 store.getState().setFileContent(content);
             })
             .catch((err: unknown) => {
-                if (getCurrentSessionName(store) !== capturedSession || getRequestState(store).select !== requestID) {
+                if (!matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store)) || getRequestState(store).select !== requestID) {
                     return;
                 }
 
@@ -295,19 +369,19 @@ export function useFileTreeActions(
                 store.getState().setContentError(toErrorMessage(err, `Failed to read file: ${path}`));
             })
             .finally(() => {
-                if (getCurrentSessionName(store) === capturedSession && getRequestState(store).select === requestID) {
+                if (matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store)) && getRequestState(store).select === requestID) {
                     store.getState().setIsLoadingContent(false);
                 }
             });
-    }, [activeSession, loadFileContent, store]);
+    }, [activeSession, activeSessionKey, loadFileContent, store]);
 
     useEffect(() => {
-        latestSessionByStore.set(store, activeSession?.trim() ?? null);
-    }, [activeSession, store]);
+        latestSessionKeyByStore.set(store, activeSessionKey);
+    }, [activeSessionKey, store]);
 
     useEffect(() => {
         return () => {
-            latestSessionByStore.delete(store);
+            latestSessionKeyByStore.delete(store);
         };
     }, [store]);
 
@@ -316,27 +390,45 @@ export function useFileTreeActions(
         store.getState().reset();
 
         if (activeSession) {
-            void refreshDirectory("").catch(() => {
+            void refreshDirectory("").catch((err: unknown) => {
+                console.error("[FILE-TREE] session change root refresh failed", err);
             });
         }
-    }, [activeSession, refreshDirectory, store]);
+    }, [activeSessionKey, refreshDirectory, store]);
 
     useEffect(() => {
         const capturedSession = activeSession?.trim();
+        const capturedSessionKey = activeSessionKey;
+        const renamedSessionRef = {current: null as string | null};
         if (!capturedSession) {
+            return;
+        }
+        if (!capturedSessionKey) {
             return;
         }
 
         let disposed = false;
-        void api.DevPanelStartWatcher(capturedSession).catch((err: unknown) => {
-            console.warn("[file-tree] DevPanelStartWatcher failed", {
-                session: capturedSession,
-                err,
+        void api.DevPanelStartWatcher(capturedSessionKey)
+            .then(() => {
+                if (disposed) {
+                    return;
+                }
+                if (matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store))) {
+                    store.getState().setWatcherError(null);
+                }
+            })
+            .catch((err: unknown) => {
+                console.warn("[file-tree] DevPanelStartWatcher failed", {
+                    session: capturedSession,
+                    err,
+                });
+                if (disposed) {
+                    return;
+                }
+                if (matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store))) {
+                    store.getState().setWatcherError("Automatic refresh is unavailable. Reload the directory manually if needed.");
+                }
             });
-            if (getCurrentSessionName(store) === capturedSession) {
-                store.getState().setDirError("Automatic refresh is unavailable. Reload the directory manually if needed.");
-            }
-        });
 
         const cancel = EventsOn(treeInvalidatedEventName, (payload: unknown) => {
             if (disposed) {
@@ -350,13 +442,13 @@ export function useFileTreeActions(
 
             for (const dirPath of event.paths) {
                 const state = store.getState();
-                const shouldExpand = dirPath !== "" && state.expandedPaths.has(dirPath);
                 if (dirPath !== "") {
                     const node = findNodeByPath(state.tree, dirPath);
-                    if (!node?.isDir || (!shouldExpand && node.children === undefined)) {
+                    if (!node?.isDir) {
                         continue;
                     }
                 }
+                const shouldExpand = dirPath !== "" && state.expandedPaths.has(dirPath);
 
                 void refreshDirectory(dirPath, {expandOnSuccess: shouldExpand}).catch((err: unknown) => {
                     console.warn("[file-tree] tree invalidation refresh failed", {
@@ -364,21 +456,91 @@ export function useFileTreeActions(
                         session: capturedSession,
                         err,
                     });
+                    if (disposed) {
+                        return;
+                    }
+                    if (matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store))) {
+                        store.getState().setWatcherError(
+                            toErrorMessage(err, "Automatic refresh failed. Reload the directory manually if needed."),
+                        );
+                    }
                 });
             }
         });
+        const cancelWatcherFailed = EventsOn(watcherFailedEventName, (payload: unknown) => {
+            if (disposed) {
+                return;
+            }
+
+            const event = parseWatcherFailedEvent(payload);
+            if (!event || event.sessionName !== capturedSession) {
+                return;
+            }
+            if (matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store))) {
+                store.getState().setWatcherError(event.message);
+            }
+        });
+        const cancelSessionRenamed = EventsOn("tmux:session-renamed", (payload: unknown) => {
+            if (disposed) {
+                return;
+            }
+
+            const event = parseSessionRenamedEvent(payload);
+            if (!event || event.oldName !== capturedSession) {
+                return;
+            }
+            renamedSessionRef.current = event.newName;
+        });
 
         return () => {
+            const shouldSurfaceCleanupFailure = matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store));
             disposed = true;
             cancel();
-            void api.DevPanelStopWatcher(capturedSession).catch((err: unknown) => {
-                console.warn("[file-tree] DevPanelStopWatcher failed", {
-                    session: capturedSession,
-                    err,
-                });
+            cancelWatcherFailed();
+            cancelSessionRenamed();
+
+            const stopTargets = [capturedSessionKey];
+            const latestRenderSnapshot = latestRenderSnapshotRef.current;
+            const shouldKeepRenamedWatcher =
+                renamedSessionRef.current !== null
+                && renamedSessionRef.current === latestRenderSnapshot.activeSession
+                && latestRenderSnapshot.activeSessionKey !== capturedSessionKey;
+            if (
+                renamedSessionRef.current
+                && renamedSessionRef.current !== capturedSession
+                && !shouldKeepRenamedWatcher
+            ) {
+                stopTargets.push(renameSessionKey(capturedSessionKey, capturedSession, renamedSessionRef.current));
+            }
+
+            void Promise.allSettled(stopTargets.map((sessionKey) => api.DevPanelStopWatcher(sessionKey))).then((results) => {
+                const cleanupErrors: string[] = [];
+                for (let index = 0; index < results.length; index += 1) {
+                    const result = results[index];
+                    if (result.status === "fulfilled") {
+                        continue;
+                    }
+
+                    const sessionKey = stopTargets[index];
+                    const err = result.reason;
+                    console.warn("[file-tree] DevPanelStopWatcher failed", {
+                        sessionKey,
+                        err,
+                    });
+                    cleanupErrors.push(
+                        toErrorMessage(err, `Automatic refresh cleanup failed for ${sessionKey}. Reload the directory manually if needed.`),
+                    );
+                }
+                if (
+                    cleanupErrors.length > 0
+                    && shouldSurfaceCleanupFailure
+                    && matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store))
+                ) {
+                    store.getState().setWatcherError(cleanupErrors.join("\n"));
+                }
             });
         };
-    }, [activeSession, refreshDirectory, store]);
+    }, [activeSession, activeSessionKey, refreshDirectory, store]);
 
     return {
         loadRoot,

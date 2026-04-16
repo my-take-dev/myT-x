@@ -971,4 +971,10 @@ func TestBuildBootstrapMessageContainsTeamAndRole(t *testing.T) {
 	if !strings.Contains(msg, `register_agent(name="arch"`) {
 		t.Fatal("missing register_agent call")
 	}
+	if !strings.Contains(msg, "list_all_tasks") {
+		t.Fatal("missing list_all_tasks workflow hint")
+	}
+	if !strings.Contains(msg, "pending / blocked → completed / failed / abandoned / cancelled / expired") {
+		t.Fatal("missing updated task status summary")
+	}
 }

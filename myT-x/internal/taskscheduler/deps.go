@@ -31,8 +31,9 @@ type Deps struct {
 	// bracketed-paste mode with Enter key.
 	SendMessagePaste func(paneID, message string) error
 
-	// ResolveOrchestratorDBPath returns the filesystem path to orchestrator.db.
-	ResolveOrchestratorDBPath func() (string, error)
+	// ResolveOrchestratorDBPath returns the filesystem path to orchestrator.db
+	// for the provided session name.
+	ResolveOrchestratorDBPath func(sessionName string) (string, error)
 
 	// NewContext creates a cancellable context derived from the app runtime context.
 	NewContext func() (context.Context, context.CancelFunc)
@@ -72,6 +73,9 @@ func (d *Deps) validateRequired() {
 			"(CheckPaneAlive, SendMessagePaste, ResolveOrchestratorDBPath, NewContext, " +
 			"LaunchWorker, BaseRecoveryOptions, SendClearCommand, GetSessionPaneIDs, " +
 			"IsPaneQuiet, IsAgentTeamSession)")
+	}
+	if d.SessionName == "" {
+		panic("taskscheduler.NewService: SessionName must not be empty")
 	}
 }
 

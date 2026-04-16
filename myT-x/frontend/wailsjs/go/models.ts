@@ -135,6 +135,7 @@ export namespace config {
 	    id: string;
 	    name: string;
 	    description?: string;
+	    kind?: string;
 	    command: string;
 	    args?: string[];
 	    env?: Record<string, string>;
@@ -151,6 +152,7 @@ export namespace config {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.description = source["description"];
+	        this.kind = source["kind"];
 	        this.command = source["command"];
 	        this.args = source["args"];
 	        this.env = source["env"];
@@ -181,6 +183,7 @@ export namespace config {
 	    enabled: boolean;
 	    force_cleanup: boolean;
 	    setup_scripts: string[];
+	    setup_script_timeout_seconds: number;
 	    copy_files: string[];
 	    copy_dirs: string[];
 	
@@ -193,6 +196,7 @@ export namespace config {
 	        this.enabled = source["enabled"];
 	        this.force_cleanup = source["force_cleanup"];
 	        this.setup_scripts = source["setup_scripts"];
+	        this.setup_script_timeout_seconds = source["setup_script_timeout_seconds"];
 	        this.copy_files = source["copy_files"];
 	        this.copy_dirs = source["copy_dirs"];
 	    }
@@ -268,6 +272,22 @@ export namespace config {
 
 export namespace devpanel {
 	
+	export class BinaryFileContent {
+	    path: string;
+	    data: string;
+	    mime: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BinaryFileContent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.data = source["data"];
+	        this.mime = source["mime"];
+	    }
+	}
 	export class CommitResult {
 	    hash: string;
 	    message: string;
@@ -309,7 +329,7 @@ export namespace devpanel {
 	    path: string;
 	    is_dir: boolean;
 	    size: number;
-	    has_children?: boolean;
+	    has_children: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FileEntry(source);
@@ -450,6 +470,94 @@ export namespace devpanel {
 	        this.name = source["name"];
 	        this.is_name_match = source["is_name_match"];
 	        this.content_lines = this.convertValues(source["content_lines"], SearchContentLine);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SqliteColumnInfo {
+	    name: string;
+	    type: string;
+	    not_null: boolean;
+	    primary_key: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SqliteColumnInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.type = source["type"];
+	        this.not_null = source["not_null"];
+	        this.primary_key = source["primary_key"];
+	    }
+	}
+	export class SqliteExportResult {
+	    path: string;
+	    row_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SqliteExportResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.row_count = source["row_count"];
+	    }
+	}
+	export class SqliteQueryResult {
+	    columns: string[];
+	    rows: string[][];
+	    null_masks: boolean[][];
+	    offset: number;
+	    total_rows: number;
+	    truncated: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SqliteQueryResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.columns = source["columns"];
+	        this.rows = source["rows"];
+	        this.null_masks = source["null_masks"];
+	        this.offset = source["offset"];
+	        this.total_rows = source["total_rows"];
+	        this.truncated = source["truncated"];
+	    }
+	}
+	export class SqliteTableInfo {
+	    name: string;
+	    columns: SqliteColumnInfo[];
+	    row_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SqliteTableInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.columns = this.convertValues(source["columns"], SqliteColumnInfo);
+	        this.row_count = source["row_count"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -806,6 +914,11 @@ export namespace main {
 	    max_message_templates: number;
 	    max_template_name_len: number;
 	    max_template_message_len: number;
+	    min_single_task_runner_clear_delay: number;
+	    max_single_task_runner_clear_delay: number;
+	    min_chat_overlay_percentage: number;
+	    max_chat_overlay_percentage: number;
+	    default_chat_overlay_percentage: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ValidationRules(source);
@@ -821,6 +934,11 @@ export namespace main {
 	        this.max_message_templates = source["max_message_templates"];
 	        this.max_template_name_len = source["max_template_name_len"];
 	        this.max_template_message_len = source["max_template_message_len"];
+	        this.min_single_task_runner_clear_delay = source["min_single_task_runner_clear_delay"];
+	        this.max_single_task_runner_clear_delay = source["max_single_task_runner_clear_delay"];
+	        this.min_chat_overlay_percentage = source["min_chat_overlay_percentage"];
+	        this.max_chat_overlay_percentage = source["max_chat_overlay_percentage"];
+	        this.default_chat_overlay_percentage = source["default_chat_overlay_percentage"];
 	    }
 	}
 
@@ -1097,6 +1215,63 @@ export namespace orchestrator {
 
 }
 
+export namespace promptpresets {
+	
+	export class PromptPreset {
+	    id: string;
+	    name: string;
+	    body: string;
+	    order: number;
+	    storage_location?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PromptPreset(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.body = source["body"];
+	        this.order = source["order"];
+	        this.storage_location = source["storage_location"];
+	    }
+	}
+	export class LoadResult {
+	    presets: PromptPreset[];
+	    warnings?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LoadResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.presets = this.convertValues(source["presets"], PromptPreset);
+	        this.warnings = source["warnings"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace scheduler {
 	
 	export class EntryStatus {
@@ -1173,6 +1348,89 @@ export namespace sessionlog {
 
 }
 
+export namespace singletaskrunner {
+	
+	export class QueueItem {
+	    id: string;
+	    title: string;
+	    message: string;
+	    target_pane_id: string;
+	    order_index: number;
+	    status: string;
+	    created_at: string;
+	    started_at?: string;
+	    completed_at?: string;
+	    error_message?: string;
+	    result_message?: string;
+	    clear_before: boolean;
+	    clear_command?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new QueueItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.message = source["message"];
+	        this.target_pane_id = source["target_pane_id"];
+	        this.order_index = source["order_index"];
+	        this.status = source["status"];
+	        this.created_at = source["created_at"];
+	        this.started_at = source["started_at"];
+	        this.completed_at = source["completed_at"];
+	        this.error_message = source["error_message"];
+	        this.result_message = source["result_message"];
+	        this.clear_before = source["clear_before"];
+	        this.clear_command = source["clear_command"];
+	    }
+	}
+	export class QueueStatus {
+	    items: QueueItem[];
+	    run_status: string;
+	    current_index: number;
+	    session_name: string;
+	    generation_id: string;
+	    clear_delay_sec: number;
+	    last_stop_reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new QueueStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], QueueItem);
+	        this.run_status = source["run_status"];
+	        this.current_index = source["current_index"];
+	        this.session_name = source["session_name"];
+	        this.generation_id = source["generation_id"];
+	        this.clear_delay_sec = source["clear_delay_sec"];
+	        this.last_stop_reason = source["last_stop_reason"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace taskscheduler {
 	
 	export class QueueConfig {
@@ -1235,6 +1493,7 @@ export namespace taskscheduler {
 	    run_status: string;
 	    current_index: number;
 	    session_name: string;
+	    generation_id: string;
 	    pre_exec_progress?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -1248,6 +1507,7 @@ export namespace taskscheduler {
 	        this.run_status = source["run_status"];
 	        this.current_index = source["current_index"];
 	        this.session_name = source["session_name"];
+	        this.generation_id = source["generation_id"];
 	        this.pre_exec_progress = source["pre_exec_progress"];
 	    }
 	
@@ -1443,6 +1703,213 @@ export namespace tmux {
 
 }
 
+export namespace usagedashboard {
+	
+	export class SourceHealth {
+	    jsonl_available: boolean;
+	    sqlite_available: boolean;
+	    history_available: boolean;
+	    project_dir: string;
+	    partial_errors: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SourceHealth(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.jsonl_available = source["jsonl_available"];
+	        this.sqlite_available = source["sqlite_available"];
+	        this.history_available = source["history_available"];
+	        this.project_dir = source["project_dir"];
+	        this.partial_errors = source["partial_errors"];
+	    }
+	}
+	export class DailyBucket {
+	    date: string;
+	    sessions: number;
+	    secondary: number;
+	    tool_calls: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DailyBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.sessions = source["sessions"];
+	        this.secondary = source["secondary"];
+	        this.tool_calls = source["tool_calls"];
+	    }
+	}
+	export class UsageEntry {
+	    name: string;
+	    count: number;
+	    // Go type: time
+	    last_used_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.count = source["count"];
+	        this.last_used_at = this.convertValues(source["last_used_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ClaudeUsageStats {
+	    total_sessions: number;
+	    active_days: number;
+	    total_messages: number;
+	    total_tool_uses: number;
+	    skills: UsageEntry[];
+	    agents: UsageEntry[];
+	    slash_commands: UsageEntry[];
+	    daily_activity: DailyBucket[];
+	    health: SourceHealth;
+	
+	    static createFrom(source: any = {}) {
+	        return new ClaudeUsageStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total_sessions = source["total_sessions"];
+	        this.active_days = source["active_days"];
+	        this.total_messages = source["total_messages"];
+	        this.total_tool_uses = source["total_tool_uses"];
+	        this.skills = this.convertValues(source["skills"], UsageEntry);
+	        this.agents = this.convertValues(source["agents"], UsageEntry);
+	        this.slash_commands = this.convertValues(source["slash_commands"], UsageEntry);
+	        this.daily_activity = this.convertValues(source["daily_activity"], DailyBucket);
+	        this.health = this.convertValues(source["health"], SourceHealth);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CodexUsageStats {
+	    total_sessions: number;
+	    active_days: number;
+	    total_prompts: number;
+	    total_spawned_agents: number;
+	    skills: UsageEntry[];
+	    agents: UsageEntry[];
+	    daily_activity: DailyBucket[];
+	    health: SourceHealth;
+	
+	    static createFrom(source: any = {}) {
+	        return new CodexUsageStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total_sessions = source["total_sessions"];
+	        this.active_days = source["active_days"];
+	        this.total_prompts = source["total_prompts"];
+	        this.total_spawned_agents = source["total_spawned_agents"];
+	        this.skills = this.convertValues(source["skills"], UsageEntry);
+	        this.agents = this.convertValues(source["agents"], UsageEntry);
+	        this.daily_activity = this.convertValues(source["daily_activity"], DailyBucket);
+	        this.health = this.convertValues(source["health"], SourceHealth);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class UsageDashboardSnapshot {
+	    claude?: ClaudeUsageStats;
+	    codex?: CodexUsageStats;
+	    // Go type: time
+	    last_updated_at: any;
+	    work_dir: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageDashboardSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.claude = this.convertValues(source["claude"], ClaudeUsageStats);
+	        this.codex = this.convertValues(source["codex"], CodexUsageStats);
+	        this.last_updated_at = this.convertValues(source["last_updated_at"], null);
+	        this.work_dir = source["work_dir"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace worktree {
 	
 	export class OrphanedWorktree {
@@ -1485,6 +1952,7 @@ export namespace worktree {
 	    branch_name: string;
 	    base_branch: string;
 	    pull_before_create: boolean;
+	    continue_on_pull_failure: boolean;
 	    enable_agent_team: boolean;
 	    use_claude_env: boolean;
 	    use_pane_env: boolean;
@@ -1499,6 +1967,7 @@ export namespace worktree {
 	        this.branch_name = source["branch_name"];
 	        this.base_branch = source["base_branch"];
 	        this.pull_before_create = source["pull_before_create"];
+	        this.continue_on_pull_failure = source["continue_on_pull_failure"];
 	        this.enable_agent_team = source["enable_agent_team"];
 	        this.use_claude_env = source["use_claude_env"];
 	        this.use_pane_env = source["use_pane_env"];

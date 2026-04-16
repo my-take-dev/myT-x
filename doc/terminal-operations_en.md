@@ -112,11 +112,11 @@ When enabled, input is sent to **all panes** in the current window simultaneousl
 
 ## Chat Input Bar
 
-A floating input panel for sending messages to panes.
+A dockable message-sending panel attached to the edge of the main area. Docks to top, bottom, left, or right, with a drag handle for resizing.
 
 ### Basic Usage
 
-1. Click the input bar at the bottom to expand
+1. Click the input bar at the edge to expand
 2. Select the target pane with the selector buttons
 3. Type your message
 4. Click **Send** or press `Ctrl+Enter`
@@ -125,8 +125,8 @@ A floating input panel for sending messages to panes.
 
 | Option | Description |
 |--------|-------------|
-| **½** button | Toggle half-size input area |
-| Arrow buttons (↗↖↙↘) | Reposition the panel (top-right / top-left / bottom-left / bottom-right) |
+| **½** button | Toggle half-size panel |
+| Anchor buttons (↑↓←→) | Change docking direction (top / bottom / left / right) |
 | **Auto close** | When checked, the panel closes automatically after sending |
 
 ---

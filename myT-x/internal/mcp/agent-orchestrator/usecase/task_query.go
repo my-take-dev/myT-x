@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"time"
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
@@ -12,7 +13,7 @@ import (
 // GetMyTasksCmd は自タスク取得コマンド。
 type GetMyTasksCmd struct {
 	AgentName    string
-	StatusFilter string
+	StatusFilter domain.TaskStatusFilter
 	MaxInline    int // インラインメッセージの最大数（デフォルト: DefaultMaxInline）
 }
 
@@ -39,7 +40,7 @@ type TaskEntry struct {
 	FromAgent     string
 	SenderPaneID  string
 	SendMessageID string
-	Status        string
+	Status        domain.TaskStatus
 	SentAt        string
 	CompletedAt   string
 	IsNowSession  bool
@@ -47,7 +48,7 @@ type TaskEntry struct {
 
 // ListAllTasksCmd は全タスク一覧取得コマンド。
 type ListAllTasksCmd struct {
-	StatusFilter string
+	StatusFilter domain.TaskStatusFilter
 	AgentName    string
 }
 
@@ -69,7 +70,7 @@ type ListAllTaskEntry struct {
 	AgentName     string
 	SenderPaneID  string
 	SendMessageID string
-	Status        string
+	Status        domain.TaskStatus
 	SentAt        string
 	CompletedAt   string
 	IsNowSession  bool
@@ -87,7 +88,7 @@ type GetTaskMessageResult struct {
 	AgentName     string
 	SenderPaneID  string
 	SendMessageID string
-	Status        string
+	Status        domain.TaskStatus
 	SentAt        string
 	CompletedAt   string
 	IsNowSession  bool
@@ -114,8 +115,10 @@ type GetTaskDetailCmd struct {
 // GetTaskDetailResult is the targeted response for a single task.
 type GetTaskDetailResult struct {
 	TaskID            string
-	Status            string
+	Status            domain.TaskStatus
 	AgentName         string
+	GroupID           string
+	GroupLabel        string
 	CompletedAt       string
 	AcknowledgedAt    string
 	CancelledAt       string
@@ -141,8 +144,9 @@ type ReadyTaskEntry struct {
 
 // ActivateReadyTasksResult reports newly activated tasks and how many remain blocked.
 type ActivateReadyTasksResult struct {
-	Activated    []ReadyTaskEntry
-	StillBlocked int
+	Activated      []ReadyTaskEntry
+	StillBlocked   int
+	DeliveryFailed int
 }
 
 // TaskQueryService はタスクの照会を管理する。
@@ -177,17 +181,11 @@ func NewTaskQueryService(
 const DefaultMaxInline = 3
 
 // GetMyTasks は自分宛のタスクを取得する。
-// pending かつ未 acknowledge のタスクはメッセージ本文をインラインで返却し、自動 acknowledge する。
+// Pending unacknowledged tasks include inline message content and are
+// auto-acknowledged best-effort when returned inline.
 func (s *TaskQueryService) GetMyTasks(ctx context.Context, cmd GetMyTasksCmd) (GetMyTasksResult, error) {
-	caller, err := resolveCaller(ctx, s.resolver, s.agents, s.logger)
+	_, err := preflightAssigneeTaskAgentCaller(ctx, s.resolver, s.agents, s.tasks, s.logger, cmd.AgentName)
 	if err != nil {
-		return GetMyTasksResult{}, err
-	}
-
-	if !IsTrustedCaller(caller) && caller.Name != cmd.AgentName {
-		return GetMyTasksResult{}, errors.New("access denied")
-	}
-	if err := expirePendingTasks(ctx, s.tasks, s.logger); err != nil {
 		return GetMyTasksResult{}, err
 	}
 
@@ -232,7 +230,7 @@ func (s *TaskQueryService) GetMyTasks(ctx context.Context, cmd GetMyTasksCmd) (G
 				})
 				acknowledgedAt := time.Now().UTC().Format(time.RFC3339)
 				if ackErr := s.tasks.AcknowledgeTask(ctx, t.ID, acknowledgedAt); ackErr != nil {
-					logf(s.logger, "get_my_tasks: auto-acknowledge task %s: %v", t.ID, ackErr)
+					logf(s.logger, "get_my_tasks: auto acknowledge task %s: %v", t.ID, ackErr)
 				}
 			}
 		}
@@ -248,15 +246,8 @@ func (s *TaskQueryService) GetMyTasks(ctx context.Context, cmd GetMyTasksCmd) (G
 
 // GetTaskMessage は send_message_id から自分宛の単一タスクとメッセージ本文を取得する。
 func (s *TaskQueryService) GetTaskMessage(ctx context.Context, cmd GetTaskMessageCmd) (GetTaskMessageResult, error) {
-	caller, err := resolveCaller(ctx, s.resolver, s.agents, s.logger)
+	caller, err := preflightAssigneeTaskAgentCaller(ctx, s.resolver, s.agents, s.tasks, s.logger, cmd.AgentName)
 	if err != nil {
-		return GetTaskMessageResult{}, err
-	}
-
-	if !IsTrustedCaller(caller) && caller.Name != cmd.AgentName {
-		return GetTaskMessageResult{}, errors.New("access denied")
-	}
-	if err := expirePendingTasks(ctx, s.tasks, s.logger); err != nil {
 		return GetTaskMessageResult{}, err
 	}
 
@@ -265,8 +256,8 @@ func (s *TaskQueryService) GetTaskMessage(ctx context.Context, cmd GetTaskMessag
 		return GetTaskMessageResult{}, operationError(s.logger, "task not found", err)
 	}
 
-	if task.AgentName != cmd.AgentName {
-		return GetTaskMessageResult{}, errors.New("access denied")
+	if _, allowed := authorizeAssigneeCaller(task, caller); !allowed {
+		return GetTaskMessageResult{}, accessDeniedError("caller is not the task assignee")
 	}
 
 	msg, err := s.messages.GetMessage(ctx, cmd.SendMessageID)
@@ -292,10 +283,7 @@ func (s *TaskQueryService) GetTaskMessage(ctx context.Context, cmd GetTaskMessag
 
 // ListAllTasks は全タスクの状態一覧を取得する。
 func (s *TaskQueryService) ListAllTasks(ctx context.Context, cmd ListAllTasksCmd) (ListAllTasksResult, error) {
-	if _, err := resolveCaller(ctx, s.resolver, s.agents, s.logger); err != nil {
-		return ListAllTasksResult{}, err
-	}
-	if err := expirePendingTasks(ctx, s.tasks, s.logger); err != nil {
+	if _, err := preflightTaskCaller(ctx, s.resolver, s.agents, s.tasks, s.logger); err != nil {
 		return ListAllTasksResult{}, err
 	}
 
@@ -352,11 +340,8 @@ func (s *TaskQueryService) ListAllTasks(ctx context.Context, cmd ListAllTasksCmd
 
 // GetTaskDetail returns targeted metadata for a single task and its response when available.
 func (s *TaskQueryService) GetTaskDetail(ctx context.Context, cmd GetTaskDetailCmd) (GetTaskDetailResult, error) {
-	caller, err := resolveCaller(ctx, s.resolver, s.agents, s.logger)
+	caller, err := preflightTaskCaller(ctx, s.resolver, s.agents, s.tasks, s.logger)
 	if err != nil {
-		return GetTaskDetailResult{}, err
-	}
-	if err := expirePendingTasks(ctx, s.tasks, s.logger); err != nil {
 		return GetTaskDetailResult{}, err
 	}
 
@@ -365,13 +350,14 @@ func (s *TaskQueryService) GetTaskDetail(ctx context.Context, cmd GetTaskDetailC
 		return GetTaskDetailResult{}, operationError(s.logger, "task is not available", err)
 	}
 	if !authorizeTaskDetailCaller(task, caller) {
-		return GetTaskDetailResult{}, errors.New("access denied")
+		return GetTaskDetailResult{}, accessDeniedError("caller is not allowed to inspect this task")
 	}
 
 	result := GetTaskDetailResult{
 		TaskID:            task.ID,
 		Status:            task.Status,
 		AgentName:         task.AgentName,
+		GroupID:           task.GroupID,
 		CompletedAt:       task.CompletedAt,
 		AcknowledgedAt:    task.AcknowledgedAt,
 		CancelledAt:       task.CancelledAt,
@@ -380,6 +366,16 @@ func (s *TaskQueryService) GetTaskDetail(ctx context.Context, cmd GetTaskDetailC
 		ProgressNote:      task.ProgressNote,
 		ProgressUpdatedAt: task.ProgressUpdatedAt,
 		ExpiresAt:         task.ExpiresAt,
+	}
+	if task.GroupID != "" {
+		group, err := s.tasks.GetTaskGroup(ctx, task.GroupID)
+		if err != nil {
+			if !errors.Is(err, domain.ErrNotFound) {
+				return GetTaskDetailResult{}, operationError(s.logger, "task group is not available", err)
+			}
+		} else {
+			result.GroupLabel = group.Label
+		}
 	}
 	dependsOn, err := s.tasks.GetTaskDependencies(ctx, task.ID)
 	if err != nil {
@@ -403,57 +399,91 @@ func (s *TaskQueryService) GetTaskDetail(ctx context.Context, cmd GetTaskDetailC
 
 // ActivateReadyTasks activates blocked tasks whose dependencies are fully completed.
 func (s *TaskQueryService) ActivateReadyTasks(ctx context.Context, cmd ActivateReadyTasksCmd) (ActivateReadyTasksResult, error) {
-	if _, err := resolveCaller(ctx, s.resolver, s.agents, s.logger); err != nil {
+	if _, err := preflightTaskCaller(ctx, s.resolver, s.agents, s.tasks, s.logger); err != nil {
 		return ActivateReadyTasksResult{}, err
 	}
 	activated, stillBlocked, err := s.tasks.ActivateReadyTasks(ctx, time.Now().UTC().Format(time.RFC3339), cmd.AgentName)
 	if err != nil {
 		return ActivateReadyTasksResult{}, operationError(s.logger, "failed to activate ready tasks", err)
 	}
-	s.deliverActivatedTasks(ctx, activated)
-	entries := make([]ReadyTaskEntry, 0, len(activated))
-	for _, task := range activated {
+	delivered, deliveryFailed := s.deliverActivatedTasks(ctx, activated)
+	entries := make([]ReadyTaskEntry, 0, len(delivered))
+	for _, task := range delivered {
 		entries = append(entries, ReadyTaskEntry{
 			TaskID:    task.ID,
 			AgentName: task.AgentName,
 		})
 	}
 	return ActivateReadyTasksResult{
-		Activated:    entries,
-		StillBlocked: stillBlocked,
+		Activated:      entries,
+		StillBlocked:   stillBlocked,
+		DeliveryFailed: deliveryFailed,
 	}, nil
 }
 
-func (s *TaskQueryService) deliverActivatedTasks(ctx context.Context, tasks []domain.Task) {
+func (s *TaskQueryService) deliverActivatedTasks(ctx context.Context, tasks []domain.Task) ([]domain.Task, int) {
+	delivered := make([]domain.Task, 0, len(tasks))
+	deliveryFailed := 0
 	for _, task := range tasks {
-		s.deliverActivatedTask(ctx, task)
+		deliveredTask, failed := s.deliverActivatedTask(ctx, task)
+		if deliveredTask {
+			delivered = append(delivered, task)
+		}
+		if failed {
+			deliveryFailed++
+		}
 	}
+	return delivered, deliveryFailed
 }
 
-func (s *TaskQueryService) deliverActivatedTask(ctx context.Context, task domain.Task) {
+func (s *TaskQueryService) deliverActivatedTask(ctx context.Context, task domain.Task) (bool, bool) {
 	if s.sender == nil || s.messages == nil {
-		return
+		return true, false
 	}
 	if task.SendMessageID == "" || task.AssigneePaneID == "" || domain.IsVirtualPaneID(task.AssigneePaneID) {
-		return
+		return true, false
 	}
 
 	msg, err := s.messages.GetMessage(ctx, task.SendMessageID)
 	if err != nil {
-		logf(s.logger, "activate_ready_tasks: get message %s for task %s: %v", task.SendMessageID, task.ID, err)
-		return
+		if failErr := s.tasks.MarkTaskFailed(ctx, task.ID); failErr != nil {
+			slog.Error("[ERROR-MCP-ORCH] activate_ready_tasks message lookup failed and mark failed could not persist",
+				"taskID", task.ID,
+				"messageID", task.SendMessageID,
+				"lookupErr", err,
+				"markFailedErr", failErr,
+			)
+			return false, true
+		}
+		slog.Warn("[WARN-MCP-ORCH] activate_ready_tasks message lookup failed",
+			"taskID", task.ID,
+			"messageID", task.SendMessageID,
+			"error", err,
+		)
+		return false, true
 	}
 	if err := s.sender.SendKeys(ctx, task.AssigneePaneID, msg.Content); err != nil {
 		if failErr := s.tasks.MarkTaskFailed(ctx, task.ID); failErr != nil {
-			logf(s.logger, "activate_ready_tasks: deliver task %s to pane %s failed: %v (mark failed: %v)", task.ID, task.AssigneePaneID, err, failErr)
-			return
+			slog.Error("[ERROR-MCP-ORCH] activate_ready_tasks delivery failed and mark failed could not persist",
+				"taskID", task.ID,
+				"paneID", task.AssigneePaneID,
+				"sendErr", err,
+				"markFailedErr", failErr,
+			)
+			return false, true
 		}
-		logf(s.logger, "activate_ready_tasks: deliver task %s to pane %s: %v", task.ID, task.AssigneePaneID, err)
+		slog.Warn("[WARN-MCP-ORCH] activate_ready_tasks delivery failed",
+			"taskID", task.ID,
+			"paneID", task.AssigneePaneID,
+			"error", err,
+		)
+		return false, true
 	}
+	return true, false
 }
 
 func authorizeTaskDetailCaller(task domain.Task, caller domain.Agent) bool {
-	if authorizeTaskSenderCaller(task, caller) {
+	if authorizeTaskSenderCaller(task, caller, "") {
 		return true
 	}
 	_, allowed := authorizeResponseCaller(task, caller)

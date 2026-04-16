@@ -1,5 +1,17 @@
 package config
 
+import "time"
+
+const (
+	// DefaultSetupScriptTimeoutSeconds is the per-script timeout used when the
+	// worktree config omits setup_script_timeout_seconds.
+	DefaultSetupScriptTimeoutSeconds = 300
+
+	// SetupScriptCancellationWait is the bounded grace period to wait after
+	// explicitly canceling setup scripts during rollback or shutdown.
+	SetupScriptCancellationWait = 30 * time.Second
+)
+
 // ClaudeEnvConfig holds Claude Code environment variable settings.
 // Vars contains key-value pairs applied to terminal panes.
 // DefaultEnabled controls the checkbox default in the new session modal.
@@ -13,6 +25,7 @@ type MCPServerConfig struct {
 	ID           string                 `yaml:"id" json:"id"`
 	Name         string                 `yaml:"name" json:"name"`
 	Description  string                 `yaml:"description,omitempty" json:"description,omitempty"`
+	Kind         string                 `yaml:"kind,omitempty" json:"kind,omitempty"`
 	Command      string                 `yaml:"command" json:"command"`
 	Args         []string               `yaml:"args,omitempty" json:"args,omitempty"`
 	Env          map[string]string      `yaml:"env,omitempty" json:"env,omitempty"`
@@ -63,9 +76,20 @@ type AgentModelOverride struct {
 // to the same protected config file. This is the intended configuration flow.
 // Do NOT expose these fields to untrusted sources (e.g. session metadata from git).
 type WorktreeConfig struct {
-	Enabled      bool     `yaml:"enabled" json:"enabled"`
-	ForceCleanup bool     `yaml:"force_cleanup" json:"force_cleanup"` // Skip uncommitted changes check when removing worktree
-	SetupScripts []string `yaml:"setup_scripts" json:"setup_scripts"` // Scripts to run after worktree creation
-	CopyFiles    []string `yaml:"copy_files" json:"copy_files"`
-	CopyDirs     []string `yaml:"copy_dirs" json:"copy_dirs"` // Directories to recursively copy from repo to worktree
+	Enabled                   bool     `yaml:"enabled" json:"enabled"`
+	ForceCleanup              bool     `yaml:"force_cleanup" json:"force_cleanup"`                               // Skip uncommitted changes check when removing worktree
+	SetupScripts              []string `yaml:"setup_scripts" json:"setup_scripts"`                               // Scripts to run after worktree creation
+	SetupScriptTimeoutSeconds int      `yaml:"setup_script_timeout_seconds" json:"setup_script_timeout_seconds"` // Per-script timeout for setup_scripts
+	CopyFiles                 []string `yaml:"copy_files" json:"copy_files"`
+	CopyDirs                  []string `yaml:"copy_dirs" json:"copy_dirs"` // Directories to recursively copy from repo to worktree
+}
+
+// SetupScriptTimeout returns the configured per-script timeout with defaults
+// applied for omitted or invalid values.
+func (cfg WorktreeConfig) SetupScriptTimeout() time.Duration {
+	seconds := cfg.SetupScriptTimeoutSeconds
+	if seconds <= 0 {
+		seconds = DefaultSetupScriptTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
 }

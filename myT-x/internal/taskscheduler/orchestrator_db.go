@@ -4,11 +4,14 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
+
+	orcdomain "myT-x/internal/mcp/agent-orchestrator/domain"
 
 	_ "modernc.org/sqlite"
 )
@@ -30,7 +33,7 @@ func CheckOrchestratorReady(dbPath string) (OrchestratorReadiness, error) {
 		if os.IsNotExist(err) {
 			return OrchestratorReadiness{DBExists: false, AgentCount: 0}, nil
 		}
-		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness: stat db path", "path", dbPath, "error", err)
+		slog.Warn("[WARN-TASK-SCHEDULER] readiness: stat db path", "path", dbPath, "error", err)
 		return OrchestratorReadiness{DBExists: false, AgentCount: 0},
 			fmt.Errorf("stat orchestrator db: %w", err)
 	}
@@ -42,7 +45,7 @@ func CheckOrchestratorReady(dbPath string) (OrchestratorReadiness, error) {
 	}
 	defer func() {
 		if closeErr := db.Close(); closeErr != nil {
-			slog.Warn("[DEBUG-TASK-SCHEDULER] close readiness db", "error", closeErr)
+			slog.Warn("[WARN-TASK-SCHEDULER] close readiness db", "error", closeErr)
 		}
 	}()
 
@@ -51,10 +54,10 @@ func CheckOrchestratorReady(dbPath string) (OrchestratorReadiness, error) {
 	if err != nil {
 		if strings.Contains(err.Error(), "no such table: agents") {
 			// The DB file exists but orchestrator initialization has not created the agents table yet.
-			slog.Warn("[DEBUG-TASK-SCHEDULER] readiness agent count query failed", "error", err)
+			slog.Warn("[WARN-TASK-SCHEDULER] readiness agent count query failed", "error", err)
 			return OrchestratorReadiness{DBExists: true, AgentCount: 0}, nil
 		}
-		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness query failed", "path", dbPath, "error", err)
+		slog.Warn("[WARN-TASK-SCHEDULER] readiness query failed", "path", dbPath, "error", err)
 		return OrchestratorReadiness{}, fmt.Errorf("query orchestrator readiness: %w", err)
 	}
 
@@ -81,7 +84,7 @@ func openOrchestratorDB(dbPath string) (*orchestratorDB, error) {
 	// Verify connectivity.
 	if err := db.Ping(); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
-			slog.Warn("[DEBUG-TASK-SCHEDULER] close orchestrator db after ping failure", "error", closeErr)
+			slog.Warn("[WARN-TASK-SCHEDULER] close orchestrator db after ping failure", "error", closeErr)
 		}
 		return nil, fmt.Errorf("ping orchestrator db: %w", err)
 	}
@@ -138,7 +141,7 @@ func (o *orchestratorDB) createTask(assigneePaneID, message string) (taskID, msg
 	defer func() {
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
-				slog.Warn("[DEBUG-TASK-SCHEDULER] rollback failed", "error", rbErr)
+				slog.Warn("[WARN-TASK-SCHEDULER] rollback failed", "error", rbErr)
 			}
 		}
 	}()
@@ -170,20 +173,66 @@ func (o *orchestratorDB) createTask(assigneePaneID, message string) (taskID, msg
 	return taskID, msgID, nil
 }
 
+// abandonPendingTask marks an undelivered pending task as abandoned so the
+// scheduler does not leave phantom pending work behind after local failures.
+func (o *orchestratorDB) abandonPendingTask(taskID string) error {
+	if strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("task id is empty")
+	}
+
+	result, err := o.db.Exec(
+		`UPDATE tasks SET status = ?, completed_at = ? WHERE task_id = ? AND status = ?`,
+		string(orcdomain.TaskStatusAbandoned),
+		time.Now().UTC().Format(time.RFC3339),
+		taskID,
+		string(orcdomain.TaskStatusPending),
+	)
+	if err != nil {
+		return fmt.Errorf("abandon pending task: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("abandon pending task rows affected: %w", err)
+	}
+	switch {
+	case rowsAffected == 0:
+		var existingStatus string
+		err = o.db.QueryRow(`SELECT status FROM tasks WHERE task_id = ?`, taskID).Scan(&existingStatus)
+		switch {
+		case err == nil:
+			slog.Info("[DEBUG-TASK-SCHEDULER] abandon skipped because task already transitioned",
+				"taskID", taskID,
+				"status", existingStatus)
+			return nil
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("abandon pending task %s: task not found", taskID)
+		default:
+			return fmt.Errorf("abandon pending task lookup %s: %w", taskID, err)
+		}
+	case rowsAffected == 1:
+		return nil
+	default:
+		// task_id is expected to be unique, so multiple updated rows would signal
+		// schema drift or data corruption rather than a normal scheduler state.
+		return fmt.Errorf("abandon pending task %s: expected 1 updated row, got %d", taskID, rowsAffected)
+	}
+}
+
 // pollTaskStatus checks the current status of a task.
-// Returns the status string and completed_at timestamp.
-func (o *orchestratorDB) pollTaskStatus(taskID string) (status string, completedAt string, err error) {
+// Returns the domain status and completed_at timestamp.
+func (o *orchestratorDB) pollTaskStatus(taskID string) (status orcdomain.TaskStatus, completedAt string, err error) {
 	if taskID == "" {
 		return "", "", fmt.Errorf("task id is empty")
 	}
+	var rawStatus string
 	err = o.db.QueryRow(
 		`SELECT status, COALESCE(completed_at, '') FROM tasks WHERE task_id = ?`,
 		taskID,
-	).Scan(&status, &completedAt)
+	).Scan(&rawStatus, &completedAt)
 	if err != nil {
 		return "", "", fmt.Errorf("query task %s: %w", taskID, err)
 	}
-	return status, completedAt, nil
+	return orcdomain.TaskStatus(rawStatus), completedAt, nil
 }
 
 // generateHexID generates a random hex-encoded ID with the given prefix.

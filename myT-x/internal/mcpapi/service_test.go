@@ -366,6 +366,24 @@ func TestApplyBridgeRecommendation_OrchestratorIDGeneratesRecommendation(t *test
 	}
 }
 
+func TestApplyBridgeRecommendation_SingleTaskRunnerKindGeneratesRecommendation(t *testing.T) {
+	svc, _ := newTestService(t)
+	snapshot := mcp.MCPSnapshot{
+		ID:     "single-task-runner",
+		Kind:   mcp.DefinitionKindSingleTaskRunner,
+		Status: mcp.StatusRunning,
+	}
+	svc.applyBridgeRecommendation("session-a", &snapshot)
+
+	if snapshot.BridgeCommand != testBridgeCommand {
+		t.Fatalf("BridgeCommand = %q, want %q", snapshot.BridgeCommand, testBridgeCommand)
+	}
+	wantArgs := []string{"mcp", "stdio", "--mcp", "single-task-runner"}
+	if !reflect.DeepEqual(snapshot.BridgeArgs, wantArgs) {
+		t.Fatalf("BridgeArgs = %#v, want %#v", snapshot.BridgeArgs, wantArgs)
+	}
+}
+
 func TestApplyBridgeRecommendation_InvalidOrchIDLeavesEmpty(t *testing.T) {
 	svc, _ := newTestService(t)
 	snapshot := mcp.MCPSnapshot{
@@ -414,6 +432,26 @@ func TestApplyBridgeRecommendation_LeavesRecommendationEmptyForNonLSPID(t *testi
 
 	if snapshot.BridgeCommand != "" {
 		t.Fatalf("BridgeCommand = %q, want empty", snapshot.BridgeCommand)
+	}
+	if snapshot.BridgeArgs != nil {
+		t.Fatalf("BridgeArgs = %#v, want nil", snapshot.BridgeArgs)
+	}
+}
+
+func TestApplyBridgeRecommendation_LeavesRecommendationEmptyForUnknownExplicitKind(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	snapshot := mcp.MCPSnapshot{
+		ID:            "lsp-gopls",
+		Kind:          "custom-kind",
+		Status:        mcp.StatusStopped,
+		BridgeCommand: "stale.exe",
+		BridgeArgs:    []string{"stale"},
+	}
+	svc.applyBridgeRecommendation("session-a", &snapshot)
+
+	if snapshot.BridgeCommand != "" {
+		t.Fatalf("BridgeCommand = %q, want empty for unknown explicit kind", snapshot.BridgeCommand)
 	}
 	if snapshot.BridgeArgs != nil {
 		t.Fatalf("BridgeArgs = %#v, want nil", snapshot.BridgeArgs)
@@ -1132,6 +1170,7 @@ func TestMCPServerConfigsToDefinitions(t *testing.T) {
 			ID:          "memory",
 			Name:        "Memory Server",
 			Description: "Persisted memory",
+			Kind:        "memory-server",
 			Command:     "npx",
 			Args:        []string{"-y", "@anthropic/memory-server"},
 			Env: map[string]string{
@@ -1159,6 +1198,7 @@ func TestMCPServerConfigsToDefinitions(t *testing.T) {
 		ID:             "memory",
 		Name:           "Memory Server",
 		Description:    "Persisted memory",
+		Kind:           "memory-server",
 		Command:        "npx",
 		Args:           []string{"-y", "@anthropic/memory-server"},
 		DefaultEnv:     map[string]string{"MEM_DIR": "/tmp/memory"},
@@ -1188,6 +1228,49 @@ func TestMCPServerConfigsToDefinitions(t *testing.T) {
 	configs[0].ConfigParams[0].Label = "Changed"
 	if defs[0].ConfigParams[0].Label == "Changed" {
 		t.Fatal("definition config params were aliased to config config_params")
+	}
+}
+
+func TestMCPServerConfigsToDefinitions_NormalizesSingleTaskRunnerKind(t *testing.T) {
+	defs := MCPServerConfigsToDefinitions([]config.MCPServerConfig{
+		{
+			ID:      "single-task-runner",
+			Name:    "Single Task Runner",
+			Kind:    "  single-task-runner  ",
+			Command: "myT-x.exe",
+		},
+	})
+	if len(defs) != 1 {
+		t.Fatalf("MCPServerConfigsToDefinitions() length = %d, want 1", len(defs))
+	}
+	if got := defs[0].Kind; got != mcp.DefinitionKindSingleTaskRunner {
+		t.Fatalf("Kind = %q, want %q", got, mcp.DefinitionKindSingleTaskRunner)
+	}
+	if !defs[0].Kind.IsBuiltIn() {
+		t.Fatal("Kind.IsBuiltIn() = false, want true for single-task-runner")
+	}
+	if !defs[0].Kind.UsesEmbeddedRuntime() {
+		t.Fatal("Kind.UsesEmbeddedRuntime() = false, want true for single-task-runner")
+	}
+}
+
+func TestMCPServerConfigsToDefinitions_PreservesCustomKind(t *testing.T) {
+	defs := MCPServerConfigsToDefinitions([]config.MCPServerConfig{
+		{
+			ID:      "lsp-custom",
+			Name:    "Custom MCP",
+			Kind:    "custom",
+			Command: "custom-mcp",
+		},
+	})
+	if len(defs) != 1 {
+		t.Fatalf("MCPServerConfigsToDefinitions() length = %d, want 1", len(defs))
+	}
+	if got := defs[0].Kind; got != "custom" {
+		t.Fatalf("Kind = %q, want %q", got, "custom")
+	}
+	if defs[0].Kind.IsBuiltIn() {
+		t.Fatal("Kind.IsBuiltIn() = true, want false for custom kind")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -65,9 +66,11 @@ type SendTasksSummary struct {
 
 // SendTasksResult is the public result for grouped task dispatch.
 type SendTasksResult struct {
-	GroupID string
-	Results []SendTasksItemResult
-	Summary SendTasksSummary
+	GroupID           string
+	Results           []SendTasksItemResult
+	Summary           SendTasksSummary
+	HasPartialFailure bool
+	AllFailed         bool
 }
 
 // CancelTaskCmd cancels a pending task created by the caller.
@@ -79,7 +82,7 @@ type CancelTaskCmd struct {
 // CancelTaskResult is the public result for task cancellation.
 type CancelTaskResult struct {
 	TaskID string
-	Status string
+	Status domain.TaskStatus
 }
 
 // TaskDispatchService はタスク送信を管理する。
@@ -126,10 +129,11 @@ func (s *TaskDispatchService) Send(ctx context.Context, cmd SendTaskCmd) (SendTa
 	return s.sendWithSender(ctx, senderAgent, cmd)
 }
 
-// SendBatch intentionally requires a registered caller because bulk fan-out is
-// restricted to in-session agents even though single send_task calls are not.
+// SendBatch requires a registered caller or trusted (pipe-bridge) access.
+// Unlike Send, which only validates from_agent, SendBatch additionally verifies
+// the calling pane via resolveCaller for pane-based authentication.
 func (s *TaskDispatchService) SendBatch(ctx context.Context, cmd SendTasksCmd) (SendTasksResult, error) {
-	if _, err := resolveCaller(ctx, s.resolver, s.agents, s.logger); err != nil {
+	if _, err := preflightTaskCaller(ctx, s.resolver, s.agents, s.tasks, s.logger); err != nil {
 		return SendTasksResult{}, err
 	}
 	senderAgent, err := s.agents.GetAgent(ctx, cmd.FromAgent)
@@ -151,6 +155,9 @@ func (s *TaskDispatchService) SendBatch(ctx context.Context, cmd SendTasksCmd) (
 
 	results := make([]SendTasksItemResult, 0, len(cmd.Tasks))
 	summary := SendTasksSummary{}
+	// Keep the group when at least one task row was persisted, even if delivery
+	// later failed, so callers can inspect partial results by task_id.
+	persistedTaskCount := 0
 	for _, item := range cmd.Tasks {
 		result, err := s.sendWithSender(ctx, senderAgent, SendTaskCmd{
 			AgentName:                   item.AgentName,
@@ -164,19 +171,24 @@ func (s *TaskDispatchService) SendBatch(ctx context.Context, cmd SendTasksCmd) (
 		if err != nil {
 			logf(s.logger, "send_tasks: task for %s failed: %v", item.AgentName, err)
 			summary.Failed++
+			if result.TaskID != "" {
+				persistedTaskCount++
+			}
 			results = append(results, SendTasksItemResult{
+				TaskID:    result.TaskID,
 				AgentName: item.AgentName,
 				Error:     err.Error(),
 			})
 			continue
 		}
 		summary.Sent++
+		persistedTaskCount++
 		results = append(results, SendTasksItemResult{
 			TaskID:    result.TaskID,
 			AgentName: result.AgentName,
 		})
 	}
-	if summary.Sent == 0 {
+	if persistedTaskCount == 0 {
 		if err := s.tasks.DeleteTaskGroup(ctx, groupID); err != nil {
 			return SendTasksResult{}, operationError(s.logger, "failed to clean up empty task group", err)
 		}
@@ -184,9 +196,11 @@ func (s *TaskDispatchService) SendBatch(ctx context.Context, cmd SendTasksCmd) (
 	}
 
 	return SendTasksResult{
-		GroupID: groupID,
-		Results: results,
-		Summary: summary,
+		GroupID:           groupID,
+		Results:           results,
+		Summary:           summary,
+		HasPartialFailure: summary.Failed > 0,
+		AllFailed:         groupID == "" && summary.Failed > 0,
 	}, nil
 }
 
@@ -197,7 +211,7 @@ func (s *TaskDispatchService) sendWithSender(ctx context.Context, senderAgent do
 	}
 
 	if domain.IsVirtualPaneID(agent.PaneID) {
-		return SendTaskResult{}, errors.New("cannot send task to virtual pane agent")
+		return SendTaskResult{}, conflictError("cannot send task to virtual pane agent")
 	}
 
 	taskID, err := generateIDWith(s.randRead, "t-", "generate task id")
@@ -224,7 +238,7 @@ func (s *TaskDispatchService) sendWithSender(ctx context.Context, senderAgent do
 	}
 	if err := s.messages.SaveMessage(ctx, domain.TaskMessage{
 		ID:        msgID,
-		Content:   sendMessage,
+		Content:   cmd.Message,
 		CreatedAt: now,
 	}); err != nil {
 		return SendTaskResult{}, operationError(s.logger, "failed to persist message", err)
@@ -248,6 +262,10 @@ func (s *TaskDispatchService) sendWithSender(ctx context.Context, senderAgent do
 	}
 
 	if err := s.tasks.CreateTaskWithDependencies(ctx, task, cmd.DependsOn); err != nil {
+		if rollbackErr := s.messages.DeleteMessage(ctx, msgID); rollbackErr != nil {
+			logf(s.logger, "rollback orphaned message %s after task create failure: %v", msgID, rollbackErr)
+			return SendTaskResult{}, operationError(s.logger, "failed to persist task", fmt.Errorf("%w (rollback message %s: %v)", err, msgID, rollbackErr))
+		}
 		return SendTaskResult{}, operationError(s.logger, "failed to persist task", err)
 	}
 
@@ -260,6 +278,8 @@ func (s *TaskDispatchService) sendWithSender(ctx context.Context, senderAgent do
 	}
 
 	if task.Status == domain.TaskStatusBlocked {
+		// Dependency-blocked tasks are persisted but not delivered yet.
+		// The SendKeys failure path below only applies to dependency-free pending tasks.
 		return result, nil
 	}
 
@@ -268,7 +288,7 @@ func (s *TaskDispatchService) sendWithSender(ctx context.Context, senderAgent do
 			logf(s.logger, "mark task %s failed: %v", taskID, failErr)
 			return SendTaskResult{}, operationError(s.logger, "message delivery failed; task may remain pending", fmt.Errorf("%w (mark task failed: %v)", err, failErr))
 		}
-		return SendTaskResult{}, operationError(s.logger, "message delivery failed", err)
+		return result, operationError(s.logger, "message delivery failed", err)
 	}
 
 	return result, nil
@@ -276,7 +296,11 @@ func (s *TaskDispatchService) sendWithSender(ctx context.Context, senderAgent do
 
 // CancelTask cancels a pending task when requested by its sender.
 func (s *TaskDispatchService) CancelTask(ctx context.Context, cmd CancelTaskCmd) (CancelTaskResult, error) {
-	caller, err := resolveCaller(ctx, s.resolver, s.agents, s.logger)
+	if err := expirePendingTasks(ctx, s.tasks, s.logger); err != nil {
+		slog.Warn("[WARN-MCP-ORCH] cancel_task: expire pending tasks failed", "error", err)
+	}
+
+	caller, callerPaneID, err := resolveTaskCancellationCaller(ctx, s.resolver, s.agents, s.logger)
 	if err != nil {
 		return CancelTaskResult{}, err
 	}
@@ -285,8 +309,8 @@ func (s *TaskDispatchService) CancelTask(ctx context.Context, cmd CancelTaskCmd)
 	if err != nil {
 		return CancelTaskResult{}, operationError(s.logger, "task is not available", err)
 	}
-	if !authorizeTaskSenderCaller(task, caller) {
-		return CancelTaskResult{}, errors.New("access denied")
+	if !authorizeTaskSenderCaller(task, caller, callerPaneID) {
+		return CancelTaskResult{}, accessDeniedError("caller does not match the task sender")
 	}
 
 	cancelledAt := time.Now().UTC().Format(time.RFC3339)
@@ -300,14 +324,35 @@ func (s *TaskDispatchService) CancelTask(ctx context.Context, cmd CancelTaskCmd)
 	}, nil
 }
 
-func authorizeTaskSenderCaller(task domain.Task, caller domain.Agent) bool {
+func resolveTaskCancellationCaller(
+	ctx context.Context,
+	resolver domain.SelfPaneResolver,
+	agents domain.AgentRepository,
+	logger *log.Logger,
+) (domain.Agent, string, error) {
+	caller, err := resolveCaller(ctx, resolver, agents, logger)
+	if err == nil {
+		return caller, "", nil
+	}
+	if !errors.Is(err, errCallerNotRegistered) {
+		return domain.Agent{}, "", err
+	}
+
+	paneID, paneErr := resolver.GetPaneID(ctx)
+	if paneErr != nil || paneID == "" {
+		return domain.Agent{}, "", err
+	}
+	return domain.Agent{}, paneID, nil
+}
+
+func authorizeTaskSenderCaller(task domain.Task, caller domain.Agent, callerPaneID string) bool {
 	if IsTrustedCaller(caller) {
 		return true
 	}
 	if task.SenderName != "" && caller.Name == task.SenderName {
 		return true
 	}
-	if task.SenderPaneID != "" && caller.PaneID == task.SenderPaneID {
+	if task.SenderPaneID != "" && (caller.PaneID == task.SenderPaneID || callerPaneID == task.SenderPaneID) {
 		return true
 	}
 	return false

@@ -1,4 +1,4 @@
-import {useState, useCallback, useRef} from "react";
+import {useState, useCallback, type ChangeEvent} from "react";
 import {useI18n} from "../../../../i18n";
 import type {PaneSnapshot} from "../../../../types/tmux";
 import {isEditableStatus, type QueueItem, type MessageTemplate} from "./useTaskScheduler";
@@ -27,22 +27,21 @@ export function TaskSchedulerForm({
     const [targetPaneID, setTargetPaneID] = useState(editingItem?.target_pane_id ?? "");
     const [clearBefore, setClearBefore] = useState(editingItem?.clear_before ?? false);
     const [clearCommand, setClearCommand] = useState(editingItem?.clear_command ?? "");
+    const [selectedTemplateIndex, setSelectedTemplateIndex] = useState("");
     const [submitting, setSubmitting] = useState(false);
-    const templateSelectRef = useRef<HTMLSelectElement>(null);
-    const isEditingLocked = !isEditableStatus(editingItem?.status);
+    const isEditingLocked = editingItem !== null && !isEditableStatus(editingItem.status);
 
-    const handleTemplateSelect = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-        const idx = Number(e.target.value);
+    const handleTemplateSelect = useCallback((e: ChangeEvent<HTMLSelectElement>) => {
+        const nextIndex = e.target.value;
+        setSelectedTemplateIndex(nextIndex);
+        const idx = Number(nextIndex);
         if (Number.isNaN(idx) || idx < 0 || idx >= messageTemplates.length) return;
         const templateMessage = messageTemplates[idx].message;
         setMessage((prev) => (prev.trim() ? prev + "\n" + templateMessage : templateMessage));
-        // Reset the select back to the placeholder after appending.
-        if (templateSelectRef.current) {
-            templateSelectRef.current.value = "";
-        }
+        setSelectedTemplateIndex("");
     }, [messageTemplates]);
 
-    const canSubmit = title.trim() !== "" && message.trim() !== "" && targetPaneID !== "" && !submitting;
+    const canSubmit = title.trim() !== "" && message.trim() !== "" && targetPaneID !== "" && !submitting && !isEditingLocked;
 
     const handleSubmit = useCallback(async () => {
         if (!canSubmit) return;
@@ -80,16 +79,15 @@ export function TaskSchedulerForm({
                 </label>
                 {messageTemplates.length > 0 && !isEditingLocked && (
                     <select
-                        ref={templateSelectRef}
                         className="task-scheduler-template-select"
                         onChange={handleTemplateSelect}
-                        defaultValue=""
+                        value={selectedTemplateIndex}
                     >
                         <option value="">
                             {tr("viewer.taskScheduler.selectTemplate", "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u304b\u3089\u8ffd\u52a0...", "Add from template...")}
                         </option>
                         {messageTemplates.map((tmpl, idx) => (
-                            <option key={idx} value={String(idx)}>
+                            <option key={tmpl.name === "" ? `template-${idx}` : `${tmpl.name}:${idx}`} value={String(idx)}>
                                 {tmpl.name}
                             </option>
                         ))}
@@ -156,8 +154,8 @@ export function TaskSchedulerForm({
                     />
                     <span className="task-scheduler-config-hint">
                         {tr("viewer.taskScheduler.clearCommandHint",
-                            "\u672a\u5165\u529b\u6642\u306f /new \u304c\u30c7\u30d5\u30a9\u30eb\u30c8",
-                            "Defaults to /new if empty")}
+                            "\u672a\u5165\u529b\u6642\u306f /new \u304c\u4f7f\u308f\u308c\u307e\u3059\u3002\u9001\u4fe1\u306b\u5931\u6557\u3057\u305f\u5834\u5408\u306f\u305d\u306e\u30bf\u30b9\u30af\u306f failed \u306b\u306a\u308a\u307e\u3059",
+                            "Defaults to /new if empty. If the clear command fails, that task is marked as failed.")}
                     </span>
                 </div>
             )}

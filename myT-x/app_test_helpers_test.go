@@ -76,17 +76,12 @@ func newSessionServiceForTest(app *App) *session.Service {
 		EmitBackendEvent: func(name string, payload any) {
 			// no-op in tests unless explicitly stubbed
 		},
-		McpCleanupSession: func(sessionName string) {
-			if app.mcpManager != nil {
-				app.mcpManager.CleanupSession(sessionName)
-			}
+		OnSessionDestroyed: app.finalizeSessionDestroyed,
+		OnSessionRenamed: func(oldName, newName string) error {
+			return app.handleSessionRenamed(oldName, newName)
 		},
-		CleanupStaleSnapshotState: func(activePaneIDs map[string]struct{}) {
-			if app.snapshotService != nil {
-				app.snapshotService.CleanupDetachedPaneStates(
-					app.snapshotService.DetachStaleOutputBuffers(activePaneIDs),
-				)
-			}
+		OnSessionRenameRollbackFailed: func(oldName, newName string) error {
+			return app.reconcileSessionRenameRollbackFailure(oldName, newName)
 		},
 		ExecuteRouterRequest: func(router *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 			return router.Execute(req)

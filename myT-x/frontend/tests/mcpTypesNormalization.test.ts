@@ -1,5 +1,9 @@
-import {describe, expect, it} from "vitest";
+import {afterEach, describe, expect, it, vi} from "vitest";
 import {normalizeMCPStatus, normalizeMCPSnapshot, normalizeMCPSnapshots} from "../src/types/mcp";
+
+afterEach(() => {
+    vi.restoreAllMocks();
+});
 
 describe("normalizeMCPStatus", () => {
     it("accepts known status values", () => {
@@ -32,9 +36,27 @@ describe("normalizeMCPSnapshot", () => {
     });
 
     it("rejects whitespace-only or non-string id/name", () => {
-        expect(normalizeMCPSnapshot({id: "   ", name: "valid", description: "", enabled: true, status: "running"})).toBeNull();
-        expect(normalizeMCPSnapshot({id: 123, name: "valid", description: "", enabled: true, status: "running"})).toBeNull();
-        expect(normalizeMCPSnapshot({id: "valid", name: 123, description: "", enabled: true, status: "running"})).toBeNull();
+        expect(normalizeMCPSnapshot({
+            id: "   ",
+            name: "valid",
+            description: "",
+            enabled: true,
+            status: "running"
+        })).toBeNull();
+        expect(normalizeMCPSnapshot({
+            id: 123,
+            name: "valid",
+            description: "",
+            enabled: true,
+            status: "running"
+        })).toBeNull();
+        expect(normalizeMCPSnapshot({
+            id: "valid",
+            name: 123,
+            description: "",
+            enabled: true,
+            status: "running"
+        })).toBeNull();
     });
 
     it("normalizes payload and filters invalid config params", () => {
@@ -123,6 +145,30 @@ describe("normalizeMCPSnapshot", () => {
         expect(result!.kind).toBe("orchestrator");
     });
 
+    it("preserves explicit custom kind values from the backend", () => {
+        const base = {id: "memory", name: "Memory MCP", description: "", enabled: true, status: "running"};
+        const result = normalizeMCPSnapshot({...base, kind: "memory-server"});
+        expect(result!.kind).toBe("memory-server");
+    });
+
+    it("trims kind values before storing them", () => {
+        const base = {id: "memory", name: "Memory MCP", description: "", enabled: true, status: "running"};
+        const result = normalizeMCPSnapshot({...base, kind: "  single-task-runner  "});
+        expect(result!.kind).toBe("single-task-runner");
+    });
+
+    it("omits explicit empty kind values", () => {
+        const base = {id: "lsp-gopls", name: "Go", description: "", enabled: true, status: "running"};
+        const result = normalizeMCPSnapshot({...base, kind: ""});
+        expect(result!.kind).toBeUndefined();
+    });
+
+    it("rejects non-string kind values", () => {
+        const base = {id: "lsp-gopls", name: "Go", description: "", enabled: true, status: "running"};
+        expect(normalizeMCPSnapshot({...base, kind: 1})).toBeNull();
+        expect(normalizeMCPSnapshot({...base, kind: null})).toBeNull();
+    });
+
     it("omits config_params when all entries are invalid", () => {
         const base = {id: "1", name: "s", description: "", enabled: true, status: "running"};
         expect(normalizeMCPSnapshot({...base, config_params: [{key: "", label: ""}]})!.config_params).toBeUndefined();
@@ -171,5 +217,25 @@ describe("normalizeMCPSnapshots", () => {
         expect(snapshots).toEqual([
             {id: "ok", name: "valid", description: "", enabled: true, status: "running"},
         ]);
+    });
+
+    it("warns when dropping invalid entries", () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const snapshots = normalizeMCPSnapshots([
+            {id: "ok", name: "valid", description: "", enabled: true, status: "running"},
+            {id: "bad-kind", name: "broken", description: "", enabled: true, status: "running", kind: 1},
+        ]);
+
+        expect(snapshots).toEqual([
+            {id: "ok", name: "valid", description: "", enabled: true, status: "running"},
+        ]);
+        expect(warnSpy).toHaveBeenCalledWith(
+            "[mcp] dropped invalid MCP snapshot",
+            expect.objectContaining({
+                index: 1,
+                reason: "kind must be a string when provided",
+            }),
+        );
     });
 });

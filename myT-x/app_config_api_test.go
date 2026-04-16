@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"myT-x/internal/config"
+	"myT-x/internal/singletaskrunner"
 	"myT-x/internal/tmux"
 )
 
@@ -450,32 +451,59 @@ func TestGetValidationRules(t *testing.T) {
 	app := NewApp()
 	rules := app.GetValidationRules()
 
-	if got := reflect.TypeFor[ValidationRules]().NumField(); got != 8 {
-		t.Fatalf("ValidationRules field count = %d, want 8; update TestGetValidationRules for new fields", got)
+	if got := reflect.TypeFor[ValidationRules]().NumField(); got != 13 {
+		t.Fatalf("ValidationRules field count = %d, want 13; update TestGetValidationRules for new fields", got)
 	}
 	if rules.MinOverrideNameLen != config.MinOverrideNameLen() {
 		t.Fatalf("min_override_name_len = %d, want %d", rules.MinOverrideNameLen, config.MinOverrideNameLen())
 	}
-	if rules.MinPreExecResetDelay != minPreExecResetDelay {
-		t.Fatalf("min_pre_exec_reset_delay = %d, want %d", rules.MinPreExecResetDelay, minPreExecResetDelay)
+	if rules.MinPreExecResetDelay != config.MinPreExecResetDelay {
+		t.Fatalf("min_pre_exec_reset_delay = %d, want %d", rules.MinPreExecResetDelay, config.MinPreExecResetDelay)
 	}
-	if rules.MaxPreExecResetDelay != maxPreExecResetDelay {
-		t.Fatalf("max_pre_exec_reset_delay = %d, want %d", rules.MaxPreExecResetDelay, maxPreExecResetDelay)
+	if rules.MaxPreExecResetDelay != config.MaxPreExecResetDelay {
+		t.Fatalf("max_pre_exec_reset_delay = %d, want %d", rules.MaxPreExecResetDelay, config.MaxPreExecResetDelay)
 	}
-	if rules.MinPreExecIdleTimeout != minPreExecIdleTimeout {
-		t.Fatalf("min_pre_exec_idle_timeout = %d, want %d", rules.MinPreExecIdleTimeout, minPreExecIdleTimeout)
+	if rules.MinPreExecIdleTimeout != config.MinPreExecIdleTimeout {
+		t.Fatalf("min_pre_exec_idle_timeout = %d, want %d", rules.MinPreExecIdleTimeout, config.MinPreExecIdleTimeout)
 	}
-	if rules.MaxPreExecIdleTimeout != maxPreExecIdleTimeout {
-		t.Fatalf("max_pre_exec_idle_timeout = %d, want %d", rules.MaxPreExecIdleTimeout, maxPreExecIdleTimeout)
+	if rules.MaxPreExecIdleTimeout != config.MaxPreExecIdleTimeout {
+		t.Fatalf("max_pre_exec_idle_timeout = %d, want %d", rules.MaxPreExecIdleTimeout, config.MaxPreExecIdleTimeout)
 	}
-	if rules.MaxMessageTemplates != maxMessageTemplates {
-		t.Fatalf("max_message_templates = %d, want %d", rules.MaxMessageTemplates, maxMessageTemplates)
+	if rules.MaxMessageTemplates != config.MaxMessageTemplates {
+		t.Fatalf("max_message_templates = %d, want %d", rules.MaxMessageTemplates, config.MaxMessageTemplates)
 	}
-	if rules.MaxTemplateNameLen != maxTemplateNameLen {
-		t.Fatalf("max_template_name_len = %d, want %d", rules.MaxTemplateNameLen, maxTemplateNameLen)
+	if rules.MaxTemplateNameLen != config.MaxTemplateNameLen {
+		t.Fatalf("max_template_name_len = %d, want %d", rules.MaxTemplateNameLen, config.MaxTemplateNameLen)
 	}
-	if rules.MaxTemplateMessageLen != maxTemplateMessageLen {
-		t.Fatalf("max_template_message_len = %d, want %d", rules.MaxTemplateMessageLen, maxTemplateMessageLen)
+	if rules.MaxTemplateMessageLen != config.MaxTemplateMessageLen {
+		t.Fatalf("max_template_message_len = %d, want %d", rules.MaxTemplateMessageLen, config.MaxTemplateMessageLen)
+	}
+	if rules.MinSingleTaskRunnerClearDelay != singletaskrunner.MinClearDelaySec {
+		t.Fatalf(
+			"min_single_task_runner_clear_delay = %d, want %d",
+			rules.MinSingleTaskRunnerClearDelay,
+			singletaskrunner.MinClearDelaySec,
+		)
+	}
+	if rules.MaxSingleTaskRunnerClearDelay != singletaskrunner.MaxClearDelaySec {
+		t.Fatalf(
+			"max_single_task_runner_clear_delay = %d, want %d",
+			rules.MaxSingleTaskRunnerClearDelay,
+			singletaskrunner.MaxClearDelaySec,
+		)
+	}
+	if rules.MinChatOverlayPercentage != config.MinChatOverlayPercentage {
+		t.Fatalf("min_chat_overlay_percentage = %d, want %d", rules.MinChatOverlayPercentage, config.MinChatOverlayPercentage)
+	}
+	if rules.MaxChatOverlayPercentage != config.MaxChatOverlayPercentage {
+		t.Fatalf("max_chat_overlay_percentage = %d, want %d", rules.MaxChatOverlayPercentage, config.MaxChatOverlayPercentage)
+	}
+	if rules.DefaultChatOverlayPercentage != config.DefaultChatOverlayPercentage {
+		t.Fatalf(
+			"default_chat_overlay_percentage = %d, want %d",
+			rules.DefaultChatOverlayPercentage,
+			config.DefaultChatOverlayPercentage,
+		)
 	}
 }
 

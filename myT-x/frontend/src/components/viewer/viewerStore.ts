@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { clampDockRatio, DOCK_RATIO_DEFAULT } from "./viewerDocking";
+import {clampDockRatio, DOCK_RATIO_DEFAULT} from "./viewerDocking";
 
 interface ViewerState {
   activeViewId: string | null;
@@ -24,7 +24,9 @@ export const useViewerStore = create<ViewerState>((set) => ({
   openViewWithContext: (viewId, context) =>
     set({ activeViewId: viewId, viewContext: context }),
   dockRatio: DOCK_RATIO_DEFAULT,
-  // clampDockRatio keeps both panes usable at the 980px minimum window width.
+  // Clamp only the persisted main-pane share here so drag math can stay simple.
+  // The actual rendered split still depends on viewerDocking.ts, window scaling,
+  // and the viewer minimum width guard applied at layout time.
   setDockRatio: (ratio) => set({ dockRatio: clampDockRatio(ratio) }),
   resetDockRatio: () => set({ dockRatio: DOCK_RATIO_DEFAULT }),
 }));

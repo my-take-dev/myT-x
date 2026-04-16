@@ -1,5 +1,5 @@
 import type {Dispatch} from "react";
-import type {AppConfigAgentModelOverride} from "../../types/tmux";
+import type {AppConfigAgentModelOverride, AppConfigMCPServerConfig, AppConfigTaskScheduler} from "../../types/tmux";
 import type {ViewerSidebarMode} from "../../utils/viewerSidebarMode";
 
 export type OverrideEntry = AppConfigAgentModelOverride & { id: string };
@@ -19,11 +19,15 @@ export interface FormState {
     keys: Record<string, string>;
     viewerShortcuts: Record<string, string>;
     defaultSessionDir: string;
+    websocketPort: number;
     wtEnabled: boolean;
     wtForceCleanup: boolean;
     wtSetupScripts: string[];
+    wtSetupScriptTimeoutSeconds: number;
     wtCopyFiles: string[];
     wtCopyDirs: string[];
+    mcpServers: AppConfigMCPServerConfig[];
+    mcpServersLoaded: boolean;
     agentFrom: string;
     agentTo: string;
     overrides: OverrideEntry[];
@@ -32,6 +36,7 @@ export interface FormState {
     paneEnvDefaultEnabled: boolean;
     claudeEnvDefaultEnabled: boolean;
     claudeEnvEntries: ClaudeEnvEntry[];
+    taskScheduler: AppConfigTaskScheduler | undefined;
     chatOverlayPercentage: number;
     minOverrideNameLen: number;
     allowedShells: string[];

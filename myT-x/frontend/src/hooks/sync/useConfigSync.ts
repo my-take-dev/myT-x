@@ -1,96 +1,16 @@
 import {useEffect, useRef} from "react";
 import {api} from "../../api";
 import {useTmuxStore} from "../../stores/tmuxStore";
-import type {AppConfig, ParsedConfigUpdatedEvent} from "../../types/tmux";
+import type {ParsedConfigUpdatedEvent} from "../../types/tmux";
 import {logFrontendEventSafe} from "../../utils/logFrontendEventSafe";
 import {asObject} from "../../utils/typeGuards";
+import {parseConfigUpdatedPayload} from "./configUpdatedEvent";
 import {cleanupEventListeners, createEventSubscriber, notifyWarn, tr} from "./eventHelpers";
 
 // Payload types are compile-time documentation only.
 interface ConfigEventMap {
     "config:load-failed": {message: string};
     "config:updated": ParsedConfigUpdatedEvent;
-}
-
-function isAppConfigPayload(payload: unknown): payload is AppConfig {
-    const cfg = asObject<Record<string, unknown>>(payload);
-    if (!cfg) {
-        return false;
-    }
-    if (typeof cfg.shell !== "string" || cfg.shell.trim() === "") {
-        return false;
-    }
-    if (typeof cfg.prefix !== "string" || cfg.prefix.trim() === "") {
-        return false;
-    }
-    if (typeof cfg.quake_mode !== "boolean") {
-        return false;
-    }
-    if (typeof cfg.global_hotkey !== "string") {
-        return false;
-    }
-
-    const keys = asObject<Record<string, unknown>>(cfg.keys);
-    if (!keys) {
-        return false;
-    }
-    for (const value of Object.values(keys)) {
-        if (typeof value !== "string") {
-            return false;
-        }
-    }
-
-    const worktree = asObject<Record<string, unknown>>(cfg.worktree);
-    if (!worktree) {
-        return false;
-    }
-    if (typeof worktree.enabled !== "boolean" || typeof worktree.force_cleanup !== "boolean") {
-        return false;
-    }
-    return true;
-}
-
-/**
- * S-08: Parse config:updated event payload with synthetic version compatibility.
- *
- * The backend may omit the `version` field (e.g., older backend versions or
- * manual config file edits that trigger a filesystem watcher event). When
- * version is missing/invalid, this function returns `version: null` and the
- * caller in the event handler uses a synthetic monotonic counter
- * (`configEventVersionRef.current += 1`) to preserve event ordering.
- *
- * This ensures forward compatibility: new frontends can handle old backends
- * that do not emit version numbers.
- */
-function parseConfigUpdatedPayload(payload: unknown): ParsedConfigUpdatedEvent | null {
-    const event = asObject<Record<string, unknown>>(payload);
-    if (!event) {
-        return null;
-    }
-
-    const nestedConfig = asObject<Record<string, unknown>>(event.config);
-    const rawVersion = event.version;
-    let version: number | null = null;
-    if (typeof rawVersion === "number" && Number.isSafeInteger(rawVersion) && rawVersion > 0) {
-        version = rawVersion;
-    }
-    const rawUpdatedAt = event.updated_at_unix_milli;
-    let updatedAtUnixMilli: number | null = null;
-    if (typeof rawUpdatedAt === "number" && Number.isSafeInteger(rawUpdatedAt) && rawUpdatedAt > 0) {
-        updatedAtUnixMilli = rawUpdatedAt;
-    }
-
-    if (nestedConfig) {
-        if (!isAppConfigPayload(nestedConfig)) {
-            return null;
-        }
-        return {config: nestedConfig, version, updated_at_unix_milli: updatedAtUnixMilli};
-    }
-
-    if (!isAppConfigPayload(event)) {
-        return null;
-    }
-    return {config: event, version, updated_at_unix_milli: updatedAtUnixMilli};
 }
 
 /**

@@ -6,7 +6,7 @@ type FileEntry struct {
 	Path        string `json:"path"` // root-relative path
 	IsDir       bool   `json:"is_dir"`
 	Size        int64  `json:"size"` // file size in bytes (0 for directories)
-	HasChildren bool   `json:"has_children,omitempty"`
+	HasChildren bool   `json:"has_children"`
 }
 
 // FileContent represents the contents of a file read from disk.
@@ -17,6 +17,13 @@ type FileContent struct {
 	Size      int64  `json:"size"`
 	Truncated bool   `json:"truncated"` // true if file exceeded 1MB limit
 	Binary    bool   `json:"binary"`    // true if binary content detected
+}
+
+// BinaryFileContent represents a file read as base64-encoded bytes.
+type BinaryFileContent struct {
+	Path string `json:"path"`
+	Data string `json:"data"`
+	Mime string `json:"mime"`
 }
 
 // FileMetadata represents stat information for a file-system entry.

@@ -18,7 +18,7 @@ import (
 //
 // TODO(T-23): This method uses independent target resolution logic that
 // partially duplicates resolveTargetCore. A future refactoring should unify
-// the window-resolution path (bare session name, session:windowID,
+// the window-resolution path (bare session name, session:windowIdx,
 // session:@windowID) with resolveTargetCore, extracting a shared
 // resolveWindowTarget helper. The current implementation is kept because
 // resolveTargetCore returns a single pane, whereas this method needs the
@@ -76,7 +76,20 @@ func (m *SessionManager) ListPanesByWindowTarget(target string, callerPaneID int
 			}
 			return copyPaneSlice(pane.Window.Panes), nil
 		}
-		session := m.sessions[sessionName]
+		if windowID, isWindowTarget, err := parseWindowIDTarget(target); isWindowTarget {
+			if err != nil {
+				return nil, err
+			}
+			window, _ := m.findWindowByIDGlobalLocked(windowID)
+			if window == nil {
+				return nil, fmt.Errorf("window id not found: %d", windowID)
+			}
+			return copyPaneSlice(window.Panes), nil
+		}
+		session, err := m.resolveSessionTokenLocked(sessionName)
+		if err != nil {
+			return nil, err
+		}
 		if session == nil {
 			return nil, fmt.Errorf("session not found: %s", sessionName)
 		}
@@ -87,7 +100,10 @@ func (m *SessionManager) ListPanesByWindowTarget(target string, callerPaneID int
 		return copyPaneSlice(activeWindow.Panes), nil
 	}
 
-	session := m.sessions[sessionName]
+	session, err := m.resolveSessionTokenLocked(sessionName)
+	if err != nil {
+		return nil, err
+	}
 	if session == nil {
 		return nil, fmt.Errorf("session not found: %s", sessionName)
 	}

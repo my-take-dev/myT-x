@@ -29,6 +29,9 @@ func TestDirCacheClonesEntries(t *testing.T) {
 	if cachedEntriesSecondRead[0].Name != "src" {
 		t.Fatalf("cache get should return clones: got %q, want %q", cachedEntriesSecondRead[0].Name, "src")
 	}
+	if !cachedEntriesSecondRead[0].HasChildren {
+		t.Fatal("HasChildren should be preserved in cloned entries")
+	}
 }
 
 func TestDirCacheExpiresEntries(t *testing.T) {
@@ -41,6 +44,36 @@ func TestDirCacheExpiresEntries(t *testing.T) {
 	now = now.Add(1500 * time.Millisecond)
 	if _, ok := cache.Get("session", ""); ok {
 		t.Fatal("expected cache entry to expire")
+	}
+}
+
+func TestDirCacheHasChildrenUsesFreshEntries(t *testing.T) {
+	cache := NewDirCache(time.Second)
+	now := time.Date(2026, time.April, 1, 12, 0, 0, 0, time.UTC)
+	cache.nowFunc = func() time.Time { return now }
+
+	cache.Set("session", "empty", []FileEntry{})
+	cache.Set("session", "non-empty", []FileEntry{{Name: "child.txt", Path: "non-empty/child.txt"}})
+
+	hasChildren, ok := cache.HasChildren("session", "empty")
+	if !ok {
+		t.Fatal("expected fresh cache hit for empty directory")
+	}
+	if hasChildren {
+		t.Fatal("empty directory cache should report no children")
+	}
+
+	hasChildren, ok = cache.HasChildren("session", "non-empty")
+	if !ok {
+		t.Fatal("expected fresh cache hit for non-empty directory")
+	}
+	if !hasChildren {
+		t.Fatal("non-empty directory cache should report children")
+	}
+
+	now = now.Add(2 * time.Second)
+	if _, ok := cache.HasChildren("session", "non-empty"); ok {
+		t.Fatal("expired cache should not report HasChildren")
 	}
 }
 

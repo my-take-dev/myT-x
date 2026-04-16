@@ -5,6 +5,10 @@ import "reflect"
 const (
 	// minOverrideNameLen is the minimum rune length for agent_model.overrides[*].name.
 	minOverrideNameLen = 5
+
+	MinChatOverlayPercentage     = 15
+	DefaultChatOverlayPercentage = 40
+	MaxChatOverlayPercentage     = 70
 )
 
 // Config is myT-x runtime configuration.
@@ -24,7 +28,7 @@ type Config struct {
 	// an available port, which is recommended to avoid port conflicts.
 	WebSocketPort int `yaml:"websocket_port" json:"websocket_port"`
 	// ViewerShortcuts maps right-sidebar view IDs to keyboard shortcut strings.
-	// Example: {"file-tree": "Ctrl+Shift+E", "git-graph": "Ctrl+Shift+G"}
+	// Example: {"file-view": "Ctrl+Shift+E", "git-graph": "Ctrl+Shift+G"}
 	// When nil or a key is absent, the frontend uses its compiled-in default shortcut.
 	ViewerShortcuts map[string]string `yaml:"viewer_shortcuts,omitempty" json:"viewer_shortcuts,omitempty"`
 	// ViewerSidebarMode controls how the right viewer sidebar is rendered.
@@ -38,11 +42,12 @@ type Config struct {
 	// MCPServers defines built-in MCP server configurations.
 	// Each entry describes an MCP that can be toggled per session.
 	MCPServers []MCPServerConfig `yaml:"mcp_servers,omitempty" json:"mcp_servers,omitempty"`
-	// ChatOverlayPercentage controls the height of the expanded chat overlay
-	// as a percentage of the terminal area (30-95). Default is 80.
+	// ChatOverlayPercentage controls the docked chat panel size
+	// as a percentage of the terminal area (15-70). Default is 40.
+	// Note: YAML/JSON key "chat_overlay_percentage" retains the legacy name for config file compatibility.
 	ChatOverlayPercentage int `yaml:"chat_overlay_percentage,omitempty" json:"chat_overlay_percentage,omitempty"`
 	// TaskScheduler holds persisted task scheduler settings.
-	// nil means no custom settings — the frontend uses its compiled-in defaults.
+	// nil means no custom settings; the backend returns the effective defaults.
 	TaskScheduler *TaskSchedulerConfig `yaml:"task_scheduler,omitempty" json:"task_scheduler,omitempty"`
 }
 
@@ -61,13 +66,14 @@ func DefaultConfig() Config {
 			"detach-session":   "d",
 		},
 		Worktree: WorktreeConfig{
-			Enabled:      true,
-			SetupScripts: []string{},
-			CopyFiles:    []string{},
-			CopyDirs:     []string{},
+			Enabled:                   true,
+			SetupScripts:              []string{},
+			SetupScriptTimeoutSeconds: DefaultSetupScriptTimeoutSeconds,
+			CopyFiles:                 []string{},
+			CopyDirs:                  []string{},
 		},
 		ViewerSidebarMode:     "overlay",
-		ChatOverlayPercentage: 80,
+		ChatOverlayPercentage: DefaultChatOverlayPercentage,
 	}
 }
 
@@ -77,12 +83,40 @@ func MinOverrideNameLen() int {
 	return minOverrideNameLen
 }
 
+// TaskSchedulerPreExecTargetMode controls which panes receive the
+// pre-execution idle wait: "task_panes" checks only the task's target
+// pane, "all_panes" checks all panes.
+type TaskSchedulerPreExecTargetMode string
+
+const (
+	TaskSchedulerPreExecTargetModeTaskPanes TaskSchedulerPreExecTargetMode = "task_panes"
+	TaskSchedulerPreExecTargetModeAllPanes  TaskSchedulerPreExecTargetMode = "all_panes"
+)
+
+// IsValidTaskSchedulerPreExecTargetMode reports whether mode is supported.
+func IsValidTaskSchedulerPreExecTargetMode(mode TaskSchedulerPreExecTargetMode) bool {
+	switch mode {
+	case TaskSchedulerPreExecTargetModeTaskPanes, TaskSchedulerPreExecTargetModeAllPanes:
+		return true
+	default:
+		return false
+	}
+}
+
+// AllTaskSchedulerPreExecTargetModes returns the supported target modes.
+func AllTaskSchedulerPreExecTargetModes() []TaskSchedulerPreExecTargetMode {
+	return []TaskSchedulerPreExecTargetMode{
+		TaskSchedulerPreExecTargetModeTaskPanes,
+		TaskSchedulerPreExecTargetModeAllPanes,
+	}
+}
+
 // TaskSchedulerConfig holds persisted task scheduler settings.
 type TaskSchedulerConfig struct {
-	PreExecResetDelay  int               `yaml:"pre_exec_reset_delay_s" json:"pre_exec_reset_delay_s"`
-	PreExecIdleTimeout int               `yaml:"pre_exec_idle_timeout_s" json:"pre_exec_idle_timeout_s"`
-	PreExecTargetMode  string            `yaml:"pre_exec_target_mode" json:"pre_exec_target_mode"`
-	MessageTemplates   []MessageTemplate `yaml:"message_templates,omitempty" json:"message_templates,omitempty"`
+	PreExecResetDelay  int                            `yaml:"pre_exec_reset_delay_s" json:"pre_exec_reset_delay_s"`
+	PreExecIdleTimeout int                            `yaml:"pre_exec_idle_timeout_s" json:"pre_exec_idle_timeout_s"`
+	PreExecTargetMode  TaskSchedulerPreExecTargetMode `yaml:"pre_exec_target_mode" json:"pre_exec_target_mode"`
+	MessageTemplates   []MessageTemplate              `yaml:"message_templates,omitempty" json:"message_templates,omitempty"`
 }
 
 // MessageTemplate is a reusable message pattern for task creation.

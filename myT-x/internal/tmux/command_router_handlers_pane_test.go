@@ -483,7 +483,7 @@ func TestHandleSelectPaneTitle(t *testing.T) {
 			wantFocusEvent:  false,
 		},
 		{
-			name:           "pane style flag is ignored without affecting focus",
+			name:           "pane style flag is ignored but selection proceeds with -t",
 			paneStyle:      "bg=default,fg=colour33",
 			wantExitCode:   0,
 			wantTitle:      "",
@@ -495,7 +495,16 @@ func TestHandleSelectPaneTitle(t *testing.T) {
 			omitTarget:     true,
 			wantExitCode:   0,
 			wantTitle:      "",
-			wantFocusEvent: true,
+			wantFocusEvent: false,
+		},
+		{
+			name:            "pane style with title and -t updates title and selects pane",
+			paneStyle:       "bg=default,fg=colour33",
+			title:           "styled",
+			wantExitCode:    0,
+			wantTitle:       "styled",
+			wantRenameEvent: true,
+			wantFocusEvent:  true,
 		},
 	}
 
@@ -874,20 +883,18 @@ func TestHandleResizePane(t *testing.T) {
 			wantHeight:   40,
 		},
 		{
-			name:         "invalid width falls back to current pane width",
-			target:       "%0",
-			flags:        map[string]any{"-x": "notint"},
-			wantExitCode: 0,
-			wantWidth:    120,
-			wantHeight:   40,
+			name:             "invalid width returns error",
+			target:           "%0",
+			flags:            map[string]any{"-x": "notint"},
+			wantExitCode:     1,
+			wantErrSubstring: "flag -x expects a positive integer or percentage",
 		},
 		{
-			name:         "zero percent falls back to current pane width",
-			target:       "%0",
-			flags:        map[string]any{"-x": "0%"},
-			wantExitCode: 0,
-			wantWidth:    120,
-			wantHeight:   40,
+			name:             "zero percent returns error",
+			target:           "%0",
+			flags:            map[string]any{"-x": "0%"},
+			wantExitCode:     1,
+			wantErrSubstring: "flag -x expects a positive integer or percentage",
 		},
 		{
 			name:             "non-existent pane returns error",
@@ -1349,6 +1356,89 @@ func TestHandleListPanesFilterWithoutAllFlag(t *testing.T) {
 				t.Fatalf("lines = %d, want %d, stdout = %q", len(lines), tt.wantLines, resp.Stdout)
 			}
 		})
+	}
+}
+
+func TestHandleListPanesFormatWithoutAllFlagIncludesSessionContext(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	router := NewCommandRouter(sessions, &captureEmitter{}, RouterOptions{ShimAvailable: true})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "demo", "-x": 120, "-y": 40},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "split-window",
+		Flags:   map[string]any{"-t": "demo:0", "-h": true},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("split-window failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "list-panes",
+		Flags:   map[string]any{"-t": "demo", "-F": "#{session_name}:#{window_index}:#{pane_id}"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	lines := strings.Split(strings.TrimRight(resp.Stdout, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("line count = %d, want 2, stdout=%q", len(lines), resp.Stdout)
+	}
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "demo:0:%") {
+			t.Fatalf("line = %q, want demo session/window context", line)
+		}
+	}
+}
+
+func TestHandleListPanesFilterWithoutAllFlagSupportsSessionVariables(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	router := NewCommandRouter(sessions, &captureEmitter{}, RouterOptions{ShimAvailable: true})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags:   map[string]any{"-s": "demo", "-x": 120, "-y": 40},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("new-session failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "split-window",
+		Flags:   map[string]any{"-t": "demo:0", "-v": true},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("split-window failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "list-panes",
+		Flags:   map[string]any{"-t": "demo", "-f": "#{==:#{session_name},demo}", "-F": "#{pane_id}"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes with matching session filter failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	lines := strings.Split(strings.TrimRight(resp.Stdout, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("matching filter lines = %d, want 2, stdout=%q", len(lines), resp.Stdout)
+	}
+
+	resp = router.Execute(ipc.TmuxRequest{
+		Command: "list-panes",
+		Flags:   map[string]any{"-t": "demo", "-f": "#{==:#{session_name},other}", "-F": "#{pane_id}"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("list-panes with mismatched session filter failed: exit=%d stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	if strings.TrimSpace(resp.Stdout) != "" {
+		t.Fatalf("mismatched session filter should exclude all panes, got %q", resp.Stdout)
 	}
 }
 

@@ -47,49 +47,64 @@ func mustInt(value any, defaultValue int) int {
 	return defaultValue
 }
 
-// resolveDimension resolves absolute and percentage-based pane dimensions.
-// reference is the base size used for percentage values such as "50%".
-// defaultValue is returned when the input is empty, invalid, non-positive, or overflows.
-func resolveDimension(value any, reference int, defaultValue int) int {
-	resolveAbsolute := func(size int) int {
-		if size <= 0 {
-			return defaultValue
-		}
-		return size
+func resolvePercentageDimension(reference int, percent int) (int, bool) {
+	if reference <= 0 || percent <= 0 {
+		return 0, false
+	}
+	maxInt := int(^uint(0) >> 1)
+	if reference > maxInt/percent {
+		return 0, false
+	}
+	return reference * percent / 100, true
+}
+
+func resolveResizeDimension(value any, reference int, defaultValue int, flag string) (int, error) {
+	if value == nil {
+		return defaultValue, nil
 	}
 
 	switch v := value.(type) {
 	case int:
-		return resolveAbsolute(v)
+		if v <= 0 {
+			return 0, fmt.Errorf("flag %s must be positive", flag)
+		}
+		return v, nil
 	case float64:
-		return resolveAbsolute(int(v))
+		size := int(v)
+		if size <= 0 {
+			return 0, fmt.Errorf("flag %s must be positive", flag)
+		}
+		return size, nil
 	case string:
 		trimmed := strings.TrimSpace(v)
 		if trimmed == "" {
-			return defaultValue
+			return 0, fmt.Errorf("flag %s requires a value", flag)
 		}
 		if strings.HasSuffix(trimmed, "%") {
 			if reference <= 0 {
-				return defaultValue
+				return 0, fmt.Errorf("flag %s cannot use percentage without a positive reference size", flag)
 			}
 			percentText := strings.TrimSpace(strings.TrimSuffix(trimmed, "%"))
 			percent, err := strconv.Atoi(percentText)
 			if err != nil || percent <= 0 {
-				return defaultValue
+				return 0, fmt.Errorf("flag %s expects a positive integer or percentage, got %q", flag, v)
 			}
-			maxInt := int(^uint(0) >> 1)
-			if reference > maxInt/percent {
-				return defaultValue
+			computed, ok := resolvePercentageDimension(reference, percent)
+			if !ok {
+				return 0, fmt.Errorf("flag %s percentage overflow: %d%% of %d", flag, percent, reference)
 			}
-			return resolveAbsolute(reference * percent / 100)
+			if computed <= 0 {
+				computed = 1 // clamp to minimum cell size
+			}
+			return computed, nil
 		}
 		size, err := strconv.Atoi(trimmed)
-		if err != nil {
-			return defaultValue
+		if err != nil || size <= 0 {
+			return 0, fmt.Errorf("flag %s expects a positive integer or percentage, got %q", flag, v)
 		}
-		return resolveAbsolute(size)
+		return size, nil
 	default:
-		return defaultValue
+		return 0, fmt.Errorf("flag %s expects a positive integer or percentage", flag)
 	}
 }
 

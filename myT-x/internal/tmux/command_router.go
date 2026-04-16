@@ -37,9 +37,16 @@ type RouterOptions struct {
 	// OnSessionDestroyed is called after kill-session succeeds.
 	// It runs outside of SessionManager locks.
 	OnSessionDestroyed func(sessionName string)
-	// OnSessionRenamed is called after rename-session succeeds.
+	// OnSessionRenamed runs rename follow-up work after rename-session succeeds.
+	// Returning an error aborts the command and lets the caller roll the tmux
+	// rename back before any rename event is emitted.
 	// It runs outside of SessionManager locks.
-	OnSessionRenamed func(oldName, newName string)
+	OnSessionRenamed func(oldName, newName string) error
+	// OnSessionRenameRollbackFailed is called when rename-session follow-up fails
+	// and the tmux rename cannot be rolled back. The session name has already
+	// converged to newName, so callers should reconcile backend/frontend state to
+	// match the renamed session.
+	OnSessionRenameRollbackFailed func(oldName, newName string)
 	// ResolveMCPStdio resolves and prepares a Named Pipe endpoint for one MCP.
 	ResolveMCPStdio func(sessionName, mcpName string) (MCPStdioResolution, error)
 	// ResolveSessionByCwd resolves a session name from a working directory path.
@@ -61,6 +68,7 @@ type CommandRouter struct {
 	emitter     EventEmitter
 	opts        RouterOptions
 	buffers     *BufferStore
+	options     *compatOptionStore
 	handlers    map[string]func(ipc.TmuxRequest) ipc.TmuxResponse
 	// renamePane is a narrow test seam used to force non-fatal rename errors.
 	renamePane func(paneID string, title string) (string, error)
@@ -128,6 +136,7 @@ func NewCommandRouter(sessions *SessionManager, emitter EventEmitter, opts Route
 		emitter:  emitter,
 		opts:     opts,
 		buffers:  NewBufferStore(),
+		options:  newCompatOptionStore(),
 	}
 	router.renamePane = sessions.RenamePane
 	router.attachTerminalFn = router.attachTerminal
@@ -152,6 +161,7 @@ func NewCommandRouter(sessions *SessionManager, emitter EventEmitter, opts Route
 		"show-environment":       router.handleShowEnvironment,
 		"set-environment":        router.handleSetEnvironment,
 		"set-option":             router.handleSetOption,
+		"show-options":           router.handleShowOptions,
 		"list-windows":           router.handleListWindows,
 		"rename-window":          router.handleRenameWindow,
 		"new-window":             router.handleNewWindow,
@@ -170,6 +180,56 @@ func NewCommandRouter(sessions *SessionManager, emitter EventEmitter, opts Route
 		"resolve-session-by-cwd": router.handleResolveSessionByCwd,
 	}
 	return router
+}
+
+func (r *CommandRouter) callOnSessionDestroyed(sessionName string) {
+	if r.opts.OnSessionDestroyed == nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("[SESSION] OnSessionDestroyed callback panicked",
+				"session", sessionName,
+				"panic", recovered,
+			)
+		}
+	}()
+	r.opts.OnSessionDestroyed(sessionName)
+}
+
+func (r *CommandRouter) callOnSessionRenamed(oldName, newName string) (err error) {
+	if r.opts.OnSessionRenamed == nil {
+		return nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("OnSessionRenamed callback panicked: %v", recovered)
+			slog.Error("[SESSION] OnSessionRenamed callback panicked",
+				"oldSession", oldName,
+				"newSession", newName,
+				"panic", recovered,
+			)
+		}
+	}()
+	return r.opts.OnSessionRenamed(oldName, newName)
+}
+
+func (r *CommandRouter) callOnSessionRenameRollbackFailed(oldName, newName string) (err error) {
+	if r.opts.OnSessionRenameRollbackFailed == nil {
+		return nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("OnSessionRenameRollbackFailed callback panicked: %v", recovered)
+			slog.Error("[SESSION] OnSessionRenameRollbackFailed callback panicked",
+				"oldSession", oldName,
+				"newSession", newName,
+				"panic", recovered,
+			)
+		}
+	}()
+	r.opts.OnSessionRenameRollbackFailed(oldName, newName)
+	return nil
 }
 
 // bestEffortSendKeys translates args via TranslateSendKeys and writes to the pane terminal.
@@ -221,7 +281,7 @@ func (r *CommandRouter) bestEffortSendKeys(pane *TmuxPane, args []string, append
 
 // Execute handles one tmux request.
 func (r *CommandRouter) Execute(req ipc.TmuxRequest) ipc.TmuxResponse {
-	req.Command = strings.TrimSpace(req.Command)
+	req.Command = canonicalTmuxCommandName(strings.TrimSpace(req.Command))
 	if req.Flags == nil {
 		req.Flags = map[string]any{}
 	}

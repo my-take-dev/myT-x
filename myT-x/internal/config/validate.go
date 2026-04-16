@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"myT-x/internal/mcp"
 )
 
 const (
@@ -23,6 +25,19 @@ const (
 	maxCustomEnvValueBytes = 8192
 )
 
+// TaskScheduler validation constants shared between config sanitizer and API layer.
+const (
+	MinPreExecResetDelay      = 0
+	MaxPreExecResetDelay      = 60
+	DefaultPreExecIdleTimeout = 30
+	MinPreExecIdleTimeout     = 10
+	MaxPreExecIdleTimeout     = 600
+	MaxMessageTemplates       = 50
+	MaxTemplateNameLen        = 100
+	MaxTemplateMessageLen     = 5000
+	defaultCustomMCPKind      = string(mcp.DefinitionKindCustom)
+)
+
 // allowedShells is the set of permitted shell executables (matched by base
 // name, case-insensitive). Additions require security review to prevent
 // arbitrary command execution.
@@ -32,6 +47,14 @@ var allowedShells = map[string]struct{}{
 	"cmd.exe":        {},
 	"bash.exe":       {},
 	"wsl.exe":        {},
+}
+
+var shellNameAliases = map[string]string{
+	"powershell": "powershell.exe",
+	"pwsh":       "pwsh.exe",
+	"cmd":        "cmd.exe",
+	"bash":       "bash.exe",
+	"wsl":        "wsl.exe",
 }
 
 // AllowedShellList returns the permitted shell executable names for UI display.
@@ -109,6 +132,14 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	if cfg.Worktree.SetupScripts == nil {
 		cfg.Worktree.SetupScripts = append([]string(nil), defaults.Worktree.SetupScripts...)
 	}
+	if cfg.Worktree.SetupScriptTimeoutSeconds == 0 {
+		cfg.Worktree.SetupScriptTimeoutSeconds = defaults.Worktree.SetupScriptTimeoutSeconds
+	} else if cfg.Worktree.SetupScriptTimeoutSeconds < 0 {
+		slog.Warn("[WARN-CONFIG] worktree.setup_script_timeout_seconds must be positive, resetting to default",
+			"configured", cfg.Worktree.SetupScriptTimeoutSeconds,
+			"default", defaults.Worktree.SetupScriptTimeoutSeconds)
+		cfg.Worktree.SetupScriptTimeoutSeconds = defaults.Worktree.SetupScriptTimeoutSeconds
+	}
 	if cfg.Worktree.CopyFiles == nil {
 		cfg.Worktree.CopyFiles = append([]string(nil), defaults.Worktree.CopyFiles...)
 	}
@@ -124,6 +155,7 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	sanitizePaneEnv(cfg)
 	sanitizeClaudeEnv(cfg)
 	sanitizeMCPServers(cfg)
+	sanitizeTaskScheduler(cfg)
 	validateDefaultSessionDir(cfg)
 	return nil
 }
@@ -185,20 +217,20 @@ func validateViewerSidebarMode(cfg *Config) {
 }
 
 // validateChatOverlayPercentage clamps ChatOverlayPercentage to the valid
-// range (30-95). Zero means "use default" (80).
+// range defined by the exported chat overlay validation constants.
 func validateChatOverlayPercentage(cfg *Config) {
 	if cfg.ChatOverlayPercentage == 0 {
-		cfg.ChatOverlayPercentage = 80
+		cfg.ChatOverlayPercentage = DefaultChatOverlayPercentage
 	}
-	if cfg.ChatOverlayPercentage < 30 {
-		slog.Warn("[WARN-CONFIG] chat_overlay_percentage too low, clamping to 30",
+	if cfg.ChatOverlayPercentage < MinChatOverlayPercentage {
+		slog.Warn("[WARN-CONFIG] chat_overlay_percentage too low, clamping to minimum",
 			"configured", cfg.ChatOverlayPercentage)
-		cfg.ChatOverlayPercentage = 30
+		cfg.ChatOverlayPercentage = MinChatOverlayPercentage
 	}
-	if cfg.ChatOverlayPercentage > 95 {
-		slog.Warn("[WARN-CONFIG] chat_overlay_percentage too high, clamping to 95",
+	if cfg.ChatOverlayPercentage > MaxChatOverlayPercentage {
+		slog.Warn("[WARN-CONFIG] chat_overlay_percentage too high, clamping to maximum",
 			"configured", cfg.ChatOverlayPercentage)
-		cfg.ChatOverlayPercentage = 95
+		cfg.ChatOverlayPercentage = MaxChatOverlayPercentage
 	}
 }
 
@@ -252,7 +284,7 @@ func validateShell(shell string) error {
 		return errors.New("shell contains invalid null byte")
 	}
 
-	baseName := strings.ToLower(filepath.Base(shell))
+	baseName := CanonicalShellBaseName(shell)
 	if _, ok := allowedShells[baseName]; !ok {
 		return fmt.Errorf("shell %q is not in the allowlist", shell)
 	}
@@ -273,6 +305,89 @@ func validateShell(shell string) error {
 		return errors.New("shell must be executable name or absolute path")
 	}
 	return nil
+}
+
+// CanonicalShellBaseName normalizes a configured shell name to the allowlist
+// base name used by config validation and runtime execution.
+func CanonicalShellBaseName(shell string) string {
+	baseName := strings.ToLower(strings.TrimSpace(filepath.Base(shell)))
+	if canonical, ok := shellNameAliases[baseName]; ok {
+		return canonical
+	}
+	return baseName
+}
+
+// sanitizeTaskScheduler validates and normalizes task scheduler settings in place.
+// Invalid values fall back to defaults without failing startup.
+func sanitizeTaskScheduler(cfg *Config) {
+	ts := cfg.TaskScheduler
+	if ts == nil {
+		return
+	}
+
+	if ts.PreExecResetDelay < MinPreExecResetDelay || ts.PreExecResetDelay > MaxPreExecResetDelay {
+		slog.Warn("[WARN-CONFIG] task_scheduler.pre_exec_reset_delay_s out of range, resetting to 0",
+			"configured", ts.PreExecResetDelay, "min", MinPreExecResetDelay, "max", MaxPreExecResetDelay)
+		ts.PreExecResetDelay = 0
+	}
+	if ts.PreExecIdleTimeout == 0 {
+		ts.PreExecIdleTimeout = DefaultPreExecIdleTimeout
+	}
+	if ts.PreExecIdleTimeout < MinPreExecIdleTimeout || ts.PreExecIdleTimeout > MaxPreExecIdleTimeout {
+		slog.Warn("[WARN-CONFIG] task_scheduler.pre_exec_idle_timeout_s out of range, resetting to default 30",
+			"configured", ts.PreExecIdleTimeout, "min", MinPreExecIdleTimeout, "max", MaxPreExecIdleTimeout)
+		ts.PreExecIdleTimeout = DefaultPreExecIdleTimeout
+	}
+
+	if ts.PreExecTargetMode == "" {
+		ts.PreExecTargetMode = TaskSchedulerPreExecTargetModeTaskPanes
+	} else if !IsValidTaskSchedulerPreExecTargetMode(ts.PreExecTargetMode) {
+		slog.Warn("[WARN-CONFIG] task_scheduler.pre_exec_target_mode is invalid, falling back to task_panes",
+			"configured", ts.PreExecTargetMode)
+		ts.PreExecTargetMode = TaskSchedulerPreExecTargetModeTaskPanes
+	}
+
+	if len(ts.MessageTemplates) > 0 {
+		seen := make(map[string]struct{}, len(ts.MessageTemplates))
+		filtered := make([]MessageTemplate, 0, len(ts.MessageTemplates))
+		for i, tmpl := range ts.MessageTemplates {
+			tmpl.Name = strings.TrimSpace(tmpl.Name)
+			tmpl.Message = strings.TrimSpace(tmpl.Message)
+			if tmpl.Name == "" {
+				slog.Warn("[WARN-CONFIG] task_scheduler.message_templates entry has empty name, skipping",
+					"index", i)
+				continue
+			}
+			if tmpl.Message == "" {
+				slog.Warn("[WARN-CONFIG] task_scheduler.message_templates entry has empty message, skipping",
+					"name", tmpl.Name)
+				continue
+			}
+			if utf8.RuneCountInString(tmpl.Name) > MaxTemplateNameLen {
+				slog.Warn("[WARN-CONFIG] task_scheduler.message_templates entry name exceeds maximum length, skipping",
+					"name", tmpl.Name, "max", MaxTemplateNameLen, "index", i)
+				continue
+			}
+			if utf8.RuneCountInString(tmpl.Message) > MaxTemplateMessageLen {
+				slog.Warn("[WARN-CONFIG] task_scheduler.message_templates entry message exceeds maximum length, skipping",
+					"name", tmpl.Name, "max", MaxTemplateMessageLen, "index", i)
+				continue
+			}
+			if _, exists := seen[tmpl.Name]; exists {
+				slog.Warn("[WARN-CONFIG] task_scheduler.message_templates entry has duplicate name, skipping",
+					"name", tmpl.Name, "index", i)
+				continue
+			}
+			seen[tmpl.Name] = struct{}{}
+			filtered = append(filtered, tmpl)
+		}
+		if len(filtered) > MaxMessageTemplates {
+			slog.Warn("[WARN-CONFIG] task_scheduler.message_templates exceeds maximum after sanitization, truncating",
+				"count", len(filtered), "max", MaxMessageTemplates)
+			filtered = filtered[:MaxMessageTemplates]
+		}
+		ts.MessageTemplates = filtered
+	}
 }
 
 // sanitizePaneEnv removes invalid entries from PaneEnv using sanitizeEnvMap.
@@ -304,6 +419,7 @@ func sanitizeMCPServers(cfg *Config) {
 		server.ID = strings.TrimSpace(server.ID)
 		server.Name = strings.TrimSpace(server.Name)
 		server.Description = strings.TrimSpace(server.Description)
+		server.Kind = strings.TrimSpace(server.Kind)
 		server.Command = strings.TrimSpace(server.Command)
 		server.UsageSample = strings.TrimSpace(server.UsageSample)
 
@@ -317,6 +433,14 @@ func sanitizeMCPServers(cfg *Config) {
 		}
 		if server.Command == "" {
 			slog.Warn("[WARN-CONFIG] mcp_servers entry has empty command, skipping", "id", server.ID)
+			continue
+		}
+		if server.Kind == "" {
+			server.Kind = defaultCustomMCPKind
+		}
+		if isReservedConfigMCPKind(server.Kind) {
+			slog.Warn("[WARN-CONFIG] mcp_servers entry uses reserved built-in kind, skipping",
+				"id", server.ID, "kind", server.Kind)
 			continue
 		}
 		if _, exists := seen[server.ID]; exists {
@@ -343,6 +467,15 @@ func sanitizeMCPServers(cfg *Config) {
 		filtered = append(filtered, server)
 	}
 	cfg.MCPServers = filtered
+}
+
+func isReservedConfigMCPKind(kind string) bool {
+	switch mcp.DefinitionKind(strings.TrimSpace(kind)) {
+	case mcp.DefinitionKindOrchestrator, mcp.DefinitionKindSingleTaskRunner:
+		return true
+	default:
+		return false
+	}
 }
 
 func sanitizeMCPServerConfigParams(params []MCPServerConfigParam, mcpID string) []MCPServerConfigParam {

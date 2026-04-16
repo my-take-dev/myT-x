@@ -15,8 +15,46 @@ type Definition struct {
 	UsageSample    string            `json:"usage_sample,omitempty" yaml:"usage_sample,omitempty"`
 	ConfigParams   []ConfigParam     `json:"config_params,omitempty" yaml:"config_params,omitempty"`
 	// Kind distinguishes MCP server types for startInstance branching.
-	// "" (empty) = LSP (default), "orchestrator" = Agent Orchestrator.
-	Kind string `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Kind DefinitionKind `json:"kind,omitempty" yaml:"kind,omitempty"`
+}
+
+// DefinitionKind identifies the type of MCP server.
+type DefinitionKind string
+
+const (
+	// DefinitionKindLSP is the default command-backed MCP kind. An omitted or
+	// empty YAML "kind" decodes to this value; unknown non-empty kinds stay
+	// command-backed via the external process path.
+	DefinitionKindLSP DefinitionKind = ""
+	// DefinitionKindCustom is the explicit command-backed kind used by
+	// config-defined external MCP servers.
+	DefinitionKindCustom DefinitionKind = "custom"
+	// DefinitionKindOrchestrator is the Agent Orchestrator MCP server.
+	DefinitionKindOrchestrator DefinitionKind = "orchestrator"
+	// DefinitionKindSingleTaskRunner is the Single Task Runner MCP server.
+	DefinitionKindSingleTaskRunner DefinitionKind = "single-task-runner"
+)
+
+// IsBuiltIn reports whether the kind is one of the backend-defined symbolic
+// kinds. Custom config-defined kinds are allowed and are command-backed.
+func (k DefinitionKind) IsBuiltIn() bool {
+	switch k {
+	case DefinitionKindLSP, DefinitionKindOrchestrator, DefinitionKindSingleTaskRunner:
+		return true
+	default:
+		return false
+	}
+}
+
+// UsesEmbeddedRuntime reports whether the kind is handled by a backend-owned
+// runtime factory instead of an external command.
+func (k DefinitionKind) UsesEmbeddedRuntime() bool {
+	switch k {
+	case DefinitionKindOrchestrator, DefinitionKindSingleTaskRunner:
+		return true
+	default:
+		return false
+	}
 }
 
 // ConfigParam describes a single user-configurable parameter for an MCP.
@@ -74,8 +112,8 @@ type Snapshot struct {
 	// recommendation is available.
 	BridgeArgs []string `json:"bridge_args,omitempty"`
 	// Kind distinguishes MCP server types for frontend category rendering.
-	// "" = LSP (default), "orchestrator" = Agent Orchestrator.
-	Kind string `json:"kind,omitempty"`
+	// See DefinitionKind constants for possible values.
+	Kind DefinitionKind `json:"kind,omitempty"`
 }
 
 // Backward-compatible aliases.

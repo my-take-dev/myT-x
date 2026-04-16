@@ -1,7 +1,9 @@
 package taskscheduler
 
+import "myT-x/internal/config"
+
 // QueueItemStatus はキューアイテムの状態を表す。
-type QueueItemStatus = string
+type QueueItemStatus string
 
 const (
 	ItemStatusPending   QueueItemStatus = "pending"
@@ -32,7 +34,7 @@ func IsTerminal(status QueueItemStatus) bool {
 }
 
 // QueueRunStatus はキュー全体の実行状態を表す。
-type QueueRunStatus = string
+type QueueRunStatus string
 
 const (
 	QueueIdle      QueueRunStatus = "idle"
@@ -44,26 +46,26 @@ const (
 
 // QueueItem はキュー内の個別タスクを表す。
 type QueueItem struct {
-	ID           string `json:"id"`
-	Title        string `json:"title"`
-	Message      string `json:"message"`
-	TargetPaneID string `json:"target_pane_id"`
-	OrderIndex   int    `json:"order_index"`
-	Status       string `json:"status"`
-	OrcTaskID    string `json:"orc_task_id,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	StartedAt    string `json:"started_at,omitempty"`
-	CompletedAt  string `json:"completed_at,omitempty"`
-	ErrorMessage string `json:"error_message,omitempty"`
-	ClearBefore  bool   `json:"clear_before"`
-	ClearCommand string `json:"clear_command,omitempty"`
+	ID           string          `json:"id"`
+	Title        string          `json:"title"`
+	Message      string          `json:"message"`
+	TargetPaneID string          `json:"target_pane_id"`
+	OrderIndex   int             `json:"order_index"`
+	Status       QueueItemStatus `json:"status"`
+	OrcTaskID    string          `json:"orc_task_id,omitempty"`
+	CreatedAt    string          `json:"created_at"`
+	StartedAt    string          `json:"started_at,omitempty"`
+	CompletedAt  string          `json:"completed_at,omitempty"`
+	ErrorMessage string          `json:"error_message,omitempty"`
+	ClearBefore  bool            `json:"clear_before"`
+	ClearCommand string          `json:"clear_command,omitempty"`
 }
 
-type PreExecTargetMode = string
+type PreExecTargetMode = config.TaskSchedulerPreExecTargetMode
 
 const (
-	PreExecTargetModeAllPanes  PreExecTargetMode = "all_panes"
-	PreExecTargetModeTaskPanes PreExecTargetMode = "task_panes"
+	PreExecTargetModeAllPanes  = config.TaskSchedulerPreExecTargetModeAllPanes
+	PreExecTargetModeTaskPanes = config.TaskSchedulerPreExecTargetModeTaskPanes
 )
 
 // QueueConfig はキュー実行設定。
@@ -78,11 +80,16 @@ func applyConfigDefaults(c *QueueConfig) {
 	if c == nil {
 		return
 	}
-	if c.PreExecResetDelay < 0 {
-		c.PreExecResetDelay = 10
+	if c.PreExecResetDelay < config.MinPreExecResetDelay || c.PreExecResetDelay > config.MaxPreExecResetDelay {
+		c.PreExecResetDelay = config.MinPreExecResetDelay
 	}
-	if c.PreExecIdleTimeout <= 0 {
-		c.PreExecIdleTimeout = 120
+	if c.PreExecIdleTimeout == 0 {
+		// Keep the runtime fallback aligned with the persisted config sanitizer and
+		// the settings API default.
+		c.PreExecIdleTimeout = config.DefaultPreExecIdleTimeout
+	}
+	if c.PreExecIdleTimeout < config.MinPreExecIdleTimeout || c.PreExecIdleTimeout > config.MaxPreExecIdleTimeout {
+		c.PreExecIdleTimeout = config.DefaultPreExecIdleTimeout
 	}
 	if c.PreExecTargetMode == "" {
 		c.PreExecTargetMode = PreExecTargetModeTaskPanes
@@ -91,10 +98,11 @@ func applyConfigDefaults(c *QueueConfig) {
 
 // QueueStatus はキューの現在状態をフロントエンドに返す DTO。
 type QueueStatus struct {
-	Config          QueueConfig `json:"config"`
-	Items           []QueueItem `json:"items"`
-	RunStatus       string      `json:"run_status"`
-	CurrentIndex    int         `json:"current_index"`
-	SessionName     string      `json:"session_name"`
-	PreExecProgress string      `json:"pre_exec_progress,omitempty"`
+	Config          QueueConfig    `json:"config"`
+	Items           []QueueItem    `json:"items"`
+	RunStatus       QueueRunStatus `json:"run_status"`
+	CurrentIndex    int            `json:"current_index"`
+	SessionName     string         `json:"session_name"`
+	GenerationID    string         `json:"generation_id"`
+	PreExecProgress string         `json:"pre_exec_progress,omitempty"`
 }

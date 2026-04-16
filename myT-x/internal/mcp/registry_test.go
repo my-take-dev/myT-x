@@ -79,6 +79,30 @@ func TestRegistry_Register(t *testing.T) {
 			wantErr:     []bool{false},
 			errContains: []string{""},
 		},
+		{
+			name: "allow custom kind when command is set",
+			defs: []MCPDefinition{
+				{ID: "memory", Name: "Memory Server", Command: "memory-cmd", Kind: "custom-kind"},
+			},
+			wantErr:     []bool{false},
+			errContains: []string{""},
+		},
+		{
+			name: "reject empty command for custom kind",
+			defs: []MCPDefinition{
+				{ID: "memory", Name: "Memory Server", Command: "   ", Kind: "custom-kind"},
+			},
+			wantErr:     []bool{true},
+			errContains: []string{"mcp definition command is required"},
+		},
+		{
+			name: "reject empty command for DefinitionKindCustom",
+			defs: []MCPDefinition{
+				{ID: "memory", Name: "Memory Server", Command: "   ", Kind: DefinitionKindCustom},
+			},
+			wantErr:     []bool{true},
+			errContains: []string{"mcp definition command is required"},
+		},
 	}
 
 	for _, tt := range tests {

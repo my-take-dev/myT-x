@@ -49,6 +49,7 @@ func MCPServerConfigsToDefinitions(configs []config.MCPServerConfig) []mcp.Defin
 			ID:          c.ID,
 			Name:        c.Name,
 			Description: c.Description,
+			Kind:        mcp.DefinitionKind(strings.TrimSpace(c.Kind)),
 			Command:     c.Command,
 			Args:        cloneMCPConfigArgs(c.Args),
 			// Config field "env" is mapped to runtime definition field "default_env".

@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"log/slog"
+	"strings"
 
 	"myT-x/internal/ipc"
 )
@@ -15,7 +16,7 @@ const (
 )
 
 // internalCommandFlagSpecs defines flag types for all supported tmux commands.
-// Used by parseTmuxCommandLine to correctly separate flags from positional args
+// Used by ParseTmuxCommandLine to correctly separate flags from positional args
 // when dispatching run-shell -C and if-shell commands internally.
 //
 // NOTE: This corresponds to cmd/tmux-shim/spec.go but is not a 1:1 mirror.
@@ -42,10 +43,11 @@ var internalCommandFlagSpecs = map[string]map[string]tmuxFlagKind{
 	"kill-pane":        {"-t": tmuxFlagString},
 	"rename-session":   {"-t": tmuxFlagString},
 	"resize-pane":      {"-t": tmuxFlagString, "-x": tmuxFlagString, "-y": tmuxFlagString, "-U": tmuxFlagBool, "-D": tmuxFlagBool, "-L": tmuxFlagBool, "-R": tmuxFlagBool, "-Z": tmuxFlagBool},
-	"select-layout":    {"-t": tmuxFlagString, "-E": tmuxFlagBool, "-n": tmuxFlagBool, "-p": tmuxFlagBool, "-o": tmuxFlagBool},
+	"select-layout":    {"-t": tmuxFlagString, "-E": tmuxFlagBool, "-n": tmuxFlagBool, "-p": tmuxFlagString, "-o": tmuxFlagBool},
 	"show-environment": {"-t": tmuxFlagString, "-g": tmuxFlagBool},
 	"set-environment":  {"-t": tmuxFlagString, "-u": tmuxFlagBool, "-g": tmuxFlagBool},
 	"set-option":       {"-p": tmuxFlagBool, "-w": tmuxFlagBool, "-s": tmuxFlagBool, "-g": tmuxFlagBool, "-u": tmuxFlagBool, "-o": tmuxFlagBool, "-q": tmuxFlagBool, "-a": tmuxFlagBool, "-F": tmuxFlagBool, "-t": tmuxFlagString},
+	"show-options":     {"-A": tmuxFlagBool, "-H": tmuxFlagBool, "-g": tmuxFlagBool, "-p": tmuxFlagBool, "-q": tmuxFlagBool, "-s": tmuxFlagBool, "-t": tmuxFlagString, "-v": tmuxFlagBool, "-w": tmuxFlagBool},
 	"list-windows":     {"-t": tmuxFlagString, "-a": tmuxFlagBool, "-F": tmuxFlagString, "-f": tmuxFlagString},
 	"rename-window":    {"-t": tmuxFlagString},
 	"new-window":       {"-d": tmuxFlagBool, "-P": tmuxFlagBool, "-F": tmuxFlagString, "-n": tmuxFlagString, "-t": tmuxFlagString, "-c": tmuxFlagString, "-e": tmuxFlagString},
@@ -60,6 +62,32 @@ var internalCommandFlagSpecs = map[string]map[string]tmuxFlagKind{
 	"capture-pane":     {"-a": tmuxFlagBool, "-b": tmuxFlagString, "-C": tmuxFlagBool, "-e": tmuxFlagBool, "-E": tmuxFlagString, "-J": tmuxFlagBool, "-M": tmuxFlagBool, "-N": tmuxFlagBool, "-p": tmuxFlagBool, "-P": tmuxFlagBool, "-q": tmuxFlagBool, "-S": tmuxFlagString, "-T": tmuxFlagBool, "-t": tmuxFlagString},
 	"run-shell":        {"-b": tmuxFlagBool, "-t": tmuxFlagString, "-C": tmuxFlagBool, "-c": tmuxFlagString},
 	"if-shell":         {"-b": tmuxFlagBool, "-F": tmuxFlagBool, "-t": tmuxFlagString},
+}
+
+func canonicalTmuxCommandName(name string) string {
+	switch strings.TrimSpace(name) {
+	case "show":
+		return "show-options"
+	default:
+		return strings.TrimSpace(name)
+	}
+}
+
+func expandCombinedInternalTmuxFlags(spec map[string]tmuxFlagKind, token string) ([]string, bool) {
+	if len(token) < 3 || token[0] != '-' {
+		return nil, false
+	}
+
+	flags := make([]string, 0, len(token)-1)
+	for _, ch := range token[1:] {
+		flag := "-" + string(ch)
+		kind, known := spec[flag]
+		if !known || kind != tmuxFlagBool {
+			return nil, false
+		}
+		flags = append(flags, flag)
+	}
+	return flags, true
 }
 
 // splitTmuxCommands splits a tmux command string on unquoted semicolons.
@@ -131,10 +159,10 @@ func tokenizeTmuxCommand(s string) []string {
 	return tokens
 }
 
-// parseTmuxCommandLine parses a raw tmux command string into a TmuxRequest
+// ParseTmuxCommandLine parses a raw tmux command string into a TmuxRequest
 // with properly separated Command, Flags, and Args fields.
 // Unknown commands are parsed with all tokens as Args (best-effort forwarding).
-func parseTmuxCommandLine(line string) ipc.TmuxRequest {
+func ParseTmuxCommandLine(line string) ipc.TmuxRequest {
 	tokens := tokenizeTmuxCommand(line)
 	if len(tokens) == 0 {
 		return ipc.TmuxRequest{
@@ -143,7 +171,7 @@ func parseTmuxCommandLine(line string) ipc.TmuxRequest {
 		}
 	}
 
-	command := tokens[0]
+	command := canonicalTmuxCommandName(tokens[0])
 	rest := tokens[1:]
 
 	flags := map[string]any{}
@@ -168,6 +196,12 @@ func parseTmuxCommandLine(line string) ipc.TmuxRequest {
 
 		kind, isFlag := spec[token]
 		if !isFlag {
+			if expandedFlags, ok := expandCombinedInternalTmuxFlags(spec, token); ok {
+				for _, flag := range expandedFlags {
+					flags[flag] = true
+				}
+				continue
+			}
 			// Not a known flag: treat as positional arg.
 			args = append(args, token)
 			continue

@@ -13,6 +13,7 @@ export interface MCPConfigParam {
 }
 
 export type MCPStatus = "stopped" | "starting" | "running" | "error";
+export type MCPKind = string;
 
 export interface MCPSnapshot {
     id: string;
@@ -30,8 +31,13 @@ export interface MCPSnapshot {
     bridge_command?: string;
     /** Bridge arguments for stdio clients. */
     bridge_args?: string[];
-    /** MCP kind: "" = LSP (default), "orchestrator" = Agent Orchestrator. */
-    kind?: string;
+    /** Raw MCP kind from the backend when present. */
+    kind?: MCPKind;
+}
+
+interface MCPSnapshotNormalizationResult {
+    snapshot: MCPSnapshot | null;
+    reason?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,15 +79,15 @@ function normalizeConfigParam(param: unknown): MCPConfigParam | null {
     return normalized;
 }
 
-export function normalizeMCPSnapshot(snapshot: unknown): MCPSnapshot | null {
+function normalizeMCPSnapshotResult(snapshot: unknown): MCPSnapshotNormalizationResult {
     if (!isRecord(snapshot)) {
-        return null;
+        return {snapshot: null, reason: "payload is not an object"};
     }
 
     const id = typeof snapshot.id === "string" ? snapshot.id.trim() : "";
     const name = typeof snapshot.name === "string" ? snapshot.name.trim() : "";
     if (id === "" || name === "") {
-        return null;
+        return {snapshot: null, reason: "id and name must be non-empty strings"};
     }
 
     const configParamsArray = Array.isArray(snapshot.config_params) ? snapshot.config_params : [];
@@ -120,18 +126,38 @@ export function normalizeMCPSnapshot(snapshot: unknown): MCPSnapshot | null {
             normalized.bridge_args = bridgeArgs;
         }
     }
-    if (typeof snapshot.kind === "string" && snapshot.kind.trim() !== "") {
-        normalized.kind = snapshot.kind;
+    if (snapshot.kind !== undefined) {
+        if (typeof snapshot.kind !== "string") {
+            return {snapshot: null, reason: "kind must be a string when provided"};
+        }
+        const normalizedKind = snapshot.kind.trim();
+        if (normalizedKind !== "") {
+            normalized.kind = normalizedKind;
+        }
     }
 
-    return normalized;
+    return {snapshot: normalized};
+}
+
+export function normalizeMCPSnapshot(snapshot: unknown): MCPSnapshot | null {
+    return normalizeMCPSnapshotResult(snapshot).snapshot;
 }
 
 export function normalizeMCPSnapshots(snapshots: unknown): MCPSnapshot[] {
     if (!Array.isArray(snapshots)) {
         return [];
     }
-    return snapshots
-        .map((snapshot) => normalizeMCPSnapshot(snapshot))
-        .filter((snapshot): snapshot is MCPSnapshot => snapshot != null);
+    const normalizedSnapshots: MCPSnapshot[] = [];
+    snapshots.forEach((snapshot, index) => {
+        const result = normalizeMCPSnapshotResult(snapshot);
+        if (result.snapshot == null) {
+            console.warn("[mcp] dropped invalid MCP snapshot", {
+                index,
+                reason: result.reason ?? "unknown normalization failure",
+            });
+            return;
+        }
+        normalizedSnapshots.push(result.snapshot);
+    });
+    return normalizedSnapshots;
 }

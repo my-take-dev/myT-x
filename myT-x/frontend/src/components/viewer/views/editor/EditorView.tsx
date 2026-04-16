@@ -4,10 +4,12 @@ import {toErrorMessage} from "../../../../utils/errorUtils";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import type {FlatNode} from "../file-tree/fileTreeTypes";
 import {FileSearchPanel} from "../file-tree/FileSearchPanel";
+import {isSameOrDescendantPath} from "../file-tree/treeUtils";
 import {useFileSearch} from "../file-tree/useFileSearch";
 import {DeleteDialog, CreateDialog, DiscardChangesDialog, RenameDialog} from "./EditorDialogs";
 import {EditorFileTree} from "./EditorFileTree";
 import {EditorPane} from "./EditorPane";
+import {remapDescendantPath} from "./editorPathUtils";
 import {useEditor} from "./useEditor";
 import {useEditorFile} from "./useEditorFile";
 
@@ -31,10 +33,12 @@ export function EditorView() {
     const closeView = useViewerStore((state) => state.closeView);
     const {
         activeSession,
+        activeSessionKey,
         error,
         flatNodes,
         isRootLoading,
         selectedPath,
+        clearSelection,
         createDirectory,
         createFile,
         deleteItem,
@@ -68,18 +72,15 @@ export function EditorView() {
     const [showDiscardDialog, setShowDiscardDialog] = useState(false);
     const [dialogError, setDialogError] = useState<string | null>(null);
     const pendingDiscardActionRef = useRef<(() => void | Promise<void>) | null>(null);
+    const previousSessionKeyRef = useRef(activeSessionKey);
+    const sessionBoundaryRef = useRef(false);
     const isInitialRootLoad = isRootLoading && flatNodes.length === 0;
     const isTreeRefreshing = isRootLoading && flatNodes.length > 0;
 
     useEffect(() => {
-        if (selectedPath) {
-            void loadFile(selectedPath);
-            return;
-        }
-        clearFile();
-    }, [clearFile, loadFile, selectedPath]);
+        const sessionChanged = previousSessionKeyRef.current !== activeSessionKey;
+        previousSessionKeyRef.current = activeSessionKey;
 
-    useEffect(() => {
         setCreateDialog(null);
         setRenameDialog(null);
         setDeleteDialog(null);
@@ -88,7 +89,18 @@ export function EditorView() {
         setDialogError(null);
         setIsSearchMode(false);
         clearSearch();
-    }, [activeSession, clearSearch]);
+        if (!sessionChanged) {
+            return;
+        }
+
+        sessionBoundaryRef.current = true;
+    }, [activeSessionKey, clearSearch]);
+
+    useEffect(() => {
+        if (currentPath === null) {
+            sessionBoundaryRef.current = false;
+        }
+    }, [currentPath]);
 
     const confirmDiscardUnsavedChanges = useCallback((action: () => void | Promise<void>) => {
         if (!isModified) {
@@ -98,6 +110,45 @@ export function EditorView() {
         setShowDiscardDialog(true);
         return false;
     }, [isModified]);
+
+    useEffect(() => {
+        if (selectedPath) {
+            if (selectedPath !== currentPath) {
+                const nextSelectedPath = selectedPath;
+                if (!confirmDiscardUnsavedChanges(() => {
+                    selectFile(nextSelectedPath);
+                })) {
+                    if (currentPath !== null) {
+                        selectFile(currentPath);
+                    } else {
+                        clearSelection();
+                    }
+                    return;
+                }
+                void loadFile(nextSelectedPath);
+            }
+            return;
+        }
+        if (!currentPath) {
+            return;
+        }
+        if (sessionBoundaryRef.current) {
+            sessionBoundaryRef.current = false;
+            if (!confirmDiscardUnsavedChanges(() => {
+                clearFile();
+            })) {
+                return;
+            }
+            clearFile();
+            return;
+        }
+        if (!confirmDiscardUnsavedChanges(() => {
+            clearFile();
+        })) {
+            return;
+        }
+        clearFile();
+    }, [clearFile, clearSelection, confirmDiscardUnsavedChanges, currentPath, loadFile, selectFile, selectedPath]);
 
     const handleCancelDiscard = useCallback(() => {
         pendingDiscardActionRef.current = null;
@@ -117,6 +168,15 @@ export function EditorView() {
             setDialogError(toErrorMessage(err, "Failed to continue after discarding changes."));
         }
     }, []);
+
+    const handleCloseView = useCallback(() => {
+        if (!confirmDiscardUnsavedChanges(() => {
+            closeView();
+        })) {
+            return;
+        }
+        closeView();
+    }, [closeView, confirmDiscardUnsavedChanges]);
 
     const handleSelectFile = useCallback((path: string) => {
         if (path === currentPath) return;
@@ -181,8 +241,12 @@ export function EditorView() {
         try {
             setDialogError(null);
             if (createDialog.type === "file") {
-                const createdPath = await createFile(createDialog.parentDir, name);
+                const {result: createdPath, refreshError} = await createFile(createDialog.parentDir, name);
+                if (createdPath === null) {
+                    return;
+                }
                 setCreateDialog(null);
+                setDialogError(refreshError);
                 if (confirmDiscardUnsavedChanges(() => {
                     selectFile(createdPath);
                 })) {
@@ -191,8 +255,12 @@ export function EditorView() {
                 return;
             }
 
-            await createDirectory(createDialog.parentDir, name);
+            const {result: created, refreshError} = await createDirectory(createDialog.parentDir, name);
+            if (!created) {
+                return;
+            }
             setCreateDialog(null);
+            setDialogError(refreshError);
         } catch (err: unknown) {
             setDialogError(toErrorMessage(err, `Failed to create ${createDialog.type}.`));
         }
@@ -202,21 +270,34 @@ export function EditorView() {
         if (!renameDialog) {
             return;
         }
+        setDialogError(null);
 
-        try {
-            setDialogError(null);
-            if (renameDialog.path === currentPath && !confirmDiscardUnsavedChanges(async () => {
-                try {
-                    await renameItem(renameDialog.path, name);
-                    setRenameDialog(null);
-                } catch (err: unknown) {
-                    setDialogError(toErrorMessage(err, "Failed to rename item."));
-                }
-            })) {
+        const doRename = async () => {
+            const {result: newPath, refreshError} = await renameItem(renameDialog.path, name);
+            if (newPath === null) {
                 return;
             }
-            await renameItem(renameDialog.path, name);
+            if (currentPath !== null && isSameOrDescendantPath(currentPath, renameDialog.path)) {
+                clearFile();
+                selectFile(remapDescendantPath(currentPath, renameDialog.path, newPath));
+            }
             setRenameDialog(null);
+            setDialogError(refreshError);
+        };
+
+        // When renaming the currently open file, require discard confirmation first.
+        if (currentPath !== null && isSameOrDescendantPath(currentPath, renameDialog.path) && !confirmDiscardUnsavedChanges(async () => {
+            try {
+                await doRename();
+            } catch (err: unknown) {
+                setDialogError(toErrorMessage(err, "Failed to rename item."));
+            }
+        })) {
+            return;
+        }
+
+        try {
+            await doRename();
         } catch (err: unknown) {
             setDialogError(toErrorMessage(err, "Failed to rename item."));
         }
@@ -226,21 +307,33 @@ export function EditorView() {
         if (!deleteDialog) {
             return;
         }
+        setDialogError(null);
 
-        try {
-            setDialogError(null);
-            if (deleteDialog.path === currentPath && !confirmDiscardUnsavedChanges(async () => {
-                try {
-                    await deleteItem(deleteDialog.path);
-                    setDeleteDialog(null);
-                } catch (err: unknown) {
-                    setDialogError(toErrorMessage(err, "Failed to delete item."));
-                }
-            })) {
+        const doDelete = async () => {
+            const {result: deleted, refreshError} = await deleteItem(deleteDialog.path);
+            if (!deleted) {
                 return;
             }
-            await deleteItem(deleteDialog.path);
+            if (currentPath !== null && isSameOrDescendantPath(currentPath, deleteDialog.path)) {
+                clearFile();
+            }
             setDeleteDialog(null);
+            setDialogError(refreshError);
+        };
+
+        // When deleting the currently open file, require discard confirmation first.
+        if (currentPath !== null && isSameOrDescendantPath(currentPath, deleteDialog.path) && !confirmDiscardUnsavedChanges(async () => {
+            try {
+                await doDelete();
+            } catch (err: unknown) {
+                setDialogError(toErrorMessage(err, "Failed to delete item."));
+            }
+        })) {
+            return;
+        }
+
+        try {
+            await doDelete();
         } catch (err: unknown) {
             setDialogError(toErrorMessage(err, "Failed to delete item."));
         }
@@ -251,7 +344,7 @@ export function EditorView() {
             <ViewerPanelShell
                 className="editor-view"
                 title="Editor"
-                onClose={closeView}
+                onClose={handleCloseView}
                 message="No active session"
             />
         );
@@ -262,7 +355,7 @@ export function EditorView() {
             <ViewerPanelShell
                 className="editor-view"
                 title="Editor"
-                onClose={closeView}
+                onClose={handleCloseView}
                 onRefresh={loadRoot}
                 message={error}
             />
@@ -273,9 +366,12 @@ export function EditorView() {
         <ViewerPanelShell
             className="editor-view"
             title="Editor"
-            onClose={closeView}
+            onClose={handleCloseView}
             onRefresh={loadRoot}
         >
+            {dialogError && !createDialog && !renameDialog && !deleteDialog && !showDiscardDialog && (
+                <div className="viewer-message" role="alert">{dialogError}</div>
+            )}
             <div className="editor-body">
                 {isInitialRootLoad ? (
                     <div className="viewer-message">Loading editor tree...</div>
@@ -324,7 +420,7 @@ export function EditorView() {
                     </>
                 )}
             </div>
-            {createDialog && (
+            {!showDiscardDialog && createDialog && (
                 <CreateDialog
                     errorMessage={dialogError}
                     parentPath={createDialog.parentDir}
@@ -336,7 +432,7 @@ export function EditorView() {
                     onConfirm={handleConfirmCreate}
                 />
             )}
-            {renameDialog && (
+            {!showDiscardDialog && renameDialog && (
                 <RenameDialog
                     currentName={renameDialog.name}
                     errorMessage={dialogError}
@@ -347,7 +443,7 @@ export function EditorView() {
                     onConfirm={handleConfirmRename}
                 />
             )}
-            {deleteDialog && (
+            {!showDiscardDialog && deleteDialog && (
                 <DeleteDialog
                     errorMessage={dialogError}
                     isDir={deleteDialog.isDir}

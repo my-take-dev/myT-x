@@ -32,7 +32,9 @@ vi.mock("../src/api", () => ({
 
 vi.mock("../src/i18n", () => ({
     getLanguage: vi.fn(() => "en"),
-    translate: vi.fn((_key: string, _jaText: string, enText: string) => enText),
+    translate: vi.fn((_: string, defaultText: string, params?: Record<string, string | number>) =>
+        defaultText.replace(/\{(\w+)}/g, (_, key: string) => String(params?.[key] ?? "")),
+    ),
 }));
 
 vi.mock("../src/services/paneDataStream", () => ({
@@ -139,5 +141,52 @@ describe("useSnapshotSync", () => {
         });
 
         expect(useNotificationStore.getState().notifications).toEqual([]);
+    });
+
+    it("adds a warning notification when session cleanup is degraded", async () => {
+        act(() => {
+            root.render(<SnapshotSyncProbe/>);
+        });
+        await flushEffects();
+
+        const handler = eventHandlers.get("session:cleanup-degraded");
+        expect(handler).toBeTypeOf("function");
+
+        act(() => {
+            handler?.({
+                component: "devpanel",
+                session_name: "feature-ime",
+                message: "cleanup timed out",
+            });
+        });
+
+        const [notification] = useNotificationStore.getState().notifications;
+        expect(notification?.level).toBe("warn");
+        expect(notification?.message).toContain("feature-ime");
+        expect(notification?.message).toContain("devpanel");
+        expect(notification?.message).toContain("cleanup timed out");
+    });
+
+    it.each([
+        null,
+        {},
+        {component: "devpanel"},
+        {component: "devpanel", session_name: "feature-ime"},
+        {component: "devpanel", session_name: "feature-ime", message: ""},
+    ])("ignores malformed session cleanup payloads: %o", async (payload) => {
+        act(() => {
+            root.render(<SnapshotSyncProbe/>);
+        });
+        await flushEffects();
+
+        const handler = eventHandlers.get("session:cleanup-degraded");
+        expect(handler).toBeTypeOf("function");
+
+        act(() => {
+            handler?.(payload);
+        });
+
+        expect(useNotificationStore.getState().notifications).toEqual([]);
+        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("session:cleanup-degraded"));
     });
 });

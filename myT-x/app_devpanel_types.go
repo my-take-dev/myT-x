@@ -8,6 +8,11 @@ import "myT-x/internal/devpanel"
 // discover them without exposing the internal package directly.
 type FileEntry = devpanel.FileEntry
 type FileContent = devpanel.FileContent
+type BinaryFileContent = devpanel.BinaryFileContent
+type SqliteColumnInfo = devpanel.SqliteColumnInfo
+type SqliteTableInfo = devpanel.SqliteTableInfo
+type SqliteQueryResult = devpanel.SqliteQueryResult
+type SqliteExportResult = devpanel.SqliteExportResult
 type FileMetadata = devpanel.FileMetadata
 type WriteFileResult = devpanel.WriteFileResult
 type GitGraphCommit = devpanel.GitGraphCommit

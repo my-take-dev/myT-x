@@ -71,41 +71,48 @@ describe("validateViewerShortcuts", () => {
 
     it("rejects shortcuts without modifier keys", () => {
         const errors = validateViewerShortcuts({
-            "file-tree": "f",
+            "file-view": "f",
         });
-        expect(errors).toHaveProperty("viewer_shortcut_file-tree");
+        expect(errors).toHaveProperty("viewer_shortcut_file-view");
     });
 
     it("allows function keys without modifier keys", () => {
         const errors = validateViewerShortcuts({
-            "file-tree": "F12",
+            "file-view": "F12",
         });
-        expect(errors).not.toHaveProperty("viewer_shortcut_file-tree");
+        expect(errors).not.toHaveProperty("viewer_shortcut_file-view");
     });
 
     it("rejects duplicate custom shortcuts (case-insensitive)", () => {
         const errors = validateViewerShortcuts({
-            "file-tree": "Ctrl+Shift+Q",
+            "file-view": "Ctrl+Shift+Q",
             "git-graph": "ctrl+shift+q",
         });
-        expect(errors).toHaveProperty("viewer_shortcut_file-tree");
+        expect(errors).toHaveProperty("viewer_shortcut_file-view");
         expect(errors).toHaveProperty("viewer_shortcut_git-graph");
     });
 
     it("rejects custom shortcut that conflicts with another view default", () => {
         const errors = validateViewerShortcuts({
-            "file-tree": "Ctrl+Shift+G", // conflicts with git-graph default
+            "file-view": "Ctrl+Shift+G", // conflicts with git-graph default
         });
-        expect(errors).toHaveProperty("viewer_shortcut_file-tree");
+        expect(errors).toHaveProperty("viewer_shortcut_file-view");
         expect(errors).toHaveProperty("viewer_shortcut_git-graph");
     });
 
     it("normalizes modifier ordering before duplicate checks", () => {
         const errors = validateViewerShortcuts({
-            "git-graph": "Shift+Ctrl+E", // conflicts with file-tree default Ctrl+Shift+E
+            "git-graph": "Shift+Ctrl+E", // conflicts with file-view default Ctrl+Shift+E
         });
-        expect(errors).toHaveProperty("viewer_shortcut_file-tree");
+        expect(errors).toHaveProperty("viewer_shortcut_file-view");
         expect(errors).toHaveProperty("viewer_shortcut_git-graph");
+    });
+
+    it("accepts the legacy file-tree key as an alias for file-view", () => {
+        const errors = validateViewerShortcuts({
+            "file-tree": "Ctrl+Shift+1",
+        });
+        expect(errors).not.toHaveProperty("viewer_shortcut_file-view");
     });
 
     it("rejects conflict with global hotkey", () => {

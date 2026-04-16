@@ -10,6 +10,10 @@ import (
 	"myT-x/internal/config"
 )
 
+func expectedTaskSchedulerTargetModeError() string {
+	return taskSchedulerTargetModeError().Error()
+}
+
 // NOTE: This file overrides the package-level function variable
 // runtimeEventsEmitFn. Do not use t.Parallel() here.
 
@@ -31,21 +35,21 @@ func newConfigPathForTaskSchedulerTest(t *testing.T, fileName string) string {
 	return newConfigPathForTest(t, fileName)
 }
 
-func TestGetTaskSchedulerSettings_ReturnsZeroValueWhenTaskSchedulerIsNil(t *testing.T) {
+func TestGetTaskSchedulerSettings_ReturnsDefaultsWhenTaskSchedulerIsNil(t *testing.T) {
 	app := NewApp()
 	app.setRuntimeContext(context.Background())
 	app.configState.Initialize(newConfigPathForTaskSchedulerTest(t, "config.yaml"), config.DefaultConfig())
 
 	got := app.GetTaskSchedulerSettings()
 
-	if got.PreExecResetDelay != 0 {
-		t.Errorf("PreExecResetDelay = %d, want 0", got.PreExecResetDelay)
+	if got.PreExecResetDelay != defaultPreExecResetDelay {
+		t.Errorf("PreExecResetDelay = %d, want %d", got.PreExecResetDelay, defaultPreExecResetDelay)
 	}
-	if got.PreExecIdleTimeout != 0 {
-		t.Errorf("PreExecIdleTimeout = %d, want 0", got.PreExecIdleTimeout)
+	if got.PreExecIdleTimeout != defaultPreExecIdleTimeout {
+		t.Errorf("PreExecIdleTimeout = %d, want %d", got.PreExecIdleTimeout, defaultPreExecIdleTimeout)
 	}
-	if got.PreExecTargetMode != "" {
-		t.Errorf("PreExecTargetMode = %q, want empty", got.PreExecTargetMode)
+	if got.PreExecTargetMode != defaultPreExecTargetMode {
+		t.Errorf("PreExecTargetMode = %q, want %q", got.PreExecTargetMode, defaultPreExecTargetMode)
 	}
 	if len(got.MessageTemplates) != 0 {
 		t.Errorf("MessageTemplates length = %d, want 0", len(got.MessageTemplates))
@@ -208,7 +212,7 @@ func TestSaveTaskSchedulerSettings(t *testing.T) {
 				PreExecTargetMode:  "invalid_mode",
 			},
 			wantErr: true,
-			errMsg:  "pre_exec_target_mode must be 'task_panes' or 'all_panes'",
+			errMsg:  expectedTaskSchedulerTargetModeError(),
 		},
 		{
 			name: "invalid: template name empty",
@@ -288,7 +292,7 @@ func TestSaveTaskSchedulerSettings(t *testing.T) {
 		{
 			name: "invalid: too many templates exceeds limit",
 			input: func() config.TaskSchedulerConfig {
-				templates := make([]config.MessageTemplate, maxMessageTemplates+1)
+				templates := make([]config.MessageTemplate, config.MaxMessageTemplates+1)
 				for i := range templates {
 					templates[i] = config.MessageTemplate{
 						Name:    "tmpl-" + strings.Repeat("x", 5),
@@ -312,7 +316,7 @@ func TestSaveTaskSchedulerSettings(t *testing.T) {
 				PreExecIdleTimeout: 50,
 				PreExecTargetMode:  "task_panes",
 				MessageTemplates: []config.MessageTemplate{
-					{Name: strings.Repeat("a", maxTemplateNameLen+1), Message: "msg"},
+					{Name: strings.Repeat("a", config.MaxTemplateNameLen+1), Message: "msg"},
 				},
 			},
 			wantErr: true,
@@ -325,7 +329,7 @@ func TestSaveTaskSchedulerSettings(t *testing.T) {
 				PreExecIdleTimeout: 50,
 				PreExecTargetMode:  "task_panes",
 				MessageTemplates: []config.MessageTemplate{
-					{Name: "ok", Message: strings.Repeat("m", maxTemplateMessageLen+1)},
+					{Name: "ok", Message: strings.Repeat("m", config.MaxTemplateMessageLen+1)},
 				},
 			},
 			wantErr: true,
@@ -362,7 +366,7 @@ func TestSaveTaskSchedulerSettings(t *testing.T) {
 		{
 			name: "valid: exactly at template count limit",
 			input: func() config.TaskSchedulerConfig {
-				templates := make([]config.MessageTemplate, maxMessageTemplates)
+				templates := make([]config.MessageTemplate, config.MaxMessageTemplates)
 				for i := range templates {
 					templates[i] = config.MessageTemplate{
 						Name:    "tmpl-" + strings.Repeat("x", 3) + "-" + strings.Repeat("0", 2),
@@ -387,7 +391,7 @@ func TestSaveTaskSchedulerSettings(t *testing.T) {
 				PreExecIdleTimeout: 50,
 				PreExecTargetMode:  "task_panes",
 				MessageTemplates: []config.MessageTemplate{
-					{Name: strings.Repeat("a", maxTemplateNameLen), Message: "msg"},
+					{Name: strings.Repeat("a", config.MaxTemplateNameLen), Message: "msg"},
 				},
 			},
 			wantErr: false,
@@ -779,6 +783,34 @@ func TestSaveTaskSchedulerSettingsKeepsPreviousStateOnValidationError(t *testing
 	}
 	if afterFailure.MessageTemplates[0].Name != "valid" {
 		t.Errorf("MessageTemplates[0].Name after failed save = %q, want %q", afterFailure.MessageTemplates[0].Name, "valid")
+	}
+}
+
+func TestSaveTaskSchedulerSettingsNormalizesEmptyTargetModeToDefault(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.configState.Initialize(newConfigPathForTaskSchedulerTest(t, "config.yaml"), config.DefaultConfig())
+
+	runtimeEventsEmitFn = func(_ context.Context, _ string, _ ...any) {}
+
+	settings := config.TaskSchedulerConfig{
+		PreExecResetDelay:  20,
+		PreExecIdleTimeout: 50,
+		PreExecTargetMode:  "",
+	}
+
+	if err := app.SaveTaskSchedulerSettings(settings); err != nil {
+		t.Fatalf("SaveTaskSchedulerSettings() error = %v", err)
+	}
+
+	got := app.GetTaskSchedulerSettings()
+	if got.PreExecTargetMode != defaultPreExecTargetMode {
+		t.Fatalf("PreExecTargetMode = %q, want %q", got.PreExecTargetMode, defaultPreExecTargetMode)
 	}
 }
 

@@ -1,10 +1,18 @@
 package terminal
 
 import (
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestPaneOutputStateFieldCountGuard(t *testing.T) {
+	const expectedFieldCount = 6
+	if got := reflect.TypeFor[paneOutputState]().NumField(); got != expectedFieldCount {
+		t.Fatalf("paneOutputState field count = %d, want %d; update flush state initialization and this assertion", got, expectedFieldCount)
+	}
+}
 
 func TestOutputFlushManagerFlushesOnThreshold(t *testing.T) {
 	ch := make(chan string, 2)
@@ -311,4 +319,180 @@ func TestIsPaneQuiet(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsPaneQuietTUIRedrawPattern(t *testing.T) {
+	const paneID = "%1"
+	// Use a large threshold so the time-based check always fails,
+	// forcing the pattern-detection path.
+	const threshold = 10 * time.Second
+
+	writeN := func(m *OutputFlushManager, size, count int, withANSI bool) {
+		data := make([]byte, size)
+		if withANSI && size > 0 {
+			data[0] = 0x1b
+		}
+		for range count {
+			m.Write(paneID, data)
+		}
+	}
+
+	tests := []struct {
+		name  string
+		setup func(m *OutputFlushManager)
+		want  bool
+	}{
+		{
+			name: "tool approval pattern detected",
+			setup: func(m *OutputFlushManager) {
+				writeN(m, 175, 10, true)
+				writeN(m, 339, 10, true)
+			},
+			want: true,
+		},
+		{
+			name: "ai response varied sizes not detected",
+			setup: func(m *OutputFlushManager) {
+				for i := range 20 {
+					m.Write(paneID, make([]byte, 80+i*23))
+				}
+			},
+			want: false,
+		},
+		{
+			name: "fixed-size plain text chunks not detected",
+			setup: func(m *OutputFlushManager) {
+				writeN(m, 512, 20, false)
+			},
+			want: false,
+		},
+		{
+			name: "below minimum samples",
+			setup: func(m *OutputFlushManager) {
+				writeN(m, 175, 5, true)
+			},
+			want: false,
+		},
+		{
+			name: "small writes excluded from tracking",
+			setup: func(m *OutputFlushManager) {
+				writeN(m, 8, 100, true)
+			},
+			want: false,
+		},
+		{
+			name: "single size pattern detected",
+			setup: func(m *OutputFlushManager) {
+				writeN(m, 339, 15, true)
+			},
+			want: true,
+		},
+		{
+			name: "three equal sizes not detected (67%)",
+			setup: func(m *OutputFlushManager) {
+				writeN(m, 100, 10, true)
+				writeN(m, 200, 10, true)
+				writeN(m, 300, 10, true)
+			},
+			want: false,
+		},
+		{
+			name: "borderline 80% detected",
+			setup: func(m *OutputFlushManager) {
+				writeN(m, 200, 6, true)
+				writeN(m, 300, 2, true)
+				writeN(m, 400, 2, true) // top-2 = 8/10 = 80%
+			},
+			want: true,
+		},
+		{
+			name: "borderline 70% not detected",
+			setup: func(m *OutputFlushManager) {
+				writeN(m, 200, 5, true)
+				writeN(m, 300, 2, true)
+				writeN(m, 400, 3, true) // top-2 = 8/10... wait: 5+3=8/10=80%
+				// Actually use 4 sizes to get below 80%:
+				data := make([]byte, 500)
+				data[0] = 0x1b
+				m.Write(paneID, data)
+				// Now: 200x5, 300x2, 400x3, 500x1 = 11 total, top-2=5+3=8/11=72.7%
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewOutputFlushManager(time.Hour, 1024*1024, func(string, []byte) {})
+			m.Start()
+			defer m.Stop()
+
+			tt.setup(m)
+			got := m.IsPaneQuiet(paneID, threshold)
+			if got != tt.want {
+				t.Errorf("IsPaneQuiet() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsPaneQuietTUIRedrawCountersReset(t *testing.T) {
+	const paneID = "%1"
+	const threshold = 10 * time.Second
+
+	writeN := func(m *OutputFlushManager, size, count int, withANSI bool) {
+		data := make([]byte, size)
+		if withANSI && size > 0 {
+			data[0] = 0x1b
+		}
+		for range count {
+			m.Write(paneID, data)
+		}
+	}
+
+	t.Run("counters reset after quiet", func(t *testing.T) {
+		m := NewOutputFlushManager(time.Hour, 1024*1024, func(string, []byte) {})
+		m.Start()
+		defer m.Stop()
+
+		// Tool approval pattern → should be quiet.
+		writeN(m, 175, 10, true)
+		writeN(m, 339, 10, true)
+		if got := m.IsPaneQuiet(paneID, threshold); !got {
+			t.Fatal("first call: expected quiet (redraw pattern)")
+		}
+
+		// AI response pattern → should NOT be quiet (counters were reset).
+		for i := range 20 {
+			m.Write(paneID, make([]byte, 80+i*23))
+		}
+		if got := m.IsPaneQuiet(paneID, threshold); got {
+			t.Fatal("second call: expected not quiet (AI response after reset)")
+		}
+	})
+
+	t.Run("time-based quiet resets counters", func(t *testing.T) {
+		m := NewOutputFlushManager(time.Hour, 1024*1024, func(string, []byte) {})
+		m.Start()
+		defer m.Stop()
+
+		// Seed stale TUI data, then set lastWriteAt to the past.
+		writeN(m, 175, 20, true)
+		m.mu.Lock()
+		m.panes[paneID].lastWriteAt = time.Now().Add(-15 * time.Second)
+		m.mu.Unlock()
+
+		// Time-based quiet → should reset counters.
+		if got := m.IsPaneQuiet(paneID, threshold); !got {
+			t.Fatal("first call: expected quiet (time-based)")
+		}
+
+		// AI response pattern → should NOT be quiet (stale counters were reset).
+		for i := range 20 {
+			m.Write(paneID, make([]byte, 80+i*23))
+		}
+		if got := m.IsPaneQuiet(paneID, threshold); got {
+			t.Fatal("second call: expected not quiet (AI response after time-based reset)")
+		}
+	})
 }

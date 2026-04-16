@@ -4,7 +4,7 @@
     top: 0;
     right: 0;
     bottom: 0;
-    width: var(--activity-strip-width);
+    width: var(--activity-strip-width, 36px);
     background: var(--bg-panel);
     border-left: 1px solid var(--line);
     display: flex;
@@ -12,6 +12,8 @@
     align-items: center;
     padding-top: 40px;
     gap: 2px;
+    /* Portaled to document.body to escape the docked layout's CSS transform scaling.
+       Keep this below context menus and above static content. */
     z-index: var(--z-activity-strip);
 }
 
@@ -82,8 +84,8 @@
 .viewer-overlay {
     position: fixed;
     top: 0;
-    left: var(--sidebar-width);
-    right: var(--activity-strip-width);
+    left: var(--sidebar-width, 280px);
+    right: var(--activity-strip-width, 36px);
     bottom: 0;
     z-index: var(--z-viewer-overlay);
     background: var(--bg-base);
@@ -98,17 +100,18 @@
     right: auto;
     bottom: auto;
     z-index: auto;
-    /* viewerDocking.ts clamps dockRatio to 0.3-0.8, and main.go enforces a
-       980px minimum window width. Together with the sidebar and activity strip,
-       both panes stay usable even at the drag extremes. */
+    /* App injects the live dock widths here. */
     width: var(--dock-viewer-width, 50%);
-    min-width: min(320px, 40vw);
-    max-width: 80%;
+    min-width: 0;
+    max-width: none;
     flex-shrink: 0;
     border-left: 1px solid var(--line);
     animation: viewer-docked-enter 150ms ease;
     order: 3;
-    margin-right: var(--activity-strip-width);
+    /* Reserve the portaled ActivityStrip column so it does not overlap the
+       docked viewer when the window is narrower than 1440px and the layout
+       is scaled down via .app-body--viewer-scaled. */
+    margin-right: var(--dock-activity-strip-reserved-width, var(--activity-strip-width, 36px));
     transition: width 150ms ease, min-width 150ms ease;
 }
 
@@ -124,7 +127,7 @@
 /* ── Docked Divider (drag handle) ── */
 .docked-divider {
     order: 2;
-    width: 4px;
+    width: var(--dock-divider-width, 4px);
     flex-shrink: 0;
     cursor: col-resize;
     background: rgba(150, 182, 219, 0.25);

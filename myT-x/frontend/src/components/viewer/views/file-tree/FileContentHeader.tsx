@@ -6,7 +6,7 @@ interface FileContentHeaderProps {
     readonly path: string;
     readonly pathCopyState: CopyNoticeState;
     readonly onCopyPath: () => void;
-    readonly isMarkdownFile: boolean;
+    readonly canPreview: boolean;
     readonly isPreviewMode: boolean;
     readonly onTogglePreview: () => void;
     readonly size: number;
@@ -40,7 +40,7 @@ export function FileContentHeader({
     path,
     pathCopyState,
     onCopyPath,
-    isMarkdownFile,
+    canPreview,
     isPreviewMode,
     onTogglePreview,
     size,
@@ -52,7 +52,7 @@ export function FileContentHeader({
         <div className="file-content-header">
             <span className="file-content-path">{path}</span>
             <CopyPathButton state={pathCopyState} onClick={onCopyPath}/>
-            {isMarkdownFile && (
+            {canPreview && (
                 <button
                     type="button"
                     className={`file-content-toggle-preview${isPreviewMode ? " active" : ""}`}

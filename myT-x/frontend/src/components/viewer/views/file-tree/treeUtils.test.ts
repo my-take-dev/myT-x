@@ -2,7 +2,10 @@ import {describe, expect, it} from "vitest";
 import type {FileEntry, FileNode} from "./fileTreeTypes";
 import {
     fileEntriesToNodes,
+    findNodeByPath,
     flattenTree,
+    formatFileSize,
+    isSameOrDescendantPath,
     mergeChildrenIntoTree,
     mergeRootNodes,
     removePathFromTree,
@@ -27,6 +30,7 @@ function fileEntry(path: string, size: number): FileEntry {
         path,
         is_dir: false,
         size,
+        has_children: false,
     };
 }
 
@@ -184,5 +188,81 @@ describe("treeUtils", () => {
         expect(renamed[0]?.children?.[0]?.path).toBe("src/renamed");
         expect(renamed[0]?.children?.[0]?.name).toBe("renamed");
         expect(renamed[0]?.children?.[0]?.children?.[0]?.path).toBe("src/renamed/deep.txt");
+    });
+
+    it("returns the original tree when removing a missing path", () => {
+        const tree = mergeChildrenIntoTree(
+            fileEntriesToNodes([directoryEntry("src", true)]),
+            "src",
+            fileEntriesToNodes([fileEntry("src/app.ts", 64)]),
+        );
+
+        expect(removePathFromTree(tree, "src/missing")).toEqual(tree);
+    });
+
+    it("returns the original tree when renaming a missing path", () => {
+        const tree = mergeChildrenIntoTree(
+            fileEntriesToNodes([directoryEntry("src", true)]),
+            "src",
+            fileEntriesToNodes([fileEntry("src/app.ts", 64)]),
+        );
+
+        expect(renamePathInTree(tree, "src/missing", "src/renamed")).toEqual(tree);
+    });
+
+    it("matches descendant paths only on directory boundaries", () => {
+        expect(isSameOrDescendantPath("src\\nested", "src")).toBe(true);
+        expect(isSameOrDescendantPath("src-other", "src")).toBe(false);
+    });
+
+    it("finds nested nodes through normalized paths", () => {
+        const tree = mergeChildrenIntoTree(
+            fileEntriesToNodes([directoryEntry("src", true)]),
+            "src",
+            fileEntriesToNodes([directoryEntry("src/nested", true)]),
+        );
+        const nestedTree = mergeChildrenIntoTree(
+            tree,
+            "src/nested",
+            fileEntriesToNodes([fileEntry("src/nested/deep.txt", 64)]),
+        );
+
+        expect(findNodeByPath(nestedTree, "src\\nested\\deep.txt")?.path).toBe("src/nested/deep.txt");
+        expect(findNodeByPath(nestedTree, "src/missing")).toBeNull();
+    });
+
+    it("renames a root node and deep descendants without touching siblings", () => {
+        const tree = mergeChildrenIntoTree(
+            fileEntriesToNodes([
+                directoryEntry("src", true),
+                directoryEntry("docs", true),
+            ]),
+            "src",
+            fileEntriesToNodes([directoryEntry("src/nested", true)]),
+        );
+        const nestedTree = mergeChildrenIntoTree(
+            tree,
+            "src/nested",
+            fileEntriesToNodes([fileEntry("src/nested/deep/file.txt", 64)]),
+        );
+
+        const renamed = renamePathInTree(nestedTree, "src", "app");
+        expect(renamed.map((node) => node.path)).toEqual(["app", "docs"]);
+        expect(renamed[0]?.children?.[0]?.path).toBe("app/nested");
+        expect(renamed[0]?.children?.[0]?.children?.[0]?.path).toBe("app/nested/deep/file.txt");
+        expect(renamed[1]?.path).toBe("docs");
+    });
+
+    it.each([
+        [0, "0 B"],
+        [512, "512 B"],
+        [1023, "1023 B"],
+        [1024, "1.0 KB"],
+        [1536, "1.5 KB"],
+        [1024 * 1024 - 1, "1024.0 KB"],
+        [1024 * 1024, "1.0 MB"],
+        [5 * 1024 * 1024, "5.0 MB"],
+    ])("formats %d bytes as %s", (bytes, expected) => {
+        expect(formatFileSize(bytes)).toBe(expected);
     });
 });

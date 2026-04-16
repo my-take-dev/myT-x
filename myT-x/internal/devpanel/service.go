@@ -2,11 +2,14 @@ package devpanel
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +29,9 @@ import (
 // maxFileSize is the maximum file size returned by ReadFile (1 MB).
 const maxFileSize int64 = 1 << 20
 
+// maxBinaryFileSize is the maximum file size returned by ReadBinary (5 MB).
+const maxBinaryFileSize int64 = 5 << 20
+
 const (
 	retryBaseDelay = 10 * time.Millisecond
 	maxRetries     = 5
@@ -35,10 +41,16 @@ const (
 const (
 	errorAccessDenied     syscall.Errno = 5
 	errorSharingViolation syscall.Errno = 32
+	errorLockViolation    syscall.Errno = 33
 )
 
 // maxDirEntries is the maximum number of directory entries returned by ListDir.
 const maxDirEntries = 5000
+
+// maxDirHasChildrenProbes bounds per-child filesystem probes on a single
+// ListDir cache miss. Larger directories fall back to cached knowledge or a
+// lazy "expand to verify" hint to avoid O(n_subdirs) extra opens.
+const maxDirHasChildrenProbes = 32
 
 // binaryProbeSize is the number of bytes scanned to detect binary content.
 const binaryProbeSize = 8192
@@ -272,6 +284,13 @@ func (s *Service) suppressWatcherPaths(sessionName string, paths ...string) {
 	s.watcherManager.ignorePaths(sessionName, paths...)
 }
 
+func (s *Service) unsuppressWatcherPaths(sessionName string, paths ...string) {
+	if s.watcherManager == nil {
+		return
+	}
+	s.watcherManager.unignorePaths(sessionName, paths...)
+}
+
 func dirHasVisibleChildren(dirPath string) (bool, error) {
 	dir, err := os.Open(dirPath)
 	if err != nil {
@@ -296,6 +315,8 @@ func dirHasVisibleChildren(dirPath string) (bool, error) {
 	}
 }
 
+var dirHasVisibleChildrenFunc = dirHasVisibleChildren
+
 func validateMutationPath(relPath, fieldName string) (string, error) {
 	trimmed := strings.TrimSpace(relPath)
 	if trimmed == "" {
@@ -312,6 +333,79 @@ func validateMutationPath(relPath, fieldName string) (string, error) {
 	return cleaned, nil
 }
 
+func resolveMutationRoot(rootDir string) (string, error) {
+	resolvedRoot, err := filepath.EvalSymlinks(rootDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve root directory: %w", err)
+	}
+	return resolvedRoot, nil
+}
+
+func (s *Service) validateMutationParentPath(rootDir, cleanedPath string) error {
+	parentPath := filepath.Dir(cleanedPath)
+	if parentPath == "." {
+		return nil
+	}
+	_, err := s.ResolveAndValidatePath(rootDir, parentPath)
+	return err
+}
+
+// resolveExistingMutationPath validates traversal through parent directories
+// while preserving the caller-selected leaf path and its current file info for
+// the actual mutation.
+func (s *Service) resolveExistingMutationPath(rootDir, cleanedPath string) (string, os.FileInfo, error) {
+	resolvedRoot, err := resolveMutationRoot(rootDir)
+	if err != nil {
+		return "", nil, err
+	}
+
+	targetPath := filepath.Join(resolvedRoot, cleanedPath)
+	info, statErr := os.Lstat(targetPath)
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return "", nil, fmt.Errorf("path does not exist: %s", cleanedPath)
+		}
+		return "", nil, fmt.Errorf("failed to inspect path: %w", statErr)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if err := s.validateMutationParentPath(rootDir, cleanedPath); err != nil {
+			return "", nil, err
+		}
+		return targetPath, info, nil
+	}
+
+	if _, err := s.ResolveAndValidatePath(rootDir, cleanedPath); err != nil {
+		return "", nil, err
+	}
+	return targetPath, info, nil
+}
+
+// resolveNewMutationPath validates traversal for create-or-update operations
+// while preserving the caller-selected leaf path for the actual mutation.
+func (s *Service) resolveNewMutationPath(rootDir, cleanedPath string) (string, error) {
+	resolvedRoot, err := resolveMutationRoot(rootDir)
+	if err != nil {
+		return "", err
+	}
+
+	targetPath := filepath.Join(resolvedRoot, cleanedPath)
+	if info, statErr := os.Lstat(targetPath); statErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			if err := s.validateMutationParentPath(rootDir, cleanedPath); err != nil {
+				return "", err
+			}
+			return targetPath, nil
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to inspect path: %w", statErr)
+	}
+
+	if _, err := s.ResolveAndValidateNewPath(rootDir, cleanedPath); err != nil {
+		return "", err
+	}
+	return targetPath, nil
+}
+
 func isRetryableFileError(err error) bool {
 	if err == nil || runtime.GOOS != "windows" {
 		return false
@@ -320,15 +414,68 @@ func isRetryableFileError(err error) bool {
 	var errno syscall.Errno
 	if errors.As(err, &errno) {
 		switch uint32(errno) {
-		case uint32(errorAccessDenied), uint32(errorSharingViolation):
+		case uint32(errorAccessDenied), uint32(errorSharingViolation), uint32(errorLockViolation):
 			return true
 		}
 	}
 	return false
 }
 
+// atomicWriteFile writes data to a file atomically by first writing to a
+// temporary file in the same directory, then renaming it over the target.
+// This prevents partial writes on crash. On Windows, os.Rename over an
+// existing file succeeds as long as the target is not locked.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".mytx-tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	// Ensure cleanup on any failure path.
+	success := false
+	closed := false
+	defer func() {
+		if !success {
+			if !closed {
+				if closeErr := tmp.Close(); closeErr != nil {
+					slog.Warn("[DEVPANEL] failed to close temp file during cleanup",
+						"path", tmpPath, "error", closeErr)
+				}
+			}
+			if removeErr := os.Remove(tmpPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				slog.Warn("[DEVPANEL] failed to remove temp file during cleanup",
+					"path", tmpPath, "error", removeErr)
+			}
+		}
+	}()
+
+	if err := tmp.Chmod(perm); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	closed = true
+	if err := retryFileOperation(func() error {
+		return os.Rename(tmpPath, path)
+	}, "rename temp file"); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	success = true
+	return nil
+}
+
 // retryFileOperation retries transient Windows file-lock failures with exponential
-// backoff (10ms, 20ms, 40ms, 80ms, 160ms; about 310ms total wait).
+// backoff (10ms, 20ms, 40ms, 80ms — about 150ms total wait).
 func retryFileOperation(operation func() error, operationName string) error {
 	var lastErr error
 	for attempt := range maxRetries {
@@ -383,11 +530,10 @@ func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, erro
 		return nil, fmt.Errorf("failed to read directory: %w", readErr)
 	}
 
-	var dirs []FileEntry
-	var files []FileEntry
-	count := 0
+	visibleEntries := make([]os.DirEntry, 0, min(len(entries), maxDirEntries))
+	visibleDirCount := 0
 	for _, entry := range entries {
-		if count >= maxDirEntries {
+		if len(visibleEntries) >= maxDirEntries {
 			slog.Warn("[DEVPANEL] directory entry limit reached",
 				"dir", targetDir, "limit", maxDirEntries)
 			break
@@ -400,12 +546,24 @@ func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, erro
 			continue
 		}
 
+		visibleEntries = append(visibleEntries, entry)
+		if entry.IsDir() {
+			visibleDirCount++
+		}
+	}
+
+	shouldProbeChildren := visibleDirCount <= maxDirHasChildrenProbes
+
+	var dirs []FileEntry
+	var files []FileEntry
+	for _, entry := range visibleEntries {
+		name := entry.Name()
+
 		// Dotfiles are intentionally visible in the developer panel.
 
 		relPath, relErr := filepath.Rel(rootDir, filepath.Join(targetDir, name))
 		if relErr != nil {
-			slog.Debug("[DEVPANEL] failed to compute relative path", "name", name, "error", relErr)
-			continue
+			return nil, fmt.Errorf("compute relative path for %q: %w", name, relErr)
 		}
 		// Normalize separators to forward slash for frontend consistency.
 		relPath = filepath.ToSlash(relPath)
@@ -417,18 +575,34 @@ func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, erro
 		}
 
 		if entry.IsDir() {
-			hasChildren, hasChildrenErr := dirHasVisibleChildren(filepath.Join(targetDir, name))
-			if hasChildrenErr != nil {
-				slog.Debug("[DEVPANEL] failed to inspect directory children", "path", relPath, "error", hasChildrenErr)
-				// Preserve the expander on transient filesystem errors so the
-				// frontend stays on the safe side and can retry lazily.
+			switch {
+			case shouldProbeChildren:
+				hasChildren, hasChildrenErr := dirHasVisibleChildrenFunc(filepath.Join(targetDir, name))
+				if hasChildrenErr != nil {
+					slog.Warn("[DEVPANEL] failed to inspect directory children", "path", relPath, "error", hasChildrenErr)
+					// Preserve the expander on transient filesystem errors so the
+					// frontend stays on the safe side and can retry lazily.
+					fe.HasChildren = true
+				} else {
+					fe.HasChildren = hasChildren
+				}
+			case s.dirCache != nil:
+				// Large listings avoid per-child I/O. Reuse fresh child listings
+				// when available; otherwise keep the expander so the frontend can
+				// resolve emptiness only if the user expands the directory.
+				if hasChildren, ok := s.dirCache.HasChildren(sessionName, relPath); ok {
+					fe.HasChildren = hasChildren
+				} else {
+					fe.HasChildren = true
+				}
+			default:
 				fe.HasChildren = true
-			} else {
-				fe.HasChildren = hasChildren
 			}
 		} else {
 			if info, infoErr := entry.Info(); infoErr == nil {
 				fe.Size = info.Size()
+			} else {
+				slog.Debug("[DEBUG-DEVPANEL] entry.Info() failed", "name", entry.Name(), "error", infoErr)
 			}
 		}
 
@@ -437,7 +611,6 @@ func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, erro
 		} else {
 			files = append(files, fe)
 		}
-		count++
 	}
 
 	// Sort: directories first (alphabetically), then files (alphabetically).
@@ -499,7 +672,11 @@ func (s *Service) ReadFile(sessionName string, filePath string) (FileContent, er
 	if openErr != nil {
 		return FileContent{}, fmt.Errorf("failed to open file: %w", openErr)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			slog.Warn("[DEVPANEL] failed to close file after read", "path", resolved, "error", closeErr)
+		}
+	}()
 
 	// Binary detection: read first probe bytes and scan for NULL bytes.
 	probeSize := min(int64(binaryProbeSize), info.Size())
@@ -535,6 +712,89 @@ func (s *Service) ReadFile(sessionName string, filePath string) (FileContent, er
 	result.Content = string(data)
 	result.LineCount = strings.Count(result.Content, "\n") + 1
 	return result, nil
+}
+
+// ReadBinary reads a file within a session's working directory as base64-encoded bytes.
+func (s *Service) ReadBinary(sessionName string, filePath string) (BinaryFileContent, error) {
+	sessionName = strings.TrimSpace(sessionName)
+	filePath = strings.TrimSpace(filePath)
+	if sessionName == "" {
+		return BinaryFileContent{}, errors.New("session name is required")
+	}
+	if filePath == "" {
+		return BinaryFileContent{}, errors.New("file path is required")
+	}
+
+	rootDir, err := s.resolveSessionWorkDir(sessionName)
+	if err != nil {
+		return BinaryFileContent{}, err
+	}
+
+	resolved, resolveErr := s.ResolveAndValidatePath(rootDir, filePath)
+	if resolveErr != nil {
+		return BinaryFileContent{}, resolveErr
+	}
+
+	info, statErr := os.Stat(resolved)
+	if statErr != nil {
+		return BinaryFileContent{}, fmt.Errorf("failed to stat file: %w", statErr)
+	}
+	if info.IsDir() {
+		return BinaryFileContent{}, fmt.Errorf("path is a directory, not a file: %s", filePath)
+	}
+	if info.Size() > maxBinaryFileSize {
+		return BinaryFileContent{}, fmt.Errorf("file exceeds binary read limit (%d bytes): %s", maxBinaryFileSize, filePath)
+	}
+
+	data, readErr := os.ReadFile(resolved)
+	if readErr != nil {
+		return BinaryFileContent{}, fmt.Errorf("failed to read file: %w", readErr)
+	}
+
+	return BinaryFileContent{
+		Path: normalizePanelPath(filePath),
+		Data: base64.StdEncoding.EncodeToString(data),
+		Mime: detectFileMIMEType(resolved, data),
+	}, nil
+}
+
+func detectFileMIMEType(path string, data []byte) string {
+	detectedType := http.DetectContentType(data)
+	extensionType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+	if extensionType == "" {
+		return detectedType
+	}
+	if detectedType == "application/octet-stream" {
+		return extensionType
+	}
+	if strings.HasPrefix(extensionType, "image/") && !strings.HasPrefix(detectedType, "image/") {
+		return extensionType
+	}
+	return detectedType
+}
+
+func detectBinaryFile(path string, size int64) (bool, error) {
+	probeSize := min(int64(binaryProbeSize), size)
+	if probeSize <= 0 {
+		return false, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return false, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			slog.Warn("[DEVPANEL] failed to close file after binary probe", "path", path, "error", closeErr)
+		}
+	}()
+
+	probe := make([]byte, probeSize)
+	probeN, readErr := io.ReadFull(f, probe)
+	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return false, fmt.Errorf("failed to read file probe: %w", readErr)
+	}
+	return bytes.IndexByte(probe[:probeN], 0) >= 0, nil
 }
 
 // GetFileInfo returns metadata for a file-system entry within a session's working directory.
@@ -587,14 +847,26 @@ func (s *Service) WriteFile(sessionName, filePath, content string) (WriteFileRes
 		return WriteFileResult{}, err
 	}
 
-	resolved, resolveErr := s.ResolveAndValidateNewPath(rootDir, cleanedPath)
+	resolved, resolveErr := s.resolveNewMutationPath(rootDir, cleanedPath)
 	if resolveErr != nil {
 		return WriteFileResult{}, resolveErr
 	}
 
-	if info, statErr := os.Stat(resolved); statErr == nil && info.IsDir() {
-		return WriteFileResult{}, fmt.Errorf("path is a directory, not a file: %s", cleanedPath)
-	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+	if info, statErr := os.Lstat(resolved); statErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return WriteFileResult{}, fmt.Errorf("symbolic links cannot be overwritten through the editor: %s", cleanedPath)
+		}
+		if info.IsDir() {
+			return WriteFileResult{}, fmt.Errorf("path is a directory, not a file: %s", cleanedPath)
+		}
+		isBinary, probeErr := detectBinaryFile(resolved, info.Size())
+		if probeErr != nil {
+			return WriteFileResult{}, probeErr
+		}
+		if isBinary {
+			return WriteFileResult{}, fmt.Errorf("binary files cannot be overwritten through the editor: %s", cleanedPath)
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return WriteFileResult{}, fmt.Errorf("failed to stat path: %w", statErr)
 	}
 
@@ -603,19 +875,31 @@ func (s *Service) WriteFile(sessionName, filePath, content string) (WriteFileRes
 		return WriteFileResult{}, fmt.Errorf("failed to create parent directory: %w", mkdirErr)
 	}
 
+	// Suppress watcher events for this path during mutation. On failure,
+	// unsuppress immediately; on success, rely on the time-windowed
+	// ignoreWindow (750ms) automatic expiry so the invalidation event
+	// that follows the rename is captured.
 	s.suppressWatcherPaths(sessionName, cleanedPath)
 	if writeErr := retryFileOperation(func() error {
-		return os.WriteFile(resolved, []byte(content), 0o644)
+		return atomicWriteFile(resolved, []byte(content), 0o644)
 	}, "write file"); writeErr != nil {
+		s.unsuppressWatcherPaths(sessionName, cleanedPath)
 		return WriteFileResult{}, fmt.Errorf("failed to write file: %w", writeErr)
 	}
 
+	s.invalidateDirCache(sessionName, cleanedPath)
+
 	info, statErr := os.Stat(resolved)
 	if statErr != nil {
-		return WriteFileResult{}, fmt.Errorf("failed to stat written file: %w", statErr)
+		// Write succeeded but stat failed (e.g. timing issue with antivirus).
+		// Return success with the input length as size.
+		slog.Warn("[DEVPANEL] stat after successful write failed, using input length",
+			"path", resolved, "error", statErr)
+		return WriteFileResult{
+			Path: normalizePanelPath(cleanedPath),
+			Size: int64(len(content)),
+		}, nil
 	}
-
-	s.invalidateDirCache(sessionName, cleanedPath)
 
 	return WriteFileResult{
 		Path: normalizePanelPath(cleanedPath),
@@ -640,12 +924,12 @@ func (s *Service) CreateFile(sessionName, filePath string) (WriteFileResult, err
 		return WriteFileResult{}, err
 	}
 
-	resolved, resolveErr := s.ResolveAndValidateNewPath(rootDir, cleanedPath)
+	resolved, resolveErr := s.resolveNewMutationPath(rootDir, cleanedPath)
 	if resolveErr != nil {
 		return WriteFileResult{}, resolveErr
 	}
 
-	if _, statErr := os.Stat(resolved); statErr == nil {
+	if _, statErr := os.Lstat(resolved); statErr == nil {
 		return WriteFileResult{}, fmt.Errorf("path already exists: %s", cleanedPath)
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return WriteFileResult{}, fmt.Errorf("failed to stat path: %w", statErr)
@@ -657,8 +941,9 @@ func (s *Service) CreateFile(sessionName, filePath string) (WriteFileResult, err
 
 	s.suppressWatcherPaths(sessionName, cleanedPath)
 	if writeErr := retryFileOperation(func() error {
-		return os.WriteFile(resolved, nil, 0o644)
+		return atomicWriteFile(resolved, nil, 0o644)
 	}, "create file"); writeErr != nil {
+		s.unsuppressWatcherPaths(sessionName, cleanedPath)
 		return WriteFileResult{}, fmt.Errorf("failed to create file: %w", writeErr)
 	}
 
@@ -687,19 +972,22 @@ func (s *Service) CreateDirectory(sessionName, dirPath string) error {
 		return err
 	}
 
-	resolved, resolveErr := s.ResolveAndValidateNewPath(rootDir, cleanedPath)
+	resolved, resolveErr := s.resolveNewMutationPath(rootDir, cleanedPath)
 	if resolveErr != nil {
 		return resolveErr
 	}
 
-	if _, statErr := os.Stat(resolved); statErr == nil {
+	if _, statErr := os.Lstat(resolved); statErr == nil {
 		return fmt.Errorf("path already exists: %s", cleanedPath)
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("failed to stat path: %w", statErr)
 	}
 
 	s.suppressWatcherPaths(sessionName, cleanedPath)
-	if mkdirErr := os.MkdirAll(resolved, 0o755); mkdirErr != nil {
+	if mkdirErr := retryFileOperation(func() error {
+		return os.MkdirAll(resolved, 0o755)
+	}, "create directory"); mkdirErr != nil {
+		s.unsuppressWatcherPaths(sessionName, cleanedPath)
 		return fmt.Errorf("failed to create directory: %w", mkdirErr)
 	}
 
@@ -732,25 +1020,25 @@ func (s *Service) RenameFile(sessionName, oldPath, newPath string) error {
 		return err
 	}
 
-	resolvedOldPath, resolveOldErr := s.ResolveAndValidatePath(rootDir, cleanedOldPath)
-	if resolveOldErr != nil {
-		return resolveOldErr
+	selectedOldPath, _, selectedOldErr := s.resolveExistingMutationPath(rootDir, cleanedOldPath)
+	if selectedOldErr != nil {
+		return selectedOldErr
 	}
-	resolvedNewPath, resolveNewErr := s.ResolveAndValidateNewPath(rootDir, cleanedNewPath)
-	if resolveNewErr != nil {
-		return resolveNewErr
+	selectedNewPath, selectedNewErr := s.resolveNewMutationPath(rootDir, cleanedNewPath)
+	if selectedNewErr != nil {
+		return selectedNewErr
 	}
 
-	if _, statErr := os.Stat(resolvedOldPath); statErr != nil {
+	if _, statErr := os.Lstat(selectedOldPath); statErr != nil {
 		return fmt.Errorf("failed to stat source path: %w", statErr)
 	}
-	if _, statErr := os.Stat(resolvedNewPath); statErr == nil {
+	if _, statErr := os.Lstat(selectedNewPath); statErr == nil {
 		return fmt.Errorf("destination already exists: %s", cleanedNewPath)
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("failed to stat destination path: %w", statErr)
 	}
 
-	destinationDir := filepath.Dir(resolvedNewPath)
+	destinationDir := filepath.Dir(selectedNewPath)
 	info, statErr := os.Stat(destinationDir)
 	if statErr != nil {
 		return fmt.Errorf("destination directory does not exist: %w", statErr)
@@ -761,8 +1049,9 @@ func (s *Service) RenameFile(sessionName, oldPath, newPath string) error {
 
 	s.suppressWatcherPaths(sessionName, cleanedOldPath, cleanedNewPath)
 	if renameErr := retryFileOperation(func() error {
-		return os.Rename(resolvedOldPath, resolvedNewPath)
+		return os.Rename(selectedOldPath, selectedNewPath)
 	}, "rename file"); renameErr != nil {
+		s.unsuppressWatcherPaths(sessionName, cleanedOldPath, cleanedNewPath)
 		return fmt.Errorf("failed to rename path: %w", renameErr)
 	}
 
@@ -788,29 +1077,29 @@ func (s *Service) DeleteFile(sessionName, filePath string) error {
 		return err
 	}
 
-	resolved, resolveErr := s.ResolveAndValidatePath(rootDir, cleanedPath)
-	if resolveErr != nil {
-		return resolveErr
-	}
-
-	info, statErr := os.Stat(resolved)
-	if statErr != nil {
-		return fmt.Errorf("failed to stat path: %w", statErr)
+	selectedPath, info, selectedPathErr := s.resolveExistingMutationPath(rootDir, cleanedPath)
+	if selectedPathErr != nil {
+		return selectedPathErr
 	}
 
 	s.suppressWatcherPaths(sessionName, cleanedPath)
 	var removeErr error
-	if info.IsDir() {
-		slog.Info("devpanel delete directory", "path", resolved)
+	if info.Mode()&os.ModeSymlink != 0 {
 		removeErr = retryFileOperation(func() error {
-			return os.RemoveAll(resolved)
+			return os.Remove(selectedPath)
+		}, "delete symlink")
+	} else if info.IsDir() {
+		slog.Debug("[DEBUG-DEVPANEL] delete directory", "path", selectedPath)
+		removeErr = retryFileOperation(func() error {
+			return os.RemoveAll(selectedPath)
 		}, "delete directory")
 	} else {
 		removeErr = retryFileOperation(func() error {
-			return os.Remove(resolved)
+			return os.Remove(selectedPath)
 		}, "delete file")
 	}
 	if removeErr != nil {
+		s.unsuppressWatcherPaths(sessionName, cleanedPath)
 		return fmt.Errorf("failed to delete path: %w", removeErr)
 	}
 

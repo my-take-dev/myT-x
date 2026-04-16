@@ -17,11 +17,14 @@ import (
 	"myT-x/internal/mcp"
 	"myT-x/internal/mcpapi"
 	"myT-x/internal/orchestrator"
+	"myT-x/internal/promptpresets"
 	"myT-x/internal/scheduler"
 	"myT-x/internal/session"
+	"myT-x/internal/singletaskrunner"
 	"myT-x/internal/snapshot"
 	"myT-x/internal/taskscheduler"
 	"myT-x/internal/tmux"
+	"myT-x/internal/usagedashboard"
 	"myT-x/internal/workerutil"
 	"myT-x/internal/worktree"
 )
@@ -93,20 +96,10 @@ func buildSessionServiceDeps(app *App) session.Deps {
 		// because app.emitBackendEvent has no nil-guard concern — it is a method on
 		// *App and is always available. Other fields use closure wrappers for nil
 		// guards or parameter adaptation.
-		EmitBackendEvent: app.emitBackendEvent,
-		McpCleanupSession: func(sessionName string) {
-			if app.mcpManager != nil {
-				app.mcpManager.CleanupSession(sessionName)
-			} else {
-				slog.Debug("[DEBUG-SESSION] McpCleanupSession skipped: mcpManager is nil",
-					"session", sessionName)
-			}
-		},
-		CleanupStaleSnapshotState: func(activePaneIDs map[string]struct{}) {
-			app.snapshotService.CleanupDetachedPaneStates(
-				app.snapshotService.DetachStaleOutputBuffers(activePaneIDs),
-			)
-		},
+		EmitBackendEvent:              app.emitBackendEvent,
+		OnSessionDestroyed:            app.finalizeSessionDestroyed,
+		OnSessionRenamed:              app.handleSessionRenamed,
+		OnSessionRenameRollbackFailed: app.reconcileSessionRenameRollbackFailure,
 	}
 }
 
@@ -165,6 +158,13 @@ func buildOrchestratorServiceDeps(app *App) orchestrator.Deps {
 	}
 }
 
+func buildPromptPresetsServiceDeps(app *App) promptpresets.Deps {
+	return promptpresets.Deps{
+		ConfigPath:          func() string { return app.configState.ConfigPath() },
+		FindSessionSnapshot: app.sessionService.FindSessionSnapshotByName,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // DevPanel
 // ---------------------------------------------------------------------------
@@ -176,6 +176,19 @@ func buildDevPanelServiceDeps(app *App) devpanel.Deps {
 		ResolveSessionDir: app.sessionService.ResolveSessionDir,
 		IsPathWithinBase:  worktree.IsPathWithinBase,
 		Emitter:           newAppRuntimeEventEmitterAdapter(app),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// UsageDashboard (Claude Code + Codex aggregation)
+// ---------------------------------------------------------------------------
+
+// buildUsageDashboardServiceDeps constructs the dependency set for the
+// usagedashboard service. The service aggregates read-only usage statistics
+// scoped to the current session's effective work directory.
+func buildUsageDashboardServiceDeps(app *App) usagedashboard.Deps {
+	return usagedashboard.Deps{
+		ResolveSessionWorkDir: app.sessionService.ResolveSessionWorkDir,
 	}
 }
 
@@ -202,7 +215,8 @@ func buildWorktreeServiceDeps(app *App) worktree.Deps {
 		RuntimeContext: func() context.Context {
 			return app.runtimeContext()
 		},
-		FindAvailableSessionName: app.sessionService.FindAvailableSessionName,
+		FindAvailableSessionName:    app.sessionService.FindAvailableSessionName,
+		ReserveAvailableSessionName: app.sessionService.ReserveAvailableSessionName,
 		CreateSession: func(sessionDir, sessionName string, enableAgentTeam, useClaudeEnv, usePaneEnv bool) (string, error) {
 			return app.sessionService.CreateSessionForDirectory(sessionDir, sessionName, session.CreateSessionOptions{
 				EnableAgentTeam: enableAgentTeam,
@@ -226,8 +240,14 @@ func buildWorktreeServiceDeps(app *App) worktree.Deps {
 		CleanupOrphanedLocalBranch: func(sessionName string, repo *gitpkg.Repository, branchName string) {
 			app.sessionService.CleanupOrphanedLocalWorktreeBranch(sessionName, repo, branchName)
 		},
-		SetupWGAdd:             func(delta int) { app.setupWG.Add(delta) },
-		SetupWGDone:            func() { app.setupWG.Done() },
+		RegisterSetupWorker: func(cancel context.CancelFunc) (func(), bool) {
+			return app.registerSetupWorker(cancel)
+		},
+		SetupWGAdd:  func(delta int) { app.setupWG.Add(delta) },
+		SetupWGDone: func() { app.setupWG.Done() },
+		TrackSetupCancel: func(cancel context.CancelFunc) func() {
+			return app.trackSetupCancel(cancel)
+		},
 		RecoverBackgroundPanic: recoverBackgroundPanic,
 	}
 }
@@ -393,10 +413,7 @@ func buildTaskSchedulerDepsFactory(app *App) taskscheduler.DepsFactory {
 				if err != nil {
 					return err
 				}
-				if !isPaneAlive(sessions, paneID) {
-					return fmt.Errorf("pane %s does not exist", paneID)
-				}
-				return nil
+				return requirePaneInSession(sessions, sessionName, paneID)
 			},
 			SendMessagePaste: func(paneID, message string) error {
 				router, err := app.requireRouter()
@@ -405,8 +422,8 @@ func buildTaskSchedulerDepsFactory(app *App) taskscheduler.DepsFactory {
 				}
 				return app.sendKeys.sendKeysLiteralPasteWithEnter(router, paneID, message)
 			},
-			ResolveOrchestratorDBPath: func() (string, error) {
-				snap, err := requireSessionSnapshot(app, sessionName)
+			ResolveOrchestratorDBPath: func(boundSessionName string) (string, error) {
+				snap, err := requireSessionSnapshot(app, boundSessionName)
 				if err != nil {
 					return "", err
 				}
@@ -455,6 +472,63 @@ func buildTaskSchedulerDepsFactory(app *App) taskscheduler.DepsFactory {
 				return snap.IsAgentTeam
 			},
 			SessionName: sessionName,
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Single Task Runner
+// ---------------------------------------------------------------------------
+
+// buildSingleTaskRunnerDepsFactory returns a factory that creates a Deps
+// bound to a specific session name. Each session gets its own Deps (and thus
+// its own Service via ServiceManager.GetOrCreate) with closures that
+// reference the fixed sessionName.
+func buildSingleTaskRunnerDepsFactory(app *App) singletaskrunner.DepsFactory {
+	return func(sessionName string) singletaskrunner.Deps {
+		return singletaskrunner.Deps{
+			Emitter:        newAppRuntimeEventEmitterAdapter(app),
+			IsShuttingDown: func() bool { return app.shuttingDown.Load() },
+			CheckPaneAlive: func(paneID string) error {
+				sessions, err := app.requireSessions()
+				if err != nil {
+					return err
+				}
+				return requirePaneInSession(sessions, sessionName, paneID)
+			},
+			SendMessagePaste: func(paneID, message string) error {
+				router, err := app.requireRouter()
+				if err != nil {
+					return err
+				}
+				return app.sendKeys.sendKeysLiteralPasteWithEnter(router, paneID, message)
+			},
+			SendClearCommand: func(paneID, command string) error {
+				router, err := app.requireRouter()
+				if err != nil {
+					return err
+				}
+				return app.sendKeys.sendKeysLiteralWithEnter(router, paneID, command)
+			},
+			NewContext: func() (context.Context, context.CancelFunc) {
+				parentCtx := app.runtimeContext()
+				if parentCtx == nil {
+					slog.Warn("[WARN-SINGLE-TASK-RUNNER] NewContext: runtime context nil, returning pre-cancelled context")
+					// Return a pre-cancelled context so Start()'s ctx.Err()
+					// check returns a meaningful error. The cancel func is
+					// still returned because the caller always calls cancel
+					// on error (CancelFunc is idempotent).
+					ctx, cancel := context.WithCancel(context.Background())
+					cancel()
+					return ctx, cancel
+				}
+				return context.WithCancel(parentCtx)
+			},
+			LaunchWorker: func(name string, ctx context.Context, fn func(ctx context.Context), opts workerutil.RecoveryOptions) {
+				workerutil.RunWithPanicRecovery(ctx, name, &app.bgWG, fn, opts)
+			},
+			BaseRecoveryOptions: app.defaultRecoveryOptions,
+			SessionName:         sessionName,
 		}
 	}
 }

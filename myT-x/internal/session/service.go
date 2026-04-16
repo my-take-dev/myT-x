@@ -71,13 +71,22 @@ type Deps struct {
 
 	// --- Cleanup (required) ---
 
-	// McpCleanupSession releases MCP instance state for a destroyed or renamed
-	// session. The closure must handle nil-guard for the MCP manager internally.
-	McpCleanupSession func(sessionName string)
+	// OnSessionDestroyed runs destroy finalization after the tmux session has
+	// been removed. The callback must be idempotent because some trigger paths
+	// (for example router callbacks plus Wails APIs) may invoke it more than once.
+	OnSessionDestroyed func(sessionName string)
 
-	// CleanupStaleSnapshotState removes stale pane output buffers and state
-	// after session destruction. Called with the current set of active pane IDs.
-	CleanupStaleSnapshotState func(activePaneIDs map[string]struct{})
+	// OnSessionRenamed runs rename follow-up work after the tmux session map and
+	// active session name are updated, but before the rename event is emitted.
+	// Returning an error aborts the rename and triggers a best-effort rollback to
+	// the original tmux session name.
+	// Optional: nil means no extra follow-up work is required.
+	OnSessionRenamed func(oldName, newName string) error
+
+	// OnSessionRenameRollbackFailed reconciles session-scoped participants when
+	// a failed rename cannot be rolled back to the original tmux session name.
+	// Optional: nil means no extra reconciliation is required.
+	OnSessionRenameRollbackFailed func(oldName, newName string) error
 
 	// --- IO operations (optional, defaults to stdlib) ---
 
@@ -93,12 +102,14 @@ type Deps struct {
 // Service encapsulates session lifecycle management: create, rename, kill,
 // active session tracking, session lookup, and worktree cleanup.
 //
-// Thread-safety: activeMu guards activeSess. All other session state lives in
-// SessionManager (internal lock). No additional Service-level lock is needed.
+// Thread-safety: activeMu guards activeSess. nameMu guards in-flight session
+// name reservations. All other session state lives in SessionManager.
 type Service struct {
-	deps       Deps
-	activeMu   sync.RWMutex
-	activeSess string
+	deps                 Deps
+	activeMu             sync.RWMutex
+	activeSess           string
+	nameMu               sync.Mutex
+	reservedSessionNames map[string]struct{}
 }
 
 // NewService creates a session service with the given dependencies.
@@ -123,11 +134,8 @@ func NewService(deps Deps) *Service {
 	if deps.EmitBackendEvent == nil {
 		missing = append(missing, "EmitBackendEvent")
 	}
-	if deps.McpCleanupSession == nil {
-		missing = append(missing, "McpCleanupSession")
-	}
-	if deps.CleanupStaleSnapshotState == nil {
-		missing = append(missing, "CleanupStaleSnapshotState")
+	if deps.OnSessionDestroyed == nil {
+		missing = append(missing, "OnSessionDestroyed")
 	}
 	if len(missing) > 0 {
 		panic("session.NewService: nil deps: " + strings.Join(missing, ", "))
@@ -166,7 +174,8 @@ func (s *Service) requireSessionsAndRouter() (*tmux.SessionManager, *tmux.Comman
 // ===========================================================================
 
 // SetActiveSessionName is a low-level API that normalizes and stores the active
-// session name without emitting events. Prefer SetActive for external callers.
+// session name without emitting events. It MUST NOT emit frontend events.
+// Prefer SetActive for external callers.
 //
 // Internal use only: called by SetActive, KillSession (to clear the name),
 // and QuickStartSession (conflict path with policy-aware emission).
@@ -310,7 +319,8 @@ func (s *Service) CreateSession(rootPath, sessionName string, opts CreateSession
 	if sessionName == "" {
 		return tmux.SessionSnapshot{}, errors.New("session name is required")
 	}
-	sessionName = s.FindAvailableSessionName(sessionName)
+	sessionName, releaseSessionName := s.ReserveAvailableSessionName(sessionName)
+	defer releaseSessionName()
 	createdName := ""
 	sessionMayExist := false
 	defer func() {
@@ -357,7 +367,7 @@ func (s *Service) CreateSession(rootPath, sessionName string, opts CreateSession
 }
 
 // RenameSession renames an existing session.
-func (s *Service) RenameSession(oldName, newName string) error {
+func (s *Service) RenameSession(oldName, newName string) (retErr error) {
 	if s.deps.IsShuttingDown() {
 		return errors.New("cannot rename session: application is shutting down")
 	}
@@ -377,9 +387,59 @@ func (s *Service) RenameSession(oldName, newName string) error {
 	if err := sessions.RenameSession(oldName, newName); err != nil {
 		return err
 	}
-	s.deps.McpCleanupSession(oldName)
-	if s.GetActiveSessionName() == oldName {
+
+	activeSessionRenamed := s.GetActiveSessionName() == oldName
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if rollbackErr := sessions.RenameSession(newName, oldName); rollbackErr != nil {
+			slog.Error("[SESSION] session rename rollback failed",
+				"oldSession", oldName,
+				"newSession", newName,
+				"error", rollbackErr,
+			)
+			if activeSessionRenamed {
+				switch {
+				case sessions.HasSession(newName):
+					s.SetActiveSessionName(newName)
+				case sessions.HasSession(oldName):
+					s.SetActiveSessionName(oldName)
+				default:
+					s.SetActiveSessionName("")
+				}
+			}
+			var reconcileErr error
+			if s.deps.OnSessionRenameRollbackFailed != nil {
+				reconcileErr = s.deps.OnSessionRenameRollbackFailed(oldName, newName)
+				if reconcileErr != nil {
+					slog.Warn("[SESSION] rollback failure reconciliation failed",
+						"oldSession", oldName,
+						"newSession", newName,
+						"error", reconcileErr,
+					)
+				}
+			}
+			s.deps.RequestSnapshot(true)
+			retErr = errors.Join(retErr, fmt.Errorf("session rename rollback also failed: %w", rollbackErr), reconcileErr)
+			return
+		}
+		if activeSessionRenamed {
+			s.SetActiveSessionName(oldName)
+		}
+	}()
+	if activeSessionRenamed {
 		s.SetActiveSessionName(newName)
+	}
+	if s.deps.OnSessionRenamed != nil {
+		if err := s.deps.OnSessionRenamed(oldName, newName); err != nil {
+			slog.Warn("[DEBUG-SESSION] session rename follow-up failed; rolling back rename",
+				"oldSession", oldName,
+				"newSession", newName,
+				"error", err,
+			)
+			return fmt.Errorf("rename session follow-up failed: %w", err)
+		}
 	}
 	// NOTE: RenameSession does not call RequestSnapshot(true) directly.
 	// Instead, the snapshot is triggered automatically by EmitBackendEvent
@@ -433,15 +493,7 @@ func (s *Service) KillSession(sessionName string, deleteWorktree bool) error {
 		return errors.New(strings.TrimSpace(resp.Stderr))
 	}
 
-	// Stop pane buffers that no longer exist (lightweight pane ID lookup).
-	existingPanes := sessions.ActivePaneIDs()
-	s.deps.CleanupStaleSnapshotState(existingPanes)
-
-	if s.GetActiveSessionName() == sessionName {
-		s.SetActiveSessionName("")
-	}
-	// Release MCP instance state for the destroyed session.
-	s.deps.McpCleanupSession(sessionName)
+	s.deps.OnSessionDestroyed(sessionName)
 	s.deps.RequestSnapshot(true)
 
 	// Worktree cleanup only when the user explicitly chose to delete.
@@ -621,23 +673,65 @@ const MaxSessionNameSuffix = 100
 // FindAvailableSessionName returns name if no session with that name exists.
 // Otherwise it appends -2, -3, ... until a free name is found.
 func (s *Service) FindAvailableSessionName(name string) string {
+	s.nameMu.Lock()
+	defer s.nameMu.Unlock()
+	return s.findAvailableSessionNameLocked(name)
+}
+
+// ReserveAvailableSessionName reserves a unique session name until the caller
+// releases it. Reserved names are excluded from subsequent availability checks
+// so concurrent create flows do not pick the same candidate.
+func (s *Service) ReserveAvailableSessionName(name string) (string, func()) {
+	s.nameMu.Lock()
+	if s.reservedSessionNames == nil {
+		s.reservedSessionNames = make(map[string]struct{})
+	}
+	candidate := s.findAvailableSessionNameLocked(name)
+	s.reservedSessionNames[candidate] = struct{}{}
+	s.nameMu.Unlock()
+
+	var once sync.Once
+	return candidate, func() {
+		once.Do(func() {
+			s.nameMu.Lock()
+			delete(s.reservedSessionNames, candidate)
+			s.nameMu.Unlock()
+		})
+	}
+}
+
+func (s *Service) findAvailableSessionNameLocked(name string) string {
 	sessions, err := s.deps.RequireSessions()
 	if err != nil {
 		slog.Debug("[DEBUG-SESSION] FindAvailableSessionName fallback to original name",
 			"name", name, "error", err)
+		if _, reserved := s.reservedSessionNames[name]; !reserved {
+			return name
+		}
+		return s.findAvailableSessionNameCandidateLocked(nil, name)
+	}
+	if !s.findAvailableSessionNameTakenLocked(sessions, name) {
 		return name
 	}
-	if !sessions.HasSession(name) {
-		return name
-	}
+	return s.findAvailableSessionNameCandidateLocked(sessions, name)
+}
+
+func (s *Service) findAvailableSessionNameCandidateLocked(sessions *tmux.SessionManager, name string) string {
 	for i := 2; i <= MaxSessionNameSuffix; i++ {
 		candidate := fmt.Sprintf("%s-%d", name, i)
-		if !sessions.HasSession(candidate) {
+		if !s.findAvailableSessionNameTakenLocked(sessions, candidate) {
 			return candidate
 		}
 	}
 	// Fallback: use timestamp suffix.
 	return fmt.Sprintf("%s-%d", name, time.Now().UnixMilli())
+}
+
+func (s *Service) findAvailableSessionNameTakenLocked(sessions *tmux.SessionManager, candidate string) bool {
+	if _, reserved := s.reservedSessionNames[candidate]; reserved {
+		return true
+	}
+	return sessions != nil && sessions.HasSession(candidate)
 }
 
 // FindSessionByRootPath returns the session name that uses the given
@@ -887,24 +981,19 @@ func (s *Service) CleanupOrphanedLocalWorktreeBranch(sessionName string, repo *g
 // IsWorktreeCleanForRemoval returns true if the worktree has no uncommitted changes.
 // On any error (open / check), it returns false to prevent data loss.
 func (s *Service) IsWorktreeCleanForRemoval(wtPath string) bool {
-	wtRepo, err := gitpkg.Open(wtPath)
-	if err != nil {
-		slog.Warn("[WARN-GIT] failed to open worktree for change check, skipping cleanup",
-			"path", wtPath, "error", err)
-		return false
-	}
-	hasChanges, chkErr := wtRepo.HasUncommittedChanges()
-	if chkErr != nil {
-		slog.Warn("[WARN-GIT] failed to check uncommitted changes, skipping cleanup",
-			"path", wtPath, "error", chkErr)
-		return false
-	}
-	if hasChanges {
+	err := gitpkg.CheckWorktreeCleanForRemoval(wtPath)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, gitpkg.ErrWorktreeHasUncommittedChanges):
 		slog.Warn("[WARN-GIT] worktree has uncommitted changes, skipping cleanup",
 			"path", wtPath)
 		return false
+	default:
+		slog.Warn("[WARN-GIT] worktree cleanup safety check failed, skipping cleanup",
+			"path", wtPath, "error", err)
+		return false
 	}
-	return true
 }
 
 // EmitWorktreeCleanupFailure notifies the frontend that worktree cleanup failed.

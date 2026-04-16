@@ -9,10 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"myT-x/internal/config"
 	"myT-x/internal/install"
 	"myT-x/internal/ipc"
+	"myT-x/internal/mcp"
 	"myT-x/internal/panestate"
+	"myT-x/internal/singletaskrunner"
+	"myT-x/internal/taskscheduler"
 	"myT-x/internal/tmux"
+	"myT-x/internal/workerutil"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -67,6 +72,271 @@ func newLifecycleTestApp() *App {
 		PipeName: ipc.DefaultPipeName(),
 	})
 	return app
+}
+
+func newLifecycleTaskSchedulerManager() *taskscheduler.ServiceManager {
+	return taskscheduler.NewServiceManager(func(sessionName string) taskscheduler.Deps {
+		return taskscheduler.Deps{
+			CheckPaneAlive:   func(string) error { return nil },
+			SendMessagePaste: func(string, string) error { return nil },
+			// Tests in this file do not depend on session-scoped orchestrator DB paths.
+			ResolveOrchestratorDBPath: func(_ string) (string, error) { return "", nil },
+			NewContext: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			LaunchWorker:        func(string, context.Context, func(context.Context), workerutil.RecoveryOptions) {},
+			BaseRecoveryOptions: func() workerutil.RecoveryOptions { return workerutil.RecoveryOptions{} },
+			SendClearCommand:    func(string, string) error { return nil },
+			GetSessionPaneIDs:   func(string) ([]string, error) { return []string{"%0"}, nil },
+			IsPaneQuiet:         func(string) bool { return true },
+			IsAgentTeamSession:  func(string) bool { return false },
+			SessionName:         sessionName,
+		}
+	})
+}
+
+func newLifecycleSingleTaskRunnerManager() *singletaskrunner.ServiceManager {
+	return singletaskrunner.NewServiceManager(func(sessionName string) singletaskrunner.Deps {
+		return singletaskrunner.Deps{
+			CheckPaneAlive:   func(string) error { return nil },
+			SendMessagePaste: func(string, string) error { return nil },
+			SendClearCommand: func(string, string) error { return nil },
+			NewContext: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			LaunchWorker:        func(string, context.Context, func(context.Context), workerutil.RecoveryOptions) {},
+			BaseRecoveryOptions: func() workerutil.RecoveryOptions { return workerutil.RecoveryOptions{} },
+			SessionName:         sessionName,
+		}
+	})
+}
+
+func TestNewRouterOptionsOnSessionRenamedMigratesTaskSchedulerAndSingleTaskRunner(t *testing.T) {
+	app := NewApp()
+	stubRuntimeEventsEmit(t)
+	app.setRuntimeContext(context.Background())
+	app.taskSchedulerManager = newLifecycleTaskSchedulerManager()
+	app.singleTaskRunnerManager = newLifecycleSingleTaskRunnerManager()
+	reg := mcp.NewRegistry()
+	if err := reg.Register(mcp.MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register(memory) error = %v", err)
+	}
+	app.mcpManager = mcp.NewManager(mcp.ManagerConfig{
+		Registry: reg,
+		EmitFn:   func(string, any) {},
+		ResolveWorkDir: func(string) (string, error) {
+			return "", errors.New("resolve workdir failed")
+		},
+	})
+
+	if err := app.taskSchedulerManager.GetOrCreate("old-session").AddItem("Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("taskScheduler AddItem failed: %v", err)
+	}
+	if err := app.singleTaskRunnerManager.GetOrCreate("old-session").AddItem("Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("singleTaskRunner AddItem failed: %v", err)
+	}
+	if err := app.mcpManager.SetEnabled("old-session", "memory", true); err != nil {
+		t.Fatalf("mcp SetEnabled(old-session) error = %v", err)
+	}
+	app.sessionService.SetActiveSessionName("old-session")
+	waitForCondition(t, time.Second, func() bool {
+		detail, err := app.mcpManager.GetDetail("old-session", "memory")
+		return err == nil && detail.Status == mcp.StatusError
+	}, "mcp manager should enter error state before rename")
+
+	opts := app.newRouterOptions(config.DefaultConfig())
+	if opts.OnSessionRenamed == nil {
+		t.Fatal("OnSessionRenamed callback should be configured")
+	}
+
+	if err := opts.OnSessionRenamed("old-session", "new-session"); err != nil {
+		t.Fatalf("OnSessionRenamed() error = %v", err)
+	}
+	if got := app.sessionService.GetActiveSessionName(); got != "new-session" {
+		t.Fatalf("GetActiveSessionName() = %q, want %q", got, "new-session")
+	}
+
+	if got := app.taskSchedulerManager.GetStatus("new-session"); got.SessionName != "new-session" || len(got.Items) != 1 {
+		t.Fatalf("taskScheduler GetStatus(new-session) = %+v, want migrated queue state", got)
+	}
+	if got := app.taskSchedulerManager.GetStatus("old-session"); got.SessionName != "old-session" || len(got.Items) != 0 {
+		t.Fatalf("taskScheduler GetStatus(old-session) = %+v, want empty queue state after rename", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("new-session"); got.SessionName != "new-session" || len(got.Items) != 1 {
+		t.Fatalf("singleTaskRunner GetStatus(new-session) = %+v, want migrated queue state after rename", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("old-session"); got.SessionName != "old-session" || len(got.Items) != 0 {
+		t.Fatalf("singleTaskRunner GetStatus(old-session) = %+v, want old queue state removed after rename", got)
+	}
+	detail, err := app.mcpManager.GetDetail("new-session", "memory")
+	if err != nil {
+		t.Fatalf("mcp GetDetail(new-session) error = %v", err)
+	}
+	if !detail.Enabled || detail.Status != mcp.StatusError {
+		t.Fatalf("mcp GetDetail(new-session) = %+v, want enabled error state migrated", detail)
+	}
+	oldDetail, err := app.mcpManager.GetDetail("old-session", "memory")
+	if err != nil {
+		t.Fatalf("mcp GetDetail(old-session) error = %v", err)
+	}
+	if oldDetail.Enabled || oldDetail.Status != mcp.StatusStopped {
+		t.Fatalf("mcp GetDetail(old-session) = %+v, want default stopped snapshot after rename", oldDetail)
+	}
+}
+
+func TestFinalizeSessionDestroyedSkipsStalePaneCleanupWhenSnapshotServiceNil(t *testing.T) {
+	app := &App{}
+	app.sessions = tmux.NewSessionManager()
+	t.Cleanup(app.sessions.Close)
+	app.sessionService = newSessionServiceForTest(app)
+
+	if _, _, err := app.sessions.CreateSession("session-a", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession(session-a): %v", err)
+	}
+	app.sessionService.SetActiveSessionName("session-a")
+
+	app.finalizeSessionDestroyed("session-a")
+
+	if got := app.sessionService.GetActiveSessionName(); got != "" {
+		t.Fatalf("GetActiveSessionName() = %q, want empty after destroy", got)
+	}
+}
+
+func TestNewRouterOptionsOnSessionDestroyedClearsActiveSession(t *testing.T) {
+	app := NewApp()
+	stubRuntimeEventsEmit(t)
+	app.setRuntimeContext(context.Background())
+	app.taskSchedulerManager = newLifecycleTaskSchedulerManager()
+	app.singleTaskRunnerManager = newLifecycleSingleTaskRunnerManager()
+	app.sessionService.SetActiveSessionName("old-session")
+
+	if err := app.taskSchedulerManager.GetOrCreate("old-session").AddItem("Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("taskScheduler AddItem failed: %v", err)
+	}
+	if err := app.singleTaskRunnerManager.GetOrCreate("old-session").AddItem("Task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("singleTaskRunner AddItem failed: %v", err)
+	}
+
+	opts := app.newRouterOptions(config.DefaultConfig())
+	if opts.OnSessionDestroyed == nil {
+		t.Fatal("OnSessionDestroyed callback should be configured")
+	}
+
+	opts.OnSessionDestroyed("old-session")
+
+	if got := app.sessionService.GetActiveSessionName(); got != "" {
+		t.Fatalf("GetActiveSessionName() = %q, want empty after destroy", got)
+	}
+	if got := app.taskSchedulerManager.GetStatus("old-session"); len(got.Items) != 0 {
+		t.Fatalf("taskScheduler GetStatus(old-session) = %+v, want empty queue state after destroy", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("old-session"); len(got.Items) != 0 {
+		t.Fatalf("singleTaskRunner GetStatus(old-session) = %+v, want empty queue state after destroy", got)
+	}
+}
+
+func TestNewRouterOptionsOnSessionRenamedIgnoresInvalidNames(t *testing.T) {
+	tests := []struct {
+		name    string
+		oldName string
+		newName string
+	}{
+		{name: "blank old name", oldName: "", newName: "new-session"},
+		{name: "blank new name", oldName: "old-session", newName: ""},
+		{name: "same name", oldName: "old-session", newName: "old-session"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := NewApp()
+			stubRuntimeEventsEmit(t)
+			app.setRuntimeContext(context.Background())
+			app.taskSchedulerManager = newLifecycleTaskSchedulerManager()
+			app.singleTaskRunnerManager = newLifecycleSingleTaskRunnerManager()
+			app.sessionService.SetActiveSessionName("old-session")
+
+			if err := app.taskSchedulerManager.GetOrCreate("old-session").AddItem("Task", "message", "%0", false, ""); err != nil {
+				t.Fatalf("taskScheduler AddItem failed: %v", err)
+			}
+			if err := app.singleTaskRunnerManager.GetOrCreate("old-session").AddItem("Task", "message", "%0", false, ""); err != nil {
+				t.Fatalf("singleTaskRunner AddItem failed: %v", err)
+			}
+
+			opts := app.newRouterOptions(config.DefaultConfig())
+			if opts.OnSessionRenamed == nil {
+				t.Fatal("OnSessionRenamed callback should be configured")
+			}
+
+			if err := opts.OnSessionRenamed(tt.oldName, tt.newName); err != nil {
+				t.Fatalf("OnSessionRenamed() error = %v", err)
+			}
+			if got := app.sessionService.GetActiveSessionName(); got != "old-session" {
+				t.Fatalf("GetActiveSessionName() = %q, want %q", got, "old-session")
+			}
+			if got := app.taskSchedulerManager.GetStatus("old-session"); len(got.Items) != 1 {
+				t.Fatalf("taskScheduler GetStatus(old-session) = %+v, want preserved queue state", got)
+			}
+			if got := app.singleTaskRunnerManager.GetStatus("old-session"); len(got.Items) != 1 {
+				t.Fatalf("singleTaskRunner GetStatus(old-session) = %+v, want preserved queue state", got)
+			}
+		})
+	}
+}
+
+func TestHandleRouterSessionRenameRollbackFailed(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+
+	app := NewApp()
+	app.setRuntimeContext(context.Background())
+	app.sessions = tmux.NewSessionManager()
+	t.Cleanup(app.sessions.Close)
+	app.taskSchedulerManager = newLifecycleTaskSchedulerManager()
+	app.singleTaskRunnerManager = newLifecycleSingleTaskRunnerManager()
+	if _, _, err := app.sessions.CreateSession("new-session", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession(new-session) error = %v", err)
+	}
+	if err := app.taskSchedulerManager.GetOrCreate("old-session").AddItem("task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("taskScheduler AddItem failed: %v", err)
+	}
+	if err := app.singleTaskRunnerManager.GetOrCreate("old-session").AddItem("task", "message", "%0", false, ""); err != nil {
+		t.Fatalf("singleTaskRunner AddItem failed: %v", err)
+	}
+
+	var events []string
+	runtimeEventsEmitFn = func(_ context.Context, name string, _ ...any) {
+		events = append(events, name)
+	}
+
+	app.sessionService.SetActiveSessionName("old-session")
+	app.handleRouterSessionRenameRollbackFailed("old-session", "new-session")
+
+	if got := app.sessionService.GetActiveSessionName(); got != "new-session" {
+		t.Fatalf("GetActiveSessionName() = %q, want %q", got, "new-session")
+	}
+	if got := app.taskSchedulerManager.GetStatus("old-session"); len(got.Items) != 0 {
+		t.Fatalf("taskScheduler GetStatus(old-session) = %+v, want migrated queue state", got)
+	}
+	if got := app.taskSchedulerManager.GetStatus("new-session"); len(got.Items) != 1 {
+		t.Fatalf("taskScheduler GetStatus(new-session) = %+v, want migrated queue state", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("old-session"); len(got.Items) != 0 {
+		t.Fatalf("singleTaskRunner GetStatus(old-session) = %+v, want migrated queue state", got)
+	}
+	if got := app.singleTaskRunnerManager.GetStatus("new-session"); len(got.Items) != 1 {
+		t.Fatalf("singleTaskRunner GetStatus(new-session) = %+v, want migrated queue state", got)
+	}
+	if !containsEvent(events, "tmux:session-renamed") {
+		t.Fatalf("events = %v, want tmux:session-renamed", events)
+	}
+	waitForCondition(
+		t,
+		350*time.Millisecond,
+		func() bool { return containsAnyEvent(events, "tmux:snapshot", "tmux:snapshot-delta") },
+		"snapshot update event after router rename rollback failure",
+	)
 }
 
 func TestEnsureShimReadyCallsLegacyCleanup(t *testing.T) {

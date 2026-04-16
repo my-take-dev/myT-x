@@ -10,13 +10,14 @@ package worktree
 // (via CreateSessionWithExistingWorktree) are still supported and can be
 // promoted via PromoteWorktreeToBranch.
 type WorktreeSessionOptions struct {
-	BranchName          string `json:"branch_name"`            // required: branch name for the new worktree
-	BaseBranch          string `json:"base_branch"`            // empty = current HEAD
-	PullBeforeCreate    bool   `json:"pull_before_create"`     // pull latest before creating worktree
-	EnableAgentTeam     bool   `json:"enable_agent_team"`      // set Agent Teams env vars on initial pane
-	UseClaudeEnv        bool   `json:"use_claude_env"`         // apply claude_env config to panes
-	UsePaneEnv          bool   `json:"use_pane_env"`           // apply pane_env config to additional panes
-	UseSessionPaneScope bool   `json:"use_session_pane_scope"` // set MYTX_SESSION on panes + scope list-panes
+	BranchName            string `json:"branch_name"`              // required: branch name for the new worktree
+	BaseBranch            string `json:"base_branch"`              // empty = current HEAD
+	PullBeforeCreate      bool   `json:"pull_before_create"`       // pull latest before creating worktree
+	ContinueOnPullFailure bool   `json:"continue_on_pull_failure"` // best-effort pull: continue with local state when pull fails
+	EnableAgentTeam       bool   `json:"enable_agent_team"`        // set Agent Teams env vars on initial pane
+	UseClaudeEnv          bool   `json:"use_claude_env"`           // apply claude_env config to panes
+	UsePaneEnv            bool   `json:"use_pane_env"`             // apply pane_env config to additional panes
+	UseSessionPaneScope   bool   `json:"use_session_pane_scope"`   // set MYTX_SESSION on panes + scope list-panes
 }
 
 // WorktreeStatus holds the pre-close status of a worktree session.

@@ -1,14 +1,19 @@
 package mcp
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os/user"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"myT-x/internal/mcp/pipebridge"
 )
 
 func TestBuildMCPPipeName(t *testing.T) {
@@ -180,5 +185,75 @@ func TestMCPPipeConfigFieldCount(t *testing.T) {
 	want := 5
 	if got != want {
 		t.Fatalf("MCPPipeConfig field count = %d, want %d", got, want)
+	}
+}
+
+type testMetadataRuntime struct {
+	startCallerPane string
+}
+
+func (r *testMetadataRuntime) Start(ctx context.Context) error {
+	r.startCallerPane = pipebridge.CallerPaneIDFromContext(ctx)
+	return nil
+}
+
+func (*testMetadataRuntime) Serve(context.Context) error { return nil }
+
+func (*testMetadataRuntime) Close(context.Context) error { return nil }
+
+func TestMCPPipeServerHandleConnectionPropagatesCallerPane(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	runtime := &testMetadataRuntime{}
+	srv := NewMCPPipeServer(MCPPipeConfig{
+		PipeName: "test-pipe",
+		RuntimeFactory: func(in io.Reader, out io.Writer) (MCPRuntime, error) {
+			return runtime, nil
+		},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleConnection(serverConn)
+	}()
+
+	if err := pipebridge.WriteCallerPaneHandshake(clientConn, "%7"); err != nil {
+		t.Fatalf("WriteCallerPaneHandshake: %v", err)
+	}
+	if err := clientConn.Close(); err != nil {
+		t.Fatalf("clientConn.Close: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleConnection did not finish")
+	}
+
+	if runtime.startCallerPane != "%7" {
+		t.Fatalf("start caller pane = %q, want %%7", runtime.startCallerPane)
+	}
+}
+
+func TestMCPPipeServerHandleConnectionStopsDuringHandshake(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	srv := NewMCPPipeServer(MCPPipeConfig{PipeName: "test-pipe"})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleConnection(serverConn)
+	}()
+
+	srv.cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleConnection did not stop during handshake")
 	}
 }

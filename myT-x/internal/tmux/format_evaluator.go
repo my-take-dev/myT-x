@@ -97,33 +97,44 @@ func findTopLevelComma(s string) int {
 // a best-effort fallback using a bare TmuxPane with only scalar fields
 // is returned. This keeps the tmux-shim contract of forwarding over aborting.
 func expandFormatSafe(format string, paneID int, sessions *SessionManager) string {
+	return expandFormatSafeWithFallback(format, paneID, nil, sessions)
+}
+
+// expandFormatSafeWithFallback resolves tmux format placeholders using a
+// TOCTOU-safe clone and falls back to the provided pane copy when the clone is
+// unavailable. This keeps scalar pane fields available even if session/window
+// metadata cannot be reloaded.
+func expandFormatSafeWithFallback(format string, paneID int, fallback *TmuxPane, sessions *SessionManager) string {
+	clonedPane := clonedPaneForFormat(paneID, sessions)
+	if clonedPane != nil {
+		return expandFormat(format, clonedPane)
+	}
+	return expandFormat(format, fallback)
+}
+
+func clonedPaneForFormat(paneID int, sessions *SessionManager) *TmuxPane {
 	ctx, ctxErr := sessions.GetPaneContextSnapshot(paneID)
 	if ctxErr != nil {
 		slog.Debug("[DEBUG-FORMAT] expandFormatSafe: snapshot failed, using bare pane fallback",
 			"paneId", paneID, "error", ctxErr)
-		// DESIGN: Fallback uses nil pane intentionally. Partial information
-		// (e.g., session name from a half-failed snapshot) is not injected
-		// because the snapshot fields may already be stale by this point.
-		// A nil pane produces well-defined empty/zero output for all format
-		// variables, which is safer than mixing stale and missing values.
-		return expandFormat(format, nil)
+		return nil
 	}
 
 	clonedSession, ok := sessions.GetSession(ctx.SessionName)
 	if !ok {
 		slog.Debug("[DEBUG-FORMAT] expandFormatSafe: session not found, using bare pane fallback",
 			"paneId", paneID, "session", ctx.SessionName)
-		return expandFormat(format, nil)
+		return nil
 	}
 
 	clonedPane := findPaneInSession(clonedSession, paneID)
 	if clonedPane == nil {
 		slog.Debug("[DEBUG-FORMAT] expandFormatSafe: pane not found in cloned session, using bare pane fallback",
 			"paneId", paneID, "session", ctx.SessionName)
-		return expandFormat(format, nil)
+		return nil
 	}
 
-	return expandFormat(format, clonedPane)
+	return clonedPane
 }
 
 // findPaneInSession locates a pane by ID within a (cloned) session.
@@ -157,6 +168,21 @@ func evaluateFilter(filter string, pane *TmuxPane) bool {
 	if result == "" || result == "0" {
 		slog.Debug("[DEBUG-FILTER] pane excluded by filter",
 			"filter", filter, "expanded", result)
+		return false
+	}
+	return true
+}
+
+// evaluateFilterSafe evaluates a filter using TOCTOU-safe session/window
+// metadata when available and falls back to scalar pane fields otherwise.
+func evaluateFilterSafe(filter string, paneID int, fallback *TmuxPane, sessions *SessionManager) bool {
+	if strings.TrimSpace(filter) == "" {
+		return true
+	}
+	result := expandFormatSafeWithFallback(filter, paneID, fallback, sessions)
+	if result == "" || result == "0" {
+		slog.Debug("[DEBUG-FILTER] pane excluded by safe filter",
+			"filter", filter, "expanded", result, "paneId", paneID)
 		return false
 	}
 	return true

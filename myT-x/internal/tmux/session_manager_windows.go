@@ -26,11 +26,6 @@ type RemoveWindowResult struct {
 	// Failing to Close causes resource leaks.
 	RemovedPanes []*TmuxPane
 
-	// SessionRemoved indicates whether the session was fully deleted from the
-	// session map. Currently always false because empty sessions are retained
-	// after the last window is removed. Kept for API compatibility.
-	SessionRemoved bool
-
 	// SessionEmptied is true when the removed window was the last window in the
 	// session, leaving the session alive with zero windows.
 	SessionEmptied bool
@@ -40,8 +35,8 @@ type RemoveWindowResult struct {
 	//
 	// NOTE: The zero value (0) is ambiguous — it could mean "window ID 0"
 	// (valid, since window IDs start at 0) or "unset". Callers must check
-	// SessionRemoved or compare against -1 to distinguish. Sentinel -1 is
-	// used for the "no surviving window" case.
+	// SessionEmptied or compare against -1 to distinguish. Sentinel -1 is used
+	// for the "no surviving window" case.
 	SurvivingWindowID int
 }
 
@@ -176,7 +171,6 @@ func (m *SessionManager) removeWindowAtIndexLocked(session *TmuxSession, windowI
 		m.markTopologyMutationLocked()
 		return RemoveWindowResult{
 			RemovedPanes:      removedPanes,
-			SessionRemoved:    false,
 			SessionEmptied:    true,
 			SurvivingWindowID: -1,
 		}, nil
@@ -196,7 +190,6 @@ func (m *SessionManager) removeWindowAtIndexLocked(session *TmuxSession, windowI
 	m.markTopologyMutationLocked()
 	return RemoveWindowResult{
 		RemovedPanes:      removedPanes,
-		SessionRemoved:    false,
 		SessionEmptied:    false,
 		SurvivingWindowID: session.ActiveWindowID,
 	}, nil

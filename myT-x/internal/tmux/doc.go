@@ -49,7 +49,7 @@
 //	command_router_handlers_window.go    — new/kill/rename/list/select/activate-window
 //	command_router_handlers_pane.go      — split-window, select-pane, capture-pane, copy-mode
 //	command_router_handlers_pane_lifecycle.go — kill-pane, resize-pane, layout event helpers
-//	command_router_handlers_options.go   — set-option, select-layout compatibility no-ops
+//	command_router_handlers_options.go   — set-option, show-options, select-layout compatibility handlers
 //	command_router_handlers_display.go   — display-message
 //	command_router_handlers_buffer.go    — list/set/paste/load/save-buffer
 //	command_router_handlers_shell.go     — run-shell, if-shell

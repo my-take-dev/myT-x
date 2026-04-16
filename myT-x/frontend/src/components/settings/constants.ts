@@ -1,5 +1,6 @@
 // Fallback value. Must match config.MinOverrideNameLen().
 export const MIN_OVERRIDE_NAME_LEN_FALLBACK = 5;
+export const DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS = 300;
 
 export const EFFORT_LEVEL_KEY = "CLAUDE_CODE_EFFORT_LEVEL";
 

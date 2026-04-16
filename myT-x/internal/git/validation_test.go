@@ -224,6 +224,11 @@ func TestValidateWorktreePath(t *testing.T) {
 		{"relative", "relative/path", true},
 		{"path traversal", absPath + string(filepath.Separator) + ".." + string(filepath.Separator) + "hack", true},
 		{"git dir", gitDirPath, true},
+		{"reserved device name", filepath.Join(filepath.Dir(absPath), "CON"), true},
+		{"trailing dot", absPath + ".", true},
+		{"trailing space", absPath + " ", true},
+		{"multibyte within windows character limit", filepath.Join(filepath.Dir(absPath), strings.Repeat("あ", 120)), false},
+		{"too long", filepath.Join(filepath.Dir(absPath), strings.Repeat("a", 270)), true},
 	}
 
 	for _, tt := range tests {

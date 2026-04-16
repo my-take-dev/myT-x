@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 
@@ -19,32 +19,31 @@ type TaskSchedulerQueueItem = taskscheduler.QueueItem
 type TaskSchedulerQueueConfig = taskscheduler.QueueConfig
 
 // taskSchedulerForActiveSession returns the Service for the active session.
-func (a *App) taskSchedulerForActiveSession() (*taskscheduler.Service, error) {
-	session := a.sessionService.GetActiveSessionName()
-	if session == "" {
-		return nil, errors.New("no active session")
+func (a *App) taskSchedulerForActiveSession(sessionKey string) (*taskscheduler.Service, error) {
+	sessionName, err := a.requireActiveSessionKey(sessionKey)
+	if err != nil {
+		return nil, err
 	}
-	return a.taskSchedulerManager.GetOrCreate(session), nil
+	return a.taskSchedulerManager.GetOrCreate(sessionName), nil
 }
 
 // GetTaskSchedulerStatus returns the current queue status.
 // Wails-bound: called from the frontend task scheduler panel.
-func (a *App) GetTaskSchedulerStatus() TaskSchedulerQueueStatus {
-	session := a.sessionService.GetActiveSessionName()
-	if session == "" {
-		return TaskSchedulerQueueStatus{
-			Items:        []TaskSchedulerQueueItem{},
-			RunStatus:    "idle",
-			CurrentIndex: -1,
-		}
+func (a *App) GetTaskSchedulerStatus(sessionKey string) (TaskSchedulerQueueStatus, error) {
+	sessionName, hasSession, err := a.resolveOptionalSessionScopedRequest(sessionKey)
+	if err != nil {
+		return defaultTaskSchedulerQueueStatus(), err
 	}
-	return a.taskSchedulerManager.GetStatus(session)
+	if !hasSession {
+		return defaultTaskSchedulerQueueStatus(), nil
+	}
+	return a.taskSchedulerManager.GetStatus(sessionName), nil
 }
 
 // StartTaskScheduler begins executing the task queue.
 // Wails-bound: called from the frontend task scheduler panel.
-func (a *App) StartTaskScheduler(config TaskSchedulerQueueConfig, items []TaskSchedulerQueueItem) error {
-	svc, err := a.taskSchedulerForActiveSession()
+func (a *App) StartTaskScheduler(sessionKey string, config TaskSchedulerQueueConfig, items []TaskSchedulerQueueItem) error {
+	svc, err := a.taskSchedulerForActiveSession(sessionKey)
 	if err != nil {
 		return err
 	}
@@ -53,8 +52,8 @@ func (a *App) StartTaskScheduler(config TaskSchedulerQueueConfig, items []TaskSc
 
 // StopTaskScheduler stops the queue and marks remaining items as skipped.
 // Wails-bound: called from the frontend task scheduler panel.
-func (a *App) StopTaskScheduler() error {
-	svc, err := a.taskSchedulerForActiveSession()
+func (a *App) StopTaskScheduler(sessionKey string) error {
+	svc, err := a.taskSchedulerForActiveSession(sessionKey)
 	if err != nil {
 		return err
 	}
@@ -64,8 +63,8 @@ func (a *App) StopTaskScheduler() error {
 // PauseTaskScheduler pauses the queue by cancelling the current worker.
 // In-progress items are preserved and resumed when ResumeTaskScheduler is called.
 // Wails-bound: called from the frontend task scheduler panel.
-func (a *App) PauseTaskScheduler() error {
-	svc, err := a.taskSchedulerForActiveSession()
+func (a *App) PauseTaskScheduler(sessionKey string) error {
+	svc, err := a.taskSchedulerForActiveSession(sessionKey)
 	if err != nil {
 		return err
 	}
@@ -74,8 +73,8 @@ func (a *App) PauseTaskScheduler() error {
 
 // ResumeTaskScheduler resumes a paused queue.
 // Wails-bound: called from the frontend task scheduler panel.
-func (a *App) ResumeTaskScheduler() error {
-	svc, err := a.taskSchedulerForActiveSession()
+func (a *App) ResumeTaskScheduler(sessionKey string) error {
+	svc, err := a.taskSchedulerForActiveSession(sessionKey)
 	if err != nil {
 		return err
 	}
@@ -84,8 +83,8 @@ func (a *App) ResumeTaskScheduler() error {
 
 // AddTaskSchedulerItem adds a new task to the end of the queue.
 // Wails-bound: called from the frontend task scheduler panel.
-func (a *App) AddTaskSchedulerItem(title, message, targetPaneID string, clearBefore bool, clearCommand string) error {
-	svc, err := a.taskSchedulerForActiveSession()
+func (a *App) AddTaskSchedulerItem(sessionKey, title, message, targetPaneID string, clearBefore bool, clearCommand string) error {
+	svc, err := a.taskSchedulerForActiveSession(sessionKey)
 	if err != nil {
 		return err
 	}
@@ -94,8 +93,8 @@ func (a *App) AddTaskSchedulerItem(title, message, targetPaneID string, clearBef
 
 // RemoveTaskSchedulerItem removes a non-running item from the queue.
 // Wails-bound: called from the frontend task scheduler panel.
-func (a *App) RemoveTaskSchedulerItem(id string) error {
-	svc, err := a.taskSchedulerForActiveSession()
+func (a *App) RemoveTaskSchedulerItem(sessionKey, id string) error {
+	svc, err := a.taskSchedulerForActiveSession(sessionKey)
 	if err != nil {
 		return err
 	}
@@ -104,8 +103,8 @@ func (a *App) RemoveTaskSchedulerItem(id string) error {
 
 // ReorderTaskSchedulerItems reorders items by their IDs.
 // Wails-bound: called from the frontend task scheduler panel.
-func (a *App) ReorderTaskSchedulerItems(orderedIDs []string) error {
-	svc, err := a.taskSchedulerForActiveSession()
+func (a *App) ReorderTaskSchedulerItems(sessionKey string, orderedIDs []string) error {
+	svc, err := a.taskSchedulerForActiveSession(sessionKey)
 	if err != nil {
 		return err
 	}
@@ -114,8 +113,8 @@ func (a *App) ReorderTaskSchedulerItems(orderedIDs []string) error {
 
 // UpdateTaskSchedulerItem updates a non-running item's fields. Non-pending items are reset to pending.
 // Wails-bound: called from the frontend task scheduler panel.
-func (a *App) UpdateTaskSchedulerItem(id, title, message, targetPaneID string, clearBefore bool, clearCommand string) error {
-	svc, err := a.taskSchedulerForActiveSession()
+func (a *App) UpdateTaskSchedulerItem(sessionKey, id, title, message, targetPaneID string, clearBefore bool, clearCommand string) error {
+	svc, err := a.taskSchedulerForActiveSession(sessionKey)
 	if err != nil {
 		return err
 	}
@@ -134,29 +133,32 @@ type TaskSchedulerOrchestratorReadiness struct {
 
 // CheckTaskSchedulerOrchestratorReady checks if the orchestrator is ready for task scheduling.
 // Wails-bound: called from the frontend task scheduler panel before adding tasks.
-func (a *App) CheckTaskSchedulerOrchestratorReady() TaskSchedulerOrchestratorReadiness {
-	session := a.sessionService.GetActiveSessionName()
-	if session == "" {
-		return TaskSchedulerOrchestratorReadiness{}
+func (a *App) CheckTaskSchedulerOrchestratorReady(sessionKey string) (TaskSchedulerOrchestratorReadiness, error) {
+	sessionName, hasSession, err := a.resolveOptionalSessionScopedRequest(sessionKey)
+	if err != nil {
+		return TaskSchedulerOrchestratorReadiness{}, err
+	}
+	if !hasSession {
+		return TaskSchedulerOrchestratorReadiness{}, nil
 	}
 
-	snapshot, err := a.sessionService.FindSessionSnapshotByName(session)
+	snapshot, err := a.sessionService.FindSessionSnapshotByName(sessionName)
 	if err != nil {
-		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness: find session snapshot", "session", session, "error", err)
-		return TaskSchedulerOrchestratorReadiness{}
+		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness: find session snapshot", "session", sessionName, "error", err)
+		return TaskSchedulerOrchestratorReadiness{}, fmt.Errorf("find task scheduler session snapshot: %w", err)
 	}
 
 	rootPath, err := orchestrator.ResolveSourceRootPath(snapshot)
 	if err != nil {
 		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness: resolve source root path", "error", err)
-		return TaskSchedulerOrchestratorReadiness{}
+		return TaskSchedulerOrchestratorReadiness{}, fmt.Errorf("resolve task scheduler source root: %w", err)
 	}
 
 	dbPath := filepath.Join(rootPath, ".myT-x", "orchestrator.db")
 	readiness, err := taskscheduler.CheckOrchestratorReady(dbPath)
 	if err != nil {
 		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness: check orchestrator ready", "dbPath", dbPath, "error", err)
-		return TaskSchedulerOrchestratorReadiness{}
+		return TaskSchedulerOrchestratorReadiness{}, fmt.Errorf("check task scheduler orchestrator readiness: %w", err)
 	}
 
 	// Check if the active session has any panes.
@@ -173,5 +175,5 @@ func (a *App) CheckTaskSchedulerOrchestratorReady() TaskSchedulerOrchestratorRea
 		DBExists:   readiness.DBExists,
 		AgentCount: readiness.AgentCount,
 		HasPanes:   hasPanes,
-	}
+	}, nil
 }

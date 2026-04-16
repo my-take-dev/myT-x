@@ -5,6 +5,7 @@ import type {Terminal} from "@xterm/xterm";
 import {SearchBar} from "./SearchBar";
 import {ConfirmDialog} from "./ConfirmDialog";
 import {AutoEnterPopover} from "./AutoEnterPopover";
+import {PaneChatBar} from "./PaneChatBar";
 import {TerminalToolbar} from "./TerminalToolbar";
 import {useTmuxStore} from "../stores/tmuxStore";
 import {useAutoEnterStore, startAutoEnter, stopAutoEnter} from "../stores/autoEnterStore";
@@ -295,6 +296,10 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                     </button>
                 )}
             </div>
+            <PaneChatBar
+                paneId={props.paneId}
+                preventTerminalFocusSteal={preventTerminalFocusSteal}
+            />
             <ConfirmDialog
                 open={pendingPaneCloseConfirm}
                 title={

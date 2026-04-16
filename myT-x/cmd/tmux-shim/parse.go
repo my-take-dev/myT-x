@@ -19,13 +19,17 @@ func parseCommand(args []string) (ipc.TmuxRequest, error) {
 		return ipc.TmuxRequest{}, fmt.Errorf("command is required")
 	}
 
+	canonicalName := canonicalShimCommandName(name)
 	spec, ok := commandSpecs[name]
+	if !ok && canonicalName != name {
+		spec, ok = commandSpecs[canonicalName]
+	}
 	if !ok {
 		return ipc.TmuxRequest{}, fmt.Errorf("unknown command: %s", name)
 	}
 
 	req := ipc.TmuxRequest{
-		Command: name,
+		Command: canonicalName,
 		Flags:   map[string]any{},
 		Env:     map[string]string{},
 	}
@@ -35,11 +39,11 @@ func parseCommand(args []string) (ipc.TmuxRequest, error) {
 		arg := args[i]
 		if arg == "--" {
 			req.Args = append(req.Args, args[i+1:]...)
-			return req, validateRequired(name, req)
+			return req, validateRequired(req.Command, req)
 		}
 		if !strings.HasPrefix(arg, "-") || arg == "-" {
 			req.Args = append(req.Args, args[i:]...)
-			return req, validateRequired(name, req)
+			return req, validateRequired(req.Command, req)
 		}
 
 		kind, known := spec.flags[arg]
@@ -91,7 +95,16 @@ func parseCommand(args []string) (ipc.TmuxRequest, error) {
 		}
 	}
 
-	return req, validateRequired(name, req)
+	return req, validateRequired(req.Command, req)
+}
+
+func canonicalShimCommandName(name string) string {
+	switch strings.TrimSpace(name) {
+	case "show":
+		return "show-options"
+	default:
+		return strings.TrimSpace(name)
+	}
 }
 
 // validateTargetFlag checks that -t flag is present and non-empty for the given command.
@@ -138,6 +151,9 @@ func validateRequired(command string, req ipc.TmuxRequest) error {
 	if err := validateNonNegativeSizeFlags(command, req); err != nil {
 		return err
 	}
+	if err := validateResizePaneSizeFlags(command, req); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -157,6 +173,47 @@ func validateNonNegativeSizeFlags(command string, req ipc.TmuxRequest) error {
 				return fmt.Errorf("flag %s must be non-negative", flag)
 			}
 		}
+	}
+	return nil
+}
+
+func validateResizePaneSizeFlags(command string, req ipc.TmuxRequest) error {
+	if command != "resize-pane" {
+		return nil
+	}
+	for _, flag := range []string{"-x", "-y"} {
+		rawValue, ok := req.Flags[flag]
+		if !ok {
+			continue
+		}
+		value, ok := rawValue.(string)
+		if !ok {
+			return fmt.Errorf("flag %s expects string size", flag)
+		}
+		if err := validateResizePaneSize(flag, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateResizePaneSize(flag, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("flag %s requires a value", flag)
+	}
+	if before, ok := strings.CutSuffix(trimmed, "%"); ok {
+		percentText := strings.TrimSpace(before)
+		percent, err := strconv.Atoi(percentText)
+		if err != nil || percent <= 0 {
+			return fmt.Errorf("flag %s expects a positive integer or percentage, got %q", flag, value)
+		}
+		return nil
+	}
+
+	size, err := strconv.Atoi(trimmed)
+	if err != nil || size <= 0 {
+		return fmt.Errorf("flag %s expects a positive integer or percentage, got %q", flag, value)
 	}
 	return nil
 }

@@ -1,6 +1,6 @@
 # MCP Orchestrator Tool Reference
 
-Complete specification of all 18 tools provided by the myT-x built-in Orchestration MCP.
+Complete specification of all 19 tools provided by the myT-x built-in Orchestration MCP.
 For an overview of Agent Teams, see [Agent Teams](agent-teams_en.md).
 
 ---
@@ -27,6 +27,7 @@ AI agents in each pane can send/receive tasks, manage statuses, and add team mem
 - Use `send_task` for direct agent-to-agent communication (no orchestrator intermediary required)
 - Use `capture_pane` to check other agents' screens for progress or errors
 - Use `add_member` to dynamically add members. Bootstrap messages are sent automatically
+- Use `add_members` to batch-add multiple members efficiently. The two-phase approach is faster than repeated `add_member` calls
 - After sending tasks with `depends_on`, call `activate_ready_tasks` once dependencies complete
 
 ---
@@ -396,7 +397,47 @@ Dynamically add a new team member: pane split, CLI launch, and bootstrap in one 
 
 ---
 
-### 18. help
+### 18. add_members
+
+Batch-add multiple members (batch version of `add_member`). Uses a two-phase approach for efficient team creation.
+
+- Phase 1: Split panes and launch CLIs in rapid succession
+- Phase 2: Wait once after all CLIs launch, then send bootstrap messages sequentially
+
+**Access:** Registered agents only
+
+| Parameter | Required | Type | Description |
+|-----------|----------|------|-------------|
+| `members` | Yes | array | Member definitions (1-10 items) |
+| `team_name` | No | string | Team name (max 64 chars, default: `動的チーム`) |
+| `split_from` | No | string | Initial source pane ID (default: caller's pane) |
+| `split_direction` | No | string | `horizontal` / `vertical` (default: `horizontal`) |
+| `bootstrap_delay_ms` | No | integer | Single delay after all CLIs launch in ms (1000-30000, default: 3000) |
+
+**Each element in `members`:**
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `pane_title` | Yes | string | Display name (max 30 chars) |
+| `role` | Yes | string | Role (max 120 chars) |
+| `command` | Yes | string | CLI command (e.g. `claude`) (max 100 chars) |
+| `args` | No | array | Command arguments (max 20, each max 200 chars) |
+| `custom_message` | No | string | Additional instructions (max 2000 chars) |
+| `skills` | No | array | Skills (same format as `register_agent`, max 20) |
+
+**Return:** `results[]` (per-member `pane_id`, `pane_title`, `agent_name`, `warnings`, `error`), `summary` { `created`, `failed` }
+
+**Notes:**
+- Batch version of `add_member`. Two-phase execution significantly reduces total time
+- Each member splits from the previous member's new pane (cascading layout)
+- If `split_from` is omitted, the first member splits from the caller's pane
+- Individual member failures do not stop the batch. Failures are recorded in per-member `error`
+- Claude CLI (claude, claude.exe, claude-code*) uses bracketed paste mode
+- Title setting or bootstrap failures are returned as `warnings`
+
+---
+
+### 19. help
 
 Get help on the orchestrator MCP system.
 
@@ -431,6 +472,7 @@ Get help on the orchestrator MCP system.
 | Max progress note length | 500 chars |
 | Max group label length | 120 chars |
 | Max batch tasks | 10 |
+| Max batch members | 10 |
 | Max depends_on tasks | 20 |
 | task_id format | `t-[A-Za-z0-9]+` |
 | send_message_id format | `m-[A-Za-z0-9]+` |

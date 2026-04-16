@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -76,6 +77,8 @@ type fakeManagedPipeServer struct {
 	pipeName     string
 	startEntered chan struct{}
 	startRelease chan struct{}
+	startErr     error
+	stopErr      error
 
 	startOnce sync.Once
 	mu        sync.Mutex
@@ -90,16 +93,20 @@ func (f *fakeManagedPipeServer) Start() error {
 	if f.startRelease != nil {
 		<-f.startRelease
 	}
+	if f.startErr != nil {
+		return f.startErr
+	}
 	f.mu.Lock()
 	f.started = true
 	f.mu.Unlock()
 	return nil
 }
 
-func (f *fakeManagedPipeServer) Stop() {
+func (f *fakeManagedPipeServer) Stop() error {
 	f.mu.Lock()
 	f.stopCount++
 	f.mu.Unlock()
+	return f.stopErr
 }
 
 func (f *fakeManagedPipeServer) PipeName() string {
@@ -508,7 +515,9 @@ func TestManager_CleanupSession(t *testing.T) {
 	}
 
 	// Cleanup.
-	mgr.CleanupSession("session-1")
+	if err := mgr.CleanupSession("session-1"); err != nil {
+		t.Fatalf("CleanupSession() error = %v", err)
+	}
 
 	// After cleanup, snapshot should show default state.
 	snapshots, err := mgr.SnapshotForSession("session-1")
@@ -525,14 +534,20 @@ func TestManager_CleanupSession(t *testing.T) {
 func TestManager_CleanupSession_EmptyName(t *testing.T) {
 	mgr, _ := newTestManager(t, MCPDefinition{ID: "memory", Name: "Memory"})
 	// Should not panic.
-	mgr.CleanupSession("")
-	mgr.CleanupSession("   ")
+	if err := mgr.CleanupSession(""); err != nil {
+		t.Fatalf("CleanupSession(\"\") error = %v", err)
+	}
+	if err := mgr.CleanupSession("   "); err != nil {
+		t.Fatalf("CleanupSession(blank) error = %v", err)
+	}
 }
 
 func TestManager_CleanupSession_NonExistingSession(t *testing.T) {
 	mgr, _ := newTestManager(t, MCPDefinition{ID: "memory", Name: "Memory"})
 	// Should not panic on missing sessions.
-	mgr.CleanupSession("never-created")
+	if err := mgr.CleanupSession("never-created"); err != nil {
+		t.Fatalf("CleanupSession(non-existing) error = %v", err)
+	}
 }
 
 func TestManager_CleanupSession_CallsCancel(t *testing.T) {
@@ -550,13 +565,581 @@ func TestManager_CleanupSession_CallsCancel(t *testing.T) {
 
 	cancelCount := 0
 	inst.mu.Lock()
-	inst.cancel = func() { cancelCount++ }
+	inst.cancel = func() error {
+		cancelCount++
+		return nil
+	}
 	inst.mu.Unlock()
 
-	mgr.CleanupSession("session-1")
+	if err := mgr.CleanupSession("session-1"); err != nil {
+		t.Fatalf("CleanupSession() error = %v", err)
+	}
 	if cancelCount != 1 {
 		t.Fatalf("CleanupSession() cancel count = %d, want 1", cancelCount)
 	}
+}
+
+func TestManager_CleanupSession_ReturnsStopErrors(t *testing.T) {
+	mgr, _ := newTestManager(t, MCPDefinition{ID: "memory", Name: "Memory"})
+	if err := mgr.SetEnabled("session-1", "memory", true); err != nil {
+		t.Fatalf("SetEnabled() error = %v", err)
+	}
+
+	mgr.mu.RLock()
+	inst := mgr.sessions["session-1"]["memory"]
+	mgr.mu.RUnlock()
+	if inst == nil {
+		t.Fatal("session instance not found after SetEnabled")
+	}
+
+	inst.mu.Lock()
+	inst.cancel = func() error { return errors.New("stop failed") }
+	inst.mu.Unlock()
+
+	err := mgr.CleanupSession("session-1")
+	if err == nil {
+		t.Fatal("CleanupSession() expected stop error")
+	}
+	if !strings.Contains(err.Error(), "stop mcp \"memory\"") {
+		t.Fatalf("CleanupSession() error = %v, want stop context", err)
+	}
+}
+
+func TestManager_RenameSession_MigratesPreservedState(t *testing.T) {
+	mgr, _ := newTestManager(t, MCPDefinition{ID: "memory", Name: "Memory"})
+
+	mgr.mu.Lock()
+	mgr.sessions["session-old"] = map[string]*instance{
+		"memory": {
+			state: InstanceState{
+				MCPID:     "memory",
+				SessionID: "session-old",
+				Enabled:   true,
+				Status:    StatusError,
+				Error:     "startup failed",
+			},
+		},
+	}
+	mgr.mu.Unlock()
+
+	if err := mgr.RenameSession("session-old", "session-new"); err != nil {
+		t.Fatalf("RenameSession() error = %v", err)
+	}
+
+	mgr.mu.RLock()
+	_, oldExists := mgr.sessions["session-old"]
+	newInst := mgr.sessions["session-new"]["memory"]
+	mgr.mu.RUnlock()
+	if oldExists {
+		t.Fatal("old session entry should be removed after rename")
+	}
+	if newInst == nil {
+		t.Fatal("new session entry should exist after rename")
+	}
+
+	newInst.mu.RLock()
+	defer newInst.mu.RUnlock()
+	if newInst.state.SessionID != "session-new" {
+		t.Fatalf("SessionID = %q, want %q", newInst.state.SessionID, "session-new")
+	}
+	if !newInst.state.Enabled {
+		t.Fatal("Enabled should be preserved after rename")
+	}
+	if newInst.state.Status != StatusError {
+		t.Fatalf("Status = %q, want %q", newInst.state.Status, StatusError)
+	}
+	if newInst.state.Error != "startup failed" {
+		t.Fatalf("Error = %q, want %q", newInst.state.Error, "startup failed")
+	}
+}
+
+func TestManager_RenameSession_ValidatesInputAndRejectsConflicts(t *testing.T) {
+	t.Run("rejects empty old session name", func(t *testing.T) {
+		mgr, _ := newTestManager(t, MCPDefinition{ID: "memory", Name: "Memory"})
+		if err := mgr.RenameSession("", "session-new"); err == nil || err.Error() != "old session name is required" {
+			t.Fatalf("RenameSession() error = %v", err)
+		}
+	})
+
+	t.Run("rejects empty new session name", func(t *testing.T) {
+		mgr, _ := newTestManager(t, MCPDefinition{ID: "memory", Name: "Memory"})
+		if err := mgr.RenameSession("session-old", ""); err == nil || err.Error() != "new session name is required" {
+			t.Fatalf("RenameSession() error = %v", err)
+		}
+	})
+
+	t.Run("same session name is a no-op", func(t *testing.T) {
+		mgr, _ := newTestManager(t, MCPDefinition{ID: "memory", Name: "Memory"})
+		if err := mgr.RenameSession("session-old", "session-old"); err != nil {
+			t.Fatalf("RenameSession() error = %v", err)
+		}
+	})
+
+	t.Run("rejects existing target session state", func(t *testing.T) {
+		mgr, _ := newTestManager(t, MCPDefinition{ID: "memory", Name: "Memory"})
+		mgr.mu.Lock()
+		mgr.sessions["session-old"] = map[string]*instance{"memory": {state: InstanceState{MCPID: "memory", SessionID: "session-old"}}}
+		mgr.sessions["session-new"] = map[string]*instance{"memory": {state: InstanceState{MCPID: "memory", SessionID: "session-new"}}}
+		mgr.mu.Unlock()
+		if err := mgr.RenameSession("session-old", "session-new"); err == nil || err.Error() != `session "session-new" already has MCP state` {
+			t.Fatalf("RenameSession() error = %v", err)
+		}
+	})
+}
+
+func TestManager_RenameSession_RestartsRunningInstance(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register(MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	var (
+		pipesMu sync.Mutex
+		pipes   []*fakeManagedPipeServer
+	)
+	newPipeServer := func(cfg MCPPipeConfig) managedPipeServer {
+		pipe := &fakeManagedPipeServer{
+			pipeName:     cfg.PipeName,
+			startEntered: make(chan struct{}),
+		}
+		pipesMu.Lock()
+		pipes = append(pipes, pipe)
+		pipesMu.Unlock()
+		return pipe
+	}
+
+	ec := &eventCollector{}
+	mgr := NewManager(ManagerConfig{
+		Registry:       reg,
+		EmitFn:         ec.emit,
+		ResolveWorkDir: func(string) (string, error) { return ".", nil },
+		NewPipeServer:  newPipeServer,
+	})
+
+	if err := mgr.SetEnabled("session-old", "memory", true); err != nil {
+		t.Fatalf("SetEnabled() error = %v", err)
+	}
+
+	var firstPipe *fakeManagedPipeServer
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		pipesMu.Lock()
+		if len(pipes) >= 1 {
+			firstPipe = pipes[0]
+		}
+		pipesMu.Unlock()
+		if firstPipe != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if firstPipe == nil {
+		t.Fatal("initial pipe was not created")
+	}
+	mustReceiveWithin(t, firstPipe.startEntered, time.Second, "initial pipe Start was not called")
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		detail, err := mgr.GetDetail("session-old", "memory")
+		if err == nil && detail.Status == StatusRunning {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := mgr.RenameSession("session-old", "session-new"); err != nil {
+		t.Fatalf("RenameSession() error = %v", err)
+	}
+
+	var secondPipe *fakeManagedPipeServer
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		pipesMu.Lock()
+		if len(pipes) >= 2 {
+			secondPipe = pipes[1]
+		}
+		pipesMu.Unlock()
+		if secondPipe != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if secondPipe == nil {
+		t.Fatal("renamed session pipe was not created")
+	}
+	mustReceiveWithin(t, secondPipe.startEntered, time.Second, "renamed session pipe Start was not called")
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, stopCount := firstPipe.snapshot()
+		if stopCount == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, stopCount := firstPipe.snapshot(); stopCount != 1 {
+		t.Fatalf("old pipe stop count = %d, want 1", stopCount)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		detail, err := mgr.GetDetail("session-new", "memory")
+		if err == nil && detail.Status == StatusRunning && detail.PipePath == BuildMCPPipeName("session-new", "memory") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	detail, err := mgr.GetDetail("session-new", "memory")
+	if err != nil {
+		t.Fatalf("GetDetail(session-new) error = %v", err)
+	}
+	t.Fatalf("renamed detail = %+v, want running state on pipe %q", detail, BuildMCPPipeName("session-new", "memory"))
+}
+
+func TestManager_RenameSession_RollsBackWhenRestartFails(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register(MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	var (
+		pipesMu sync.Mutex
+		pipes   []*fakeManagedPipeServer
+	)
+	newPipeServer := func(cfg MCPPipeConfig) managedPipeServer {
+		pipe := &fakeManagedPipeServer{
+			pipeName:     cfg.PipeName,
+			startEntered: make(chan struct{}),
+		}
+		pipesMu.Lock()
+		switch len(pipes) {
+		case 1:
+			pipe.startErr = errors.New("rename restart failed")
+		}
+		pipes = append(pipes, pipe)
+		pipesMu.Unlock()
+		return pipe
+	}
+
+	ec := &eventCollector{}
+	mgr := NewManager(ManagerConfig{
+		Registry:       reg,
+		EmitFn:         ec.emit,
+		ResolveWorkDir: func(string) (string, error) { return ".", nil },
+		NewPipeServer:  newPipeServer,
+	})
+
+	if err := mgr.SetEnabled("session-old", "memory", true); err != nil {
+		t.Fatalf("SetEnabled() error = %v", err)
+	}
+
+	var firstPipe *fakeManagedPipeServer
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		pipesMu.Lock()
+		if len(pipes) >= 1 {
+			firstPipe = pipes[0]
+		}
+		pipesMu.Unlock()
+		if firstPipe != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if firstPipe == nil {
+		t.Fatal("initial pipe was not created")
+	}
+	mustReceiveWithin(t, firstPipe.startEntered, time.Second, "initial pipe Start was not called")
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		detail, err := mgr.GetDetail("session-old", "memory")
+		if err == nil && detail.Status == StatusRunning {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	err := mgr.RenameSession("session-old", "session-new")
+	if err == nil {
+		t.Fatal("RenameSession() expected restart failure")
+	}
+	if !strings.Contains(err.Error(), "restart renamed MCP") {
+		t.Fatalf("RenameSession() error = %v, want restart failure", err)
+	}
+
+	var secondPipe, thirdPipe *fakeManagedPipeServer
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		pipesMu.Lock()
+		if len(pipes) >= 2 {
+			secondPipe = pipes[1]
+		}
+		if len(pipes) >= 3 {
+			thirdPipe = pipes[2]
+		}
+		pipesMu.Unlock()
+		if secondPipe != nil && thirdPipe != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if secondPipe == nil || thirdPipe == nil {
+		t.Fatalf("pipe count = %d, want 3 after rollback", len(pipes))
+	}
+	mustReceiveWithin(t, secondPipe.startEntered, time.Second, "rename restart pipe Start was not called")
+	mustReceiveWithin(t, thirdPipe.startEntered, time.Second, "rollback pipe Start was not called")
+
+	if _, stopCount := firstPipe.snapshot(); stopCount != 1 {
+		t.Fatalf("old pipe stop count = %d, want 1", stopCount)
+	}
+	if _, stopCount := secondPipe.snapshot(); stopCount != 1 {
+		t.Fatalf("failed rename pipe stop count = %d, want 1", stopCount)
+	}
+
+	mgr.mu.RLock()
+	_, oldExists := mgr.sessions["session-old"]
+	_, newExists := mgr.sessions["session-new"]
+	mgr.mu.RUnlock()
+	if !oldExists {
+		t.Fatal("old session entry should be restored after rollback")
+	}
+	if newExists {
+		t.Fatal("new session entry should not remain after rollback")
+	}
+	if ec.count() < 2 {
+		t.Fatalf("event count = %d, want at least 2", ec.count())
+	}
+	last := ec.last()
+	if last.Name != "mcp:state-changed" {
+		t.Fatalf("last event name = %q, want %q", last.Name, "mcp:state-changed")
+	}
+	payload := payloadMap(t, last.Payload)
+	if got := payload["session_name"]; got != "session-old" {
+		t.Fatalf("last event session_name = %v, want %q", got, "session-old")
+	}
+	if got := payload["mcp_id"]; got != "memory" {
+		t.Fatalf("last event mcp_id = %v, want %q", got, "memory")
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		detail, detailErr := mgr.GetDetail("session-old", "memory")
+		if detailErr == nil && detail.Status == StatusRunning && detail.PipePath == BuildMCPPipeName("session-old", "memory") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	detail, detailErr := mgr.GetDetail("session-old", "memory")
+	if detailErr != nil {
+		t.Fatalf("GetDetail(session-old) error = %v", detailErr)
+	}
+	t.Fatalf("rolled back detail = %+v, want running state on pipe %q", detail, BuildMCPPipeName("session-old", "memory"))
+}
+
+func TestManager_RenameSession_BlocksConcurrentSetEnabled(t *testing.T) {
+	// Verify that SetEnabled waits for a concurrent rename to finish instead
+	// of racing with the restart / rollback window.
+	reg := NewRegistry()
+	if err := reg.Register(MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	startGate := make(chan struct{}) // blocks pipe Start until we release it
+	newPipeServer := func(cfg MCPPipeConfig) managedPipeServer {
+		return &fakeManagedPipeServer{
+			pipeName:     cfg.PipeName,
+			startEntered: make(chan struct{}),
+			startRelease: startGate,
+		}
+	}
+
+	mgr := NewManager(ManagerConfig{
+		Registry:       reg,
+		EmitFn:         func(string, any) {},
+		ResolveWorkDir: func(string) (string, error) { return ".", nil },
+		NewPipeServer:  newPipeServer,
+	})
+
+	// Enable the MCP so there is something to restart during rename.
+	close(startGate) // let the initial Start through
+	if err := mgr.SetEnabled("session-old", "memory", true); err != nil {
+		t.Fatalf("SetEnabled(old, true) error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		detail, err := mgr.GetDetail("session-old", "memory")
+		if err == nil && detail.Status == StatusRunning {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Now use a blocking gate for the rename-triggered restart.
+	renameGate := make(chan struct{})
+	mgr.newPipeServer = func(cfg MCPPipeConfig) managedPipeServer {
+		return &fakeManagedPipeServer{
+			pipeName:     cfg.PipeName,
+			startEntered: make(chan struct{}),
+			startRelease: renameGate,
+		}
+	}
+
+	renameDone := make(chan error, 1)
+	go func() {
+		renameDone <- mgr.RenameSession("session-old", "session-new")
+	}()
+
+	// Give rename a moment to acquire the renaming guard.
+	time.Sleep(50 * time.Millisecond)
+
+	// SetEnabled on the new session should block until rename completes.
+	setEnabledDone := make(chan error, 1)
+	go func() {
+		setEnabledDone <- mgr.SetEnabled("session-new", "memory", false)
+	}()
+
+	// SetEnabled should NOT complete while rename is in progress.
+	select {
+	case err := <-setEnabledDone:
+		t.Fatalf("SetEnabled completed before rename finished (err=%v); expected it to block", err)
+	case <-time.After(100 * time.Millisecond):
+		// OK, it is blocking as expected.
+	}
+
+	// Release the rename pipe start so rename can complete.
+	close(renameGate)
+	select {
+	case err := <-renameDone:
+		if err != nil {
+			t.Fatalf("RenameSession() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RenameSession() timed out")
+	}
+
+	// Now SetEnabled should unblock.
+	select {
+	case err := <-setEnabledDone:
+		if err != nil {
+			t.Fatalf("SetEnabled(new, false) error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SetEnabled() timed out after rename completed")
+	}
+}
+
+func TestManager_RenameSession_BlocksConcurrentCleanupOnOldSession(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register(MCPDefinition{ID: "memory", Name: "Memory", Command: "test-command"}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	rollbackGate := make(chan struct{})
+	var pipesMu sync.Mutex
+	var pipes []*fakeManagedPipeServer
+	newPipeServer := func(cfg MCPPipeConfig) managedPipeServer {
+		pipe := &fakeManagedPipeServer{
+			pipeName:     cfg.PipeName,
+			startEntered: make(chan struct{}),
+		}
+
+		pipesMu.Lock()
+		switch len(pipes) {
+		case 1:
+			pipe.startErr = errors.New("rename restart failed")
+		case 2:
+			pipe.startRelease = rollbackGate
+		}
+		pipes = append(pipes, pipe)
+		pipesMu.Unlock()
+		return pipe
+	}
+
+	mgr := NewManager(ManagerConfig{
+		Registry:       reg,
+		EmitFn:         func(string, any) {},
+		ResolveWorkDir: func(string) (string, error) { return ".", nil },
+		NewPipeServer:  newPipeServer,
+	})
+
+	if err := mgr.SetEnabled("session-old", "memory", true); err != nil {
+		t.Fatalf("SetEnabled() error = %v", err)
+	}
+
+	var firstPipe *fakeManagedPipeServer
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		pipesMu.Lock()
+		if len(pipes) >= 1 {
+			firstPipe = pipes[0]
+		}
+		pipesMu.Unlock()
+		if firstPipe != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if firstPipe == nil {
+		t.Fatal("initial pipe was not created")
+	}
+	mustReceiveWithin(t, firstPipe.startEntered, time.Second, "initial pipe Start was not called")
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		detail, err := mgr.GetDetail("session-old", "memory")
+		if err == nil && detail.Status == StatusRunning {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	renameDone := make(chan error, 1)
+	go func() {
+		renameDone <- mgr.RenameSession("session-old", "session-new")
+	}()
+
+	var rollbackPipe *fakeManagedPipeServer
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		pipesMu.Lock()
+		if len(pipes) >= 3 {
+			rollbackPipe = pipes[2]
+		}
+		pipesMu.Unlock()
+		if rollbackPipe != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rollbackPipe == nil {
+		t.Fatal("rollback pipe was not created")
+	}
+	mustReceiveWithin(t, rollbackPipe.startEntered, time.Second, "rollback pipe Start was not called")
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		if err := mgr.CleanupSession("session-old"); err != nil {
+			t.Errorf("CleanupSession() error = %v", err)
+		}
+		close(cleanupDone)
+	}()
+
+	mustNotReceiveWithin(t, cleanupDone, 100*time.Millisecond, "CleanupSession(old) should block until rename completes")
+
+	close(rollbackGate)
+	select {
+	case err := <-renameDone:
+		if err == nil || !strings.Contains(err.Error(), "restart renamed MCP") {
+			t.Fatalf("RenameSession() error = %v, want restart failure", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RenameSession() timed out")
+	}
+
+	mustReceiveWithin(t, cleanupDone, time.Second, "CleanupSession(old) did not resume after rename completed")
 }
 
 func TestManager_Close_CallsCancel(t *testing.T) {
@@ -574,7 +1157,10 @@ func TestManager_Close_CallsCancel(t *testing.T) {
 
 	cancelCount := 0
 	inst.mu.Lock()
-	inst.cancel = func() { cancelCount++ }
+	inst.cancel = func() error {
+		cancelCount++
+		return nil
+	}
 	inst.mu.Unlock()
 
 	mgr.CloseWithoutEvent()
@@ -720,7 +1306,9 @@ func TestManager_CleanupSession_InvalidatesStartBlockedInPipeStart(t *testing.T)
 		t.Fatal("session instance not found after SetEnabled")
 	}
 
-	mgr.CleanupSession("session-1")
+	if err := mgr.CleanupSession("session-1"); err != nil {
+		t.Fatalf("CleanupSession() error = %v", err)
+	}
 	close(pipe.startRelease)
 
 	deadline := time.Now().Add(time.Second)
