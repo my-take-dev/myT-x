@@ -115,7 +115,7 @@ func (p *TmuxPane) IDString() string {
 	if p.idString != "" {
 		return p.idString
 	}
-	return fmt.Sprintf("%%%d", p.ID)
+	return formatPaneID(p.ID)
 }
 
 func (p *TmuxPane) ttyPath() string {

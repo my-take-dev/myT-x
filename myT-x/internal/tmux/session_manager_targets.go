@@ -82,9 +82,26 @@ func (m *SessionManager) resolveTargetCore(target string, callerPaneID int) (pan
 		}
 		return p, false, nil, nil
 	}
+	if windowID, isWindowTarget, parseErr := parseWindowIDTarget(target); isWindowTarget {
+		if parseErr != nil {
+			return nil, false, nil, parseErr
+		}
+		window, _ := m.findWindowByIDGlobalLocked(windowID)
+		if window == nil {
+			return nil, false, nil, fmt.Errorf("window id not found: %d", windowID)
+		}
+		pane, paneErr := activePaneInWindow(window)
+		if paneErr != nil {
+			return nil, false, nil, paneErr
+		}
+		return pane, false, nil, nil
+	}
 
 	sessionName, rem, hasColon := strings.Cut(target, ":")
-	sess := m.sessions[sessionName]
+	sess, resolveErr := m.resolveSessionTokenLocked(sessionName)
+	if resolveErr != nil {
+		return nil, false, nil, resolveErr
+	}
 	if !hasColon {
 		if sess == nil {
 			return nil, false, nil, fmt.Errorf("session not found: %s", sessionName)
@@ -101,7 +118,10 @@ func (m *SessionManager) resolveTargetCore(target string, callerPaneID int) (pan
 
 	// Window:pane target — delegate to resolveWindowPaneTarget.
 	p, _, resolveErr := m.resolveWindowPaneTarget(sess, rem)
-	return p, false, nil, resolveErr
+	if resolveErr != nil {
+		return nil, false, nil, fmt.Errorf("target %q: %w", target, resolveErr)
+	}
+	return p, false, nil, nil
 }
 
 // resolveTargetRLocked resolves a target under RLock.
@@ -134,7 +154,6 @@ func (m *SessionManager) resolveTargetRLocked(target string, callerPaneID int) (
 // REQUIRES: m.mu must be held by the caller in some mode (RLock or Lock).
 func (m *SessionManager) resolveWindowPaneTarget(session *TmuxSession, remainder string) (*TmuxPane, bool, error) {
 	windowPart, panePart, hasPane := strings.Cut(remainder, ".")
-	var window *TmuxWindow
 	window, err := resolveWindowByTargetID(session.Windows, windowPart)
 	if err != nil {
 		return nil, false, err

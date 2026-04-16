@@ -42,10 +42,15 @@
 | ターミナル分割 | ペインの左右・上下分割、5種のレイアウトプリセット |
 | Agent Teams | Claude Code / Codex CLI / Gemini CLI のチーム連携 |
 | モデル自動切替 | 子エージェントのモデルを一括/個別に自動置換 |
-| Git Worktree | ブランチごとの独立作業フォルダ管理 |
-| 9種のビューア | File Tree / Git Graph / Diff / Input History / MCP Manager / スケジューラ / タスクキュー / チーム管理 / Error Log |
-| MCP内蔵 | オーケストレーションMCP + LSP-MCP 200種以上 |
-| タスク自動化 | ペインスケジューラ（定期実行）+ タスクスケジューラ（順次実行） |
+| Git Worktree | ブランチごとの独立作業フォルダ管理（セットアップスクリプト + 進捗表示対応） |
+| ファイルビュー (File View) | Markdown / Mermaid / Swagger(OpenAPI) / draw.io / SQLite の統合プレビュー（`Ctrl+Shift+E`） |
+| SQLite Viewer | `.db` / `.sqlite` / `.sqlite3` のテーブル一覧 + 行データ表示 + CSV エクスポート（読み取り専用） |
+| Prompt Presets | 固定プロンプトテンプレートを登録してチャット入力に追記（グローバル / プロジェクトの 2 スコープ、最大 200 件、`Ctrl+Shift+P`） |
+| Usage Dashboard | Claude Code / Codex の利用統計を可視化（エージェント / スキル / スラッシュコマンドの集計、30 日間日次アクティビティ、`Ctrl+Shift+U`） |
+| 13種のビューア | Editor / File View / Git Graph / Diff / Input History / MCP Manager / スケジューラ / タスクキュー / Single Task Runner / チーム管理 / Usage Dashboard / Prompt Presets / Error Log |
+| MCP内蔵 | オーケストレーションMCP + Single Task Runner MCP + LSP-MCP 200種以上 |
+| タスク自動化 | ペインスケジューラ（定期実行）+ タスクスケジューラ（順次実行）+ Single Task Runner（軽量版、`Ctrl+Shift+J`） |
+| ペインチャットバー | 各ペイン下部にチャット入力バーを常時ドッキング、クリックで対象ペインへ送信 |
 | キャンバスモード | エージェント間のタスクフローを視覚化 |
 | Quake Mode | ホットキーでウィンドウ即呼び出し |
 | 日本語IME対応 | WebView2プロセス分離 + IMEリセット機能 |
@@ -70,7 +75,7 @@ https://github.com/my-take-dev/myT-x/releases
 | [はじめかた](doc/getting-started.md) | インストール、最初のセッション作成 |
 | [画面の見かた](doc/screen-layout.md) | メニューバー、サイドバー、メインエリア、Activity Strip の各UI要素 |
 | [ターミナル操作](doc/terminal-operations.md) | 分割、コピペ、検索、Quake Mode、同期入力、チャット入力バー |
-| [ビューアシステム](doc/viewer-system.md) | 9種のビューア（File Tree / Git Graph / Diff 等）の詳細操作 |
+| [ビューアシステム](doc/viewer-system.md) | 13種のビューア（Editor / File View / Git Graph / Diff / Usage Dashboard / Prompt Presets 等）の詳細操作 |
 | [設定](doc/settings.md) | 6つの設定タブ（Shell / キーバインド / Worktree / Agent Model / 環境変数） |
 | [Agent Teams](doc/agent-teams.md) | チーム作成、メンバー管理、オーケストレーションMCP、キャンバスモード |
 | [タスクスケジューラ](doc/task-scheduler.md) | ペインスケジューラとタスクスケジューラの使い方 |
@@ -87,6 +92,10 @@ OSS、セキュリティ診断を継続的に行い　　<br>
 基本的な機能に関する破壊的変更は予定しておりませんが　　<br>
 内部的には破壊的リファクタリングが随時発生していますので　　<br>
 破壊された機能に対する修正は発見し次第となります。<br>
+
+Claude code マルチエージェント機能、オーケストレーターMCPに関しては<br>
+検証の自動化を実施して毎度担保できるようにしております。
+
 
 ---
 

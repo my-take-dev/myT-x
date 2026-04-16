@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"myT-x/internal/config"
+	"myT-x/internal/singletaskrunner"
 )
 
 // ValidationRules contains validation parameters shared between backend and frontend.
@@ -19,6 +20,13 @@ type ValidationRules struct {
 	MaxMessageTemplates   int `json:"max_message_templates"`
 	MaxTemplateNameLen    int `json:"max_template_name_len"`
 	MaxTemplateMessageLen int `json:"max_template_message_len"`
+	// Single-task-runner validation boundaries.
+	MinSingleTaskRunnerClearDelay int `json:"min_single_task_runner_clear_delay"`
+	MaxSingleTaskRunnerClearDelay int `json:"max_single_task_runner_clear_delay"`
+	// Chat overlay validation boundaries.
+	MinChatOverlayPercentage     int `json:"min_chat_overlay_percentage"`
+	MaxChatOverlayPercentage     int `json:"max_chat_overlay_percentage"`
+	DefaultChatOverlayPercentage int `json:"default_chat_overlay_percentage"`
 }
 
 // GetConfig returns loaded config.
@@ -137,14 +145,19 @@ func (a *App) GetAllowedShells() []string {
 // GetValidationRules returns frontend validation parameters shared with backend checks.
 func (a *App) GetValidationRules() ValidationRules {
 	return ValidationRules{
-		MinOverrideNameLen:    config.MinOverrideNameLen(),
-		MinPreExecResetDelay:  minPreExecResetDelay,
-		MaxPreExecResetDelay:  maxPreExecResetDelay,
-		MinPreExecIdleTimeout: minPreExecIdleTimeout,
-		MaxPreExecIdleTimeout: maxPreExecIdleTimeout,
-		MaxMessageTemplates:   maxMessageTemplates,
-		MaxTemplateNameLen:    maxTemplateNameLen,
-		MaxTemplateMessageLen: maxTemplateMessageLen,
+		MinOverrideNameLen:            config.MinOverrideNameLen(),
+		MinPreExecResetDelay:          config.MinPreExecResetDelay,
+		MaxPreExecResetDelay:          config.MaxPreExecResetDelay,
+		MinPreExecIdleTimeout:         config.MinPreExecIdleTimeout,
+		MaxPreExecIdleTimeout:         config.MaxPreExecIdleTimeout,
+		MaxMessageTemplates:           config.MaxMessageTemplates,
+		MaxTemplateNameLen:            config.MaxTemplateNameLen,
+		MaxTemplateMessageLen:         config.MaxTemplateMessageLen,
+		MinSingleTaskRunnerClearDelay: singletaskrunner.MinClearDelaySec,
+		MaxSingleTaskRunnerClearDelay: singletaskrunner.MaxClearDelaySec,
+		MinChatOverlayPercentage:      config.MinChatOverlayPercentage,
+		MaxChatOverlayPercentage:      config.MaxChatOverlayPercentage,
+		DefaultChatOverlayPercentage:  config.DefaultChatOverlayPercentage,
 	}
 }
 

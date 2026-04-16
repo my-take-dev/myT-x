@@ -1,5 +1,6 @@
 import {useState, useCallback, useRef} from "react";
 import {useI18n} from "../../../../i18n";
+import {ConfirmDialog} from "../../../ConfirmDialog";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {
@@ -17,6 +18,7 @@ import {TaskSchedulerAlert} from "./TaskSchedulerAlert";
 import {TaskSchedulerSettingsPanel} from "./TaskSchedulerSettings";
 
 type Screen = "list" | "form" | "config" | "alert" | "settings";
+type PendingSettingsNavigation = "back" | "close" | null;
 
 export function TaskSchedulerView() {
     const {language, t} = useI18n();
@@ -28,17 +30,34 @@ export function TaskSchedulerView() {
     const [screen, setScreen] = useState<Screen>("list");
     const [editingItemID, setEditingItemID] = useState<string | null>(null);
     const [orchestratorReadiness, setOrchestratorReadiness] = useState<OrchestratorReadiness | null>(null);
+    const [settingsDirty, setSettingsDirty] = useState(false);
+    const [pendingSettingsNavigation, setPendingSettingsNavigation] = useState<PendingSettingsNavigation>(null);
     const statusRef = useRef(hook.status);
     statusRef.current = hook.status;
 
     const handleBack = useCallback(() => {
         setEditingItemID(null);
+        setSettingsDirty(false);
         setScreen("list");
     }, []);
 
+    const handleClose = useCallback(() => {
+        if (screen === "settings" && settingsDirty) {
+            setPendingSettingsNavigation("close");
+            return;
+        }
+        closeView();
+    }, [closeView, screen, settingsDirty]);
+
     const handleNew = useCallback(async () => {
         hook.setError(null);
-        const readiness = await hook.checkOrchestratorReady();
+        let readiness: OrchestratorReadiness;
+        try {
+            readiness = await hook.checkOrchestratorReady();
+        } catch {
+            // The hook already recorded the user-visible error state.
+            return;
+        }
         if (!readiness.ready) {
             setOrchestratorReadiness(readiness);
             setScreen("alert");
@@ -53,7 +72,13 @@ export function TaskSchedulerView() {
         // Non-pending items will be auto-reset to pending on save — verify orchestrator readiness.
         const item = statusRef.current?.items.find((i) => i.id === id);
         if (item && item.status !== PENDING_ITEM_STATUS) {
-            const readiness = await hook.checkOrchestratorReady();
+            let readiness: OrchestratorReadiness;
+            try {
+                readiness = await hook.checkOrchestratorReady();
+            } catch {
+                // The hook already recorded the user-visible error state.
+                return;
+            }
             if (!readiness.ready) {
                 setOrchestratorReadiness(readiness);
                 setScreen("alert");
@@ -71,8 +96,31 @@ export function TaskSchedulerView() {
 
     const handleOpenSettings = useCallback(() => {
         hook.setError(null);
+        setSettingsDirty(false);
         setScreen("settings");
     }, [hook.setError]);
+
+    const handleSettingsBack = useCallback(() => {
+        if (settingsDirty) {
+            setPendingSettingsNavigation("back");
+            return;
+        }
+        handleBack();
+    }, [handleBack, settingsDirty]);
+
+    const handleConfirmDiscardSettingsChanges = useCallback((action: string) => {
+        if (action !== "discard") {
+            return;
+        }
+        const pendingAction = pendingSettingsNavigation;
+        setPendingSettingsNavigation(null);
+        setSettingsDirty(false);
+        if (pendingAction === "close") {
+            closeView();
+            return;
+        }
+        handleBack();
+    }, [closeView, handleBack, pendingSettingsNavigation]);
 
     const handleStart = useCallback(async (config: QueueConfig, items: QueueItem[]) => {
         const ok = await hook.start(config, items);
@@ -99,7 +147,7 @@ export function TaskSchedulerView() {
         <ViewerPanelShell
             className="task-scheduler-view"
             title={tr("viewer.taskScheduler.title", "\u30bf\u30b9\u30af\u30b9\u30b1\u30b8\u30e5\u30fc\u30e9", "Task Scheduler")}
-            onClose={closeView}
+            onClose={handleClose}
             onRefresh={hook.refreshStatus}
         >
             <div className="task-scheduler-body">
@@ -136,12 +184,15 @@ export function TaskSchedulerView() {
                             : null
                         }
                         onSave={async (title, message, targetPaneID, clearBefore, clearCommand) => {
+                            let saved = false;
                             if (editingItemID) {
-                                await hook.updateItem(editingItemID, title, message, targetPaneID, clearBefore, clearCommand);
+                                saved = await hook.updateItem(editingItemID, title, message, targetPaneID, clearBefore, clearCommand);
                             } else {
-                                await hook.addItem(title, message, targetPaneID, clearBefore, clearCommand);
+                                saved = await hook.addItem(title, message, targetPaneID, clearBefore, clearCommand);
                             }
-                            handleBack();
+                            if (saved) {
+                                handleBack();
+                            }
                         }}
                         onBack={handleBack}
                     />
@@ -162,7 +213,9 @@ export function TaskSchedulerView() {
                     <TaskSchedulerSettingsPanel
                         initialSettings={hook.settings}
                         onSave={hook.saveSettings}
-                        onBack={handleBack}
+                        onError={hook.setError}
+                        onBack={handleSettingsBack}
+                        onDirtyChange={setSettingsDirty}
                     />
                 )}
 
@@ -174,6 +227,30 @@ export function TaskSchedulerView() {
                     />
                 )}
             </div>
+            <ConfirmDialog
+                open={pendingSettingsNavigation !== null}
+                title={tr(
+                    "viewer.taskScheduler.unsaved.title",
+                    "\u672a\u4fdd\u5b58\u306e\u8a2d\u5b9a",
+                    "Unsaved Settings",
+                )}
+                message={tr(
+                    "viewer.taskScheduler.unsaved.message",
+                    "\u5909\u66f4\u3092\u4fdd\u5b58\u305b\u305a\u306b\u79fb\u52d5\u3057\u307e\u3059\u304b\uff1f",
+                    "Leave without saving these scheduler settings?",
+                )}
+                actions={[{
+                    label: tr(
+                        "viewer.taskScheduler.unsaved.discard",
+                        "\u4fdd\u5b58\u305b\u305a\u306b\u79fb\u52d5",
+                        "Discard Changes",
+                    ),
+                    value: "discard",
+                    variant: "danger",
+                }]}
+                onAction={handleConfirmDiscardSettingsChanges}
+                onClose={() => setPendingSettingsNavigation(null)}
+            />
         </ViewerPanelShell>
     );
 }

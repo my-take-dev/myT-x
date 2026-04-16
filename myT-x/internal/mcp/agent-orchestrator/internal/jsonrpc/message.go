@@ -1,8 +1,9 @@
 package jsonrpc
 
 import (
+	"bytes"
 	"encoding/json"
-	"strconv"
+	"regexp"
 	"strings"
 )
 
@@ -25,25 +26,24 @@ type Message struct {
 
 // IsRequest はメッセージがリクエスト（method と id を持つ）の場合に true を返す。
 func (m Message) IsRequest() bool {
-	return m.Method != "" && hasID(m.ID)
+	return m.Method != "" && hasIDMember(m.ID) && hasValidID(m.ID)
 }
 
 // IsNotification はメッセージが通知（method はあるが id がない）の場合に true を返す。
 func (m Message) IsNotification() bool {
-	return m.Method != "" && !hasID(m.ID)
+	return m.Method != "" && !hasIDMember(m.ID)
 }
 
 // IsResponse はメッセージがレスポンス（id はあるが method がない）の場合に true を返す。
 func (m Message) IsResponse() bool {
-	return m.Method == "" && hasID(m.ID)
+	return m.Method == "" && hasIDMember(m.ID) && hasValidID(m.ID)
 }
 
-func hasID(raw json.RawMessage) bool {
+func hasIDMember(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false
 	}
-	trimmed := strings.TrimSpace(string(raw))
-	return trimmed != "" && trimmed != "null"
+	return strings.TrimSpace(string(raw)) != ""
 }
 
 // IDKey は id の生値を安定したマップキーに変換する。
@@ -51,26 +51,38 @@ func IDKey(raw json.RawMessage) string {
 	return strings.TrimSpace(string(raw))
 }
 
-// ParseID は id の生値を JSON マーシャル可能な id 値に変換する。
-func ParseID(raw json.RawMessage) any {
-	if len(raw) == 0 {
-		return nil
-	}
-
-	var intID int64
-	if err := json.Unmarshal(raw, &intID); err == nil {
-		return intID
-	}
-
-	var floatID float64
-	if err := json.Unmarshal(raw, &floatID); err == nil {
-		return floatID
-	}
-
-	var strID string
-	if err := json.Unmarshal(raw, &strID); err == nil {
-		return strID
-	}
-
-	return strconv.Quote(string(raw))
+func hasValidID(raw json.RawMessage) bool {
+	_, ok := ParseID(raw)
+	return ok
 }
+
+// ParseID は id の生値を JSON マーシャル可能な id 値に変換する。
+// 返り値の bool は JSON-RPC の有効な ID 型かどうかを表す。
+func ParseID(raw json.RawMessage) (any, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+
+	var id any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&id); err != nil {
+		return nil, false
+	}
+
+	switch v := id.(type) {
+	case nil:
+		return nil, true
+	case string:
+		return v, true
+	case json.Number:
+		if !integralJSONRPCNumberPattern.MatchString(v.String()) {
+			return nil, false
+		}
+		return v, true
+	default:
+		return nil, false
+	}
+}
+
+var integralJSONRPCNumberPattern = regexp.MustCompile(`^-?(0|[1-9]\d*)([eE][+-]?\d+)?$`)

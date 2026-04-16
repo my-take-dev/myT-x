@@ -30,6 +30,35 @@ func copyEnvMap(input map[string]string) map[string]string {
 	return out
 }
 
+func formatPaneID(id int) string {
+	return fmt.Sprintf("%%%d", id)
+}
+
+func formatSessionID(id int) string {
+	return fmt.Sprintf("$%d", id)
+}
+
+func formatWindowID(id int) string {
+	return fmt.Sprintf("@%d", id)
+}
+
+// seedPaneIdentityEnv ensures pane-local identity variables match paneID.
+// Callers can seed a freshly created pane model before the full tmux runtime
+// environment is attached.
+//
+// Only GO_TMUX_PANE and TMUX_PANE are set here. Session-level variables are
+// added later by addTmuxEnvironment when SetPaneRuntime attaches the tmux
+// runtime environment to the pane.
+func seedPaneIdentityEnv(env map[string]string, paneID int) map[string]string {
+	if env == nil {
+		env = map[string]string{}
+	}
+	paneValue := formatPaneID(paneID)
+	env["GO_TMUX_PANE"] = paneValue
+	env["TMUX_PANE"] = paneValue
+	return env
+}
+
 func sessionWorkDir(session *TmuxSession) string {
 	if session == nil {
 		return ""
@@ -63,6 +92,38 @@ func parsePaneID(value string) (int, error) {
 		return -1, fmt.Errorf("invalid pane id: %s", value)
 	}
 	return id, nil
+}
+
+// parseWindowIDTarget parses a bare "@N" target into a window ID.
+// Returns (id, true, nil) on success.
+// Returns (-1, true, err) when value starts with "@" but is malformed.
+// Returns (-1, false, nil) when value is not a bare window ID target.
+func parseWindowIDTarget(value string) (int, bool, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "@") {
+		return -1, false, nil
+	}
+	id, err := strconv.Atoi(strings.TrimPrefix(value, "@"))
+	if err != nil || id < 0 {
+		return -1, true, fmt.Errorf("invalid window id: %s", value)
+	}
+	return id, true, nil
+}
+
+// parseSessionIDTarget parses a bare "$N" target into a session ID.
+// Returns (id, true, nil) on success.
+// Returns (-1, true, err) when value starts with "$" but is malformed.
+// Returns (-1, false, nil) when value is not a bare session ID target.
+func parseSessionIDTarget(value string) (int, bool, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "$") {
+		return -1, false, nil
+	}
+	id, err := strconv.Atoi(strings.TrimPrefix(value, "$"))
+	if err != nil || id < 0 {
+		return -1, true, fmt.Errorf("invalid session id: %s", value)
+	}
+	return id, true, nil
 }
 
 // Compiled at package level to avoid re-compilation per call.

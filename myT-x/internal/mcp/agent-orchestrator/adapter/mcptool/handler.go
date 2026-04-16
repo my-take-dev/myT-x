@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"myT-x/internal/mcp/agent-orchestrator/domain"
 	"myT-x/internal/mcp/agent-orchestrator/internal/mcp"
 	"myT-x/internal/mcp/agent-orchestrator/usecase"
 )
@@ -61,29 +62,30 @@ func (h *Handler) BuildRegistry() (*mcp.Registry, error) {
 		h.sendResponseTool(),
 		h.updateStatusTool(),
 		h.getAgentStatusTool(),
-		h.checkTasksTool(),
+		h.listAllTasksTool(),
 		h.activateReadyTasksTool(),
 		h.cancelTaskTool(),
 		h.updateTaskProgressTool(),
 		h.capturePaneTool(),
 		h.addMemberTool(),
+		h.addMembersTool(),
 		helpTool(),
 	})
 }
 
-// register_agent: エージェントのペインIDと名前を紐付け、ロール・得意分野を登録する。
-// 同名で再呼び出しすると情報を更新する。登録・変更・更新は caller の pane に関係なく実行できる。
-// ※ 他ツール利用の前提条件。最初に必ず実行すること。
+// register_agent binds a pane ID to an agent name and stores optional role and skill metadata.
+// Re-calling with the same name updates the registration. Registration can be changed
+// regardless of the caller's pane. Registration is required before using tools other than help.
 //
-// パラメータ:
-//   - name（必須）: エージェント名（英数字・._-、最大64文字）
-//   - pane_id（必須）: tmux ペインID（例: "%1"）
-//   - role（任意）: 役割（最大120文字）
-//   - skills（任意）: 得意分野（最大20件。文字列配列も後方互換で受付可）
+// Parameters:
+//   - name (required): agent name (alphanumeric, "._-", max 64 chars)
+//   - pane_id (required): tmux pane ID (for example "%1")
+//   - role (optional): agent role (max 120 chars)
+//   - skills (optional): skill list (max 20 items; string arrays are also accepted for backward compatibility)
 func (h *Handler) registerAgentTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "register_agent",
-		Description: "Register an agent by binding a pane ID to a name with optional role and skills. Re-calling with the same name updates the entry. Can be called regardless of the caller's pane. Prerequisite for all other tools.",
+		Description: "Register an agent by binding a pane ID to a name with optional role and skills. Re-calling with the same name updates the entry. Can be called regardless of the caller's pane. Required before using tools other than help.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -157,7 +159,7 @@ func (h *Handler) handleRegisterAgent(ctx context.Context, args map[string]any) 
 func (h *Handler) listAgentsTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "list_agents",
-		Description: "List all registered agents with their status and unregistered panes. Requires agent registration. Returns: registered_agents (name, role, skills, status) and unregistered_panes.",
+		Description: "List all registered agents with their status, reconcile missing tmux panes, and report unregistered panes. Requires agent registration or trusted access. Returns: registered_agents (name, role, skills, status) and unregistered_panes.",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -214,7 +216,7 @@ func (h *Handler) handleListAgents(ctx context.Context, _ map[string]any) (any, 
 func (h *Handler) sendTaskTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "send_task",
-		Description: "Send a task to a target agent. Any registered agent can send. The from_agent value must be your registered agent name so the assignee can reply via send_response. With depends_on, the task is created as blocked and activation is deferred until dependencies complete.",
+		Description: sendTaskHelpContract.registryDescription,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -294,7 +296,7 @@ func (h *Handler) handleSendTask(ctx context.Context, args map[string]any) (any,
 func (h *Handler) sendTasksTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "send_tasks",
-		Description: "Batch-send tasks to multiple agents, grouped by group_id. Requires agent registration. Each task item accepts agent_name, message, include_response_instructions, and expires_after_minutes.",
+		Description: sendTasksHelpContract.registryDescription,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -360,8 +362,10 @@ func (h *Handler) handleSendTasks(ctx context.Context, args map[string]any) (any
 	}
 
 	return map[string]any{
-		"group_id": result.GroupID,
-		"results":  entries,
+		"group_id":   result.GroupID,
+		"results":    entries,
+		"isError":    result.HasPartialFailure,
+		"all_failed": result.AllFailed,
 		"summary": map[string]any{
 			"sent":   result.Summary.Sent,
 			"failed": result.Summary.Failed,
@@ -378,7 +382,7 @@ func (h *Handler) handleSendTasks(ctx context.Context, args map[string]any) (any
 func (h *Handler) getTaskDetailTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_task_detail",
-		Description: "Get detailed task state. Accessible by sender, assignee, or trusted caller. Completed tasks include the stored response. Does not include the message body; use get_task_message for that.",
+		Description: "Get detailed task state, including batch group metadata when present. Accessible by sender, assignee, or trusted caller. Completed tasks include the stored response. Does not include the message body; use get_task_message for that.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -405,6 +409,12 @@ func (h *Handler) handleGetTaskDetail(ctx context.Context, args map[string]any) 
 		"task_id":    result.TaskID,
 		"status":     result.Status,
 		"agent_name": result.AgentName,
+	}
+	if result.GroupID != "" {
+		entry["group_id"] = result.GroupID
+	}
+	if result.GroupLabel != "" {
+		entry["group_label"] = result.GroupLabel
 	}
 	if result.CompletedAt != "" {
 		entry["completed_at"] = result.CompletedAt
@@ -442,8 +452,8 @@ func (h *Handler) handleGetTaskDetail(ctx context.Context, args map[string]any) 
 	return entry, nil
 }
 
-// acknowledge_task: 担当タスクの受領を記録する（任意）。
-// 送信者にタスクを認識したことを伝える。task assignee のみ実行可能。
+// acknowledge_task: 担当タスクの受領を記録する。
+// Idle-time re-delivery is suppressed after acknowledgment. Task assignee only.
 //
 // パラメータ:
 //   - agent_name（必須）: 自分のエージェント名
@@ -451,11 +461,11 @@ func (h *Handler) handleGetTaskDetail(ctx context.Context, args map[string]any) 
 func (h *Handler) acknowledgeTaskTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "acknowledge_task",
-		Description: "Record task acknowledgment (optional). Signals to the sender that the task is recognized. Assignee only.",
+		Description: "Record task acknowledgment. Use it after you accept a task so idle-time re-delivery stops and the sender can see that the task is recognized. Assignee or trusted local-pipe caller. agent_name selects the assignee identity in pipe mode.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent_name": map[string]any{"type": "string", "description": "Your agent name"},
+				"agent_name": map[string]any{"type": "string", "description": "Assignee agent name. Required because pipe mode cannot infer it from the caller pane alone."},
 				"task_id":    map[string]any{"type": "string", "description": "Task ID to acknowledge"},
 			},
 			"required": []string{"agent_name", "task_id"},
@@ -474,7 +484,7 @@ func (h *Handler) handleAcknowledgeTask(ctx context.Context, args map[string]any
 		return nil, err
 	}
 
-	result, err := h.taskUpdateSvc.AcknowledgeTask(ctx, usecase.AcknowledgeTaskCmd{
+	result, err := h.taskUpdateSvc.AcknowledgeTask(usecase.WithMCPInstanceID(ctx, h.instanceID), usecase.AcknowledgeTaskCmd{
 		AgentName: agentName,
 		TaskID:    taskID,
 	})
@@ -500,12 +510,12 @@ func (h *Handler) handleAcknowledgeTask(ctx context.Context, args map[string]any
 func (h *Handler) getMyTasksTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_my_tasks",
-		Description: "Get tasks assigned to you (inbox). Only returns tasks where caller matches agent_name. Default filter: pending; blocked, completed, all, failed, abandoned, cancelled, and expired are also supported. Pending unacknowledged tasks are returned with inline message content and auto-acknowledged. Task and inline message entries include from_agent when available. Response includes response_instructions.",
+		Description: "Get tasks assigned to you (inbox). Registered callers use their own agent_name; trusted local-pipe callers may specify the assignee name explicitly. agent_name is required because pipe mode cannot infer the assignee name from the caller pane alone. Default filter: pending; blocked, completed, all, failed, abandoned, cancelled, and expired are also supported. Pending unacknowledged tasks returned inline are auto-acknowledged best-effort. Task and inline message entries include from_agent when available. Response includes response_instructions.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent_name":    map[string]any{"type": "string", "description": "Your agent name"},
-				"status_filter": map[string]any{"type": "string", "description": "\"pending\" / \"blocked\" / \"completed\" / \"all\" / \"failed\" / \"abandoned\" / \"cancelled\" / \"expired\""},
+				"agent_name":    map[string]any{"type": "string", "description": "Assignee agent name. Required because pipe mode cannot infer it from the caller pane alone."},
+				"status_filter": map[string]any{"type": "string", "description": taskStatusFilterDesc},
 				"max_inline":    map[string]any{"type": "integer", "description": fmt.Sprintf("Max number of inline messages to include (default: %d, range: 1-10)", usecase.DefaultMaxInline)},
 			},
 			"required": []string{"agent_name"},
@@ -528,9 +538,9 @@ func (h *Handler) handleGetMyTasks(ctx context.Context, args map[string]any) (an
 		return nil, err
 	}
 
-	result, err := h.querySvc.GetMyTasks(ctx, usecase.GetMyTasksCmd{
+	result, err := h.querySvc.GetMyTasks(usecase.WithMCPInstanceID(ctx, h.instanceID), usecase.GetMyTasksCmd{
 		AgentName:    agentName,
-		StatusFilter: statusFilter,
+		StatusFilter: domain.TaskStatusFilterFromString(statusFilter),
 		MaxInline:    maxInline,
 	})
 	if err != nil {
@@ -594,11 +604,11 @@ func (h *Handler) handleGetMyTasks(ctx context.Context, args map[string]any) (an
 func (h *Handler) getTaskMessageTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_task_message",
-		Description: "Get task message body and metadata by send_message_id. Only accessible by the assignee. Use get_task_detail for progress/dependencies/responses.",
+		Description: "Get task message body and metadata by send_message_id. Assignee or trusted local-pipe caller. agent_name selects the assignee identity in pipe mode. Use get_task_detail for progress/dependencies/responses.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"agent_name":      map[string]any{"type": "string", "description": "Your agent name"},
+				"agent_name":      map[string]any{"type": "string", "description": "Assignee agent name. Required because pipe mode cannot infer it from the caller pane alone."},
 				"send_message_id": map[string]any{"type": "string", "description": "Target send_message_id (m- prefix)"},
 			},
 			"required": []string{"agent_name", "send_message_id"},
@@ -617,7 +627,7 @@ func (h *Handler) handleGetTaskMessage(ctx context.Context, args map[string]any)
 		return nil, err
 	}
 
-	result, err := h.querySvc.GetTaskMessage(ctx, usecase.GetTaskMessageCmd{
+	result, err := h.querySvc.GetTaskMessage(usecase.WithMCPInstanceID(ctx, h.instanceID), usecase.GetTaskMessageCmd{
 		AgentName:     agentName,
 		SendMessageID: sendMessageID,
 	})
@@ -657,7 +667,7 @@ func (h *Handler) handleGetTaskMessage(ctx context.Context, args map[string]any)
 func (h *Handler) sendResponseTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "send_response",
-		Description: "Reply to the task sender and mark the task as completed. Assignee of a pending task only. task_id is required.",
+		Description: "Reply to the task sender and mark the task as completed. Pending-task assignee or trusted local-pipe caller. task_id is required.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -681,7 +691,7 @@ func (h *Handler) sendResponseTool() mcp.Tool {
 func (h *Handler) updateStatusTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "update_status",
-		Description: "Update your agent status. Values: idle (accepting tasks), busy (no new tasks), working (active but accepting tasks). Setting status to idle re-delivers unacknowledged pending tasks and auto-acknowledges successful deliveries to avoid duplicates.",
+		Description: "Update your agent status. Values: idle (accepting tasks), busy (no new tasks), working (active but accepting tasks). Setting status to idle re-delivers unacknowledged pending tasks.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -716,7 +726,7 @@ func (h *Handler) handleUpdateStatus(ctx context.Context, args map[string]any) (
 
 	result, err := h.statusSvc.UpdateStatus(ctx, usecase.UpdateStatusCmd{
 		AgentName:     agentName,
-		Status:        statusValue,
+		Status:        domain.AgentWorkStatus(statusValue),
 		CurrentTaskID: currentTaskID,
 		Note:          note,
 	})
@@ -725,10 +735,14 @@ func (h *Handler) handleUpdateStatus(ctx context.Context, args map[string]any) (
 	}
 
 	resp := map[string]any{
-		"agent_name":        result.AgentName,
-		"status":            result.Status,
-		"updated_at":        result.UpdatedAt,
-		"redelivered_count": result.RedeliveredCount,
+		"agent_name":              result.AgentName,
+		"status":                  result.Status,
+		"updated_at":              result.UpdatedAt,
+		"redelivered_count":       result.RedeliveredCount,
+		"redelivery_failed_count": result.RedeliveryFailedCount,
+	}
+	if result.RedeliveryFailedCount > 0 {
+		resp["warning"] = "Some pending tasks were delivered to the pane but could not be acknowledged; they may be redelivered."
 	}
 	return resp, nil
 }
@@ -741,7 +755,7 @@ func (h *Handler) handleUpdateStatus(ctx context.Context, args map[string]any) (
 func (h *Handler) getAgentStatusTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_agent_status",
-		Description: "Get the latest status of a specific agent. Any registered agent can call this.",
+		Description: "Get the latest status of a specific agent. Any registered or trusted agent can call this.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -790,7 +804,7 @@ func (h *Handler) handleSendResponse(ctx context.Context, args map[string]any) (
 		return nil, err
 	}
 
-	result, err := h.responseSvc.Send(ctx, usecase.SendResponseCmd{
+	result, err := h.responseSvc.Send(usecase.WithMCPInstanceID(ctx, h.instanceID), usecase.SendResponseCmd{
 		Message: message,
 		TaskID:  taskID,
 	})
@@ -821,14 +835,14 @@ func (h *Handler) handleSendResponse(ctx context.Context, args map[string]any) (
 // パラメータ:
 //   - status_filter（任意）: "pending" / "blocked" / "completed" / "all" / "failed" / "abandoned" / "cancelled" / "expired"
 //   - assignee_name（任意）: 担当者（assignee）でフィルタ
-func (h *Handler) checkTasksTool() mcp.Tool {
+func (h *Handler) listAllTasksTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "list_all_tasks",
-		Description: "List all tasks for monitoring. Any registered agent can call. Default filter: all. Response includes a summary with counts for pending, blocked, completed, failed, abandoned, cancelled, and expired. Unlike get_my_tasks, this shows all agents' tasks.",
+		Description: "List all tasks for monitoring. Any registered or trusted agent can call. Default filter: all. Response includes a summary with counts for pending, blocked, completed, failed, abandoned, cancelled, and expired. Unlike get_my_tasks, this shows all agents' tasks.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"status_filter": map[string]any{"type": "string", "description": "\"pending\" / \"blocked\" / \"completed\" / \"all\" / \"failed\" / \"abandoned\" / \"cancelled\" / \"expired\""},
+				"status_filter": map[string]any{"type": "string", "description": taskStatusFilterDesc},
 				"assignee_name": map[string]any{"type": "string", "description": "Filter by assignee agent name"},
 			},
 		},
@@ -847,7 +861,7 @@ func (h *Handler) handleListAllTasks(ctx context.Context, args map[string]any) (
 	}
 
 	result, err := h.querySvc.ListAllTasks(ctx, usecase.ListAllTasksCmd{
-		StatusFilter: statusFilter,
+		StatusFilter: domain.TaskStatusFilterFromString(statusFilter),
 		AgentName:    agentName,
 	})
 	if err != nil {
@@ -890,7 +904,7 @@ func (h *Handler) handleListAllTasks(ctx context.Context, args map[string]any) (
 }
 
 // cancel_task: 送信済みの pending または blocked タスクをキャンセルする。
-// 送信者のみ実行可能。
+// 送信者または trusted caller が実行可能。
 //
 // パラメータ:
 //   - task_id（必須）: キャンセルする task_id
@@ -898,7 +912,7 @@ func (h *Handler) handleListAllTasks(ctx context.Context, args map[string]any) (
 func (h *Handler) cancelTaskTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "cancel_task",
-		Description: "Cancel a pending or blocked task. Sender only.",
+		Description: cancelTaskHelpContract.registryDescription,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -943,7 +957,7 @@ func (h *Handler) handleCancelTask(ctx context.Context, args map[string]any) (an
 func (h *Handler) activateReadyTasksTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "activate_ready_tasks",
-		Description: "Evaluate blocked tasks and activate those whose dependencies are all completed. Call after completing tasks or periodically. Any registered agent can call.",
+		Description: "Evaluate blocked tasks and activate those whose dependencies are all completed. Call after completing tasks or periodically. Any registered or trusted agent can call.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -971,8 +985,9 @@ func (h *Handler) handleActivateReadyTasks(ctx context.Context, args map[string]
 		})
 	}
 	return map[string]any{
-		"activated":     activated,
-		"still_blocked": result.StillBlocked,
+		"activated":             activated,
+		"still_blocked":         result.StillBlocked,
+		"delivery_failed_count": result.DeliveryFailed,
 	}, nil
 }
 
@@ -1017,7 +1032,7 @@ func (h *Handler) handleUpdateTaskProgress(ctx context.Context, args map[string]
 		return nil, errors.New("progress_pct or progress_note is required")
 	}
 
-	result, err := h.taskUpdateSvc.UpdateTaskProgress(ctx, usecase.UpdateTaskProgressCmd{
+	result, err := h.taskUpdateSvc.UpdateTaskProgress(usecase.WithMCPInstanceID(ctx, h.instanceID), usecase.UpdateTaskProgressCmd{
 		TaskID:       taskID,
 		ProgressPct:  progressPct,
 		ProgressNote: progressNote,
@@ -1046,7 +1061,7 @@ func (h *Handler) handleUpdateTaskProgress(ctx context.Context, args map[string]
 func (h *Handler) capturePaneTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "capture_pane",
-		Description: "Capture the terminal output of a target agent's pane. Any registered agent can call. Useful for checking progress or errors. Default 50 lines, max 200.",
+		Description: "Capture the terminal output of a target agent's pane. Any registered or trusted agent can call. Useful for checking progress or errors. Default 50 lines, max 200.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -1103,7 +1118,7 @@ func (h *Handler) handleCapturePane(ctx context.Context, args map[string]any) (a
 func (h *Handler) addMemberTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "add_member",
-		Description: "Dynamically add a new team member by splitting a pane, starting the CLI, and sending a bootstrap message. Requires agent registration.",
+		Description: "Dynamically add a new team member by splitting a pane, starting the CLI, and sending a bootstrap message. Registered agents can omit split_from. Trusted callers can omit split_from only when the caller pane is available; otherwise they must provide split_from.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -1114,7 +1129,7 @@ func (h *Handler) addMemberTool() mcp.Tool {
 				"custom_message":     map[string]any{"type": "string", "description": "Additional instructions message (max 2000 chars)"},
 				"skills":             map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"name"}}, "description": "Skill list (same format as register_agent)"},
 				"team_name":          map[string]any{"type": "string", "description": fmt.Sprintf("Team name (max 64 chars, default: %q)", usecase.DefaultMemberTeamName)},
-				"split_from":         map[string]any{"type": "string", "description": "Source pane ID to split (default: caller's pane)"},
+				"split_from":         map[string]any{"type": "string", "description": "Source pane ID to split. Default: caller's pane when available. Trusted callers can omit it only when the caller pane is available."},
 				"split_direction":    map[string]any{"type": "string", "enum": []string{"horizontal", "vertical"}, "description": "Split direction (default: \"horizontal\")"},
 				"bootstrap_delay_ms": map[string]any{"type": "integer", "description": "Delay after CLI startup in ms (1000-30000, default: 3000)"},
 			},
@@ -1197,12 +1212,133 @@ func (h *Handler) handleAddMember(ctx context.Context, args map[string]any) (any
 	return m, nil
 }
 
-// help: オーケストレーターMCPの使い方ヘルプを返す。
-// topic を省略すると全体概要とワークフローを返し、ツール名を指定するとそのツールの詳細ヘルプを返す。
-// 登録不要で誰でも利用可能。
+// add_members: 複数メンバーを一括追加する（add_member のバッチ版）。
+// 二段階アプローチで効率的にチームを構築する:
+// Phase 1 — ペイン分割・CLI 起動を高速に連続実行
+// Phase 2 — 全 CLI 起動後に1回だけ bootstrap delay → ブートストラップメッセージを順次送信
 //
 // パラメータ:
-//   - topic（任意）: ヘルプトピック（ツール名を指定。省略時は全体概要）
+//   - members（必須）: メンバー定義配列（1-10件。各要素は pane_title, role, command 必須）
+//   - team_name（任意）: チーム名（最大64文字、デフォルト: "動的チーム"）
+//   - split_from（任意）: 最初の分割元ペインID（デフォルト: 呼び出し元ペイン。以降は直前に作成したペインからカスケード分割）
+//   - split_direction（任意）: "horizontal" / "vertical"（デフォルト: "horizontal"）
+//   - bootstrap_delay_ms（任意）: 全 CLI 起動後の待ち時間 ms（1000-30000、デフォルト: 3000）
+func (h *Handler) addMembersTool() mcp.Tool {
+	return mcp.Tool{
+		Name:        "add_members",
+		Description: "Batch-add multiple team members by splitting panes, launching CLIs, and sending bootstrap messages. Uses a two-phase approach: all CLIs launch first, then a single delay before bootstrap messages. Individual member failures do not stop the batch. Registered agents can omit split_from. Trusted callers can omit split_from only when the caller pane is available; otherwise they must provide split_from.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"members": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"pane_title":     map[string]any{"type": "string", "description": "Member display name (max 30 chars)"},
+							"role":           map[string]any{"type": "string", "description": "Role (max 120 chars)"},
+							"command":        map[string]any{"type": "string", "description": "CLI command (e.g. \"claude\") (max 100 chars)"},
+							"args":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Command arguments array"},
+							"custom_message": map[string]any{"type": "string", "description": "Additional instructions message (max 2000 chars)"},
+							"skills":         map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"name"}}, "description": "Skill list (same format as register_agent)"},
+						},
+						"required": []string{"pane_title", "role", "command"},
+					},
+					"description": "Member definitions (1-10 items)",
+				},
+				"team_name":          map[string]any{"type": "string", "description": fmt.Sprintf("Team name shared by all members (max 64 chars, default: %q)", usecase.DefaultMemberTeamName)},
+				"split_from":         map[string]any{"type": "string", "description": "Initial source pane ID to split. Default: caller's pane when available. Trusted callers can omit it only when the caller pane is available. Each subsequent member splits from the previous member's new pane."},
+				"split_direction":    map[string]any{"type": "string", "enum": []string{"horizontal", "vertical"}, "description": "Split direction (default: \"horizontal\")"},
+				"bootstrap_delay_ms": map[string]any{"type": "integer", "description": "Single delay after all CLIs launch in ms (1000-30000, default: 3000)"},
+			},
+			"required": []string{"members"},
+		},
+		Handler: h.handleAddMembers,
+	}
+}
+
+func (h *Handler) handleAddMembers(ctx context.Context, args map[string]any) (any, error) {
+	if h.memberSvc == nil {
+		return nil, errors.New("add_members is not available")
+	}
+	members, err := requiredBatchMembers(args, "members")
+	if err != nil {
+		return nil, err
+	}
+	teamName, err := optionalBoundedString(args, "team_name", maxTeamNameLen)
+	if err != nil {
+		return nil, err
+	}
+	splitFrom, err := optionalPaneID(args, "split_from")
+	if err != nil {
+		return nil, err
+	}
+	splitDirection, err := optionalSplitDirection(args, "split_direction", "horizontal")
+	if err != nil {
+		return nil, err
+	}
+	bootstrapDelayMs, err := optionalIntBounded(args, "bootstrap_delay_ms",
+		usecase.BootstrapDelayDefault, usecase.BootstrapDelayMin, usecase.BootstrapDelayMax)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := h.memberSvc.AddMembers(ctx, usecase.AddMembersCmd{
+		Members:          members,
+		TeamName:         teamName,
+		SplitFrom:        splitFrom,
+		SplitDirection:   splitDirection,
+		BootstrapDelayMs: bootstrapDelayMs,
+	})
+	var partialWarning string
+	if err != nil {
+		var partial *usecase.AddMembersPartialResultError
+		if !errors.As(err, &partial) {
+			return nil, err
+		}
+		result = partial.Result
+		partialWarning = err.Error()
+	}
+
+	entries := make([]map[string]any, 0, len(result.Results))
+	for _, item := range result.Results {
+		entry := map[string]any{
+			"pane_title": item.PaneTitle,
+		}
+		if item.Error != "" {
+			entry["error"] = item.Error
+			if item.OrphanedPaneID != "" {
+				entry["orphaned_pane_id"] = item.OrphanedPaneID
+			}
+		} else {
+			entry["pane_id"] = item.PaneID
+			entry["agent_name"] = item.AgentName
+		}
+		if len(item.Warnings) > 0 {
+			entry["warnings"] = item.Warnings
+		}
+		entries = append(entries, entry)
+	}
+
+	response := map[string]any{
+		"results": entries,
+		"summary": map[string]any{
+			"created": result.Summary.Created,
+			"failed":  result.Summary.Failed,
+		},
+	}
+	if partialWarning != "" {
+		response["warning"] = partialWarning
+	}
+	return response, nil
+}
+
+// help returns usage guidance for the orchestrator MCP server.
+// Omitting topic returns the overview and workflow, while passing a tool name
+// returns detailed help for that tool. Registration is not required.
+//
+// Parameters:
+//   - topic (optional): help topic (tool name). Omit for the overview.
 func helpTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "help",

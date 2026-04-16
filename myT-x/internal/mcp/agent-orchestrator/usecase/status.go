@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"time"
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
@@ -12,17 +13,18 @@ import (
 // UpdateStatusCmd updates the caller's reported work status.
 type UpdateStatusCmd struct {
 	AgentName     string
-	Status        string
+	Status        domain.AgentWorkStatus
 	CurrentTaskID string
 	Note          string
 }
 
 // UpdateStatusResult is the public response for update_status.
 type UpdateStatusResult struct {
-	AgentName        string
-	Status           string
-	UpdatedAt        string
-	RedeliveredCount int
+	AgentName             string
+	Status                domain.AgentWorkStatus
+	UpdatedAt             string
+	RedeliveredCount      int
+	RedeliveryFailedCount int
 }
 
 // GetAgentStatusCmd reads a single agent status.
@@ -33,7 +35,7 @@ type GetAgentStatusCmd struct {
 // GetAgentStatusResult is the targeted status response.
 type GetAgentStatusResult struct {
 	AgentName          string
-	Status             string
+	Status             domain.AgentWorkStatus
 	CurrentTaskID      string
 	Note               string
 	SecondsSinceUpdate *int64
@@ -78,10 +80,10 @@ func (s *StatusService) UpdateStatus(ctx context.Context, cmd UpdateStatusCmd) (
 		return UpdateStatusResult{}, err
 	}
 	if !IsTrustedCaller(caller) && caller.Name != cmd.AgentName {
-		return UpdateStatusResult{}, errors.New("access denied")
+		return UpdateStatusResult{}, accessDeniedError("caller does not match agent_name")
 	}
 	if !isValidAgentWorkStatus(cmd.Status) {
-		return UpdateStatusResult{}, errors.New("invalid agent status")
+		return UpdateStatusResult{}, validationError("invalid agent status")
 	}
 	if _, err := s.agents.GetAgent(ctx, cmd.AgentName); err != nil {
 		return UpdateStatusResult{}, operationError(s.logger, "agent is not available", err)
@@ -106,7 +108,7 @@ func (s *StatusService) UpdateStatus(ctx context.Context, cmd UpdateStatusCmd) (
 
 	// idle 報告時に未 acknowledge の pending タスクを再配信
 	if cmd.Status == domain.AgentWorkStatusIdle {
-		result.RedeliveredCount = s.redeliverPendingTasks(ctx, cmd.AgentName)
+		result.RedeliveredCount, result.RedeliveryFailedCount = s.redeliverPendingTasks(ctx, cmd.AgentName)
 	}
 
 	return result, nil
@@ -126,7 +128,7 @@ func (s *StatusService) GetAgentStatus(ctx context.Context, cmd GetAgentStatusCm
 		if errors.Is(err, domain.ErrNotFound) {
 			return GetAgentStatusResult{
 				AgentName: cmd.AgentName,
-				Status:    domain.AgentWorkStatusUnknown,
+				Status:    domain.AgentWorkStatusIdle,
 			}, nil
 		}
 		return GetAgentStatusResult{}, operationError(s.logger, "failed to load agent status", err)
@@ -150,32 +152,41 @@ func (s *StatusService) GetAgentStatus(ctx context.Context, cmd GetAgentStatusCm
 }
 
 // redeliverPendingTasks re-sends unacknowledged pending tasks to the agent's pane via SendKeys.
-// Successfully re-delivered tasks are auto-acknowledged to avoid repeated delivery loops.
-// Returns the number of tasks successfully re-delivered.
-func (s *StatusService) redeliverPendingTasks(ctx context.Context, agentName string) int {
+// Tasks are acknowledged only after pane delivery succeeds so failed writes remain
+// eligible for inline fallback or later retries.
+// Returns the number of tasks successfully re-delivered and acknowledged,
+// plus the number of redelivery attempts that failed and remain pending.
+func (s *StatusService) redeliverPendingTasks(ctx context.Context, agentName string) (int, int) {
 	if s.tasks == nil || s.messages == nil || s.sender == nil {
-		return 0
+		return 0, 0
+	}
+	if err := expirePendingTasks(ctx, s.tasks, s.logger); err != nil {
+		slog.Warn("[WARN-MCP-ORCH] update_status redeliver: expire pending tasks failed",
+			"agentName", agentName,
+			"error", err,
+		)
 	}
 
 	agent, err := s.agents.GetAgent(ctx, agentName)
 	if err != nil {
 		logf(s.logger, "update_status redeliver: get agent %s: %v", agentName, err)
-		return 0
+		return 0, 0
 	}
 	if domain.IsVirtualPaneID(agent.PaneID) {
-		return 0
+		return 0, 0
 	}
 
 	tasks, err := s.tasks.ListTasks(ctx, domain.TaskFilter{
-		Status:    domain.TaskStatusPending,
+		Status:    domain.TaskStatusFilterPending,
 		AgentName: agentName,
 	})
 	if err != nil {
 		logf(s.logger, "update_status redeliver: list tasks for %s: %v", agentName, err)
-		return 0
+		return 0, 0
 	}
 
 	count := 0
+	failed := 0
 	for _, task := range tasks {
 		if task.AcknowledgedAt != "" || task.SendMessageID == "" {
 			continue
@@ -183,23 +194,32 @@ func (s *StatusService) redeliverPendingTasks(ctx context.Context, agentName str
 		msg, msgErr := s.messages.GetMessage(ctx, task.SendMessageID)
 		if msgErr != nil {
 			logf(s.logger, "update_status redeliver: get message %s for task %s: %v", task.SendMessageID, task.ID, msgErr)
+			failed++
 			continue
 		}
 		if sendErr := s.sender.SendKeys(ctx, agent.PaneID, msg.Content); sendErr != nil {
 			logf(s.logger, "update_status redeliver: send task %s to pane %s: %v", task.ID, agent.PaneID, sendErr)
+			failed++
 			continue
 		}
 		acknowledgedAt := time.Now().UTC().Format(time.RFC3339)
 		if ackErr := s.tasks.AcknowledgeTask(ctx, task.ID, acknowledgedAt); ackErr != nil {
-			logf(s.logger, "update_status redeliver: acknowledge task %s after pane delivery: %v", task.ID, ackErr)
+			slog.Error("[ERROR-MCP-ORCH] update_status redeliver: acknowledge after pane delivery failed",
+				"taskID", task.ID,
+				"agentName", agentName,
+				"paneID", agent.PaneID,
+				"error", ackErr,
+			)
+			failed++
+			continue
 		}
 		logf(s.logger, "update_status redeliver: re-sent task %s to %s (pane %s)", task.ID, agentName, agent.PaneID)
 		count++
 	}
-	return count
+	return count, failed
 }
 
-func isValidAgentWorkStatus(status string) bool {
+func isValidAgentWorkStatus(status domain.AgentWorkStatus) bool {
 	switch status {
 	case domain.AgentWorkStatusIdle, domain.AgentWorkStatusBusy, domain.AgentWorkStatusWorking:
 		return true

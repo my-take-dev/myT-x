@@ -13,6 +13,7 @@ import (
 
 	"myT-x/internal/config"
 	"myT-x/internal/ipc"
+	"myT-x/internal/tmux"
 )
 
 // NOT safe for t.Parallel(): this helper temporarily replaces os.Stderr.
@@ -541,6 +542,7 @@ func TestParseCommandResizePaneAcceptsStringDimensions(t *testing.T) {
 		name      string
 		args      []string
 		wantFlags map[string]any
+		wantErr   string
 	}{
 		{
 			name:      "absolute sizes remain strings",
@@ -553,20 +555,34 @@ func TestParseCommandResizePaneAcceptsStringDimensions(t *testing.T) {
 			wantFlags: map[string]any{"-t": "%0", "-x": "30%", "-y": "75%"},
 		},
 		{
-			name:      "negative size is forwarded as string for handler fallback",
-			args:      []string{"resize-pane", "-t", "%0", "-x", "-1"},
-			wantFlags: map[string]any{"-t": "%0", "-x": "-1"},
+			name:    "zero sizes are rejected",
+			args:    []string{"resize-pane", "-t", "%0", "-x", "0", "-y", "0%"},
+			wantErr: "flag -x expects a positive integer or percentage",
 		},
 		{
-			name:      "invalid resize size is forwarded for handler fallback",
-			args:      []string{"resize-pane", "-t", "%0", "-x", "notint"},
-			wantFlags: map[string]any{"-t": "%0", "-x": "notint"},
+			name:    "negative size is rejected",
+			args:    []string{"resize-pane", "-t", "%0", "-x", "-1"},
+			wantErr: "flag -x expects a positive integer or percentage",
+		},
+		{
+			name:    "invalid resize size is rejected",
+			args:    []string{"resize-pane", "-t", "%0", "-x", "notint"},
+			wantErr: "flag -x expects a positive integer or percentage",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req, err := parseCommand(tt.args)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("parseCommand(%v) expected error containing %q", tt.args, tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("parseCommand(%v) error = %v", tt.args, err)
 			}
@@ -1746,6 +1762,13 @@ func TestParseCommandNewCommands(t *testing.T) {
 			wantFlags: map[string]any{"-t": "demo:0"},
 			wantArgs:  []string{"main-vertical"},
 		},
+		{
+			name:      "select-layout preserves percent flag value",
+			args:      []string{"select-layout", "-t", "demo:0", "-p", "30", "main-vertical"},
+			wantCmd:   "select-layout",
+			wantFlags: map[string]any{"-t": "demo:0", "-p": "30"},
+			wantArgs:  []string{"main-vertical"},
+		},
 		// --- set-option ---
 		{
 			name:      "set-option with pane scope",
@@ -1760,6 +1783,20 @@ func TestParseCommandNewCommands(t *testing.T) {
 			wantCmd:   "set-option",
 			wantFlags: map[string]any{"-F": true, "-g": true},
 			wantArgs:  []string{"status-left", "#{session_name}"},
+		},
+		{
+			name:      "show-options accepts quiet target lookup",
+			args:      []string{"show-options", "-q", "-t", "demo", "focus-events"},
+			wantCmd:   "show-options",
+			wantFlags: map[string]any{"-q": true, "-t": "demo"},
+			wantArgs:  []string{"focus-events"},
+		},
+		{
+			name:      "show alias canonicalizes and expands combined bool flags",
+			args:      []string{"show", "-gv", "focus-events"},
+			wantCmd:   "show-options",
+			wantFlags: map[string]any{"-g": true, "-v": true},
+			wantArgs:  []string{"focus-events"},
 		},
 		// --- show-environment ---
 		{
@@ -2110,6 +2147,46 @@ func TestParseCommandDoubleDashAtEnd(t *testing.T) {
 				}
 			} else if !reflect.DeepEqual(req.Args, tt.wantArgs) {
 				t.Errorf("args = %v, want %v", req.Args, tt.wantArgs)
+			}
+		})
+	}
+}
+
+func TestShowOptionsParserConsistencyWithInternalParser(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		line string
+	}{
+		{
+			name: "show alias with combined flags",
+			args: []string{"show", "-gv", "focus-events"},
+			line: "show -gv focus-events",
+		},
+		{
+			name: "show-options with quiet target lookup",
+			args: []string{"show-options", "-q", "-t", "demo", "focus-events"},
+			line: "show-options -q -t demo focus-events",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shimReq, err := parseCommand(tt.args)
+			if err != nil {
+				t.Fatalf("parseCommand(%v) error = %v", tt.args, err)
+			}
+
+			internalReq := tmux.ParseTmuxCommandLine(tt.line)
+
+			if shimReq.Command != internalReq.Command {
+				t.Fatalf("Command mismatch: shim=%q internal=%q", shimReq.Command, internalReq.Command)
+			}
+			if !reflect.DeepEqual(shimReq.Flags, internalReq.Flags) {
+				t.Fatalf("Flags mismatch: shim=%v internal=%v", shimReq.Flags, internalReq.Flags)
+			}
+			if !reflect.DeepEqual(shimReq.Args, internalReq.Args) {
+				t.Fatalf("Args mismatch: shim=%v internal=%v", shimReq.Args, internalReq.Args)
 			}
 		})
 	}

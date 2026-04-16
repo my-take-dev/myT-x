@@ -100,7 +100,7 @@ AI agents in each pane can:
 
 ### Tool Reference
 
-For the complete specification of all 18 tools (parameters, return values, permissions, validation constraints), see [MCP Orchestrator Tool Reference](mcp-orchestrator_en.md).
+For the complete specification of all 19 tools (parameters, return values, permissions, validation constraints), see [MCP Orchestrator Tool Reference](mcp-orchestrator_en.md).
 
 ### Connecting External AI Tools
 
@@ -181,7 +181,7 @@ Click the toggle button to display panes as nodes with task flows shown as conne
 
 ## Next Steps
 
-- [MCP Orchestrator Tool Reference](mcp-orchestrator_en.md) — Complete specification of all 18 tools
+- [MCP Orchestrator Tool Reference](mcp-orchestrator_en.md) — Complete specification of all 19 tools
 - [Task Scheduler](task-scheduler_en.md) — Automate task execution
 - [Viewer System](viewer-system_en.md) — All viewers explained
 - [Shortcuts](shortcuts_en.md)

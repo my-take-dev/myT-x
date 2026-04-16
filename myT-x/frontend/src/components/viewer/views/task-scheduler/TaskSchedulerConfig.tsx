@@ -6,6 +6,7 @@ import {
     resolveInitialPreExecResetDelay,
     resolveInitialPreExecTargetMode,
 } from "./taskSchedulerConfigForm";
+import {PRE_EXEC_TARGET_MODE_ALL_PANES} from "./preExecTargetModes";
 
 interface TaskSchedulerConfigProps {
     items: QueueItem[];
@@ -35,7 +36,8 @@ export function TaskSchedulerConfig({
         () => items.filter((i) => i.status === "pending"),
         [items],
     );
-    const canStart = pendingItems.length > 0 && !submitting;
+    const settingsLoaded = savedSettings !== null;
+    const canStart = pendingItems.length > 0 && !submitting && (!preExecEnabled || settingsLoaded);
 
     // Resolve timing values from saved settings (persisted in config.yaml).
     const resetDelay = resolveInitialPreExecResetDelay(savedSettings?.pre_exec_reset_delay_s);
@@ -92,11 +94,17 @@ export function TaskSchedulerConfig({
                 <div className="task-scheduler-config-section">
                     <div className="task-scheduler-config-hint-row">
                         <div className="task-scheduler-config-hint">
-                            {tr(
-                                "viewer.taskScheduler.preExecSettingsHint",
-                                `\u5f85\u6a5f\u6642\u9593: ${resetDelay}\u79d2 / \u30bf\u30a4\u30e0\u30a2\u30a6\u30c8: ${idleTimeout}\u79d2 / \u5bfe\u8c61: ${targetMode === "all_panes" ? "\u5168\u30da\u30a4\u30f3" : "\u30bf\u30b9\u30af\u30da\u30a4\u30f3\u306e\u307f"}`,
-                                `Delay: ${resetDelay}s / Timeout: ${idleTimeout}s / Target: ${targetMode === "all_panes" ? "all panes" : "task panes only"}`,
-                            )}
+                            {settingsLoaded
+                                ? tr(
+                                    "viewer.taskScheduler.preExecSettingsHint",
+                                    `\u5f85\u6a5f\u6642\u9593: ${resetDelay}\u79d2 / \u30bf\u30a4\u30e0\u30a2\u30a6\u30c8: ${idleTimeout}\u79d2 / \u5bfe\u8c61: ${targetMode === PRE_EXEC_TARGET_MODE_ALL_PANES ? "\u5168\u30da\u30a4\u30f3" : "\u30bf\u30b9\u30af\u30da\u30a4\u30f3\u306e\u307f"}`,
+                                    `Delay: ${resetDelay}s / Timeout: ${idleTimeout}s / Target: ${targetMode === PRE_EXEC_TARGET_MODE_ALL_PANES ? "all panes" : "task panes only"}`,
+                                )
+                                : tr(
+                                    "viewer.taskScheduler.preExecSettingsLoading",
+                                    "\u30b9\u30b1\u30b8\u30e5\u30fc\u30e9\u8a2d\u5b9a\u3092\u8aad\u307f\u8fbc\u307f\u4e2d...",
+                                    "Loading scheduler settings...",
+                                )}
                         </div>
                         <button
                             type="button"

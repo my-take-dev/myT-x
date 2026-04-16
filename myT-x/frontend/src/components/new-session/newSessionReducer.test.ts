@@ -93,6 +93,7 @@ describe("newSessionReducer", () => {
                 worktreeSource: "existing",
                 selectedWorktree: {path: "/wt", branch: "b", isMain: false, isDetached: false} as git.WorktreeInfo,
                 worktreeConflict: "conflict",
+                continueOnPullFailure: true,
                 branches: ["main"],
                 worktrees: [{path: "/wt", branch: "b", isMain: false, isDetached: false} as git.WorktreeInfo],
                 useWorktree: true,
@@ -104,6 +105,7 @@ describe("newSessionReducer", () => {
             expect(result.worktreeSource).toBe("new");
             expect(result.selectedWorktree).toBeNull();
             expect(result.worktreeConflict).toBe("");
+            expect(result.continueOnPullFailure).toBe(false);
             expect(result.branches).toEqual([]);
             expect(result.worktrees).toEqual([]);
             expect(result.useWorktree).toBe(false);
@@ -203,7 +205,7 @@ describe("newSessionReducer", () => {
 
     describe("INITIAL_STATE", () => {
         it("covers all fields (field-count guard)", () => {
-            expect(Object.keys(INITIAL_STATE)).toHaveLength(24);
+            expect(Object.keys(INITIAL_STATE)).toHaveLength(25);
         });
 
         it("has correct default values for all fields", () => {
@@ -221,6 +223,7 @@ describe("newSessionReducer", () => {
             expect(INITIAL_STATE.baseBranch).toBe("");
             expect(INITIAL_STATE.branchName).toBe("");
             expect(INITIAL_STATE.pullBefore).toBe(true);
+            expect(INITIAL_STATE.continueOnPullFailure).toBe(false);
             expect(INITIAL_STATE.enableAgentTeam).toBe(false);
             expect(INITIAL_STATE.useClaudeEnv).toBe(false);
             expect(INITIAL_STATE.usePaneEnv).toBe(false);

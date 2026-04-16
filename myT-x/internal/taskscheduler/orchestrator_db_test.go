@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
+
+	orcdomain "myT-x/internal/mcp/agent-orchestrator/domain"
 )
 
 func TestCheckOrchestratorReady_NonExistentPath(t *testing.T) {
@@ -186,5 +189,68 @@ func TestQueueItemStatusCount(t *testing.T) {
 	}
 	if len(allStatuses) != 5 {
 		t.Errorf("status count changed to %d; update IsEditable and TestIsEditable", len(allStatuses))
+	}
+}
+
+func TestAbandonPendingTask_IgnoresAlreadyTransitionedTask(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "orchestrator.db")
+	prepareTaskSchedulerDB(t, dbPath)
+
+	db, err := openOrchestratorDB(dbPath)
+	if err != nil {
+		t.Fatalf("openOrchestratorDB: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatalf("db.Close() error = %v", closeErr)
+		}
+	})
+
+	sentAt := time.Now().UTC().Format(time.RFC3339)
+	completedAt := time.Now().UTC().Add(time.Second).Format(time.RFC3339)
+	if _, err := db.db.Exec(
+		`INSERT INTO tasks (
+			task_id, agent_name, assignee_pane_id, sender_pane_id,
+			sender_name, sender_instance_id, send_message_id, status, sent_at, completed_at, is_now_session
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"task-1", taskMasterAgentName, "%1", taskMasterPaneID,
+		taskMasterAgentName, "", "msg-1", string(orcdomain.TaskStatusCompleted), sentAt, completedAt, 1,
+	); err != nil {
+		t.Fatalf("insert task: %v", err)
+	}
+
+	if err := db.abandonPendingTask("task-1"); err != nil {
+		t.Fatalf("abandonPendingTask should ignore already transitioned tasks: %v", err)
+	}
+
+	var status string
+	if err := db.db.QueryRow(`SELECT status FROM tasks WHERE task_id = ?`, "task-1").Scan(&status); err != nil {
+		t.Fatalf("query task status: %v", err)
+	}
+	if status != string(orcdomain.TaskStatusCompleted) {
+		t.Fatalf("task status after ignored abandon = %q, want %q", status, orcdomain.TaskStatusCompleted)
+	}
+}
+
+func TestAbandonPendingTask_ReturnsErrorForMissingTask(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "orchestrator.db")
+	prepareTaskSchedulerDB(t, dbPath)
+
+	db, err := openOrchestratorDB(dbPath)
+	if err != nil {
+		t.Fatalf("openOrchestratorDB: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatalf("db.Close() error = %v", closeErr)
+		}
+	})
+
+	if err := db.abandonPendingTask("missing-task"); err == nil {
+		t.Fatal("abandonPendingTask should fail for a missing task")
 	}
 }

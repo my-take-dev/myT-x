@@ -38,15 +38,18 @@
 
 | キー | ビューア |
 |------|---------|
-| `Ctrl+Shift+W` | Editor（エディタ） |
-| `Ctrl+Shift+E` | File Tree（ファイルツリー） |
+| `Ctrl+Shift+O` | Editor（エディタ） |
+| `Ctrl+Shift+E` | File View（ファイルビュー） |
 | `Ctrl+Shift+G` | Git Graph（Git グラフ） |
 | `Ctrl+Shift+D` | Diff（差分ビュー） |
 | `Ctrl+Shift+H` | Input History（入力履歴） |
 | `Ctrl+Shift+M` | MCP Manager（MCP 管理） |
 | `Ctrl+Shift+K` | Schedule（ペインスケジューラ） |
 | `Ctrl+Shift+Q` | Task Queue（タスクスケジューラ） |
+| `Ctrl+Shift+J` | Single Task Runner（シングルタスクランナー） |
 | `Ctrl+Shift+T` | Teams（オーケストレーターチーム） |
+| `Ctrl+Shift+U` | Usage Dashboard（使用状況ダッシュボード） |
+| `Ctrl+Shift+P` | Prompt Presets（プロンプトプリセット） |
 | `Ctrl+Shift+L` | Error Log（エラーログ） |
 
 ---

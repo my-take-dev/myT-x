@@ -28,6 +28,8 @@ type DirCache struct {
 	sets    uint64
 }
 
+// NewDirCache creates a directory cache with the provided TTL.
+// Non-positive TTL values fall back to the package default.
 func NewDirCache(ttl time.Duration) *DirCache {
 	if ttl <= 0 {
 		ttl = defaultDirCacheTTL
@@ -54,6 +56,7 @@ func cloneFileEntries(entries []FileEntry) []FileEntry {
 	return cloned
 }
 
+// Get returns a cloned cached directory listing when the entry is still fresh.
 func (c *DirCache) Get(sessionName, dirPath string) ([]FileEntry, bool) {
 	key := makeDirCacheKey(sessionName, dirPath)
 	now := c.nowFunc()
@@ -78,6 +81,33 @@ func (c *DirCache) Get(sessionName, dirPath string) ([]FileEntry, bool) {
 	return cloneFileEntries(cached.entries), true
 }
 
+// HasChildren reports whether the cached directory listing is fresh and non-empty
+// without cloning the stored entries.
+func (c *DirCache) HasChildren(sessionName, dirPath string) (bool, bool) {
+	key := makeDirCacheKey(sessionName, dirPath)
+	now := c.nowFunc()
+
+	c.mu.RLock()
+	cached, ok := c.entries[key]
+	c.mu.RUnlock()
+	if !ok {
+		return false, false
+	}
+
+	if !now.Before(cached.expiresAt) {
+		c.mu.Lock()
+		current, stillPresent := c.entries[key]
+		if stillPresent && !now.Before(current.expiresAt) {
+			delete(c.entries, key)
+		}
+		c.mu.Unlock()
+		return false, false
+	}
+
+	return len(cached.entries) > 0, true
+}
+
+// Set stores a cloned directory listing for the session/path pair.
 func (c *DirCache) Set(sessionName, dirPath string, entries []FileEntry) {
 	key := makeDirCacheKey(sessionName, dirPath)
 	now := c.nowFunc()
@@ -94,6 +124,7 @@ func (c *DirCache) Set(sessionName, dirPath string, entries []FileEntry) {
 	c.mu.Unlock()
 }
 
+// Invalidate removes the cached entry for dirPath and every nested path below it.
 func (c *DirCache) Invalidate(sessionName, dirPath string) {
 	key := makeDirCacheKey(sessionName, dirPath)
 	prefix := key
@@ -110,6 +141,7 @@ func (c *DirCache) Invalidate(sessionName, dirPath string) {
 	c.mu.Unlock()
 }
 
+// InvalidateAll removes every cached entry that belongs to sessionName.
 func (c *DirCache) InvalidateAll(sessionName string) {
 	prefix := sessionName + dirCacheKeySeparator
 
@@ -120,6 +152,29 @@ func (c *DirCache) InvalidateAll(sessionName string) {
 		}
 	}
 	c.mu.Unlock()
+}
+
+// RenameSession moves cached entries from the old session key prefix to the new one.
+func (c *DirCache) RenameSession(oldSessionName, newSessionName string) {
+	oldSessionName = strings.TrimSpace(oldSessionName)
+	newSessionName = strings.TrimSpace(newSessionName)
+	if oldSessionName == "" || newSessionName == "" || oldSessionName == newSessionName {
+		return
+	}
+
+	oldPrefix := oldSessionName + dirCacheKeySeparator
+	newPrefix := newSessionName + dirCacheKeySeparator
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for currentKey, entry := range c.entries {
+		if !strings.HasPrefix(currentKey, oldPrefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(currentKey, oldPrefix)
+		delete(c.entries, currentKey)
+		c.entries[newPrefix+suffix] = entry
+	}
 }
 
 func (c *DirCache) evictExpiredLocked(now time.Time) {

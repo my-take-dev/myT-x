@@ -122,9 +122,6 @@ func TestRemoveWindowByIDReleasesOutputHistoryForTrackedAndOrphanedPanes(t *test
 	if err != nil {
 		t.Fatalf("RemoveWindowByID() error = %v", err)
 	}
-	if result.SessionRemoved {
-		t.Fatal("SessionRemoved = true, want false")
-	}
 	if !result.SessionEmptied {
 		t.Fatal("SessionEmptied = false, want true")
 	}

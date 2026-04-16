@@ -20,6 +20,7 @@ import (
 	"myT-x/internal/mcp/agent-orchestrator/internal/store"
 	"myT-x/internal/mcp/agent-orchestrator/internal/tmux"
 	"myT-x/internal/mcp/agent-orchestrator/usecase"
+	"myT-x/internal/mcp/pipebridge"
 )
 
 const (
@@ -257,6 +258,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return nil
 	}
 	r.mu.Unlock()
+
+	if stickyResolver, ok := r.resolver.(*stickySelfResolver); ok {
+		stickyResolver.SetPaneID(pipebridge.CallerPaneIDFromContext(ctx))
+	}
 
 	paneID, err := r.resolver.GetPaneID(ctx)
 	if err != nil {

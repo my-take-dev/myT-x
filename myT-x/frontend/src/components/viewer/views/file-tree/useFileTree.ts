@@ -3,10 +3,13 @@ import {useStore} from "zustand";
 import {useFileTreeActions} from "../../../../hooks/useFileTreeActions";
 import {createFileTreeStore} from "../../../../stores/fileTreeStore";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
-import type {FileContentResult, FlatNode} from "./fileTreeTypes";
+import type {FileContentResult, FileNode, FlatNode} from "./fileTreeTypes";
 import {flattenTree} from "./treeUtils";
 
 export interface UseFileTreeResult {
+    readonly tree: readonly FileNode[];
+    readonly expandedPaths: ReadonlySet<string>;
+    readonly loadingPaths: ReadonlySet<string>;
     readonly flatNodes: readonly FlatNode[];
     readonly selectedPath: string | null;
     readonly fileContent: FileContentResult | null;
@@ -15,14 +18,22 @@ export interface UseFileTreeResult {
     readonly error: string | null;
     readonly contentError: string | null;
     readonly dirError: string | null;
+    readonly watcherError: string | null;
     readonly toggleDir: (path: string) => void;
     readonly selectFile: (path: string) => void;
     readonly loadRoot: () => void;
     readonly activeSession: string | null;
+    readonly activeSessionKey: string;
 }
 
 export function useFileTree(): UseFileTreeResult {
+    const sessions = useTmuxStore((state) => state.sessions);
     const activeSession = useTmuxStore((state) => state.activeSession);
+    const activeSessionSnapshot = useMemo(
+        () => (activeSession ? sessions.find((entry) => entry.name === activeSession) ?? null : null),
+        [sessions, activeSession],
+    );
+    const activeSessionKey = activeSessionSnapshot ? `${activeSessionSnapshot.name}:${activeSessionSnapshot.id}` : "";
     const [store] = useState(createFileTreeStore);
 
     const tree = useStore(store, (state) => state.tree);
@@ -35,9 +46,11 @@ export function useFileTree(): UseFileTreeResult {
     const error = useStore(store, (state) => state.error);
     const contentError = useStore(store, (state) => state.contentError);
     const dirError = useStore(store, (state) => state.dirError);
+    const watcherError = useStore(store, (state) => state.watcherError);
 
     const {loadRoot, selectFile, toggleDir} = useFileTreeActions(store, {
         activeSession,
+        activeSessionKey,
         loadFileContent: true,
     });
 
@@ -47,6 +60,9 @@ export function useFileTree(): UseFileTreeResult {
     );
 
     return {
+        tree,
+        expandedPaths,
+        loadingPaths,
         flatNodes,
         selectedPath,
         fileContent,
@@ -55,9 +71,11 @@ export function useFileTree(): UseFileTreeResult {
         error,
         contentError,
         dirError,
+        watcherError,
         toggleDir,
         selectFile,
         loadRoot,
         activeSession,
+        activeSessionKey,
     };
 }

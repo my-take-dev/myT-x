@@ -126,9 +126,6 @@ func TestRemoveWindowLastWindowKeepsEmptySession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveWindowByID() error = %v", err)
 	}
-	if result.SessionRemoved {
-		t.Fatal("SessionRemoved = true, want false (last window empties the session)")
-	}
 	if !result.SessionEmptied {
 		t.Fatal("SessionEmptied = false, want true (last window removed)")
 	}
@@ -221,7 +218,6 @@ func TestRemoveWindowByID(t *testing.T) {
 		windowID             int                         // -1 means "use actual window ID from created session"
 		setup                func(m *SessionManager) int // returns windowID to use, or -1 if windowID field is used
 		wantErr              bool
-		wantSessionGone      bool
 		wantSessionEmptied   bool
 		wantSurvivingID      int
 		wantRemovedPanes     int
@@ -232,7 +228,6 @@ func TestRemoveWindowByID(t *testing.T) {
 			sessionName:          "test",
 			windowID:             -1,
 			wantErr:              false,
-			wantSessionGone:      false,
 			wantSessionEmptied:   true,
 			wantSurvivingID:      -1,
 			wantRemovedPanes:     1,
@@ -301,9 +296,6 @@ func TestRemoveWindowByID(t *testing.T) {
 				return
 			}
 
-			if result.SessionRemoved != tt.wantSessionGone {
-				t.Fatalf("SessionRemoved = %v, want %v", result.SessionRemoved, tt.wantSessionGone)
-			}
 			if result.SessionEmptied != tt.wantSessionEmptied {
 				t.Fatalf("SessionEmptied = %v, want %v", result.SessionEmptied, tt.wantSessionEmptied)
 			}
@@ -315,9 +307,6 @@ func TestRemoveWindowByID(t *testing.T) {
 			}
 
 			// Verify session lifecycle outcome in the manager.
-			if tt.wantSessionGone && manager.HasSession(tt.sessionName) {
-				t.Fatal("session should be removed after explicit session removal")
-			}
 			if tt.wantSessionEmptied {
 				session, ok := manager.GetSession(tt.sessionName)
 				if !ok {
@@ -404,9 +393,6 @@ func TestRemoveWindowByID_ActiveWindowTransitions(t *testing.T) {
 	if removeErr != nil {
 		t.Fatalf("RemoveWindowByID() error = %v", removeErr)
 	}
-	if result.SessionRemoved {
-		t.Fatal("SessionRemoved = true, want false (second window survives)")
-	}
 	if result.SurvivingWindowID != secondWindow.ID {
 		t.Fatalf("SurvivingWindowID = %d, want %d (second window)", result.SurvivingWindowID, secondWindow.ID)
 	}
@@ -460,9 +446,6 @@ func TestRemoveWindowByID_NonActiveWindowKeepsActiveID(t *testing.T) {
 	result, removeErr := manager.RemoveWindowByID("test", secondWindow.ID)
 	if removeErr != nil {
 		t.Fatalf("RemoveWindowByID() error = %v", removeErr)
-	}
-	if result.SessionRemoved {
-		t.Fatal("SessionRemoved = true, want false")
 	}
 	// ActiveWindowID should remain the first window since we removed the non-active one.
 	if result.SurvivingWindowID != firstWindowID {

@@ -37,7 +37,7 @@ export const TreeNodeRow = memo(function TreeNodeRow({
                                                          renderExtra,
                                                          renderIcon,
                                                      }: TreeNodeRowProps) {
-    const hasChildren = node.isDir ? (node.hasChildren ?? true) : false;
+    const hasChildren = node.isDir ? node.hasChildren : false;
 
     const handleClick = () => {
         onFocusIndex(index);

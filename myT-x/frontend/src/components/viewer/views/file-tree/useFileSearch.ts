@@ -1,7 +1,8 @@
-import {useCallback, useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {api} from "../../../../api";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
 import {toErrorMessage} from "../../../../utils/errorUtils";
+import {shouldIgnoreSessionMutation} from "../../../../utils/sessionGuard";
 import type {SearchFileResult} from "./fileTreeTypes";
 
 export interface UseFileSearchResult {
@@ -25,7 +26,13 @@ const SEARCH_DEBOUNCE_MS = 300;
  * - Resets state when the active session changes.
  */
 export function useFileSearch(): UseFileSearchResult {
+    const sessions = useTmuxStore((s) => s.sessions);
     const activeSession = useTmuxStore((s) => s.activeSession);
+    const activeSessionSnapshot = useMemo(
+        () => (activeSession ? sessions.find((entry) => entry.name === activeSession) ?? null : null),
+        [sessions, activeSession],
+    );
+    const activeSessionKey = activeSessionSnapshot ? `${activeSessionSnapshot.name}:${activeSessionSnapshot.id}` : "";
 
     const [query, setQueryState] = useState("");
     const [results, setResults] = useState<readonly SearchFileResult[]>([]);
@@ -34,14 +41,12 @@ export function useFileSearch(): UseFileSearchResult {
 
     // ── Refs (stale-closure prevention) ──
 
-    const prevSessionRef = useRef<string | null>(null);
+    const prevSessionKeyRef = useRef(activeSessionKey);
     const mountedRef = useRef(true);
     const sessionRef = useRef(activeSession);
+    const latestSessionKeyRef = useRef(activeSessionKey);
     const searchRequestRef = useRef(0);
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    // Synchronize sessionRef during render (same pattern as useFileTree).
-    sessionRef.current = activeSession;
 
     // ── Mount / unmount lifecycle ──
 
@@ -55,11 +60,16 @@ export function useFileSearch(): UseFileSearchResult {
         };
     }, []);
 
-    // ── Session change reset ──
+    useEffect(() => {
+        sessionRef.current = activeSession;
+        latestSessionKeyRef.current = activeSessionKey;
+    }, [activeSession, activeSessionKey]);
+
+    // ── Session change reset (keyed by name:id to detect same-name recreation) ──
 
     useEffect(() => {
-        if (prevSessionRef.current === activeSession) return;
-        prevSessionRef.current = activeSession;
+        if (prevSessionKeyRef.current === activeSessionKey) return;
+        prevSessionKeyRef.current = activeSessionKey;
         searchRequestRef.current += 1;
         if (debounceRef.current !== null) {
             clearTimeout(debounceRef.current);
@@ -69,7 +79,7 @@ export function useFileSearch(): UseFileSearchResult {
         setResults([]);
         setIsSearching(false);
         setSearchError(null);
-    }, [activeSession]);
+    }, [activeSessionKey]);
 
     // ── Internal search execution ──
 
@@ -81,20 +91,19 @@ export function useFileSearch(): UseFileSearchResult {
             return;
         }
 
+        const capturedSessionKey = latestSessionKeyRef.current;
         const reqId = ++searchRequestRef.current;
         setIsSearching(true);
         setSearchError(null);
 
         void api.DevPanelSearchFiles(capturedSession, searchQuery)
             .then((searchResults) => {
-                if (!mountedRef.current) return;
-                if (sessionRef.current?.trim() !== capturedSession) return;
+                if (shouldIgnoreSessionMutation(capturedSessionKey, mountedRef, latestSessionKeyRef)) return;
                 if (searchRequestRef.current !== reqId) return;
                 setResults(searchResults ?? []);
             })
             .catch((err: unknown) => {
-                if (!mountedRef.current) return;
-                if (sessionRef.current?.trim() !== capturedSession) return;
+                if (shouldIgnoreSessionMutation(capturedSessionKey, mountedRef, latestSessionKeyRef)) return;
                 if (searchRequestRef.current !== reqId) return;
                 console.error("[file-search] DevPanelSearchFiles failed", {
                     session: capturedSession,

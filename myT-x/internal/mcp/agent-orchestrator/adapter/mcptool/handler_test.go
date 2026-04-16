@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
 	"myT-x/internal/mcp/agent-orchestrator/usecase"
@@ -55,6 +56,22 @@ func (m *mockRepo) GetAgentByPaneID(_ context.Context, paneID string) (domain.Ag
 	return domain.Agent{}, fmt.Errorf("pane %q not found: %w", paneID, domain.ErrNotFound)
 }
 
+func (m *mockRepo) GetAgentByMCPInstanceID(_ context.Context, instanceID string) (domain.Agent, error) {
+	var matched []domain.Agent
+	for _, agent := range m.agents {
+		if agent.MCPInstanceID == instanceID {
+			matched = append(matched, agent)
+		}
+	}
+	if len(matched) == 0 {
+		return domain.Agent{}, fmt.Errorf("instance %q not found: %w", instanceID, domain.ErrNotFound)
+	}
+	if len(matched) > 1 {
+		return domain.Agent{}, fmt.Errorf("multiple agents registered for mcp_instance_id %q", instanceID)
+	}
+	return matched[0], nil
+}
+
 func (m *mockRepo) ListAgents(_ context.Context) ([]domain.Agent, error) {
 	agents := make([]domain.Agent, 0, len(m.agents))
 	for _, a := range m.agents {
@@ -67,9 +84,28 @@ func (m *mockRepo) DeleteAgentsByPaneID(_ context.Context, paneID string) error 
 	for name, a := range m.agents {
 		if a.PaneID == paneID {
 			delete(m.agents, name)
+			delete(m.agentStatuses, name)
 		}
 	}
 	return nil
+}
+
+func (m *mockRepo) ReplaceAgentRegistration(ctx context.Context, agent domain.Agent, defaultStatus *domain.AgentStatus) error {
+	if err := m.DeleteAgentsByPaneID(ctx, agent.PaneID); err != nil {
+		return err
+	}
+	if err := m.UpsertAgent(ctx, agent); err != nil {
+		return err
+	}
+	if defaultStatus == nil {
+		return nil
+	}
+	statusToStore := *defaultStatus
+	if existingStatus, ok := m.agentStatuses[agent.Name]; ok {
+		statusToStore = existingStatus
+		statusToStore.AgentName = agent.Name
+	}
+	return m.UpsertAgentStatus(ctx, statusToStore)
 }
 
 func (m *mockRepo) UpsertAgentStatus(_ context.Context, status domain.AgentStatus) error {
@@ -101,6 +137,14 @@ func (m *mockRepo) CreateTask(_ context.Context, t domain.Task) error {
 func (m *mockRepo) CreateTaskGroup(_ context.Context, group domain.TaskGroup) error {
 	m.taskGroups[group.ID] = group
 	return nil
+}
+
+func (m *mockRepo) GetTaskGroup(_ context.Context, groupID string) (domain.TaskGroup, error) {
+	group, ok := m.taskGroups[groupID]
+	if !ok {
+		return domain.TaskGroup{}, fmt.Errorf("task group %q not found: %w", groupID, domain.ErrNotFound)
+	}
+	return group, nil
 }
 
 func (m *mockRepo) DeleteTaskGroup(_ context.Context, groupID string) error {
@@ -137,7 +181,7 @@ func (m *mockRepo) GetTaskDependencies(_ context.Context, taskID string) ([]stri
 func (m *mockRepo) ListTasks(_ context.Context, filter domain.TaskFilter) ([]domain.Task, error) {
 	var result []domain.Task
 	for _, t := range m.tasks {
-		if filter.Status != "" && filter.Status != "all" && t.Status != filter.Status {
+		if !filter.Status.MatchesTaskStatus(t.Status) {
 			continue
 		}
 		if filter.AgentName != "" && t.AgentName != filter.AgentName {
@@ -308,6 +352,14 @@ func (m *mockMessageRepo) SaveResponse(_ context.Context, msg domain.TaskMessage
 	return nil
 }
 
+func (m *mockMessageRepo) DeleteMessage(_ context.Context, id string) error {
+	if _, ok := m.messages[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(m.messages, id)
+	return nil
+}
+
 func (m *mockMessageRepo) GetMessage(_ context.Context, id string) (domain.TaskMessage, error) {
 	msg, ok := m.messages[id]
 	if !ok {
@@ -325,13 +377,20 @@ func (m *mockMessageRepo) GetResponse(_ context.Context, id string) (domain.Task
 }
 
 type mockPaneOps struct {
-	selfPane   string
-	sentKeys   []sentKey
-	paneTitle  map[string]string
-	capturedAt map[string]string
-	sendErr    error
-	captureErr error
-	listErr    error
+	selfPane        string
+	sentKeys        []sentKey
+	pastedKeys      []sentKey
+	paneTitle       map[string]string
+	capturedAt      map[string]string
+	sendErr         error
+	pasteErr        error
+	captureErr      error
+	listErr         error
+	splitErr        error
+	nextSplitPaneID string
+	sendFn          func(ctx context.Context, paneID string, text string) error
+	pasteFn         func(ctx context.Context, paneID string, text string) error
+	splitFn         func(ctx context.Context, targetPaneID string, horizontal bool) (string, error)
 }
 
 type sentKey struct {
@@ -341,17 +400,32 @@ type sentKey struct {
 
 func newMockPaneOps() *mockPaneOps {
 	return &mockPaneOps{
-		selfPane:   "%0",
-		paneTitle:  make(map[string]string),
-		capturedAt: make(map[string]string),
+		selfPane:        "%0",
+		paneTitle:       make(map[string]string),
+		capturedAt:      make(map[string]string),
+		nextSplitPaneID: "%5",
 	}
 }
 
-func (m *mockPaneOps) SendKeys(_ context.Context, paneID string, text string) error {
+func (m *mockPaneOps) SendKeys(ctx context.Context, paneID string, text string) error {
+	if m.sendFn != nil {
+		return m.sendFn(ctx, paneID, text)
+	}
 	if m.sendErr != nil {
 		return m.sendErr
 	}
 	m.sentKeys = append(m.sentKeys, sentKey{paneID: paneID, text: text})
+	return nil
+}
+
+func (m *mockPaneOps) SendKeysPaste(ctx context.Context, paneID string, text string) error {
+	if m.pasteFn != nil {
+		return m.pasteFn(ctx, paneID, text)
+	}
+	if m.pasteErr != nil {
+		return m.pasteErr
+	}
+	m.pastedKeys = append(m.pastedKeys, sentKey{paneID: paneID, text: text})
 	return nil
 }
 
@@ -373,6 +447,16 @@ func (m *mockPaneOps) ListPanes(context.Context) ([]domain.PaneInfo, error) {
 func (m *mockPaneOps) SetPaneTitle(_ context.Context, paneID string, title string) error {
 	m.paneTitle[paneID] = title
 	return nil
+}
+
+func (m *mockPaneOps) SplitPane(ctx context.Context, targetPaneID string, horizontal bool) (string, error) {
+	if m.splitFn != nil {
+		return m.splitFn(ctx, targetPaneID, horizontal)
+	}
+	if m.splitErr != nil {
+		return "", m.splitErr
+	}
+	return m.nextSplitPaneID, nil
 }
 
 func (m *mockPaneOps) CapturePaneOutput(_ context.Context, paneID string, _ int) (string, error) {
@@ -403,7 +487,9 @@ func buildTestHandlerWithMessageRepo(repo *mockRepo, paneOps *mockPaneOps, msgRe
 	responseSvc := usecase.NewResponseService(repo, repo, msgRepo, paneOps, paneOps, logger)
 	statusSvc := usecase.NewStatusService(repo, repo, repo, msgRepo, paneOps, paneOps, logger)
 	captureSvc := usecase.NewCaptureService(repo, paneOps, paneOps, logger)
-	return NewHandler(agentSvc, dispatchSvc, querySvc, taskUpdateSvc, responseSvc, statusSvc, captureSvc, nil, "mcp-test-instance")
+	memberSvc := usecase.NewMemberBootstrapService(repo, paneOps, paneOps, paneOps, paneOps, paneOps, "/project/root", logger)
+	memberSvc.SetSleepFn(func(_ context.Context, _ time.Duration) error { return nil })
+	return NewHandler(agentSvc, dispatchSvc, querySvc, taskUpdateSvc, responseSvc, statusSvc, captureSvc, memberSvc, "mcp-test-instance")
 }
 
 func TestRegisterAgentRequiresSelfPane(t *testing.T) {
@@ -744,6 +830,74 @@ func TestSendTasksReturnsBatchSummary(t *testing.T) {
 	if summary["sent"] != 1 || summary["failed"] != 1 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
+	if m["all_failed"] != false {
+		t.Fatalf("all_failed = %v, want false", m["all_failed"])
+	}
+	if m["isError"] != true {
+		t.Fatalf("isError = %v, want true for partial failure", m["isError"])
+	}
+}
+
+func TestGetTaskDetailReturnsGroupMetadata(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["sender"] = domain.Agent{Name: "sender", PaneID: "%0"}
+	mr.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	mr.taskGroups["g-1"] = domain.TaskGroup{ID: "g-1", Label: "phase3", CreatedAt: "2026-04-14T10:00:00Z"}
+	mr.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderPaneID:   "%0",
+		SenderName:     "sender",
+		Status:         domain.TaskStatusPending,
+		GroupID:        "g-1",
+	}
+	mp := newMockPaneOps()
+	mp.selfPane = "%0"
+
+	h := buildTestHandler(mr, mp)
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("get_task_detail")
+
+	result, err := tool.Handler(context.Background(), map[string]any{"task_id": "t-1"})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	m := result.(map[string]any)
+	if m["group_id"] != "g-1" || m["group_label"] != "phase3" {
+		t.Fatalf("unexpected group metadata: %+v", m)
+	}
+}
+
+func TestListAgentsRemovesMissingPaneRegistrations(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	mr.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1", Role: "reviewer"}
+	mr.agents["stale"] = domain.Agent{Name: "stale", PaneID: "%9", Role: "worker"}
+	mr.agentStatuses["stale"] = domain.AgentStatus{AgentName: "stale", Status: domain.AgentWorkStatusBusy}
+	mp := newMockPaneOps()
+	mp.selfPane = "%1"
+
+	h := buildTestHandler(mr, mp)
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("list_agents")
+
+	result, err := tool.Handler(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	m := result.(map[string]any)
+	registered := m["registered_agents"].([]map[string]any)
+	if len(registered) != 1 || registered[0]["name"] != "codex" {
+		t.Fatalf("unexpected registered agents: %+v", registered)
+	}
+	if _, ok := mr.agents["stale"]; ok {
+		t.Fatalf("stale registration should be deleted: %+v", mr.agents)
+	}
+	if !strings.Contains(m["warning"].(string), "removed stale agent registrations for missing panes") {
+		t.Fatalf("unexpected warning: %+v", m)
+	}
 }
 
 func TestGetMyTasksRequiresCallerMatch(t *testing.T) {
@@ -818,6 +972,35 @@ func TestSendResponseCompletesTask(t *testing.T) {
 	}
 }
 
+func TestSendResponseCompletesTaskFromPipeBridgeCaller(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	mr.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1", MCPInstanceID: "mcp-test-instance"}
+	mr.tasks["t-001"] = domain.Task{ID: "t-001", AgentName: "codex", AssigneePaneID: "%1", SenderName: "orchestrator", Status: "pending"}
+	mp := newMockPaneOps()
+	mp.selfPane = ""
+
+	h := buildTestHandler(mr, mp)
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("send_response")
+
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"message": "実装完了しました",
+		"task_id": "t-001",
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	m := result.(map[string]any)
+	if m["sent_to_name"] != "orchestrator" {
+		t.Fatalf("unexpected result: %+v", m)
+	}
+	if mr.tasks["t-001"].Status != "completed" {
+		t.Fatalf("task status = %s", mr.tasks["t-001"].Status)
+	}
+}
+
 func TestSendResponseAllowsSamePaneAfterRename(t *testing.T) {
 	mr := newMockRepo()
 	mr.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
@@ -844,6 +1027,42 @@ func TestSendResponseAllowsSamePaneAfterRename(t *testing.T) {
 	}
 	if mr.tasks["t-001"].Status != "completed" {
 		t.Fatalf("task status = %s", mr.tasks["t-001"].Status)
+	}
+}
+
+func TestSendResponseUsesSenderInstanceIDAfterSenderRename(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["sender-renamed"] = domain.Agent{Name: "sender-renamed", PaneID: "%9", MCPInstanceID: "mcp-sender"}
+	mr.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
+	mr.tasks["t-001"] = domain.Task{
+		ID:               "t-001",
+		AgentName:        "codex",
+		AssigneePaneID:   "%1",
+		SenderName:       "sender-old",
+		SenderInstanceID: "mcp-sender",
+		Status:           "pending",
+	}
+	mp := newMockPaneOps()
+	mp.selfPane = "%1"
+
+	h := buildTestHandler(mr, mp)
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("send_response")
+
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"message": "実装完了しました",
+		"task_id": "t-001",
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	m := result.(map[string]any)
+	if m["sent_to_name"] != "sender-renamed" || m["sent_to"] != "%9" {
+		t.Fatalf("unexpected result: %+v", m)
+	}
+	if len(mp.sentKeys) != 1 || mp.sentKeys[0].paneID != "%9" {
+		t.Fatalf("unexpected sent keys: %+v", mp.sentKeys)
 	}
 }
 
@@ -1160,7 +1379,7 @@ func TestMockRepoAbandonTasksByPaneID(t *testing.T) {
 	}
 }
 
-func TestGetMyTaskHandlerHappyPath(t *testing.T) {
+func TestGetTaskMessageHandlerHappyPath(t *testing.T) {
 	mr := newMockRepo()
 	mp := newMockPaneOps()
 	mp.selfPane = "%1"
@@ -1257,6 +1476,246 @@ func TestGetMyTasksRejectsInvalidMaxInline(t *testing.T) {
 	}
 }
 
+func TestHandleAddMembersReturnsBatchResults(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	mp := newMockPaneOps()
+	splitCalls := 0
+	mp.splitFn = func(_ context.Context, _ string, _ bool) (string, error) {
+		splitCalls++
+		if splitCalls == 1 {
+			return "%5", nil
+		}
+		return "", fmt.Errorf("no space left")
+	}
+
+	h := buildTestHandler(mr, mp)
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("add_members")
+
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"members": []any{
+			map[string]any{"pane_title": "worker", "role": "implement", "command": "claude"},
+			map[string]any{"pane_title": "reviewer", "role": "review", "command": "claude"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	m := result.(map[string]any)
+	summary := m["summary"].(map[string]any)
+	if summary["created"] != 1 || summary["failed"] != 1 {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+	results, ok := m["results"].([]map[string]any)
+	if !ok {
+		t.Fatalf("unexpected results type: %T", m["results"])
+	}
+	if results[0]["pane_id"] != "%5" {
+		t.Fatalf("first result = %+v", results[0])
+	}
+	if results[0]["agent_name"] != "worker" {
+		t.Fatalf("first result = %+v", results[0])
+	}
+	if _, exists := results[1]["pane_id"]; exists {
+		t.Fatalf("failed result should not expose pane_id: %+v", results[1])
+	}
+	if !strings.Contains(results[1]["error"].(string), "failed to split pane") {
+		t.Fatalf("second result = %+v", results[1])
+	}
+}
+
+func TestHandleAddMembersDefaultsSplitDirectionToHorizontal(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	mp := newMockPaneOps()
+	gotHorizontal := false
+	mp.splitFn = func(_ context.Context, _ string, horizontal bool) (string, error) {
+		gotHorizontal = horizontal
+		return "%5", nil
+	}
+
+	h := buildTestHandler(mr, mp)
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("add_members")
+
+	_, err := tool.Handler(context.Background(), map[string]any{
+		"members": []any{
+			map[string]any{"pane_title": "worker", "role": "implement", "command": "claude"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !gotHorizontal {
+		t.Fatal("split_direction should default to horizontal")
+	}
+}
+
+func TestHandleAddMembersValidationErrors(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	mp := newMockPaneOps()
+
+	h := buildTestHandler(mr, mp)
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("add_members")
+
+	tests := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{
+			name: "missing members",
+			args: map[string]any{},
+			want: "members is required",
+		},
+		{
+			name: "member missing role",
+			args: map[string]any{
+				"members": []any{
+					map[string]any{"pane_title": "worker", "command": "claude"},
+				},
+			},
+			want: "members[0]: role is required",
+		},
+		{
+			name: "invalid split_from",
+			args: map[string]any{
+				"members":    []any{map[string]any{"pane_title": "worker", "role": "implement", "command": "claude"}},
+				"split_from": "invalid",
+			},
+			want: "pane_id",
+		},
+		{
+			name: "invalid split_direction",
+			args: map[string]any{
+				"members":         []any{map[string]any{"pane_title": "worker", "role": "implement", "command": "claude"}},
+				"split_direction": "diagonal",
+			},
+			want: "split_direction must be one of horizontal, vertical",
+		},
+		{
+			name: "invalid bootstrap delay",
+			args: map[string]any{
+				"members":            []any{map[string]any{"pane_title": "worker", "role": "implement", "command": "claude"}},
+				"bootstrap_delay_ms": float64(999),
+			},
+			want: "bootstrap_delay_ms must be between 1000 and 30000",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tool.Handler(context.Background(), tt.args)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleAddMembersReturnsPartialResultsAsWarning(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	mp := newMockPaneOps()
+	splitIndex := 0
+	paneIDs := []string{"%5", "%6"}
+	mp.splitFn = func(_ context.Context, _ string, _ bool) (string, error) {
+		if splitIndex >= len(paneIDs) {
+			return "", fmt.Errorf("too many splits")
+		}
+		paneID := paneIDs[splitIndex]
+		splitIndex++
+		return paneID, nil
+	}
+
+	h := buildTestHandler(mr, mp)
+	sleepCalls := 0
+	h.memberSvc.SetSleepFn(func(_ context.Context, _ time.Duration) error {
+		sleepCalls++
+		if sleepCalls == 5 {
+			return context.Canceled
+		}
+		return nil
+	})
+
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("add_members")
+
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"members": []any{
+			map[string]any{"pane_title": "worker", "role": "implement", "command": "claude"},
+			map[string]any{"pane_title": "reviewer", "role": "review", "command": "claude"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	m := result.(map[string]any)
+	if !strings.Contains(m["warning"].(string), "bootstrap wait") {
+		t.Fatalf("warning = %v", m["warning"])
+	}
+	summary := m["summary"].(map[string]any)
+	if summary["created"] != 2 || summary["failed"] != 0 {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+	results, ok := m["results"].([]map[string]any)
+	if !ok {
+		t.Fatalf("unexpected results type: %T", m["results"])
+	}
+	warnings, ok := results[0]["warnings"].([]string)
+	if !ok || len(warnings) == 0 {
+		t.Fatalf("expected warnings in first result: %+v", results[0])
+	}
+}
+
+func TestHandleAddMembersIncludesOrphanedPaneIDOnCommandFailure(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	mp := newMockPaneOps()
+	mp.splitFn = func(_ context.Context, _ string, _ bool) (string, error) {
+		return "%5", nil
+	}
+	mp.sendFn = func(_ context.Context, _ string, text string) error {
+		if strings.HasPrefix(text, `cd "`) {
+			return fmt.Errorf("cd failed")
+		}
+		return nil
+	}
+
+	h := buildTestHandler(mr, mp)
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("add_members")
+
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"members": []any{
+			map[string]any{"pane_title": "worker", "role": "implement", "command": "claude"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	m := result.(map[string]any)
+	results, ok := m["results"].([]map[string]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("unexpected results payload: %#v", m["results"])
+	}
+	if results[0]["orphaned_pane_id"] != "%5" {
+		t.Fatalf("orphaned_pane_id = %v, want %%5", results[0]["orphaned_pane_id"])
+	}
+	if _, exists := results[0]["pane_id"]; exists {
+		t.Fatalf("failed result should not expose pane_id: %+v", results[0])
+	}
+}
+
 func TestToolCount(t *testing.T) {
 	mr := newMockRepo()
 	mp := newMockPaneOps()
@@ -1267,8 +1726,8 @@ func TestToolCount(t *testing.T) {
 	}
 
 	tools := registry.List()
-	if len(tools) != 18 {
-		t.Fatalf("got %d tools, want 18", len(tools))
+	if len(tools) != 19 {
+		t.Fatalf("got %d tools, want 19", len(tools))
 	}
 	for _, name := range []string{
 		"register_agent",
@@ -1288,6 +1747,7 @@ func TestToolCount(t *testing.T) {
 		"update_task_progress",
 		"capture_pane",
 		"add_member",
+		"add_members",
 		"help",
 	} {
 		if _, ok := registry.Get(name); !ok {
@@ -1348,12 +1808,17 @@ func TestToolMetadataRetainsOperationalDetails(t *testing.T) {
 		{
 			name:       "get_my_tasks lists supported filters",
 			toolName:   "get_my_tasks",
-			substrings: []string{"blocked", "cancelled", "expired", "from_agent"},
+			substrings: []string{"blocked", "cancelled", "expired", "from_agent", "pipe mode cannot infer the assignee name"},
+		},
+		{
+			name:       "add_member documents caller pane fallback",
+			toolName:   "add_member",
+			substrings: []string{"caller pane is available", "split_from"},
 		},
 		{
 			name:       "update_status mentions idle redelivery",
 			toolName:   "update_status",
-			substrings: []string{"idle", "re-delivers", "auto-acknowledges"},
+			substrings: []string{"idle", "re-delivers", "unacknowledged"},
 		},
 		{
 			name:       "list_all_tasks describes summary payload",
@@ -1442,8 +1907,11 @@ func TestHelpOverviewReturnsAllTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected []string for available_tools, got %T", m["available_tools"])
 	}
-	if len(tools) != 18 {
-		t.Fatalf("got %d tools, want 18", len(tools))
+	if len(tools) != 19 {
+		t.Fatalf("got %d tools, want 19", len(tools))
+	}
+	if !reflect.DeepEqual(tools, availableTopics()) {
+		t.Fatalf("available_tools = %v, want sorted topics %v", tools, availableTopics())
 	}
 	if m["title"] != "Agent Orchestrator MCP Help" {
 		t.Fatalf("unexpected title: %v", m["title"])
@@ -1464,6 +1932,136 @@ func TestHelpWithTopicReturnsTool(t *testing.T) {
 	}
 	if m["tool"] != "send_task" {
 		t.Fatalf("tool = %v, want send_task", m["tool"])
+	}
+}
+
+func TestHelpOverviewDocumentsSendTaskRegistrationException(t *testing.T) {
+	result, err := handleHelp(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("handleHelp: %v", err)
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+
+	workflow, ok := m["workflow"].(map[string]any)
+	if !ok {
+		t.Fatalf("workflow = %T, want map[string]any", m["workflow"])
+	}
+	steps, ok := workflow["steps"].([]string)
+	if !ok {
+		t.Fatalf("workflow steps = %T, want []string", workflow["steps"])
+	}
+	if len(steps) == 0 || !strings.Contains(steps[0], "Direct send_task calls can still work without caller-pane registration") {
+		t.Fatalf("workflow step[0] = %q, want send_task registration exception", steps[0])
+	}
+
+	bestPractices, ok := m["best_practices"].([]string)
+	if !ok {
+		t.Fatalf("best_practices = %T, want []string", m["best_practices"])
+	}
+	if len(bestPractices) == 0 || !strings.Contains(bestPractices[0], "Direct send_task calls only require from_agent to resolve") {
+		t.Fatalf("best_practices[0] = %q, want send_task registration exception", bestPractices[0])
+	}
+}
+
+func TestToolHelpContractsExposeCurrentAuthorizationAndResultNotes(t *testing.T) {
+	tests := []struct {
+		name                string
+		toolName            string
+		helpDescription     string
+		registryDescription string
+		notes               []string
+	}{
+		{
+			name:                "send_task",
+			toolName:            "send_task",
+			helpDescription:     sendTaskHelpContract.helpDescription,
+			registryDescription: sendTaskHelpContract.registryDescription,
+			notes:               sendTaskHelpContract.notes,
+		},
+		{
+			name:                "send_tasks",
+			toolName:            "send_tasks",
+			helpDescription:     sendTasksHelpContract.helpDescription,
+			registryDescription: sendTasksHelpContract.registryDescription,
+			notes:               sendTasksHelpContract.notes,
+		},
+		{
+			name:                "cancel_task",
+			toolName:            "cancel_task",
+			helpDescription:     cancelTaskHelpContract.helpDescription,
+			registryDescription: cancelTaskHelpContract.registryDescription,
+			notes:               cancelTaskHelpContract.notes,
+		},
+	}
+
+	mr := newMockRepo()
+	mp := newMockPaneOps()
+	h := buildTestHandler(mr, mp)
+	registry, err := h.BuildRegistry()
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool, ok := registry.Get(tt.toolName)
+			if !ok {
+				t.Fatalf("tool %q should be registered", tt.toolName)
+			}
+			if tool.Description != tt.registryDescription {
+				t.Fatalf("tool %q description = %q, want %q", tt.toolName, tool.Description, tt.registryDescription)
+			}
+
+			help, ok := helpForTool(tt.toolName)
+			if !ok {
+				t.Fatalf("tool %q help should exist", tt.toolName)
+			}
+			if got := help["description"]; got != tt.helpDescription {
+				t.Fatalf("tool %q help description = %v, want %q", tt.toolName, got, tt.helpDescription)
+			}
+			gotNotes, ok := help["notes"].([]string)
+			if !ok {
+				t.Fatalf("tool %q help notes = %T, want []string", tt.toolName, help["notes"])
+			}
+			if !reflect.DeepEqual(gotNotes, tt.notes) {
+				t.Fatalf("tool %q help notes = %#v, want %#v", tt.toolName, gotNotes, tt.notes)
+			}
+		})
+	}
+}
+
+func TestHelpDocumentsAssigneeNameRequirementAndCallerPaneFallback(t *testing.T) {
+	tests := []struct {
+		toolName   string
+		noteSubstr string
+	}{
+		{toolName: "get_my_tasks", noteSubstr: "cannot derive which registered assignee name"},
+		{toolName: "get_task_message", noteSubstr: "cannot derive which registered assignee name"},
+		{toolName: "acknowledge_task", noteSubstr: "cannot derive which registered assignee name"},
+		{toolName: "add_member", noteSubstr: "caller pane is available"},
+		{toolName: "add_members", noteSubstr: "caller pane is available"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.toolName, func(t *testing.T) {
+			help, ok := helpForTool(tt.toolName)
+			if !ok {
+				t.Fatalf("tool %q help should exist", tt.toolName)
+			}
+			notes, ok := help["notes"].([]string)
+			if !ok {
+				t.Fatalf("tool %q help notes = %T, want []string", tt.toolName, help["notes"])
+			}
+			for _, note := range notes {
+				if strings.Contains(note, tt.noteSubstr) {
+					return
+				}
+			}
+			t.Fatalf("tool %q help notes = %#v, want substring %q", tt.toolName, notes, tt.noteSubstr)
+		})
 	}
 }
 

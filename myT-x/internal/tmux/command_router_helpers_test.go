@@ -1,120 +1,168 @@
 package tmux
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestResolveDimension(t *testing.T) {
+func TestResolveResizeDimension(t *testing.T) {
 	tests := []struct {
 		name         string
 		value        any
 		reference    int
 		defaultValue int
+		flag         string
 		want         int
+		wantErr      string // substring match; empty means no error expected
 	}{
 		{
-			name:         "nil returns default",
+			name:         "nil returns default without error",
 			value:        nil,
 			reference:    120,
 			defaultValue: 80,
+			flag:         "-x",
 			want:         80,
 		},
 		{
-			name:         "int value is used directly",
-			value:        90,
+			name:         "positive int is returned as-is",
+			value:        42,
 			reference:    120,
 			defaultValue: 80,
-			want:         90,
+			flag:         "-x",
+			want:         42,
 		},
 		{
-			name:         "float64 value is truncated to int",
-			value:        float64(90),
+			name:         "zero int is rejected",
+			value:        0,
 			reference:    120,
 			defaultValue: 80,
-			want:         90,
+			flag:         "-x",
+			wantErr:      "must be positive",
 		},
 		{
-			name:         "negative float64 falls back to default",
-			value:        float64(-5.5),
+			name:         "negative int is rejected",
+			value:        -5,
 			reference:    120,
 			defaultValue: 80,
-			want:         80,
+			flag:         "-x",
+			wantErr:      "must be positive",
 		},
 		{
-			name:         "string integer is parsed",
-			value:        "100",
+			name:         "positive float64 is truncated",
+			value:        float64(42.9),
 			reference:    120,
 			defaultValue: 80,
-			want:         100,
+			flag:         "-x",
+			want:         42,
 		},
 		{
-			name:         "percentage uses reference",
-			value:        "30%",
+			name:         "zero float64 is rejected",
+			value:        float64(0),
 			reference:    120,
 			defaultValue: 80,
-			want:         36,
+			flag:         "-x",
+			wantErr:      "must be positive",
 		},
 		{
-			name:         "zero percent falls back to default",
-			value:        "0%",
+			name:         "valid percentage computes correctly",
+			value:        "50%",
 			reference:    120,
 			defaultValue: 80,
-			want:         80,
+			flag:         "-x",
+			want:         60,
 		},
 		{
-			name:         "percent sign only falls back to default",
-			value:        "%",
-			reference:    120,
+			name:         "tiny percentage clamps to 1",
+			value:        "1%",
+			reference:    50,
 			defaultValue: 80,
-			want:         80,
+			flag:         "-y",
+			want:         1, // 1% of 50 = 0.5 → truncated to 0 → clamped to 1
 		},
 		{
-			name:         "hundred percent returns full reference",
-			value:        "100%",
-			reference:    120,
-			defaultValue: 80,
-			want:         120,
-		},
-		{
-			name:         "percentage over 100 exceeds reference",
-			value:        "200%",
-			reference:    120,
-			defaultValue: 80,
-			want:         240,
-		},
-		{
-			name:         "invalid string falls back to default",
-			value:        "notint",
-			reference:    120,
-			defaultValue: 80,
-			want:         80,
-		},
-		{
-			name:         "whitespace-only string falls back to default",
-			value:        "   ",
-			reference:    120,
-			defaultValue: 80,
-			want:         80,
-		},
-		{
-			name:         "negative absolute value falls back to default",
-			value:        "-5",
-			reference:    120,
-			defaultValue: 80,
-			want:         80,
-		},
-		{
-			name:         "overflowing percentage falls back to default",
+			name:         "percentage overflow returns error",
 			value:        "200%",
 			reference:    int(^uint(0) >> 1),
 			defaultValue: 80,
-			want:         80,
+			flag:         "-x",
+			wantErr:      "overflow",
+		},
+		{
+			name:         "zero percent is rejected",
+			value:        "0%",
+			reference:    120,
+			defaultValue: 80,
+			flag:         "-x",
+			wantErr:      "expects a positive integer or percentage",
+		},
+		{
+			name:         "negative percent is rejected",
+			value:        "-10%",
+			reference:    120,
+			defaultValue: 80,
+			flag:         "-x",
+			wantErr:      "expects a positive integer or percentage",
+		},
+		{
+			name:         "empty string is rejected",
+			value:        "",
+			reference:    120,
+			defaultValue: 80,
+			flag:         "-x",
+			wantErr:      "requires a value",
+		},
+		{
+			name:         "non-numeric string is rejected",
+			value:        "abc",
+			reference:    120,
+			defaultValue: 80,
+			flag:         "-x",
+			wantErr:      "expects a positive integer or percentage",
+		},
+		{
+			name:         "percentage with zero reference is rejected",
+			value:        "50%",
+			reference:    0,
+			defaultValue: 80,
+			flag:         "-x",
+			wantErr:      "cannot use percentage without a positive reference",
+		},
+		{
+			name:         "100 percent returns full reference",
+			value:        "100%",
+			reference:    120,
+			defaultValue: 80,
+			flag:         "-x",
+			want:         120,
+		},
+		{
+			name:         "200 percent doubles reference",
+			value:        "200%",
+			reference:    60,
+			defaultValue: 80,
+			flag:         "-x",
+			want:         120,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resolveDimension(tt.value, tt.reference, tt.defaultValue); got != tt.want {
-				t.Fatalf("resolveDimension(%v, %d, %d) = %d, want %d",
-					tt.value, tt.reference, tt.defaultValue, got, tt.want)
+			got, err := resolveResizeDimension(tt.value, tt.reference, tt.defaultValue, tt.flag)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolveResizeDimension(%v, %d, %d, %q) = %d, want %d",
+					tt.value, tt.reference, tt.defaultValue, tt.flag, got, tt.want)
 			}
 		})
 	}

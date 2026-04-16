@@ -1,6 +1,7 @@
 import type {ClaudeEnvEntry, FormAction, FormState, PaneEnvEntry} from "./types";
 import {generateId} from "./types";
-import {EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK} from "./constants";
+import {DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS, EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK} from "./constants";
+import {normalizeViewerShortcutConfig} from "../viewer/viewerShortcutDefinitions";
 import {normalizeViewerSidebarMode} from "../../utils/viewerSidebarMode";
 
 export const INITIAL_FORM: FormState = {
@@ -12,11 +13,15 @@ export const INITIAL_FORM: FormState = {
     keys: {},
     viewerShortcuts: {},
     defaultSessionDir: "",
+    websocketPort: 0,
     wtEnabled: true,
     wtForceCleanup: false,
     wtSetupScripts: [],
+    wtSetupScriptTimeoutSeconds: DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS,
     wtCopyFiles: [],
     wtCopyDirs: [],
+    mcpServers: [],
+    mcpServersLoaded: false,
     agentFrom: "",
     agentTo: "",
     overrides: [],
@@ -25,7 +30,8 @@ export const INITIAL_FORM: FormState = {
     paneEnvDefaultEnabled: false,
     claudeEnvDefaultEnabled: false,
     claudeEnvEntries: [],
-    chatOverlayPercentage: 80,
+    taskScheduler: undefined,
+    chatOverlayPercentage: 40,
     minOverrideNameLen: MIN_OVERRIDE_NAME_LEN_FALLBACK,
     allowedShells: [],
     loading: false,
@@ -57,6 +63,17 @@ export function formReducer(state: FormState, action: FormAction): FormState {
             const claudeEnvEntries: ClaudeEnvEntry[] = ce?.vars
                 ? Object.entries(ce.vars).map(([key, value]) => ({id: generateId(), key, value}))
                 : [];
+            const taskScheduler = cfg.task_scheduler
+                ? {
+                    pre_exec_reset_delay_s: cfg.task_scheduler.pre_exec_reset_delay_s,
+                    pre_exec_idle_timeout_s: cfg.task_scheduler.pre_exec_idle_timeout_s,
+                    pre_exec_target_mode: cfg.task_scheduler.pre_exec_target_mode,
+                    message_templates: cfg.task_scheduler.message_templates?.map((template) => ({
+                        name: template.name,
+                        message: template.message,
+                    })),
+                }
+                : undefined;
             return {
                 ...state,
                 shell: cfg.shell || "powershell.exe",
@@ -65,13 +82,36 @@ export function formReducer(state: FormState, action: FormAction): FormState {
                 globalHotkey: cfg.global_hotkey || "Ctrl+Shift+F12",
                 viewerSidebarMode: normalizeViewerSidebarMode(cfg.viewer_sidebar_mode),
                 keys: cfg.keys || {},
-                viewerShortcuts: cfg.viewer_shortcuts ?? {},
+                viewerShortcuts: normalizeViewerShortcutConfig(cfg.viewer_shortcuts),
                 defaultSessionDir: cfg.default_session_dir || "",
+                websocketPort: cfg.websocket_port ?? 0,
                 wtEnabled: wt?.enabled ?? true,
                 wtForceCleanup: wt?.force_cleanup ?? false,
                 wtSetupScripts: wt?.setup_scripts || [],
+                wtSetupScriptTimeoutSeconds:
+                    typeof wt?.setup_script_timeout_seconds === "number" && wt.setup_script_timeout_seconds > 0
+                        ? wt.setup_script_timeout_seconds
+                        : DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS,
                 wtCopyFiles: wt?.copy_files || [],
                 wtCopyDirs: wt?.copy_dirs || [],
+                mcpServers: (cfg.mcp_servers ?? []).map((server) => ({
+                    id: server.id,
+                    name: server.name,
+                    description: server.description,
+                    kind: server.kind,
+                    command: server.command,
+                    args: server.args ? [...server.args] : undefined,
+                    env: server.env ? {...server.env} : undefined,
+                    enabled: server.enabled,
+                    usage_sample: server.usage_sample,
+                    config_params: server.config_params?.map((param) => ({
+                        key: param.key,
+                        label: param.label,
+                        default_value: param.default_value,
+                        description: param.description,
+                    })),
+                })),
+                mcpServersLoaded: true,
                 agentFrom: am?.from || "",
                 agentTo: am?.to || "",
                 overrides: (am?.overrides || []).map((o) => ({
@@ -82,9 +122,10 @@ export function formReducer(state: FormState, action: FormAction): FormState {
                 effortLevel: effortKey ? pe[effortKey] || "" : "",
                 paneEnvEntries,
                 paneEnvDefaultEnabled: cfg.pane_env_default_enabled ?? false,
-                chatOverlayPercentage: cfg.chat_overlay_percentage ?? 80,
+                chatOverlayPercentage: cfg.chat_overlay_percentage ?? 40,
                 claudeEnvDefaultEnabled: ce?.default_enabled ?? false,
                 claudeEnvEntries,
+                taskScheduler,
                 allowedShells: shells || [],
                 loading: false,
                 loadFailed: false,

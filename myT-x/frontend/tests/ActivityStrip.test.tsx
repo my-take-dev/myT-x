@@ -61,6 +61,12 @@ describe("ActivityStrip", () => {
         root = createRoot(container);
         mockSidebarMode = undefined;
         resolveToggleViewerSidebarMode = null;
+        mocked.views = [{
+            id: "test-view",
+            icon: () => null,
+            label: "Test View",
+            component: () => null,
+        }];
         mocked.ToggleViewerSidebarMode.mockReset();
         mocked.toggleView.mockReset();
         mocked.ToggleViewerSidebarMode.mockImplementation(() => new Promise<void>((resolve) => {
@@ -83,7 +89,7 @@ describe("ActivityStrip", () => {
             root.render(<ActivityStrip/>);
         });
 
-        const toggleButton = container.querySelector<HTMLButtonElement>("[aria-label='ドッキング表示に切替']");
+        const toggleButton = document.body.querySelector<HTMLButtonElement>("[aria-label='ドッキング表示に切替']");
         expect(toggleButton).not.toBeNull();
 
         await act(async () => {
@@ -101,5 +107,32 @@ describe("ActivityStrip", () => {
         });
 
         expect(toggleButton?.disabled).toBe(false);
+    });
+
+    it("renders nothing when no views are registered", () => {
+        mocked.views = [];
+
+        act(() => {
+            root.render(<ActivityStrip/>);
+        });
+
+        expect(container.innerHTML).toBe("");
+        expect(document.body.querySelector(".viewer-activity-strip")).toBeNull();
+    });
+
+    it("skips rendering when document.body is unavailable", () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const bodySpy = vi.spyOn(document, "body", "get").mockReturnValue(null);
+
+        act(() => {
+            root.render(<ActivityStrip/>);
+        });
+
+        expect(container.innerHTML).toBe("");
+        expect(errorSpy).toHaveBeenCalledWith(
+            "[ActivityStrip] document.body unavailable; skipping portal render",
+        );
+
+        bodySpy.mockRestore();
     });
 });

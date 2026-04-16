@@ -122,6 +122,171 @@ func TestResolveSessionTargetReturnsClone(t *testing.T) {
 	}
 }
 
+func TestResolveSessionTargetBySessionID(t *testing.T) {
+	manager := NewSessionManager()
+	session, _, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	resolved, err := manager.ResolveSessionTarget(formatSessionID(session.ID))
+	if err != nil {
+		t.Fatalf("ResolveSessionTarget($sessionID) error = %v", err)
+	}
+	if resolved.ID != session.ID {
+		t.Fatalf("resolved session ID = %d, want %d", resolved.ID, session.ID)
+	}
+}
+
+func TestResolveTargetBareWindowID_SingleSession(t *testing.T) {
+	manager := NewSessionManager()
+	session, pane, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	resolved, err := manager.ResolveTarget(formatWindowID(session.Windows[0].ID), -1)
+	if err != nil {
+		t.Fatalf("ResolveTarget(@windowID) error = %v", err)
+	}
+	if resolved.ID != pane.ID {
+		t.Fatalf("resolved pane ID = %d, want %d", resolved.ID, pane.ID)
+	}
+}
+
+func TestResolveTargetBareWindowID_MultiSession(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("first", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession(first) error = %v", err)
+	}
+	secondSession, secondPane, err := manager.CreateSession("second", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(second) error = %v", err)
+	}
+
+	resolved, err := manager.ResolveTarget(formatWindowID(secondSession.Windows[0].ID), -1)
+	if err != nil {
+		t.Fatalf("ResolveTarget(@windowID) error = %v", err)
+	}
+	if resolved.ID != secondPane.ID {
+		t.Fatalf("resolved pane ID = %d, want %d", resolved.ID, secondPane.ID)
+	}
+}
+
+func TestResolveTargetBareWindowID_NotFound(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	_, err := manager.ResolveTarget("@9999", -1)
+	if err == nil {
+		t.Fatal("ResolveTarget(@9999) expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "window id not found: 9999") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "window id not found: 9999")
+	}
+}
+
+func TestResolveTargetBareWindowID_Malformed(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	tests := []string{"@", "@abc", "@-1"}
+	for _, target := range tests {
+		t.Run(target, func(t *testing.T) {
+			_, err := manager.ResolveTarget(target, -1)
+			if err == nil {
+				t.Fatalf("ResolveTarget(%q) expected error, got nil", target)
+			}
+			if !strings.Contains(err.Error(), "invalid window id:") {
+				t.Fatalf("error = %q, want substring %q", err.Error(), "invalid window id:")
+			}
+		})
+	}
+}
+
+func TestResolveSessionTargetBareWindowID(t *testing.T) {
+	manager := NewSessionManager()
+	session, _, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	resolved, err := manager.ResolveSessionTarget(formatWindowID(session.Windows[0].ID))
+	if err != nil {
+		t.Fatalf("ResolveSessionTarget(@windowID) error = %v", err)
+	}
+	if resolved.Name != session.Name {
+		t.Fatalf("resolved session = %q, want %q", resolved.Name, session.Name)
+	}
+}
+
+func TestResolveSessionTargetBareWindowID_MultiSession(t *testing.T) {
+	manager := NewSessionManager()
+	firstSession, _, err := manager.CreateSession("first", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(first) error = %v", err)
+	}
+	secondSession, _, err := manager.CreateSession("second", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(second) error = %v", err)
+	}
+
+	firstResolved, err := manager.ResolveSessionTarget(formatWindowID(firstSession.Windows[0].ID))
+	if err != nil {
+		t.Fatalf("ResolveSessionTarget(first @windowID) error = %v", err)
+	}
+	if firstResolved.Name != firstSession.Name {
+		t.Fatalf("resolved session = %q, want %q", firstResolved.Name, firstSession.Name)
+	}
+
+	secondResolved, err := manager.ResolveSessionTarget(formatWindowID(secondSession.Windows[0].ID))
+	if err != nil {
+		t.Fatalf("ResolveSessionTarget(second @windowID) error = %v", err)
+	}
+	if secondResolved.Name != secondSession.Name {
+		t.Fatalf("resolved session = %q, want %q", secondResolved.Name, secondSession.Name)
+	}
+}
+
+func TestResolveSessionTargetBareWindowID_NotFound(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	_, err := manager.ResolveSessionTarget("@9999")
+	if err == nil {
+		t.Fatal("ResolveSessionTarget(@9999) expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "window id not found: 9999") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "window id not found: 9999")
+	}
+}
+
+func TestResolveSessionTargetBareWindowID_Malformed(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	tests := []string{"@", "@abc", "@-1"}
+	for _, target := range tests {
+		t.Run(target, func(t *testing.T) {
+			_, err := manager.ResolveSessionTarget(target)
+			if err == nil {
+				t.Fatalf("ResolveSessionTarget(%q) expected error, got nil", target)
+			}
+			if !strings.Contains(err.Error(), "invalid window id:") {
+				t.Fatalf("error = %q, want substring %q", err.Error(), "invalid window id:")
+			}
+		})
+	}
+}
+
 func TestSplitPaneUpdatesLayout(t *testing.T) {
 	manager := NewSessionManager()
 	session, pane, err := manager.CreateSession("demo", "main", 120, 40)
@@ -134,6 +299,18 @@ func TestSplitPaneUpdatesLayout(t *testing.T) {
 	}
 	if newPane.ID != 1 {
 		t.Fatalf("new pane id = %d, want 1", newPane.ID)
+	}
+	if got := pane.Env["TMUX_PANE"]; got != pane.IDString() {
+		t.Fatalf("initial pane TMUX_PANE = %q, want %q", got, pane.IDString())
+	}
+	if got := pane.Env["GO_TMUX_PANE"]; got != pane.IDString() {
+		t.Fatalf("initial pane GO_TMUX_PANE = %q, want %q", got, pane.IDString())
+	}
+	if got := newPane.Env["TMUX_PANE"]; got != newPane.IDString() {
+		t.Fatalf("new pane TMUX_PANE = %q, want %q", got, newPane.IDString())
+	}
+	if got := newPane.Env["GO_TMUX_PANE"]; got != newPane.IDString() {
+		t.Fatalf("new pane GO_TMUX_PANE = %q, want %q", got, newPane.IDString())
 	}
 	if session.Windows[0].Layout == nil || session.Windows[0].Layout.Type != LayoutSplit {
 		t.Fatalf("layout not split: %#v", session.Windows[0].Layout)
@@ -901,6 +1078,12 @@ func TestCreatePaneInEmptySession(t *testing.T) {
 	if newPane.Width != DefaultTerminalCols || newPane.Height != DefaultTerminalRows {
 		t.Fatalf("new pane size = %dx%d, want %dx%d", newPane.Width, newPane.Height, DefaultTerminalCols, DefaultTerminalRows)
 	}
+	if got := newPane.Env["TMUX_PANE"]; got != newPane.IDString() {
+		t.Fatalf("new pane TMUX_PANE = %q, want %q", got, newPane.IDString())
+	}
+	if got := newPane.Env["GO_TMUX_PANE"]; got != newPane.IDString() {
+		t.Fatalf("new pane GO_TMUX_PANE = %q, want %q", got, newPane.IDString())
+	}
 
 	snapshot, ok := manager.GetSession("demo")
 	if !ok {
@@ -911,6 +1094,12 @@ func TestCreatePaneInEmptySession(t *testing.T) {
 	}
 	if len(snapshot.Windows[0].Panes) != 1 {
 		t.Fatalf("len(snapshot.Windows[0].Panes) = %d, want 1", len(snapshot.Windows[0].Panes))
+	}
+	if got := snapshot.Windows[0].Panes[0].Env["TMUX_PANE"]; got != newPane.IDString() {
+		t.Fatalf("snapshot pane TMUX_PANE = %q, want %q", got, newPane.IDString())
+	}
+	if got := snapshot.Windows[0].Panes[0].Env["GO_TMUX_PANE"]; got != newPane.IDString() {
+		t.Fatalf("snapshot pane GO_TMUX_PANE = %q, want %q", got, newPane.IDString())
 	}
 	if snapshot.ActiveWindowID != snapshot.Windows[0].ID {
 		t.Fatalf("ActiveWindowID = %d, want %d", snapshot.ActiveWindowID, snapshot.Windows[0].ID)
@@ -1247,11 +1436,9 @@ func TestCreateSessionNegativeDimensionsDefaultToSane(t *testing.T) {
 	}
 }
 
-// TestResolveTargetWindowByID_NonZeroID verifies that bare numeric window
-// targets are resolved by window.ID (not slice index). When two sessions exist,
-// the second session's window has ID=1 but is at slice position 0 within its
-// session — the target "second:1" must resolve successfully.
-func TestResolveTargetWindowByID_NonZeroID(t *testing.T) {
+// TestResolveTargetWindowByIndex_NonZeroWindowID verifies that bare numeric
+// window targets are resolved by session-local index, not global window ID.
+func TestResolveTargetWindowByIndex_NonZeroWindowID(t *testing.T) {
 	manager := NewSessionManager()
 
 	// First session gets window ID=0.
@@ -1265,10 +1452,11 @@ func TestResolveTargetWindowByID_NonZeroID(t *testing.T) {
 		t.Fatalf("CreateSession(second) error = %v", err)
 	}
 
-	// "second:1" should resolve via window.ID=1, not slice index 1.
-	resolved, resolveErr := manager.ResolveTarget("second:1", -1)
+	// "second:0" should resolve the first window in the second session even
+	// though that window's stable ID is 1.
+	resolved, resolveErr := manager.ResolveTarget("second:0", -1)
 	if resolveErr != nil {
-		t.Fatalf("ResolveTarget(%q) error = %v", "second:1", resolveErr)
+		t.Fatalf("ResolveTarget(%q) error = %v", "second:0", resolveErr)
 	}
 	if resolved.ID != secondPane.ID {
 		t.Fatalf("resolved pane ID = %d, want %d", resolved.ID, secondPane.ID)
@@ -1280,7 +1468,8 @@ func TestResolveTargetWindowByID_NonZeroID(t *testing.T) {
 func TestResolveTargetWindowByID_RoundTrip(t *testing.T) {
 	manager := NewSessionManager()
 
-	// Create two sessions so the second has window.ID != 0.
+	// Create two sessions so the second window has a different stable ID but the
+	// same session-local index of 0.
 	if _, _, err := manager.CreateSession("first", "main", 120, 40); err != nil {
 		t.Fatalf("CreateSession(first) error = %v", err)
 	}
@@ -1291,8 +1480,8 @@ func TestResolveTargetWindowByID_RoundTrip(t *testing.T) {
 
 	// Expand format string as display-message would.
 	formatted := expandFormatSafe("#{session_name}:#{window_index}", secondPane.ID, manager)
-	if formatted != "second:1" {
-		t.Fatalf("expandFormatSafe() = %q, want %q", formatted, "second:1")
+	if formatted != "second:0" {
+		t.Fatalf("expandFormatSafe() = %q, want %q", formatted, "second:0")
 	}
 
 	// Use the formatted string as a target — must round-trip successfully.
@@ -1305,9 +1494,33 @@ func TestResolveTargetWindowByID_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestResolveTargetWindowByID_NotFound verifies that a non-existent window ID
-// returns a clear error.
-func TestResolveTargetWindowByID_NotFound(t *testing.T) {
+func TestResolveTargetSessionIDRoundTrip(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("first", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession(first) error = %v", err)
+	}
+	_, secondPane, err := manager.CreateSession("second", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(second) error = %v", err)
+	}
+
+	formatted := expandFormatSafe("#{session_id}:#{window_index}", secondPane.ID, manager)
+	if formatted == "" || formatted == "second:0" {
+		t.Fatalf("expandFormatSafe() = %q, want $session_id format", formatted)
+	}
+
+	resolved, resolveErr := manager.ResolveTarget(formatted, -1)
+	if resolveErr != nil {
+		t.Fatalf("ResolveTarget(%q) error = %v", formatted, resolveErr)
+	}
+	if resolved.ID != secondPane.ID {
+		t.Fatalf("round-trip session_id target resolved pane ID = %d, want %d", resolved.ID, secondPane.ID)
+	}
+}
+
+// TestResolveTargetWindowByIndex_NotFound verifies that an out-of-range window
+// index returns a clear error.
+func TestResolveTargetWindowByIndex_NotFound(t *testing.T) {
 	manager := NewSessionManager()
 	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
@@ -1317,7 +1530,24 @@ func TestResolveTargetWindowByID_NotFound(t *testing.T) {
 	if resolveErr == nil {
 		t.Fatal("ResolveTarget(demo:999) expected error, got nil")
 	}
-	if !strings.Contains(resolveErr.Error(), "window id not found") {
-		t.Fatalf("error = %q, want substring %q", resolveErr.Error(), "window id not found")
+	if !strings.Contains(resolveErr.Error(), "window index out of range") {
+		t.Fatalf("error = %q, want substring %q", resolveErr.Error(), "window index out of range")
+	}
+}
+
+// TestResolveTargetWindowByIndex_Empty verifies that an empty window index
+// returns a clear error.
+func TestResolveTargetWindowByIndex_Empty(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	_, resolveErr := manager.ResolveTarget("demo:.", -1)
+	if resolveErr == nil {
+		t.Fatal("ResolveTarget(demo:.) expected error, got nil")
+	}
+	if !strings.Contains(resolveErr.Error(), "invalid window index") {
+		t.Fatalf("error = %q, want substring %q", resolveErr.Error(), "invalid window index")
 	}
 }

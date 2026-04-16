@@ -167,12 +167,9 @@ func (s *Service) applyBridgeRecommendation(sessionName string, snapshot *mcp.MC
 	if sessionName == "" {
 		return
 	}
-	mcpName := strings.TrimSpace(lspMCPCLINameFromID(snapshot.ID))
+	mcpName := strings.TrimSpace(bridgeMCPCLIName(snapshot))
 	if mcpName == "" {
-		mcpName = strings.TrimSpace(orchMCPCLINameFromID(snapshot.ID))
-	}
-	if mcpName == "" {
-		// Custom MCPs without lsp-/orch- prefix do not support bridge recommendations.
+		// Custom MCPs without a known CLI bridge target do not support recommendations.
 		return
 	}
 
@@ -187,4 +184,27 @@ func (s *Service) applyBridgeRecommendation(sessionName string, snapshot *mcp.MC
 		"--mcp",
 		mcpName,
 	}
+}
+
+func bridgeMCPCLIName(snapshot *mcp.MCPSnapshot) string {
+	if snapshot == nil {
+		return ""
+	}
+	switch snapshot.Kind {
+	case mcp.DefinitionKindSingleTaskRunner:
+		return strings.TrimSpace(snapshot.ID)
+	case mcp.DefinitionKindOrchestrator:
+		return strings.TrimSpace(orchMCPCLINameFromID(snapshot.ID))
+	case mcp.DefinitionKindLSP:
+		// Legacy snapshots may not populate Kind. Fall back to ID heuristics only
+		// for that backward-compatible case.
+	default:
+		return ""
+	}
+
+	mcpName := strings.TrimSpace(lspMCPCLINameFromID(snapshot.ID))
+	if mcpName != "" {
+		return mcpName
+	}
+	return strings.TrimSpace(orchMCPCLINameFromID(snapshot.ID))
 }

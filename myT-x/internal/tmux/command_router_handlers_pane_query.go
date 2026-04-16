@@ -69,21 +69,13 @@ func (r *CommandRouter) handleListPanes(req ipc.TmuxRequest) ipc.TmuxResponse {
 	// pane-by-pane within each window) from the collection loop in
 	// ListPanesByWindowTarget. No re-sorting is needed; value-copied panes
 	// have Window=nil, making the original multi-level sort impossible.
-	//
-	// NOTE: Value-copied panes have Window=nil, so filter expressions that
-	// reference session/window variables will see empty/zero values.
-	// This is a known limitation of the non-(-a) path.
-	if filter != "" {
-		slog.Warn("[WARN-LISTPANES] filter on non-(-a) path: session/window variables are unavailable (Window=nil in value copies); filter may exclude all items",
-			"filter", filter, "target", target, "paneCount", len(panes))
-	}
-
 	lines := make([]string, 0, len(panes))
 	for i := range panes {
-		if !evaluateFilter(filter, &panes[i]) {
+		pane := &panes[i]
+		if !evaluateFilterSafe(filter, pane.ID, pane, r.sessions) {
 			continue
 		}
-		lines = append(lines, formatPaneLine(&panes[i], format))
+		lines = append(lines, formatPaneLineSafe(pane, format, r.sessions))
 	}
 	return okResp(joinLines(lines))
 }

@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -121,9 +122,7 @@ func (r *CommandRouter) handleKillSession(req ipc.TmuxRequest) ipc.TmuxResponse 
 	r.emitter.Emit("tmux:session-destroyed", map[string]any{
 		"name": session.Name,
 	})
-	if r.opts.OnSessionDestroyed != nil {
-		r.opts.OnSessionDestroyed(session.Name)
-	}
+	r.callOnSessionDestroyed(session.Name)
 	return okResp("")
 }
 
@@ -155,13 +154,49 @@ func (r *CommandRouter) handleRenameSession(req ipc.TmuxRequest) ipc.TmuxRespons
 		return errResp(err)
 	}
 
+	if r.opts.OnSessionRenamed != nil {
+		if err := r.callOnSessionRenamed(oldName, newName); err != nil {
+			slog.Warn("[WARN-SESSION] rename-session follow-up failed; rolling back tmux rename",
+				"oldSession", oldName,
+				"newSession", newName,
+				"error", err,
+			)
+			if rollbackErr := r.sessions.RenameSession(newName, oldName); rollbackErr != nil {
+				rollbackHandled := false
+				if r.opts.OnSessionRenameRollbackFailed != nil {
+					if callbackErr := r.callOnSessionRenameRollbackFailed(oldName, newName); callbackErr != nil {
+						slog.Warn("[WARN-SESSION] rename-session rollback failure callback failed; emitting fallback rename event",
+							"oldSession", oldName,
+							"newSession", newName,
+							"error", callbackErr,
+						)
+					} else {
+						rollbackHandled = true
+					}
+				}
+				if !rollbackHandled {
+					r.emitter.Emit("tmux:session-renamed", map[string]any{
+						"oldName": oldName,
+						"newName": newName,
+					})
+				}
+				return errResp(errors.Join(
+					fmt.Errorf("rename-session follow-up failed: %w", err),
+					fmt.Errorf("tmux rename rollback also failed: %w", rollbackErr),
+				))
+			}
+			r.emitter.Emit("tmux:session-rename-reverted", map[string]any{
+				"originalName":  oldName,
+				"attemptedName": newName,
+				"restoredName":  oldName,
+			})
+			return errResp(fmt.Errorf("rename-session follow-up failed: %w", err))
+		}
+	}
 	r.emitter.Emit("tmux:session-renamed", map[string]any{
 		"oldName": oldName,
 		"newName": newName,
 	})
-	if r.opts.OnSessionRenamed != nil {
-		r.opts.OnSessionRenamed(oldName, newName)
-	}
 	return okResp("")
 }
 

@@ -239,7 +239,7 @@ func (m *SessionManager) KillPane(paneID string) (sessionName string, sessionEmp
 	for _, ct := range result.closeTargets {
 		if closeErr := ct.Close(); closeErr != nil {
 			slog.Warn("[WARN-PANE] KillPane terminal close failed",
-				"paneId", fmt.Sprintf("%%%d", id),
+				"paneId", formatPaneID(id),
 				"session", result.sessionName,
 				"error", closeErr,
 			)
@@ -247,7 +247,7 @@ func (m *SessionManager) KillPane(paneID string) (sessionName string, sessionEmp
 	}
 	if !result.removedFromWindow {
 		slog.Warn("[WARN-PANE] KillPane removed pane from map but not from any window",
-			"paneId", fmt.Sprintf("%%%d", id),
+			"paneId", formatPaneID(id),
 			"session", result.sessionName,
 		)
 	}

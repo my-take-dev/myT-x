@@ -75,12 +75,55 @@ func (m *SessionManager) resolveSessionTargetLocked(target string) (*TmuxSession
 		}
 		return pane.Window.Session, nil
 	}
+	if windowID, isWindowTarget, err := parseWindowIDTarget(target); isWindowTarget {
+		if err != nil {
+			return nil, err
+		}
+		_, ownerSession := m.findWindowByIDGlobalLocked(windowID)
+		if ownerSession == nil {
+			return nil, fmt.Errorf("window id not found: %d", windowID)
+		}
+		return ownerSession, nil
+	}
 	sessionName, _, _ := strings.Cut(target, ":")
-	session, ok := m.sessions[sessionName]
-	if !ok {
+	session, err := m.resolveSessionTokenLocked(sessionName)
+	if err != nil {
+		return nil, err
+	}
+	if session == nil {
 		return nil, fmt.Errorf("session not found: %s", sessionName)
 	}
 	return session, nil
+}
+
+func (m *SessionManager) resolveSessionTokenLocked(token string) (*TmuxSession, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, nil
+	}
+	if sessionID, isSessionTarget, err := parseSessionIDTarget(token); isSessionTarget {
+		if err != nil {
+			return nil, err
+		}
+		session := m.findSessionByIDLocked(sessionID)
+		if session == nil {
+			return nil, fmt.Errorf("session id not found: %d", sessionID)
+		}
+		return session, nil
+	}
+	return m.sessions[token], nil
+}
+
+func (m *SessionManager) findSessionByIDLocked(sessionID int) *TmuxSession {
+	for _, session := range m.sessions {
+		if session == nil {
+			continue
+		}
+		if session.ID == sessionID {
+			return session
+		}
+	}
+	return nil
 }
 
 func (m *SessionManager) activePaneInSessionLocked(session *TmuxSession) (*TmuxPane, error) {
@@ -133,21 +176,46 @@ func findWindowByID(windows []*TmuxWindow, activeWindowID int) (window *TmuxWind
 	return window, fallback
 }
 
+// findWindowByIDGlobalLocked searches every session for a globally unique
+// window ID and returns both the window and its owning session.
+//
+// REQUIRES: m.mu held by the caller (RLock or Lock).
+func (m *SessionManager) findWindowByIDGlobalLocked(windowID int) (*TmuxWindow, *TmuxSession) {
+	for _, session := range m.sessions {
+		if session == nil {
+			continue
+		}
+		window, _ := findWindowByID(session.Windows, windowID)
+		if window != nil {
+			return window, session
+		}
+	}
+	return nil, nil
+}
+
 func resolveWindowByTargetID(windows []*TmuxWindow, windowPart string) (*TmuxWindow, error) {
 	windowPart = strings.TrimSpace(windowPart)
-	windowIDText := windowPart
-	if after, ok := strings.CutPrefix(windowPart, "@"); ok {
-		windowIDText = strings.TrimSpace(after)
+	if windowID, isWindowTarget, err := parseWindowIDTarget(windowPart); isWindowTarget {
+		if err != nil {
+			return nil, err
+		}
+		window, _ := findWindowByID(windows, windowID)
+		if window == nil {
+			return nil, fmt.Errorf("window id not found: %d", windowID)
+		}
+		return window, nil
 	}
 
-	windowID, err := strconv.Atoi(windowIDText)
-	if err != nil || windowID < 0 {
-		return nil, fmt.Errorf("invalid window id: %s", windowPart)
+	windowIdx, err := strconv.Atoi(windowPart)
+	if err != nil || windowIdx < 0 {
+		return nil, fmt.Errorf("invalid window index: %s", windowPart)
 	}
-
-	window, _ := findWindowByID(windows, windowID)
+	if windowIdx >= len(windows) {
+		return nil, fmt.Errorf("window index out of range: %d", windowIdx)
+	}
+	window := windows[windowIdx]
 	if window == nil {
-		return nil, fmt.Errorf("window id not found: %d", windowID)
+		return nil, fmt.Errorf("window at index %d is nil", windowIdx)
 	}
 	return window, nil
 }

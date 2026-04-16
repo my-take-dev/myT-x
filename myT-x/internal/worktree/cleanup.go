@@ -25,16 +25,25 @@ func (s *Service) CleanupWorktree(sessionName string) error {
 	}
 	wtPath := worktreeInfo.Path
 	repoPath := worktreeInfo.RepoPath
+	cfg := s.deps.GetConfigSnapshot()
 
 	repo, err := gitpkg.Open(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
+	if !cfg.Worktree.ForceCleanup {
+		if err := gitpkg.CheckWorktreeCleanForRemoval(wtPath); err != nil {
+			return fmt.Errorf("failed to remove worktree safely: %w", err)
+		}
+	}
+
 	if err := repo.RemoveWorktree(wtPath); err != nil {
+		if !cfg.Worktree.ForceCleanup {
+			return fmt.Errorf("failed to remove worktree: %w", err)
+		}
 		slog.Warn("[WARN-GIT] normal worktree removal failed, trying forced removal",
 			"session", sessionName, "path", wtPath, "error", err)
-		// Try forced removal.
 		if fErr := repo.RemoveWorktreeForced(wtPath); fErr != nil {
 			return fmt.Errorf("failed to remove worktree (forced): %w", fErr)
 		}

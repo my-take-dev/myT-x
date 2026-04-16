@@ -41,6 +41,37 @@ describe("diffTreeUtils", () => {
         ]);
     });
 
+    it("records hand-calculated depth and expansion metadata", () => {
+        const files = [
+            diffFile("src/app.ts", 10, 2),
+            diffFile("src/nested/deep.ts", 4, 1),
+        ];
+
+        expect(buildDiffTree(files, new Set(["src"]))).toEqual([
+            {
+                path: "src",
+                name: "src",
+                isDir: true,
+                depth: 0,
+                isExpanded: true,
+            },
+            {
+                path: "src/app.ts",
+                name: "app.ts",
+                isDir: false,
+                depth: 1,
+                file: diffFile("src/app.ts", 10, 2),
+            },
+            {
+                path: "src/nested",
+                name: "nested",
+                isDir: true,
+                depth: 1,
+                isExpanded: false,
+            },
+        ]);
+    });
+
     it("collects unique directory paths from diff files", () => {
         const files = [
             diffFile("src/app.ts", 1, 0),

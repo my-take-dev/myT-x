@@ -63,6 +63,26 @@ func (r *testAgentRepo) GetAgentByPaneID(_ context.Context, paneID string) (doma
 	return domain.Agent{}, domain.ErrNotFound
 }
 
+func (r *testAgentRepo) GetAgentByMCPInstanceID(_ context.Context, instanceID string) (domain.Agent, error) {
+	if r.getByPaneErr != nil {
+		return domain.Agent{}, r.getByPaneErr
+	}
+
+	var matched []domain.Agent
+	for _, agent := range r.agents {
+		if agent.MCPInstanceID == instanceID {
+			matched = append(matched, agent)
+		}
+	}
+	if len(matched) == 0 {
+		return domain.Agent{}, domain.ErrNotFound
+	}
+	if len(matched) > 1 {
+		return domain.Agent{}, errors.New("multiple agents registered for instance")
+	}
+	return matched[0], nil
+}
+
 func (r *testAgentRepo) ListAgents(_ context.Context) ([]domain.Agent, error) {
 	if r.listErr != nil {
 		return nil, r.listErr
@@ -80,6 +100,38 @@ func (r *testAgentRepo) DeleteAgentsByPaneID(_ context.Context, paneID string) e
 			delete(r.agents, name)
 			delete(r.statuses, name)
 		}
+	}
+	return nil
+}
+
+func (r *testAgentRepo) ReplaceAgentRegistration(ctx context.Context, agent domain.Agent, defaultStatus *domain.AgentStatus) error {
+	agentsSnapshot := maps.Clone(r.agents)
+	statusesSnapshot := maps.Clone(r.statuses)
+	restore := func() {
+		r.agents = agentsSnapshot
+		r.statuses = statusesSnapshot
+	}
+
+	if err := r.DeleteAgentsByPaneID(ctx, agent.PaneID); err != nil {
+		restore()
+		return err
+	}
+	if err := r.UpsertAgent(ctx, agent); err != nil {
+		restore()
+		return err
+	}
+	if defaultStatus == nil {
+		return nil
+	}
+
+	statusToStore := *defaultStatus
+	if existingStatus, ok := statusesSnapshot[agent.Name]; ok {
+		statusToStore = existingStatus
+		statusToStore.AgentName = agent.Name
+	}
+	if err := r.UpsertAgentStatus(ctx, statusToStore); err != nil {
+		restore()
+		return err
 	}
 	return nil
 }
@@ -120,9 +172,11 @@ type testTaskRepo struct {
 	taskDependencies map[string][]string
 	createErr        error
 	getTaskErr       error
+	getTaskGroupErr  error
 	listErr          error
 	completeTaskErr  error
 	markFailedErr    error
+	ackErr           error
 }
 
 func newTestTaskRepo() *testTaskRepo {
@@ -144,6 +198,17 @@ func (r *testTaskRepo) CreateTask(_ context.Context, task domain.Task) error {
 func (r *testTaskRepo) CreateTaskGroup(_ context.Context, group domain.TaskGroup) error {
 	r.taskGroups[group.ID] = group
 	return nil
+}
+
+func (r *testTaskRepo) GetTaskGroup(_ context.Context, groupID string) (domain.TaskGroup, error) {
+	if r.getTaskGroupErr != nil {
+		return domain.TaskGroup{}, r.getTaskGroupErr
+	}
+	group, ok := r.taskGroups[groupID]
+	if !ok {
+		return domain.TaskGroup{}, domain.ErrNotFound
+	}
+	return group, nil
 }
 
 func (r *testTaskRepo) DeleteTaskGroup(_ context.Context, groupID string) error {
@@ -185,7 +250,7 @@ func (r *testTaskRepo) ListTasks(_ context.Context, filter domain.TaskFilter) ([
 	}
 	tasks := make([]domain.Task, 0, len(r.tasks))
 	for _, task := range r.tasks {
-		if filter.Status != "" && filter.Status != "all" && task.Status != filter.Status {
+		if !filter.Status.MatchesTaskStatus(task.Status) {
 			continue
 		}
 		if filter.AgentName != "" && task.AgentName != filter.AgentName {
@@ -213,6 +278,7 @@ func (r *testTaskRepo) ActivateReadyTasks(_ context.Context, now string, agentNa
 			continue
 		}
 		ready := true
+		countAsBlocked := false
 		for _, dependencyTaskID := range r.taskDependencies[taskID] {
 			dependencyTask, ok := r.tasks[dependencyTaskID]
 			if !ok {
@@ -222,7 +288,8 @@ func (r *testTaskRepo) ActivateReadyTasks(_ context.Context, now string, agentNa
 				task.CompletedAt = now
 				r.tasks[taskID] = task
 				ready = false
-				goto nextTask
+				countAsBlocked = false
+				break
 			}
 			switch dependencyTask.Status {
 			case domain.TaskStatusCompleted:
@@ -230,13 +297,17 @@ func (r *testTaskRepo) ActivateReadyTasks(_ context.Context, now string, agentNa
 			case domain.TaskStatusCancelled, domain.TaskStatusFailed, domain.TaskStatusAbandoned, domain.TaskStatusExpired:
 				task.Status = domain.TaskStatusCancelled
 				task.CancelledAt = now
-				task.CancelReason = "dependency task " + dependencyTaskID + " ended with status " + dependencyTask.Status
+				task.CancelReason = "dependency task " + dependencyTaskID + " ended with status " + string(dependencyTask.Status)
 				task.CompletedAt = now
 				r.tasks[taskID] = task
 				ready = false
-				goto nextTask
+				countAsBlocked = false
+				break
 			default:
 				ready = false
+				countAsBlocked = true
+			}
+			if !ready {
 				break
 			}
 		}
@@ -246,8 +317,9 @@ func (r *testTaskRepo) ActivateReadyTasks(_ context.Context, now string, agentNa
 			activated = append(activated, task)
 			continue
 		}
-		stillBlocked++
-	nextTask:
+		if countAsBlocked {
+			stillBlocked++
+		}
 	}
 	return activated, stillBlocked, nil
 }
@@ -284,6 +356,9 @@ func (r *testTaskRepo) MarkTaskFailed(_ context.Context, taskID string) error {
 }
 
 func (r *testTaskRepo) AcknowledgeTask(_ context.Context, taskID string, acknowledgedAt string) error {
+	if r.ackErr != nil {
+		return r.ackErr
+	}
 	task, ok := r.tasks[taskID]
 	if !ok {
 		return domain.ErrNotFound
@@ -331,7 +406,7 @@ func (r *testTaskRepo) UpdateTaskProgress(_ context.Context, taskID string, prog
 func (r *testTaskRepo) ExpirePendingTasks(_ context.Context, now string) (int64, error) {
 	var expired int64
 	for id, task := range r.tasks {
-		if task.Status != domain.TaskStatusPending || task.ExpiresAt == "" {
+		if (task.Status != domain.TaskStatusPending && task.Status != domain.TaskStatusBlocked) || task.ExpiresAt == "" {
 			continue
 		}
 		if task.ExpiresAt <= now {
@@ -368,6 +443,7 @@ type testMessageRepo struct {
 	messages  map[string]domain.TaskMessage
 	responses map[string]domain.TaskMessage
 	saveErr   error
+	deleteErr error
 }
 
 func newTestMessageRepo() *testMessageRepo {
@@ -393,6 +469,17 @@ func (r *testMessageRepo) SaveResponse(_ context.Context, msg domain.TaskMessage
 	return nil
 }
 
+func (r *testMessageRepo) DeleteMessage(_ context.Context, id string) error {
+	if r.deleteErr != nil {
+		return r.deleteErr
+	}
+	if _, ok := r.messages[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(r.messages, id)
+	return nil
+}
+
 func (r *testMessageRepo) GetMessage(_ context.Context, id string) (domain.TaskMessage, error) {
 	msg, ok := r.messages[id]
 	if !ok {
@@ -413,7 +500,10 @@ type testPaneOps struct {
 	selfPane   string
 	sendErr    error
 	captureErr error
+	listErr    error
+	listPanes  []domain.PaneInfo
 	sent       []sentCall
+	sendFn     func(ctx context.Context, paneID string, text string) error
 }
 
 type sentCall struct {
@@ -421,7 +511,10 @@ type sentCall struct {
 	text   string
 }
 
-func (p *testPaneOps) SendKeys(_ context.Context, paneID string, text string) error {
+func (p *testPaneOps) SendKeys(ctx context.Context, paneID string, text string) error {
+	if p.sendFn != nil {
+		return p.sendFn(ctx, paneID, text)
+	}
 	if p.sendErr != nil {
 		return p.sendErr
 	}
@@ -434,7 +527,13 @@ func (p *testPaneOps) GetPaneID(context.Context) (string, error) {
 }
 
 func (p *testPaneOps) ListPanes(context.Context) ([]domain.PaneInfo, error) {
-	return nil, nil
+	if p.listErr != nil {
+		return nil, p.listErr
+	}
+	if p.listPanes == nil {
+		return nil, nil
+	}
+	return append([]domain.PaneInfo(nil), p.listPanes...), nil
 }
 
 func (p *testPaneOps) SetPaneTitle(context.Context, string, string) error {
@@ -574,6 +673,184 @@ func TestAgentServiceRegisterReplacesExistingPaneRegistration(t *testing.T) {
 	}
 }
 
+func TestAgentServiceRegisterInitializesIdleStatus(t *testing.T) {
+	repo := newTestAgentRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	if _, err := svc.Register(context.Background(), RegisterAgentCmd{Name: "worker", PaneID: "%1"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	status, ok := repo.statuses["worker"]
+	if !ok {
+		t.Fatal("expected idle status to be persisted")
+	}
+	if status.Status != domain.AgentWorkStatusIdle {
+		t.Fatalf("status = %q, want idle", status.Status)
+	}
+	if status.UpdatedAt == "" {
+		t.Fatal("updated_at should be populated")
+	}
+}
+
+func TestAgentServiceRegisterPreservesExistingStatus(t *testing.T) {
+	repo := newTestAgentRepo()
+	repo.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	repo.statuses["worker"] = domain.AgentStatus{
+		AgentName:     "worker",
+		Status:        domain.AgentWorkStatusWorking,
+		CurrentTaskID: "t-123",
+		Note:          "running",
+		UpdatedAt:     "2026-04-14T10:00:00Z",
+	}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	if _, err := svc.Register(context.Background(), RegisterAgentCmd{Name: "worker", PaneID: "%1", Role: "reviewer"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	status := repo.statuses["worker"]
+	if status.Status != domain.AgentWorkStatusWorking || status.CurrentTaskID != "t-123" || status.Note != "running" {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
+func TestAgentServiceRegisterRejectsEmptyPaneID(t *testing.T) {
+	repo := newTestAgentRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	_, err := svc.Register(context.Background(), RegisterAgentCmd{Name: "worker", PaneID: ""})
+	if err == nil || err.Error() != "pane_id is required" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.agents) != 0 || len(repo.statuses) != 0 {
+		t.Fatalf("register should not mutate repository on validation failure: agents=%+v statuses=%+v", repo.agents, repo.statuses)
+	}
+}
+
+func TestAgentServiceRegisterRollsBackWhenStatusPersistFails(t *testing.T) {
+	repo := newTestAgentRepo()
+	repo.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1", Role: "existing"}
+	repo.statuses["worker"] = domain.AgentStatus{
+		AgentName:     "worker",
+		Status:        domain.AgentWorkStatusWorking,
+		CurrentTaskID: "t-123",
+		Note:          "running",
+		UpdatedAt:     "2026-04-14T10:00:00Z",
+	}
+	repo.statusUpsertErr = errors.New("status write failed")
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	_, err := svc.Register(context.Background(), RegisterAgentCmd{Name: "worker", PaneID: "%2", Role: "reviewer"})
+	if err == nil || err.Error() != "failed to register agent" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gotAgent := repo.agents["worker"]
+	if gotAgent.PaneID != "%1" || gotAgent.Role != "existing" {
+		t.Fatalf("agent should be rolled back, got %+v", gotAgent)
+	}
+	gotStatus := repo.statuses["worker"]
+	if gotStatus.Status != domain.AgentWorkStatusWorking || gotStatus.CurrentTaskID != "t-123" || gotStatus.Note != "running" {
+		t.Fatalf("status should be rolled back, got %+v", gotStatus)
+	}
+}
+
+func TestAgentServiceListRemovesStalePaneRegistrations(t *testing.T) {
+	repo := newTestAgentRepo()
+	repo.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	repo.agents["stale"] = domain.Agent{Name: "stale", PaneID: "%9"}
+	repo.agents["virtual"] = domain.Agent{Name: "virtual", PaneID: domain.VirtualPaneIDPrefix + "scheduler"}
+	repo.statuses["stale"] = domain.AgentStatus{AgentName: "stale", Status: domain.AgentWorkStatusBusy}
+	panes := &testPaneOps{
+		selfPane: "%1",
+		listPanes: []domain.PaneInfo{
+			{ID: "%1", Title: "worker"},
+		},
+	}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	result, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result.Agents) != 2 {
+		t.Fatalf("expected 2 visible agents after stale cleanup, got %+v", result.Agents)
+	}
+	if _, ok := repo.agents["stale"]; ok {
+		t.Fatalf("stale agent should be removed from repo: %+v", repo.agents)
+	}
+	if _, ok := repo.statuses["stale"]; ok {
+		t.Fatalf("stale status should be removed from repo: %+v", repo.statuses)
+	}
+	if !strings.Contains(result.Warning, "removed stale agent registrations for missing panes") {
+		t.Fatalf("warning = %q", result.Warning)
+	}
+}
+
+func TestAgentServiceListSkipsStaleCleanupWhenPaneInspectionIsIncomplete(t *testing.T) {
+	repo := newTestAgentRepo()
+	repo.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	repo.agents["stale"] = domain.Agent{Name: "stale", PaneID: "%9"}
+	repo.statuses["stale"] = domain.AgentStatus{AgentName: "stale", Status: domain.AgentWorkStatusBusy}
+	panes := &testPaneOps{
+		selfPane:  "%1",
+		listPanes: []domain.PaneInfo{},
+	}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	result, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if _, ok := repo.agents["stale"]; !ok {
+		t.Fatalf("stale agent should be preserved when pane inspection is incomplete: %+v", repo.agents)
+	}
+	if _, ok := repo.statuses["stale"]; !ok {
+		t.Fatalf("stale status should be preserved when pane inspection is incomplete: %+v", repo.statuses)
+	}
+	if len(result.Agents) != 2 {
+		t.Fatalf("expected both agents to remain visible, got %+v", result.Agents)
+	}
+	if !strings.Contains(result.Warning, "skipped stale agent cleanup because tmux pane inspection was incomplete") {
+		t.Fatalf("warning = %q", result.Warning)
+	}
+}
+
+func TestAgentServiceListSkipsEmptyPaneIDCleanup(t *testing.T) {
+	repo := newTestAgentRepo()
+	repo.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	repo.agents["broken"] = domain.Agent{Name: "broken", PaneID: ""}
+	panes := &testPaneOps{
+		selfPane: "%1",
+		listPanes: []domain.PaneInfo{
+			{ID: "%1", Title: "worker"},
+		},
+	}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	result, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if _, ok := repo.agents["broken"]; !ok {
+		t.Fatal("empty pane_id registration should not be deleted by list cleanup")
+	}
+	var brokenStatus domain.AgentWorkStatus
+	for _, agent := range result.Agents {
+		if agent.Name == "broken" {
+			brokenStatus = agent.Status
+		}
+	}
+	if brokenStatus != domain.AgentWorkStatusUnknown {
+		t.Fatalf("broken agent status = %q, want unknown", brokenStatus)
+	}
+	if !strings.Contains(result.Warning, "found agent registrations with empty pane_id") {
+		t.Fatalf("warning = %q", result.Warning)
+	}
+}
+
 func TestTaskDispatchServiceSendReturnsPersistError(t *testing.T) {
 	agents := newTestAgentRepo()
 	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%2"}
@@ -594,6 +871,9 @@ func TestTaskDispatchServiceSendReturnsPersistError(t *testing.T) {
 	}
 	if len(panes.sent) != 0 {
 		t.Fatalf("message should not be sent when persistence fails: %+v", panes.sent)
+	}
+	if len(messages.messages) != 0 {
+		t.Fatalf("saved messages should be rolled back when task persistence fails: %+v", messages.messages)
 	}
 }
 
@@ -664,8 +944,32 @@ func TestTaskDispatchServiceSendAllowsUnregisteredCallerWhenSenderExists(t *test
 	if len(messages.messages) != 1 {
 		t.Fatalf("expected 1 message saved, got %d", len(messages.messages))
 	}
-	if saved := messages.messages[task.SendMessageID]; saved.Content != panes.sent[0].text {
-		t.Fatalf("saved message content = %q, want %q", saved.Content, panes.sent[0].text)
+	if saved := messages.messages[task.SendMessageID]; saved.Content != "implement it" {
+		t.Fatalf("saved message content = %q, want %q", saved.Content, "implement it")
+	}
+}
+
+func TestTaskDispatchServiceSendReturnsRollbackErrorWhenMessageCleanupFails(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%2"}
+	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.createErr = errors.New("db busy")
+	messages := newTestMessageRepo()
+	messages.deleteErr = errors.New("disk error")
+	panes := &testPaneOps{selfPane: "%2"}
+	svc := NewTaskDispatchService(agents, tasks, messages, panes, panes, discardLogger())
+
+	_, err := svc.Send(context.Background(), SendTaskCmd{
+		AgentName: "codex",
+		FromAgent: "worker",
+		Message:   "implement it",
+	})
+	if err == nil || err.Error() != "failed to persist task" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(messages.messages) != 1 {
+		t.Fatalf("message should remain when rollback fails, got %d entries", len(messages.messages))
 	}
 }
 
@@ -744,6 +1048,9 @@ func TestTaskDispatchServiceSendBatchPersistsGroupAndCollectsPartialFailures(t *
 	if result.GroupID == "" {
 		t.Fatal("GroupID should be set")
 	}
+	if result.AllFailed {
+		t.Fatal("AllFailed should be false for partial failure")
+	}
 	if result.Summary.Sent != 1 || result.Summary.Failed != 1 {
 		t.Fatalf("unexpected summary: %+v", result.Summary)
 	}
@@ -784,11 +1091,60 @@ func TestTaskDispatchServiceSendBatchDeletesEmptyGroupWhenAllTargetsFail(t *test
 	if result.Summary.Sent != 0 || result.Summary.Failed != 2 {
 		t.Fatalf("unexpected summary: %+v", result.Summary)
 	}
+	if !result.AllFailed {
+		t.Fatal("AllFailed should be true when every target fails")
+	}
 	if result.GroupID != "" {
 		t.Fatalf("GroupID = %q, want empty", result.GroupID)
 	}
 	if len(tasks.taskGroups) != 0 {
 		t.Fatalf("task groups should be cleaned up, got %+v", tasks.taskGroups)
+	}
+}
+
+func TestTaskDispatchServiceSendBatchKeepsGroupAndTaskIDsWhenPersistedTasksFailDelivery(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%2"}
+	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%2", sendErr: errors.New("tmux failed")}
+	svc := NewTaskDispatchService(agents, tasks, messages, panes, panes, discardLogger())
+
+	result, err := svc.SendBatch(context.Background(), SendTasksCmd{
+		FromAgent:  "worker",
+		GroupLabel: "delivery fail",
+		Tasks: []SendTaskBatchItemCmd{
+			{AgentName: "codex", Message: "task 1", IncludeResponseInstructions: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendBatch: %v", err)
+	}
+	if result.GroupID == "" {
+		t.Fatal("GroupID should be preserved when a task was created")
+	}
+	if result.AllFailed {
+		t.Fatal("AllFailed should be false when a task was persisted")
+	}
+	if result.Summary.Sent != 0 || result.Summary.Failed != 1 {
+		t.Fatalf("unexpected summary: %+v", result.Summary)
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("len(results) = %d", len(result.Results))
+	}
+	if result.Results[0].TaskID == "" {
+		t.Fatal("failed result should still include TaskID")
+	}
+	if _, ok := tasks.taskGroups[result.GroupID]; !ok {
+		t.Fatalf("task group %q should remain persisted", result.GroupID)
+	}
+	task := tasks.tasks[result.Results[0].TaskID]
+	if task.Status != domain.TaskStatusFailed {
+		t.Fatalf("task status = %q, want failed", task.Status)
+	}
+	if task.GroupID != result.GroupID {
+		t.Fatalf("task group_id = %q, want %q", task.GroupID, result.GroupID)
 	}
 }
 
@@ -835,6 +1191,36 @@ func TestTaskDispatchServiceSendBatchRejectsUnregisteredCallerPane(t *testing.T)
 	}
 }
 
+func TestTaskDispatchServiceSendBatchExpiresPendingTasksBeforeDispatch(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%2"}
+	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-expired"] = domain.Task{
+		ID:        "t-expired",
+		AgentName: "worker",
+		Status:    domain.TaskStatusPending,
+		SentAt:    "2026-04-02T09:00:00Z",
+		ExpiresAt: "2000-01-01T00:00:00Z",
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%2"}
+	svc := NewTaskDispatchService(agents, tasks, messages, panes, panes, discardLogger())
+
+	_, err := svc.SendBatch(context.Background(), SendTasksCmd{
+		FromAgent: "worker",
+		Tasks: []SendTaskBatchItemCmd{
+			{AgentName: "codex", Message: "task 1", IncludeResponseInstructions: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendBatch: %v", err)
+	}
+	if got := tasks.tasks["t-expired"].Status; got != domain.TaskStatusExpired {
+		t.Fatalf("expired task status = %q, want expired", got)
+	}
+}
+
 func TestResponseServiceSendReturnsNotAvailableForUnknownTask(t *testing.T) {
 	agents := newTestAgentRepo()
 	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
@@ -861,6 +1247,32 @@ func TestResponseServiceSendRejectsNonPendingTask(t *testing.T) {
 	_, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
 	if err == nil || err.Error() != "task is not pending" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResponseServiceSendExpiresPendingTaskBeforeWrite(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-expired"] = domain.Task{
+		ID:             "t-expired",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderName:     "orchestrator",
+		Status:         domain.TaskStatusPending,
+		ExpiresAt:      "2000-01-01T00:00:00Z",
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
+
+	_, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-expired", Message: "done"})
+	if err == nil || err.Error() != "task is not pending" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := tasks.tasks["t-expired"].Status; got != domain.TaskStatusExpired {
+		t.Fatalf("task status = %q, want expired", got)
 	}
 }
 
@@ -907,6 +1319,110 @@ func TestResponseServiceSendAllowsSamePaneAfterAgentRename(t *testing.T) {
 	}
 	if len(messages.responses) != 1 {
 		t.Fatalf("expected 1 response saved, got %d", len(messages.responses))
+	}
+}
+
+func TestResponseServiceSendUsesSenderInstanceIDAfterSenderRename(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["sender-renamed"] = domain.Agent{Name: "sender-renamed", PaneID: "%9", MCPInstanceID: "mcp-sender"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-001"] = domain.Task{
+		ID:               "t-001",
+		AgentName:        "worker",
+		AssigneePaneID:   "%1",
+		SenderName:       "sender-old",
+		SenderInstanceID: "mcp-sender",
+		Status:           "pending",
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
+
+	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SentToName != "sender-renamed" || result.SentTo != "%9" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if len(panes.sent) != 1 || panes.sent[0].paneID != "%9" {
+		t.Fatalf("unexpected sent calls: %+v", panes.sent)
+	}
+}
+
+func TestResponseServiceSendFallsBackToSenderNameWhenSenderInstanceIDIsStale(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-001"] = domain.Task{
+		ID:               "t-001",
+		AgentName:        "worker",
+		AssigneePaneID:   "%1",
+		SenderName:       "orchestrator",
+		SenderInstanceID: "mcp-stale",
+		Status:           "pending",
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
+
+	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SentToName != "orchestrator" || result.SentTo != "%0" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestResponseServiceSendFallsBackToSenderNameWhenSenderInstanceIDIsAmbiguous(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0", MCPInstanceID: "mcp-shared"}
+	agents.agents["other"] = domain.Agent{Name: "other", PaneID: "%8", MCPInstanceID: "mcp-shared"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-001"] = domain.Task{
+		ID:               "t-001",
+		AgentName:        "worker",
+		AssigneePaneID:   "%1",
+		SenderName:       "orchestrator",
+		SenderInstanceID: "mcp-shared",
+		Status:           "pending",
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
+
+	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SentToName != "orchestrator" || result.SentTo != "%0" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestResponseServiceSendReturnsNotAvailableWhenSenderInstanceIDAndNameBothMiss(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-001"] = domain.Task{
+		ID:               "t-001",
+		AgentName:        "worker",
+		AssigneePaneID:   "%1",
+		SenderName:       "missing",
+		SenderInstanceID: "mcp-missing",
+		Status:           "pending",
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
+
+	_, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err == nil || err.Error() != "response target is not available" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1004,6 +1520,57 @@ func TestResponseServiceSendAllowsTrustedCaller(t *testing.T) {
 	}
 }
 
+func TestResponseServiceSendAllowsTrustedCallerRecoveredByInstanceID(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1", MCPInstanceID: "mcp-1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-001"] = domain.Task{
+		ID:             "t-001",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderName:     "orchestrator",
+		Status:         "pending",
+	}
+	messages := newTestMessageRepo()
+	svc := NewResponseService(agents, tasks, messages, &testPaneOps{}, errorResolver{err: errors.New("tmux missing")}, discardLogger())
+
+	result, err := svc.Send(WithMCPInstanceID(context.Background(), "mcp-1"), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SentToName != "orchestrator" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if tasks.tasks["t-001"].Status != domain.TaskStatusCompleted {
+		t.Fatalf("task status = %s, want completed", tasks.tasks["t-001"].Status)
+	}
+}
+
+func TestResponseServiceSendAllowsTrustedCallerWithoutRecovery(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	agents.agents["other"] = domain.Agent{Name: "other", PaneID: "%2", MCPInstanceID: "mcp-1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-001"] = domain.Task{
+		ID:             "t-001",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderName:     "orchestrator",
+		Status:         "pending",
+	}
+	messages := newTestMessageRepo()
+	svc := NewResponseService(agents, tasks, messages, &testPaneOps{}, errorResolver{err: errors.New("tmux missing")}, discardLogger())
+
+	result, err := svc.Send(WithMCPInstanceID(context.Background(), "mcp-1"), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SentToName != "orchestrator" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
 func TestResponseServiceSendReturnsWarningOnIDGenerationError(t *testing.T) {
 	t.Parallel()
 
@@ -1041,6 +1608,40 @@ func TestResponseServiceSendReturnsWarningOnIDGenerationError(t *testing.T) {
 	// Message should still be delivered despite ID generation failure.
 	if len(panes.sent) != 1 || panes.sent[0].paneID != "%0" {
 		t.Fatalf("unexpected sent calls: %+v", panes.sent)
+	}
+}
+
+func TestResponseServiceSendReturnsLastKnownStatusWhenCompletionUpdateFails(t *testing.T) {
+	t.Parallel()
+
+	agents := newTestAgentRepo()
+	agents.agents["orchestrator"] = domain.Agent{Name: "orchestrator", PaneID: "%0"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.completeTaskErr = errors.New("db down")
+	tasks.tasks["t-001"] = domain.Task{
+		ID:             "t-001",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderName:     "orchestrator",
+		Status:         domain.TaskStatusPending,
+	}
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewResponseService(agents, tasks, messages, panes, panes, discardLogger())
+
+	result, err := svc.Send(context.Background(), SendResponseCmd{TaskID: "t-001", Message: "done"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Warning == "" {
+		t.Fatal("expected warning when completion update fails")
+	}
+	if result.TaskStatus != domain.TaskStatusPending {
+		t.Fatalf("TaskStatus = %q, want pending", result.TaskStatus)
+	}
+	if result.CompletedAt != "" {
+		t.Fatalf("CompletedAt = %q, want empty", result.CompletedAt)
 	}
 }
 
@@ -1177,6 +1778,34 @@ func TestTaskQueryServiceCheckTasksCountsAllStatuses(t *testing.T) {
 	}
 }
 
+func TestTaskQueryServiceListAllTasksExpiresBlockedTasks(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-expired"] = domain.Task{
+		ID:        "t-expired",
+		AgentName: "worker",
+		Status:    domain.TaskStatusBlocked,
+		ExpiresAt: "2000-01-01T00:00:00Z",
+	}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewTaskQueryService(agents, tasks, newTestMessageRepo(), panes, panes, discardLogger())
+
+	result, err := svc.ListAllTasks(context.Background(), ListAllTasksCmd{})
+	if err != nil {
+		t.Fatalf("ListAllTasks: %v", err)
+	}
+	if result.Blocked != 0 {
+		t.Fatalf("Blocked = %d, want 0", result.Blocked)
+	}
+	if result.Expired != 1 {
+		t.Fatalf("Expired = %d, want 1", result.Expired)
+	}
+	if got := tasks.tasks["t-expired"].Status; got != domain.TaskStatusExpired {
+		t.Fatalf("t-expired status = %q, want expired", got)
+	}
+}
+
 func TestTaskQueryServiceGetTaskDetailIncludesResponseAndOptionalFields(t *testing.T) {
 	agents := newTestAgentRepo()
 	agents.agents["sender"] = domain.Agent{Name: "sender", PaneID: "%0"}
@@ -1197,7 +1826,9 @@ func TestTaskQueryServiceGetTaskDetailIncludesResponseAndOptionalFields(t *testi
 		ProgressNote:      "tests almost done",
 		ProgressUpdatedAt: "2026-04-02T10:04:00Z",
 		ExpiresAt:         "2026-04-02T11:00:00Z",
+		GroupID:           "g-1",
 	}
+	tasks.taskGroups["g-1"] = domain.TaskGroup{ID: "g-1", Label: "phase3", CreatedAt: "2026-04-02T10:00:00Z"}
 	tasks.taskDependencies["t-1"] = []string{"t-dep-1", "t-dep-2"}
 	messages := newTestMessageRepo()
 	messages.responses["r-1"] = domain.TaskMessage{ID: "r-1", Content: "all green", CreatedAt: "2026-04-02T10:05:00Z"}
@@ -1219,6 +1850,38 @@ func TestTaskQueryServiceGetTaskDetailIncludesResponseAndOptionalFields(t *testi
 	}
 	if !reflect.DeepEqual(result.DependsOn, []string{"t-dep-1", "t-dep-2"}) {
 		t.Fatalf("DependsOn = %v", result.DependsOn)
+	}
+	if result.GroupID != "g-1" || result.GroupLabel != "phase3" {
+		t.Fatalf("unexpected group metadata: %+v", result)
+	}
+}
+
+func TestTaskQueryServiceGetTaskDetailKeepsGroupIDWhenGroupRowIsMissing(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["sender"] = domain.Agent{Name: "sender", PaneID: "%0"}
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderPaneID:   "%0",
+		SenderName:     "sender",
+		Status:         domain.TaskStatusPending,
+		GroupID:        "g-missing",
+	}
+	panes := &testPaneOps{selfPane: "%0"}
+	svc := NewTaskQueryService(agents, tasks, newTestMessageRepo(), panes, panes, discardLogger())
+
+	result, err := svc.GetTaskDetail(context.Background(), GetTaskDetailCmd{TaskID: "t-1"})
+	if err != nil {
+		t.Fatalf("GetTaskDetail: %v", err)
+	}
+	if result.GroupID != "g-missing" {
+		t.Fatalf("GroupID = %q, want g-missing", result.GroupID)
+	}
+	if result.GroupLabel != "" {
+		t.Fatalf("GroupLabel = %q, want empty", result.GroupLabel)
 	}
 }
 
@@ -1343,8 +2006,36 @@ func TestTaskQueryServiceCheckReadyTasksMarksTaskFailedWhenDeliveryFails(t *test
 	if err != nil {
 		t.Fatalf("ActivateReadyTasks: %v", err)
 	}
-	if len(result.Activated) != 1 {
+	if len(result.Activated) != 0 {
 		t.Fatalf("Activated = %+v", result.Activated)
+	}
+	if result.DeliveryFailed != 1 {
+		t.Fatalf("DeliveryFailed = %d, want 1", result.DeliveryFailed)
+	}
+	if got := tasks.tasks["t-ready"].Status; got != domain.TaskStatusFailed {
+		t.Fatalf("t-ready status = %q, want failed", got)
+	}
+}
+
+func TestTaskQueryServiceCheckReadyTasksMarksTaskFailedWhenMessageLookupFails(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-dep-done"] = domain.Task{ID: "t-dep-done", AgentName: "worker", Status: domain.TaskStatusCompleted}
+	tasks.tasks["t-ready"] = domain.Task{ID: "t-ready", AgentName: "worker", AssigneePaneID: "%1", SendMessageID: "m-missing", Status: domain.TaskStatusBlocked}
+	tasks.taskDependencies["t-ready"] = []string{"t-dep-done"}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewTaskQueryService(agents, tasks, newTestMessageRepo(), panes, panes, discardLogger())
+
+	result, err := svc.ActivateReadyTasks(context.Background(), ActivateReadyTasksCmd{AgentName: "worker"})
+	if err != nil {
+		t.Fatalf("ActivateReadyTasks: %v", err)
+	}
+	if len(result.Activated) != 0 {
+		t.Fatalf("Activated = %+v", result.Activated)
+	}
+	if result.DeliveryFailed != 1 {
+		t.Fatalf("DeliveryFailed = %d, want 1", result.DeliveryFailed)
 	}
 	if got := tasks.tasks["t-ready"].Status; got != domain.TaskStatusFailed {
 		t.Fatalf("t-ready status = %q, want failed", got)
@@ -1376,6 +2067,38 @@ func TestTaskQueryServiceCheckReadyTasksCancelsBrokenDependencies(t *testing.T) 
 	}
 }
 
+func TestTaskQueryServiceCheckReadyTasksExpiresBlockedTasksBeforeDependencyWait(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-dep-open"] = domain.Task{ID: "t-dep-open", AgentName: "worker", Status: domain.TaskStatusPending}
+	tasks.tasks["t-expired"] = domain.Task{
+		ID:             "t-expired",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SendMessageID:  "m-expired",
+		Status:         domain.TaskStatusBlocked,
+		ExpiresAt:      "2000-01-01T00:00:00Z",
+	}
+	tasks.taskDependencies["t-expired"] = []string{"t-dep-open"}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewTaskQueryService(agents, tasks, newTestMessageRepo(), panes, panes, discardLogger())
+
+	result, err := svc.ActivateReadyTasks(context.Background(), ActivateReadyTasksCmd{AgentName: "worker"})
+	if err != nil {
+		t.Fatalf("ActivateReadyTasks: %v", err)
+	}
+	if len(result.Activated) != 0 {
+		t.Fatalf("Activated = %+v", result.Activated)
+	}
+	if result.StillBlocked != 0 {
+		t.Fatalf("StillBlocked = %d, want 0", result.StillBlocked)
+	}
+	if got := tasks.tasks["t-expired"].Status; got != domain.TaskStatusExpired {
+		t.Fatalf("t-expired status = %q, want expired", got)
+	}
+}
+
 func TestTaskUpdateServiceAcknowledgeTaskExpiresPendingTaskBeforeWrite(t *testing.T) {
 	agents := newTestAgentRepo()
 	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
@@ -1400,6 +2123,36 @@ func TestTaskUpdateServiceAcknowledgeTaskExpiresPendingTaskBeforeWrite(t *testin
 	}
 	if got := tasks.tasks["t-expired"].Status; got != domain.TaskStatusExpired {
 		t.Fatalf("task status = %q, want expired", got)
+	}
+}
+
+func TestTaskUpdateServiceAcknowledgeTaskIsIdempotent(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		Status:         domain.TaskStatusPending,
+		AcknowledgedAt: "2026-04-02T10:05:00Z",
+		SentAt:         "2026-04-02T10:00:00Z",
+	}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewTaskUpdateService(agents, tasks, panes, discardLogger())
+
+	result, err := svc.AcknowledgeTask(context.Background(), AcknowledgeTaskCmd{
+		AgentName: "worker",
+		TaskID:    "t-1",
+	})
+	if err != nil {
+		t.Fatalf("AcknowledgeTask: %v", err)
+	}
+	if result.AcknowledgedAt != "2026-04-02T10:05:00Z" {
+		t.Fatalf("AcknowledgedAt = %q", result.AcknowledgedAt)
+	}
+	if got := tasks.tasks["t-1"].AcknowledgedAt; got != "2026-04-02T10:05:00Z" {
+		t.Fatalf("task acknowledgement = %q", got)
 	}
 }
 
@@ -1451,6 +2204,145 @@ func TestTaskUpdateServiceUpdateTaskProgressRequiresInput(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateServiceAcknowledgeTaskAllowsTrustedCallerWithoutRecovery(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		Status:         domain.TaskStatusPending,
+		SentAt:         "2026-04-02T10:00:00Z",
+	}
+	svc := NewTaskUpdateService(agents, tasks, errorResolver{err: errors.New("tmux missing")}, discardLogger())
+
+	result, err := svc.AcknowledgeTask(context.Background(), AcknowledgeTaskCmd{
+		AgentName: "worker",
+		TaskID:    "t-1",
+	})
+	if err != nil {
+		t.Fatalf("AcknowledgeTask error = %v", err)
+	}
+	if result.AcknowledgedAt == "" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestTaskUpdateServiceAcknowledgeTaskAllowsTrustedCallerRecoveredByInstanceID(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1", MCPInstanceID: "mcp-1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		Status:         domain.TaskStatusPending,
+		SentAt:         "2026-04-02T10:00:00Z",
+	}
+	svc := NewTaskUpdateService(agents, tasks, errorResolver{err: errors.New("tmux missing")}, discardLogger())
+
+	result, err := svc.AcknowledgeTask(WithMCPInstanceID(context.Background(), "mcp-1"), AcknowledgeTaskCmd{
+		AgentName: "worker",
+		TaskID:    "t-1",
+	})
+	if err != nil {
+		t.Fatalf("AcknowledgeTask error = %v", err)
+	}
+	if result.AgentName != "worker" || result.AcknowledgedAt == "" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestTaskUpdateServiceUpdateTaskProgressAllowsTrustedCallerWithoutRecovery(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		Status:         domain.TaskStatusPending,
+		SentAt:         "2026-04-02T10:00:00Z",
+	}
+	progressPct := 10
+	svc := NewTaskUpdateService(agents, tasks, errorResolver{err: errors.New("tmux missing")}, discardLogger())
+
+	result, err := svc.UpdateTaskProgress(context.Background(), UpdateTaskProgressCmd{
+		TaskID:      "t-1",
+		ProgressPct: &progressPct,
+	})
+	if err != nil {
+		t.Fatalf("UpdateTaskProgress error = %v", err)
+	}
+	if result.ProgressPct == nil || *result.ProgressPct != 10 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestTaskUpdateServiceUpdateTaskProgressAllowsTrustedCallerRecoveredByInstanceID(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1", MCPInstanceID: "mcp-1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		Status:         domain.TaskStatusPending,
+		SentAt:         "2026-04-02T10:00:00Z",
+	}
+	progressPct := 10
+	svc := NewTaskUpdateService(agents, tasks, errorResolver{err: errors.New("tmux missing")}, discardLogger())
+
+	result, err := svc.UpdateTaskProgress(WithMCPInstanceID(context.Background(), "mcp-1"), UpdateTaskProgressCmd{
+		TaskID:      "t-1",
+		ProgressPct: &progressPct,
+	})
+	if err != nil {
+		t.Fatalf("UpdateTaskProgress error = %v", err)
+	}
+	if result.ProgressPct == nil || *result.ProgressPct != 10 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestTaskUpdateServiceUpdateTaskProgressValidatesUsecaseInputs(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	tasks.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		Status:         domain.TaskStatusPending,
+		SentAt:         "2026-04-02T10:00:00Z",
+	}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewTaskUpdateService(agents, tasks, panes, discardLogger())
+
+	t.Run("progress pct below range", func(t *testing.T) {
+		progressPct := -1
+		_, err := svc.UpdateTaskProgress(context.Background(), UpdateTaskProgressCmd{
+			TaskID:      "t-1",
+			ProgressPct: &progressPct,
+		})
+		if err == nil || err.Error() != "progress_pct must be between 0 and 100" {
+			t.Fatalf("UpdateTaskProgress error = %v", err)
+		}
+	})
+
+	t.Run("progress note exceeds max length", func(t *testing.T) {
+		progressNote := strings.Repeat("a", MaxTaskProgressNoteLen+1)
+		_, err := svc.UpdateTaskProgress(context.Background(), UpdateTaskProgressCmd{
+			TaskID:       "t-1",
+			ProgressNote: &progressNote,
+		})
+		if err == nil || err.Error() != "progress_note must be 500 characters or fewer" {
+			t.Fatalf("UpdateTaskProgress error = %v", err)
+		}
+	})
+}
+
 func TestTaskDispatchServiceCancelTaskAuthorizationAndStatuses(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1458,7 +2350,7 @@ func TestTaskDispatchServiceCancelTaskAuthorizationAndStatuses(t *testing.T) {
 		selfPane   string
 		agents     map[string]domain.Agent
 		wantError  string
-		wantStatus string
+		wantStatus domain.TaskStatus
 		wantReason string
 	}{
 		{
@@ -1492,6 +2384,22 @@ func TestTaskDispatchServiceCancelTaskAuthorizationAndStatuses(t *testing.T) {
 			selfPane: "%0",
 			agents: map[string]domain.Agent{
 				"sender": {Name: "sender", PaneID: "%0"},
+				"worker": {Name: "worker", PaneID: "%1"},
+			},
+			wantStatus: domain.TaskStatusCancelled,
+			wantReason: "no longer needed",
+		},
+		{
+			name: "unregistered sender pane can cancel",
+			task: domain.Task{
+				ID:             "t-unregistered-sender",
+				AgentName:      "worker",
+				AssigneePaneID: "%1",
+				SenderPaneID:   "%0",
+				Status:         domain.TaskStatusPending,
+			},
+			selfPane: "%0",
+			agents: map[string]domain.Agent{
 				"worker": {Name: "worker", PaneID: "%1"},
 			},
 			wantStatus: domain.TaskStatusCancelled,
@@ -1649,6 +2557,22 @@ func TestStatusServiceErrorPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("update status rejects mismatched non-trusted caller", func(t *testing.T) {
+		agents := newTestAgentRepo()
+		agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+		agents.agents["other"] = domain.Agent{Name: "other", PaneID: "%2"}
+		panes := &testPaneOps{selfPane: "%2"}
+		svc := NewStatusService(agents, agents, nil, nil, nil, panes, discardLogger())
+
+		_, err := svc.UpdateStatus(context.Background(), UpdateStatusCmd{
+			AgentName: "worker",
+			Status:    domain.AgentWorkStatusBusy,
+		})
+		if err == nil || err.Error() != "access denied" {
+			t.Fatalf("UpdateStatus error = %v", err)
+		}
+	})
+
 	t.Run("update status propagates repository failure", func(t *testing.T) {
 		agents := newTestAgentRepo()
 		agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
@@ -1665,7 +2589,7 @@ func TestStatusServiceErrorPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("get status returns unknown when unset", func(t *testing.T) {
+	t.Run("get status returns idle when unset", func(t *testing.T) {
 		agents := newTestAgentRepo()
 		agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
 		panes := &testPaneOps{selfPane: "%1"}
@@ -1675,8 +2599,8 @@ func TestStatusServiceErrorPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetAgentStatus: %v", err)
 		}
-		if result.Status != domain.AgentWorkStatusUnknown {
-			t.Fatalf("status = %q, want unknown", result.Status)
+		if result.Status != domain.AgentWorkStatusIdle {
+			t.Fatalf("status = %q, want idle", result.Status)
 		}
 	})
 
@@ -1714,10 +2638,11 @@ func TestTaskQueryServiceGetMyTasksIncludesTaskIDPlaceholderInstruction(t *testi
 	}
 }
 
-func TestTaskQueryServiceGetMyTask(t *testing.T) {
+func TestTaskQueryServiceGetTaskMessage(t *testing.T) {
 	tests := []struct {
 		name        string
 		callerPane  string
+		instanceID  string
 		agentName   string
 		msgID       string
 		setupAgent  map[string]domain.Agent
@@ -1778,14 +2703,27 @@ func TestTaskQueryServiceGetMyTask(t *testing.T) {
 			wantErr:    "message not found",
 		},
 		{
-			name:       "trusted caller bypasses pane check",
-			callerPane: "",
-			agentName:  "worker",
-			msgID:      "m-001",
-			setupAgent: map[string]domain.Agent{"worker": {Name: "worker", PaneID: "%1"}},
-			setupTask:  map[string]domain.Task{"t-001": {ID: "t-001", AgentName: "worker", SendMessageID: "m-001", Status: "pending", SentAt: "2026-03-07T10:00:00Z"}},
-			setupMsg:   map[string]domain.TaskMessage{"m-001": {ID: "m-001", Content: "trusted", CreatedAt: "2026-03-07T10:00:00Z"}},
-			wantTaskID: "t-001", wantContent: "trusted",
+			name:        "trusted caller can read by declared assignee name",
+			callerPane:  "",
+			agentName:   "worker",
+			msgID:       "m-001",
+			setupAgent:  map[string]domain.Agent{"worker": {Name: "worker", PaneID: "%1"}},
+			setupTask:   map[string]domain.Task{"t-001": {ID: "t-001", AgentName: "worker", SendMessageID: "m-001", Status: "pending", SentAt: "2026-03-07T10:00:00Z"}},
+			setupMsg:    map[string]domain.TaskMessage{"m-001": {ID: "m-001", Content: "trusted", CreatedAt: "2026-03-07T10:00:00Z"}},
+			wantTaskID:  "t-001",
+			wantContent: "trusted",
+		},
+		{
+			name:        "trusted caller is recovered by instance id",
+			callerPane:  "",
+			instanceID:  "mcp-1",
+			agentName:   "worker",
+			msgID:       "m-001",
+			setupAgent:  map[string]domain.Agent{"worker": {Name: "worker", PaneID: "%1", MCPInstanceID: "mcp-1"}},
+			setupTask:   map[string]domain.Task{"t-001": {ID: "t-001", AgentName: "worker", AssigneePaneID: "%1", SendMessageID: "m-001", Status: "pending", SentAt: "2026-03-07T10:00:00Z"}},
+			setupMsg:    map[string]domain.TaskMessage{"m-001": {ID: "m-001", Content: "trusted", CreatedAt: "2026-03-07T10:00:00Z"}},
+			wantTaskID:  "t-001",
+			wantContent: "trusted",
 		},
 	}
 
@@ -1797,7 +2735,12 @@ func TestTaskQueryServiceGetMyTask(t *testing.T) {
 			panes := &testPaneOps{selfPane: tt.callerPane}
 			svc := NewTaskQueryService(agents, tasks, messages, panes, panes, discardLogger())
 
-			result, err := svc.GetTaskMessage(context.Background(), GetTaskMessageCmd{
+			ctx := context.Background()
+			if tt.instanceID != "" {
+				ctx = WithMCPInstanceID(ctx, tt.instanceID)
+			}
+
+			result, err := svc.GetTaskMessage(ctx, GetTaskMessageCmd{
 				AgentName:     tt.agentName,
 				SendMessageID: tt.msgID,
 			})
@@ -1948,14 +2891,14 @@ func TestGetMyTasksInlineMessageDelivery(t *testing.T) {
 		messages                map[string]domain.TaskMessage
 		maxInline               int
 		wantInlineCount         int
-		wantAcknowledged        []string // taskIDs that should be acknowledged
+		wantAcknowledged        []string // taskIDs that should remain acknowledged
 		wantNewAcknowledgements int
 		wantInlineContent       []string // expected inline message contents
 		wantInlineFromAgent     []string
 		wantErr                 bool
 	}{
 		{
-			name: "pending unacknowledged task returns inline message and auto-acknowledges",
+			name: "pending unacknowledged task returns inline message and auto-acknowledges it",
 			tasks: map[string]domain.Task{
 				"t-1": {
 					ID:             "t-1",
@@ -1972,7 +2915,7 @@ func TestGetMyTasksInlineMessageDelivery(t *testing.T) {
 			},
 			maxInline:               3,
 			wantInlineCount:         1,
-			wantAcknowledged:        []string{"t-1"},
+			wantAcknowledged:        []string{},
 			wantNewAcknowledgements: 1,
 			wantInlineContent:       []string{"Hello, task-1"},
 			wantInlineFromAgent:     []string{"orchestrator"},
@@ -2077,7 +3020,7 @@ func TestGetMyTasksInlineMessageDelivery(t *testing.T) {
 			messages:                map[string]domain.TaskMessage{},
 			maxInline:               3,
 			wantInlineCount:         0,
-			wantAcknowledged:        []string{}, // No auto-acknowledge on fetch failure
+			wantAcknowledged:        []string{}, // Fetch failures must not mutate acknowledgment state
 			wantNewAcknowledgements: 0,
 		},
 		{
@@ -2127,7 +3070,7 @@ func TestGetMyTasksInlineMessageDelivery(t *testing.T) {
 			},
 			maxInline:               0,
 			wantInlineCount:         2,
-			wantAcknowledged:        []string{"t-1", "t-2"},
+			wantAcknowledged:        []string{},
 			wantNewAcknowledgements: 2,
 		},
 	}
@@ -2194,7 +3137,7 @@ func TestGetMyTasksInlineMessageDelivery(t *testing.T) {
 				}
 			}
 
-			// Verify auto-acknowledgement
+			// Verify acknowledgment state
 			for _, taskID := range tt.wantAcknowledged {
 				task, ok := tasks.tasks[taskID]
 				if !ok {
@@ -2202,7 +3145,7 @@ func TestGetMyTasksInlineMessageDelivery(t *testing.T) {
 					continue
 				}
 				if task.AcknowledgedAt == "" {
-					t.Errorf("task %s not auto-acknowledged", taskID)
+					t.Errorf("task %s should remain acknowledged", taskID)
 				}
 			}
 
@@ -2229,11 +3172,12 @@ func TestGetMyTasksAccessControl(t *testing.T) {
 	tests := []struct {
 		name       string
 		caller     domain.Agent
+		instanceID string
 		agentName  string
 		wantAccess bool
 	}{
 		{
-			name:       "trusted caller can access any agent's tasks",
+			name:       "trusted caller can access any declared assignee inbox",
 			caller:     domain.Agent{Name: "_trusted"},
 			agentName:  "agent-a",
 			wantAccess: true,
@@ -2241,6 +3185,13 @@ func TestGetMyTasksAccessControl(t *testing.T) {
 		{
 			name:       "self-agent can access own tasks",
 			caller:     domain.Agent{Name: "agent-a", PaneID: "%1"},
+			agentName:  "agent-a",
+			wantAccess: true,
+		},
+		{
+			name:       "trusted caller recovered by instance can access own tasks",
+			caller:     domain.Agent{Name: "_trusted"},
+			instanceID: "mcp-a",
 			agentName:  "agent-a",
 			wantAccess: true,
 		},
@@ -2255,7 +3206,7 @@ func TestGetMyTasksAccessControl(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			agents := newTestAgentRepo()
-			agents.agents["agent-a"] = domain.Agent{Name: "agent-a", PaneID: "%1"}
+			agents.agents["agent-a"] = domain.Agent{Name: "agent-a", PaneID: "%1", MCPInstanceID: "mcp-a"}
 			agents.agents["agent-b"] = domain.Agent{Name: "agent-b", PaneID: "%2"}
 
 			tasks := newTestTaskRepo()
@@ -2265,7 +3216,12 @@ func TestGetMyTasksAccessControl(t *testing.T) {
 			mockResolver := &mockCallerResolver{agent: tt.caller}
 			svc := NewTaskQueryService(agents, tasks, messages, mockResolver, mockResolver, discardLogger())
 
-			result, err := svc.GetMyTasks(context.Background(), GetMyTasksCmd{
+			ctx := context.Background()
+			if tt.instanceID != "" {
+				ctx = WithMCPInstanceID(ctx, tt.instanceID)
+			}
+
+			result, err := svc.GetMyTasks(ctx, GetMyTasksCmd{
 				AgentName: tt.agentName,
 			})
 
@@ -2313,7 +3269,44 @@ func (r *taskRepoWithAckError) AcknowledgeTask(_ context.Context, taskID string,
 	return r.testTaskRepo.AcknowledgeTask(context.Background(), taskID, acknowledgedAt)
 }
 
-func TestGetMyTasksWithAcknowledgeError(t *testing.T) {
+func TestGetMyTasksAutoAcknowledgesInlineMessages(t *testing.T) {
+	agents := newTestAgentRepo()
+	agents.agents["agent-a"] = domain.Agent{Name: "agent-a", PaneID: "%1"}
+
+	baseTaskRepo := newTestTaskRepo()
+	baseTaskRepo.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "agent-a",
+		Status:         domain.TaskStatusPending,
+		AcknowledgedAt: "",
+		SendMessageID:  "m-1",
+	}
+
+	tasks := baseTaskRepo
+
+	messages := newTestMessageRepo()
+	messages.messages["m-1"] = domain.TaskMessage{ID: "m-1", Content: "Task content"}
+
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewTaskQueryService(agents, tasks, messages, panes, panes, discardLogger())
+
+	result, err := svc.GetMyTasks(context.Background(), GetMyTasksCmd{
+		AgentName: "agent-a",
+	})
+
+	if err != nil {
+		t.Fatalf("GetMyTasks: %v", err)
+	}
+
+	if len(result.InlineMessages) != 1 {
+		t.Fatalf("expected 1 inline message, got %d", len(result.InlineMessages))
+	}
+	if got := tasks.tasks["t-1"].AcknowledgedAt; got == "" {
+		t.Fatal("AcknowledgedAt should be set")
+	}
+}
+
+func TestGetMyTasksReturnsInlineMessagesWhenAutoAcknowledgeFails(t *testing.T) {
 	agents := newTestAgentRepo()
 	agents.agents["agent-a"] = domain.Agent{Name: "agent-a", PaneID: "%1"}
 
@@ -2340,14 +3333,14 @@ func TestGetMyTasksWithAcknowledgeError(t *testing.T) {
 	result, err := svc.GetMyTasks(context.Background(), GetMyTasksCmd{
 		AgentName: "agent-a",
 	})
-
 	if err != nil {
 		t.Fatalf("GetMyTasks: %v", err)
 	}
-
-	// Even though acknowledge failed, the inline message should still be returned
 	if len(result.InlineMessages) != 1 {
-		t.Errorf("expected 1 inline message despite acknowledge error, got %d", len(result.InlineMessages))
+		t.Fatalf("expected 1 inline message, got %d", len(result.InlineMessages))
+	}
+	if got := tasks.tasks["t-1"].AcknowledgedAt; got != "" {
+		t.Fatalf("AcknowledgedAt = %q, want empty after failed auto-ack", got)
 	}
 }
 
@@ -2444,16 +3437,18 @@ func TestUpdateStatusRedeliveryWithMissingDependencies(t *testing.T) {
 func TestUpdateStatusIdleRedelivery(t *testing.T) {
 	tests := []struct {
 		name                    string
-		status                  string
+		status                  domain.AgentWorkStatus
 		tasks                   map[string]domain.Task
 		messages                map[string]domain.TaskMessage
 		agentName               string
 		paneID                  string
 		wantRedeliveredCount    int
+		wantRedeliveryFailures  int
 		wantSendKeysCallCount   int
 		wantNewAcknowledgements int
 		wantSentTo              []string // pane IDs that should receive re-delivered messages
 		sendKeysErr             error
+		ackErr                  error
 		wantErr                 bool
 	}{
 		{
@@ -2554,11 +3549,12 @@ func TestUpdateStatusIdleRedelivery(t *testing.T) {
 			},
 			messages:                map[string]domain.TaskMessage{},
 			wantRedeliveredCount:    0,
+			wantRedeliveryFailures:  1,
 			wantSendKeysCallCount:   0, // SendKeys not called because message fetch failed first
 			wantNewAcknowledgements: 0,
 		},
 		{
-			name:   "send failure in redeliver leaves task unacknowledged",
+			name:   "send failure in redeliver leaves task pending for retry",
 			status: domain.AgentWorkStatusIdle,
 			tasks: map[string]domain.Task{
 				"t-1": {
@@ -2575,7 +3571,30 @@ func TestUpdateStatusIdleRedelivery(t *testing.T) {
 			},
 			sendKeysErr:             errors.New("send failed"),
 			wantRedeliveredCount:    0,
+			wantRedeliveryFailures:  1,
 			wantSendKeysCallCount:   0,
+			wantNewAcknowledgements: 0,
+		},
+		{
+			name:   "acknowledge failure after redelivery leaves task pending for retry",
+			status: domain.AgentWorkStatusIdle,
+			tasks: map[string]domain.Task{
+				"t-1": {
+					ID:             "t-1",
+					AgentName:      "agent-a",
+					Status:         domain.TaskStatusPending,
+					AcknowledgedAt: "",
+					SendMessageID:  "m-1",
+					SentAt:         "2026-01-01T12:00:00Z",
+				},
+			},
+			messages: map[string]domain.TaskMessage{
+				"m-1": {ID: "m-1", Content: "Task content", CreatedAt: "2026-01-01T12:00:00Z"},
+			},
+			ackErr:                  errors.New("ack failed"),
+			wantRedeliveredCount:    0,
+			wantRedeliveryFailures:  1,
+			wantSendKeysCallCount:   1,
 			wantNewAcknowledgements: 0,
 		},
 		{
@@ -2671,6 +3690,7 @@ func TestUpdateStatusIdleRedelivery(t *testing.T) {
 
 			taskRepo := newTestTaskRepo()
 			maps.Copy(taskRepo.tasks, tt.tasks)
+			taskRepo.ackErr = tt.ackErr
 
 			messages := newTestMessageRepo()
 			maps.Copy(messages.messages, tt.messages)
@@ -2702,6 +3722,9 @@ func TestUpdateStatusIdleRedelivery(t *testing.T) {
 
 			if result.RedeliveredCount != tt.wantRedeliveredCount {
 				t.Errorf("RedeliveredCount = %d, want %d", result.RedeliveredCount, tt.wantRedeliveredCount)
+			}
+			if result.RedeliveryFailedCount != tt.wantRedeliveryFailures {
+				t.Errorf("RedeliveryFailedCount = %d, want %d", result.RedeliveryFailedCount, tt.wantRedeliveryFailures)
 			}
 
 			if len(panes.sent) != tt.wantSendKeysCallCount {
@@ -2744,7 +3767,7 @@ func TestUpdateStatusReturnsCorrectStatusField(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		inputStatus string
+		inputStatus domain.AgentWorkStatus
 	}{
 		{"busy status", domain.AgentWorkStatusBusy},
 		{"idle status", domain.AgentWorkStatusIdle},

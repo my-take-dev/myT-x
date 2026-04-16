@@ -1,6 +1,8 @@
 import {useCallback} from "react";
 import {api} from "../../api";
 import {useNotificationStore} from "../../stores/notificationStore";
+import type {ValidationRules} from "../../types/tmux";
+import {clampChatOverlayPercentage, getChatOverlayValidationRules} from "../../utils/chatOverlayValidation";
 import type {FormDispatch, FormState} from "./types";
 import {ShortcutInput} from "./ShortcutInput";
 import {useSettingsI18n} from "./settingsI18n";
@@ -8,11 +10,13 @@ import {useSettingsI18n} from "./settingsI18n";
 interface GeneralSettingsProps {
     s: FormState;
     dispatch: FormDispatch;
+    validationRules?: ValidationRules | null;
 }
 
-export function GeneralSettings({s, dispatch}: GeneralSettingsProps) {
+export function GeneralSettings({s, dispatch, validationRules}: GeneralSettingsProps) {
     const {t} = useSettingsI18n();
     const addNotification = useNotificationStore((state) => state.addNotification);
+    const chatOverlayRules = getChatOverlayValidationRules(validationRules);
     const defaultSessionDirInputId = "default-session-dir";
     const defaultSessionDirError = s.validationErrors.default_session_dir;
 
@@ -22,7 +26,7 @@ export function GeneralSettings({s, dispatch}: GeneralSettingsProps) {
             if (dir) {
                 dispatch({type: "SET_FIELD", field: "defaultSessionDir", value: dir});
             }
-        } catch (err) {
+        } catch (err: unknown) {
             console.warn("[settings] PickSessionDirectory failed", err);
             addNotification(
                 t(
@@ -177,22 +181,28 @@ export function GeneralSettings({s, dispatch}: GeneralSettingsProps) {
             </div>
 
             <div className="form-group">
-                <label className="form-label" htmlFor="chat-overlay-percentage">
+                <label className="form-label" htmlFor="chat-panel-percentage">
                     {t(
                         "settings.general.chatOverlayPercentage.label",
-                        "チャットオーバーレイの高さ (%)",
-                        "Chat overlay height (%)",
+                        "チャットパネルの比率 (%)",
+                        "Chat panel ratio (%)",
                     )}
                 </label>
                 <input
-                    id="chat-overlay-percentage"
+                    id="chat-panel-percentage"
                     className="form-input"
                     type="number"
-                    min={30}
-                    max={95}
+                    min={chatOverlayRules.minPercentage}
+                    max={chatOverlayRules.maxPercentage}
                     value={s.chatOverlayPercentage}
                     onChange={(e) => {
-                        const v = Math.max(30, Math.min(95, Number(e.target.value) || 80));
+                        const parsedValue = Number(e.target.value);
+                        const v = clampChatOverlayPercentage(
+                            Number.isFinite(parsedValue) && parsedValue > 0
+                                ? parsedValue
+                                : chatOverlayRules.defaultPercentage,
+                            validationRules,
+                        );
                         dispatch({type: "SET_FIELD", field: "chatOverlayPercentage", value: v});
                     }}
                     style={{width: "100px"}}
@@ -200,8 +210,8 @@ export function GeneralSettings({s, dispatch}: GeneralSettingsProps) {
                 <span className="settings-desc">
                     {t(
                         "settings.general.chatOverlayPercentage.description",
-                        "チャット入力欄を拡大した時のターミナル領域に対する高さの割合（30-95%、デフォルト: 80）",
-                        "Height ratio of the expanded chat overlay relative to the terminal area (30-95%, default: 80).",
+                        `ドッキングチャットパネルのターミナル領域に対する比率（${chatOverlayRules.minPercentage}-${chatOverlayRules.maxPercentage}%、デフォルト: ${chatOverlayRules.defaultPercentage}）`,
+                        `Docked chat panel ratio relative to the terminal area (${chatOverlayRules.minPercentage}-${chatOverlayRules.maxPercentage}%, default: ${chatOverlayRules.defaultPercentage}).`,
                     )}
                 </span>
             </div>

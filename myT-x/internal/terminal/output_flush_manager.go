@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -12,10 +13,31 @@ type paneOutputChunk struct {
 	data   []byte
 }
 
+const (
+	// tuiRedrawMinWriteSize filters out small TUI control sequences (8, 19 bytes).
+	tuiRedrawMinWriteSize = 32
+
+	// tuiRedrawMinSamples prevents false positives from short bursts.
+	tuiRedrawMinSamples = 10
+
+	// tuiRedrawConcentrationThreshold: top-2 sizes must account for this
+	// fraction of large writes. Tool approval=~1.0, AI response=~0.35.
+	tuiRedrawConcentrationThreshold = 0.80
+
+	// tuiRedrawANSIThreshold requires redraw candidates to mostly contain ANSI
+	// escape sequences so plain-text output chunks are not mistaken for TUI redraws.
+	tuiRedrawANSIThreshold = 0.80
+)
+
 type paneOutputState struct {
 	buf          *bytes.Buffer
 	lastWriteAt  time.Time
 	pendingSince time.Time
+
+	// TUI redraw pattern detection: frequency of large write sizes.
+	largeSizeFreq  map[int]int
+	largeSizeTotal int
+	largeANSIWrites int
 }
 
 // OutputFlushManager batches pane output with a single background worker.
@@ -133,7 +155,128 @@ func (m *OutputFlushManager) IsPaneQuiet(paneID string, threshold time.Duration)
 		slog.Debug("[DEBUG-FLUSH] IsPaneQuiet: no state for pane, treating as quiet", "paneID", paneID)
 		return true // no output tracked → treat as quiet
 	}
-	return time.Since(state.lastWriteAt) >= threshold
+
+	// Primary: time since last write.
+	if time.Since(state.lastWriteAt) >= threshold {
+		m.resetRedrawCountersLocked(state)
+		return true
+	}
+
+	// Secondary: TUI redraw pattern detection.
+	// If recent output consists almost entirely of 1-2 repeating large-write
+	// sizes, the pane is likely in a TUI redraw loop (e.g., tool approval UI).
+	if m.isTUIRedrawPatternLocked(state) {
+		concentration := m.topTwoConcentrationLocked(state)
+		ansiRatio := m.ansiWriteConcentrationLocked(state)
+		slog.Debug("[DEBUG-QUIET] TUI redraw pattern detected, treating as quiet",
+			"paneID", paneID,
+			"largeSizeTotal", state.largeSizeTotal,
+			"largeANSIWrites", state.largeANSIWrites,
+			"distinctSizes", len(state.largeSizeFreq),
+			"topTwoConcentration", fmt.Sprintf("%.1f%%", concentration*100),
+			"ansiRatio", fmt.Sprintf("%.1f%%", ansiRatio*100),
+			"top10", m.topNSizesLocked(state, 10),
+		)
+		m.resetRedrawCountersLocked(state)
+		return true
+	}
+
+	// Log pattern stats when pane is busy — helps tune concentration threshold.
+	if state.largeSizeTotal >= tuiRedrawMinSamples {
+		concentration := m.topTwoConcentrationLocked(state)
+		ansiRatio := m.ansiWriteConcentrationLocked(state)
+		slog.Debug("[DEBUG-QUIET] pane busy pattern stats",
+			"paneID", paneID,
+			"largeSizeTotal", state.largeSizeTotal,
+			"largeANSIWrites", state.largeANSIWrites,
+			"distinctSizes", len(state.largeSizeFreq),
+			"topTwoConcentration", fmt.Sprintf("%.1f%%", concentration*100),
+			"ansiRatio", fmt.Sprintf("%.1f%%", ansiRatio*100),
+			"top10", m.topNSizesLocked(state, 10),
+		)
+	}
+
+	// Reset counters so each check window analyzes only the latest interval.
+	m.resetRedrawCountersLocked(state)
+
+	return false
+}
+
+// isTUIRedrawPatternLocked checks if the accumulated write-size distribution
+// matches a TUI redraw pattern: top-2 most frequent large-write sizes account
+// for >= tuiRedrawConcentrationThreshold of all large writes.
+func (m *OutputFlushManager) isTUIRedrawPatternLocked(state *paneOutputState) bool {
+	if state.largeSizeTotal < tuiRedrawMinSamples {
+		return false
+	}
+	return m.topTwoConcentrationLocked(state) >= tuiRedrawConcentrationThreshold &&
+		m.ansiWriteConcentrationLocked(state) >= tuiRedrawANSIThreshold
+}
+
+// topTwoConcentrationLocked returns the fraction of large writes accounted
+// for by the two most frequent write sizes.
+func (m *OutputFlushManager) topTwoConcentrationLocked(state *paneOutputState) float64 {
+	if state.largeSizeTotal == 0 {
+		return 0
+	}
+	var top1, top2 int
+	for _, count := range state.largeSizeFreq {
+		if count > top1 {
+			top2 = top1
+			top1 = count
+		} else if count > top2 {
+			top2 = count
+		}
+	}
+	return float64(top1+top2) / float64(state.largeSizeTotal)
+}
+
+func (m *OutputFlushManager) ansiWriteConcentrationLocked(state *paneOutputState) float64 {
+	if state.largeSizeTotal == 0 {
+		return 0
+	}
+	return float64(state.largeANSIWrites) / float64(state.largeSizeTotal)
+}
+
+// topNSizesLocked returns a string showing the top-N most frequent write sizes
+// and their counts, sorted by count descending. For diagnostic logging.
+func (m *OutputFlushManager) topNSizesLocked(state *paneOutputState, n int) string {
+	type sizeCount struct {
+		size  int
+		count int
+	}
+
+	entries := make([]sizeCount, 0, len(state.largeSizeFreq))
+	for size, count := range state.largeSizeFreq {
+		entries = append(entries, sizeCount{size, count})
+	}
+
+	// Simple insertion sort for small N — avoid sort package import.
+	for i := 1; i < len(entries); i++ {
+		for j := i; j > 0 && entries[j].count > entries[j-1].count; j-- {
+			entries[j], entries[j-1] = entries[j-1], entries[j]
+		}
+	}
+
+	if len(entries) > n {
+		entries = entries[:n]
+	}
+
+	var b bytes.Buffer
+	for i, e := range entries {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%dB=%d", e.size, e.count)
+	}
+	return b.String()
+}
+
+// resetRedrawCountersLocked clears the TUI redraw pattern counters.
+func (m *OutputFlushManager) resetRedrawCountersLocked(state *paneOutputState) {
+	state.largeSizeFreq = nil
+	state.largeSizeTotal = 0
+	state.largeANSIWrites = 0
 }
 
 // Write appends output for one pane.
@@ -160,6 +303,19 @@ func (m *OutputFlushManager) Write(paneID string, data []byte) {
 		state.pendingSince = now
 	}
 	state.lastWriteAt = now
+
+	// Track large-write size for TUI redraw pattern detection.
+	if len(data) >= tuiRedrawMinWriteSize {
+		if state.largeSizeFreq == nil {
+			state.largeSizeFreq = make(map[int]int)
+		}
+		state.largeSizeFreq[len(data)]++
+		state.largeSizeTotal++
+		if bytes.IndexByte(data, 0x1b) >= 0 {
+			state.largeANSIWrites++
+		}
+	}
+
 	_, _ = state.buf.Write(data)
 	if state.buf.Len() >= m.maxBytes {
 		shouldWake = true

@@ -15,12 +15,15 @@ import (
 	"myT-x/internal/mcpapi"
 	"myT-x/internal/orchestrator"
 	"myT-x/internal/panestate"
+	"myT-x/internal/promptpresets"
 	"myT-x/internal/scheduler"
 	"myT-x/internal/session"
 	"myT-x/internal/sessionlog"
+	"myT-x/internal/singletaskrunner"
 	"myT-x/internal/snapshot"
 	"myT-x/internal/taskscheduler"
 	"myT-x/internal/tmux"
+	"myT-x/internal/usagedashboard"
 	"myT-x/internal/worktree"
 	"myT-x/internal/wsserver"
 )
@@ -119,10 +122,20 @@ type App struct {
 	// Initialized in NewApp().
 	taskSchedulerManager *taskscheduler.ServiceManager
 
+	// Single task runner manager (per-session sequential task queue).
+	// Thread-safety is managed internally by the ServiceManager. No App-level mutex is needed.
+	// Initialized in NewApp().
+	singleTaskRunnerManager *singletaskrunner.ServiceManager
+
 	// Orchestrator team CRUD and launch operations.
 	// Thread-safety is managed internally by the Service. No App-level mutex is needed.
 	// Initialized in NewApp().
 	orchestratorService *orchestrator.Service
+
+	// Prompt preset CRUD operations for chat prompt insertion.
+	// Thread-safety is managed internally by the Service. No App-level mutex is needed.
+	// Initialized in NewApp().
+	promptPresetsService *promptpresets.Service
 
 	// Developer panel file browsing and git operations.
 	// Stateless service; no mutex needed. Initialized in NewApp().
@@ -136,6 +149,11 @@ type App struct {
 	// Stateless service; no mutex needed. Initialized in NewApp().
 	mcpAPIService *mcpapi.Service
 
+	// Claude Code + Codex usage dashboard aggregation (right sidebar plugin).
+	// Read-only file aggregation; internal mutex serializes refresh runs.
+	// Initialized in NewApp().
+	usageDashboard *usagedashboard.Service
+
 	// sendKeys holds injectable functions for send-keys operations.
 	// Initialized with defaultSendKeysIO() in NewApp().
 	sendKeys sendKeysIO
@@ -145,9 +163,12 @@ type App struct {
 	openExplorerFn func(string) error
 
 	// Background worker cancellation/waits.
-	idleCancel context.CancelFunc
-	bgWG       sync.WaitGroup
-	setupWG    sync.WaitGroup
+	idleCancel        context.CancelFunc
+	bgWG              sync.WaitGroup
+	setupWG           sync.WaitGroup
+	setupCancelMu     sync.Mutex
+	setupCancels      map[uint64]context.CancelFunc
+	nextSetupCancelID atomic.Uint64
 }
 
 // NewApp creates the app service.
@@ -157,6 +178,7 @@ func NewApp() *App {
 		hotkeys:        hotkeys.NewManager(),
 		paneStates:     panestate.NewManager(512 * 1024),
 		configState:    config.NewStateService(),
+		setupCancels:   make(map[uint64]context.CancelFunc),
 		sendKeys:       defaultSendKeysIO(),
 		openExplorerFn: openExplorer,
 	}
@@ -168,12 +190,15 @@ func NewApp() *App {
 	app.inputHistoryService = inputhistory.NewService(emitter, isShuttingDown)
 	app.sessionService = session.NewService(buildSessionServiceDeps(app))
 	app.orchestratorService = orchestrator.NewService(buildOrchestratorServiceDeps(app))
+	app.promptPresetsService = promptpresets.NewService(buildPromptPresetsServiceDeps(app))
 	app.devpanelService = devpanel.NewService(buildDevPanelServiceDeps(app))
 	app.worktreeService = worktree.NewService(buildWorktreeServiceDeps(app))
 	app.mcpAPIService = mcpapi.NewService(buildMCPAPIServiceDeps(app))
+	app.usageDashboard = usagedashboard.NewService(buildUsageDashboardServiceDeps(app))
 	app.snapshotService = snapshot.NewService(buildSnapshotServiceDeps(app))
 	app.schedulerService = scheduler.NewService(buildSchedulerServiceDeps(app))
 	app.taskSchedulerManager = taskscheduler.NewServiceManager(buildTaskSchedulerDepsFactory(app))
+	app.singleTaskRunnerManager = singletaskrunner.NewServiceManager(buildSingleTaskRunnerDepsFactory(app))
 	return app
 }
 

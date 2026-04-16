@@ -1,13 +1,13 @@
 import {registerView} from "../../viewerRegistry";
 import {mustGetViewerShortcutDef} from "../../viewerShortcutDefinitions";
-import {TaskSchedulerIcon} from "../../icons/TaskSchedulerIcon";
+import {OrchestratorTaskIcon} from "../../icons/OrchestratorTaskIcon";
 import {TaskSchedulerView} from "./TaskSchedulerView";
 
 const shortcutDef = mustGetViewerShortcutDef("task-scheduler");
 
 registerView({
     id: shortcutDef.viewId,
-    icon: TaskSchedulerIcon,
+    icon: OrchestratorTaskIcon,
     label: shortcutDef.label,
     component: TaskSchedulerView,
     shortcut: shortcutDef.defaultShortcut,

@@ -37,6 +37,7 @@ func TestCommandRouterHandlerMapHasNoDuplicateKeys(t *testing.T) {
 		"show-environment",
 		"set-environment",
 		"set-option",
+		"show-options",
 		"list-windows",
 		"rename-window",
 		"new-window",

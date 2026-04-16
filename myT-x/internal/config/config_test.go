@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"myT-x/internal/mcp"
 )
 
 func newConfigPathForSaveTest(t *testing.T, elems ...string) string {
@@ -207,7 +209,7 @@ func TestIsZeroConfig(t *testing.T) {
 		{
 			name: "viewer shortcuts set",
 			mutate: func(cfg *Config) {
-				cfg.ViewerShortcuts = map[string]string{"file-tree": "Ctrl+Shift+E"}
+				cfg.ViewerShortcuts = map[string]string{"file-view": "Ctrl+Shift+E"}
 			},
 		},
 		{
@@ -272,6 +274,22 @@ func TestLoadAcceptsAllowlistedShellName(t *testing.T) {
 	}
 	if cfg.Shell != "cmd.exe" {
 		t.Fatalf("cfg.Shell = %q, want cmd.exe", cfg.Shell)
+	}
+}
+
+func TestLoadAcceptsAllowlistedShellAlias(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := []byte("shell: pwsh\n")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Shell != "pwsh" {
+		t.Fatalf("cfg.Shell = %q, want pwsh", cfg.Shell)
 	}
 }
 
@@ -508,6 +526,47 @@ func TestLoadWorktreeForceCleanup(t *testing.T) {
 	}
 }
 
+func TestLoadWorktreeSetupScriptTimeoutSeconds(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{
+			name: "explicit timeout",
+			yaml: "worktree:\n  setup_script_timeout_seconds: 45\n",
+			want: 45,
+		},
+		{
+			name: "timeout omitted uses default",
+			yaml: "worktree:\n  enabled: true\n",
+			want: DefaultSetupScriptTimeoutSeconds,
+		},
+		{
+			name: "negative timeout resets to default",
+			yaml: "worktree:\n  setup_script_timeout_seconds: -1\n",
+			want: DefaultSetupScriptTimeoutSeconds,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Worktree.SetupScriptTimeoutSeconds != tt.want {
+				t.Errorf("SetupScriptTimeoutSeconds = %d, want %d", cfg.Worktree.SetupScriptTimeoutSeconds, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadWorktreeEnabledDefaultAppliedWhenEnabledFieldMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	raw := []byte("worktree:\n  copy_files:\n    - .env\n")
@@ -551,6 +610,10 @@ func TestDefaultConfigWorktreeDefaults(t *testing.T) {
 	}
 	if cfg.Worktree.SetupScripts == nil || len(cfg.Worktree.SetupScripts) != 0 {
 		t.Errorf("Worktree.SetupScripts: want non-nil empty slice, got %v", cfg.Worktree.SetupScripts)
+	}
+	if cfg.Worktree.SetupScriptTimeoutSeconds != DefaultSetupScriptTimeoutSeconds {
+		t.Errorf("Worktree.SetupScriptTimeoutSeconds = %d, want %d",
+			cfg.Worktree.SetupScriptTimeoutSeconds, DefaultSetupScriptTimeoutSeconds)
 	}
 	if cfg.Worktree.CopyFiles == nil || len(cfg.Worktree.CopyFiles) != 0 {
 		t.Errorf("Worktree.CopyFiles: want non-nil empty slice, got %v", cfg.Worktree.CopyFiles)
@@ -1343,8 +1406,8 @@ func TestConfigStructFieldCounts(t *testing.T) {
 	if got := reflect.TypeFor[Config]().NumField(); got != 17 {
 		t.Fatalf("Config field count = %d, want 17; update isZeroConfig tests for new fields", got)
 	}
-	if got := reflect.TypeFor[WorktreeConfig]().NumField(); got != 5 {
-		t.Fatalf("WorktreeConfig field count = %d, want 5 (enabled, force_cleanup, setup_scripts, copy_files, copy_dirs)", got)
+	if got := reflect.TypeFor[WorktreeConfig]().NumField(); got != 6 {
+		t.Fatalf("WorktreeConfig field count = %d, want 6 (enabled, force_cleanup, setup_scripts, setup_script_timeout_seconds, copy_files, copy_dirs)", got)
 	}
 	if got := reflect.TypeFor[ClaudeEnvConfig]().NumField(); got != 2 {
 		t.Fatalf("ClaudeEnvConfig field count = %d, want 2 (default_enabled, vars); update Clone/sanitize for new fields", got)
@@ -2310,9 +2373,9 @@ func TestLoadViewerShortcuts(t *testing.T) {
 		},
 		{
 			name: "viewer_shortcuts loaded correctly",
-			yaml: "viewer_shortcuts:\n  file-tree: \"Ctrl+Shift+1\"\n  git-graph: \"Ctrl+Shift+2\"\n",
+			yaml: "viewer_shortcuts:\n  file-view: \"Ctrl+Shift+1\"\n  git-graph: \"Ctrl+Shift+2\"\n",
 			wantMap: map[string]string{
-				"file-tree": "Ctrl+Shift+1",
+				"file-view": "Ctrl+Shift+1",
 				"git-graph": "Ctrl+Shift+2",
 			},
 		},
@@ -2435,13 +2498,13 @@ func TestCloneViewerShortcuts(t *testing.T) {
 
 	t.Run("viewer shortcuts deep copied", func(t *testing.T) {
 		src := DefaultConfig()
-		src.ViewerShortcuts = map[string]string{"file-tree": "Ctrl+Shift+1"}
+		src.ViewerShortcuts = map[string]string{"file-view": "Ctrl+Shift+1"}
 		dst := Clone(src)
 		if !reflect.DeepEqual(src.ViewerShortcuts, dst.ViewerShortcuts) {
 			t.Errorf("Clone did not preserve ViewerShortcuts")
 		}
-		dst.ViewerShortcuts["file-tree"] = "Ctrl+Shift+9"
-		if src.ViewerShortcuts["file-tree"] != "Ctrl+Shift+1" {
+		dst.ViewerShortcuts["file-view"] = "Ctrl+Shift+9"
+		if src.ViewerShortcuts["file-view"] != "Ctrl+Shift+1" {
 			t.Error("Clone ViewerShortcuts is not independent from source")
 		}
 	})
@@ -2451,7 +2514,7 @@ func TestSaveRoundTripViewerShortcuts(t *testing.T) {
 	path := newConfigPathForSaveTest(t, "config.yaml")
 	cfg := DefaultConfig()
 	cfg.ViewerShortcuts = map[string]string{
-		"file-tree": "Ctrl+Shift+1",
+		"file-view": "Ctrl+Shift+1",
 		"git-graph": "Ctrl+Shift+2",
 	}
 	if _, err := Save(path, cfg); err != nil {
@@ -2494,6 +2557,7 @@ func TestCloneMCPServers(t *testing.T) {
 				ID:          "mem-server",
 				Name:        "Memory Server",
 				Description: "Persistent memory",
+				Kind:        "memory-server",
 				Command:     "npx",
 				Args:        []string{"-y", "@anthropic/memory-server"},
 				Env:         map[string]string{"MEM_DIR": "/tmp/mem"},
@@ -2627,6 +2691,33 @@ func TestCloneTaskScheduler(t *testing.T) {
 	})
 }
 
+func TestSaveRoundTripTaskScheduler(t *testing.T) {
+	path := newConfigPathForSaveTest(t, "config.yaml")
+	input := DefaultConfig()
+	input.TaskScheduler = &TaskSchedulerConfig{
+		PreExecResetDelay:  15,
+		PreExecIdleTimeout: 120,
+		PreExecTargetMode:  TaskSchedulerPreExecTargetModeAllPanes,
+		MessageTemplates: []MessageTemplate{
+			{Name: "review", Message: "Review this carefully"},
+			{Name: "tests", Message: "Run the targeted tests"},
+		},
+	}
+
+	if _, err := Save(path, input); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(loaded.TaskScheduler, input.TaskScheduler) {
+		t.Fatalf("TaskScheduler round-trip mismatch\nloaded: %#v\ninput: %#v", loaded.TaskScheduler, input.TaskScheduler)
+	}
+}
+
 func TestLoadMCPServersYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	raw := []byte(`
@@ -2634,6 +2725,7 @@ mcp_servers:
   - id: memory
     name: Memory Server
     description: Persistent memory
+    kind: memory-server
     command: npx
     args:
       - -y
@@ -2665,7 +2757,7 @@ mcp_servers:
 	}
 
 	first := cfg.MCPServers[0]
-	if first.ID != "memory" || first.Name != "Memory Server" || first.Command != "npx" {
+	if first.ID != "memory" || first.Name != "Memory Server" || first.Kind != "memory-server" || first.Command != "npx" {
 		t.Fatalf("first MCP server parsed incorrectly: %+v", first)
 	}
 	if !first.Enabled {
@@ -2693,6 +2785,66 @@ mcp_servers:
 	}
 }
 
+func TestLoadMCPServersYAMLRejectsReservedBuiltInKinds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := []byte(`
+mcp_servers:
+  - id: orch-custom
+    name: Fake Orchestrator
+    kind: "  orchestrator  "
+    command: custom-orch.exe
+  - id: str-custom
+    name: Fake Runner
+    kind: "single-task-runner"
+    command: custom-runner.exe
+  - id: browser
+    name: Browser MCP
+    kind: custom
+    command: browser-mcp
+`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.MCPServers) != 1 {
+		t.Fatalf("MCPServers length = %d, want 1", len(cfg.MCPServers))
+	}
+	if got := cfg.MCPServers[0].ID; got != "browser" {
+		t.Fatalf("ID = %q, want %q", got, "browser")
+	}
+	if got := cfg.MCPServers[0].Kind; got != string(mcp.DefinitionKindCustom) {
+		t.Fatalf("Kind = %q, want %q", got, mcp.DefinitionKindCustom)
+	}
+}
+
+func TestLoadMCPServersYAMLDefaultsEmptyKindToCustom(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := []byte(`
+mcp_servers:
+  - id: lsp-custom
+    name: Custom MCP
+    command: custom-mcp
+`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.MCPServers) != 1 {
+		t.Fatalf("MCPServers length = %d, want 1", len(cfg.MCPServers))
+	}
+	if got := cfg.MCPServers[0].Kind; got != string(mcp.DefinitionKindCustom) {
+		t.Fatalf("Kind = %q, want %q", got, mcp.DefinitionKindCustom)
+	}
+}
+
 func TestSaveRoundTripMCPServers(t *testing.T) {
 	path := newConfigPathForSaveTest(t, "config.yaml")
 	input := DefaultConfig()
@@ -2701,6 +2853,7 @@ func TestSaveRoundTripMCPServers(t *testing.T) {
 			ID:          "memory",
 			Name:        "Memory Server",
 			Description: "Persistent memory",
+			Kind:        "memory-server",
 			Command:     "npx",
 			Args:        []string{"-y", "@anthropic/memory-server"},
 			Env: map[string]string{
@@ -2719,6 +2872,7 @@ func TestSaveRoundTripMCPServers(t *testing.T) {
 		{
 			ID:      "browser",
 			Name:    "Browser MCP",
+			Kind:    "custom",
 			Command: "browser-mcp",
 			Enabled: false,
 		},
@@ -2739,8 +2893,8 @@ func TestSaveRoundTripMCPServers(t *testing.T) {
 }
 
 func TestMCPServerConfigStructFieldCount(t *testing.T) {
-	if got := reflect.TypeFor[MCPServerConfig]().NumField(); got != 9 {
-		t.Fatalf("MCPServerConfig field count = %d, want 9; update Clone for new fields", got)
+	if got := reflect.TypeFor[MCPServerConfig]().NumField(); got != 10 {
+		t.Fatalf("MCPServerConfig field count = %d, want 10; update Clone for new fields", got)
 	}
 }
 
@@ -2922,21 +3076,22 @@ func TestValidateDefaultSessionDirTildeExpansionError(t *testing.T) {
 }
 
 func TestValidateChatOverlayPercentageBoundary(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name  string
 		input int
 		want  int
 	}{
-		{name: "zero defaults to 80", input: 0, want: 80},
-		{name: "29 clamped to 30", input: 29, want: 30},
-		{name: "30 preserved", input: 30, want: 30},
-		{name: "50 preserved", input: 50, want: 50},
-		{name: "80 preserved", input: 80, want: 80},
-		{name: "95 preserved (upper bound)", input: 95, want: 95},
-		{name: "96 clamped to 95", input: 96, want: 95},
-		{name: "100 clamped to 95", input: 100, want: 95},
-		{name: "negative clamped to 30", input: -10, want: 30},
-		{name: "1 clamped to 30", input: 1, want: 30},
+		{name: "zero defaults to 40", input: 0, want: 40},
+		{name: "14 clamped to 15", input: 14, want: 15},
+		{name: "15 preserved", input: 15, want: 15},
+		{name: "40 preserved", input: 40, want: 40},
+		{name: "70 preserved (upper bound)", input: 70, want: 70},
+		{name: "80 clamped to 70", input: 80, want: 70},
+		{name: "96 clamped to 70", input: 96, want: 70},
+		{name: "negative clamped to 15", input: -10, want: 15},
+		{name: "1 clamped to 15", input: 1, want: 15},
 	}
 
 	for _, tt := range tests {
@@ -2950,6 +3105,15 @@ func TestValidateChatOverlayPercentageBoundary(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigChatOverlayPercentage(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	if cfg.ChatOverlayPercentage != 40 {
+		t.Fatalf("DefaultConfig().ChatOverlayPercentage = %d, want 40", cfg.ChatOverlayPercentage)
+	}
+}
+
 func TestLoadSanitizesMCPServers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	raw := []byte(`
@@ -2959,6 +3123,7 @@ mcp_servers:
     command: "echo"
   - id: "memory"
     name: "  Memory Server  "
+    kind: " memory-server "
     command: "  npx  "
     args:
       - " -y "
@@ -3000,6 +3165,9 @@ mcp_servers:
 	}
 	if server.Name != "Memory Server" {
 		t.Fatalf("MCPServers[0].Name = %q, want %q", server.Name, "Memory Server")
+	}
+	if server.Kind != "memory-server" {
+		t.Fatalf("MCPServers[0].Kind = %q, want %q", server.Kind, "memory-server")
 	}
 	if server.Command != "npx" {
 		t.Fatalf("MCPServers[0].Command = %q, want %q", server.Command, "npx")

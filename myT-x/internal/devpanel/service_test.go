@@ -1,18 +1,24 @@
 package devpanel
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"maps"
 	"os"
 	execStdlib "os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"myT-x/internal/apptypes"
 )
 
 // testIsPathWithinBase is a simple implementation for testing.
@@ -27,21 +33,55 @@ func testIsPathWithinBase(path, base string) bool {
 	return true
 }
 
+type testSessionResolver struct {
+	mu    sync.RWMutex
+	roots map[string]string
+}
+
+func newTestSessionResolver(entries map[string]string) *testSessionResolver {
+	cloned := make(map[string]string, len(entries))
+	maps.Copy(cloned, entries)
+	return &testSessionResolver{roots: cloned}
+}
+
+func (r *testSessionResolver) resolveSessionDir(name string, _ bool) (string, error) {
+	r.mu.RLock()
+	rootPath, ok := r.roots[name]
+	r.mu.RUnlock()
+	if !ok {
+		return "", errors.New("session not found")
+	}
+	if rootPath == "" {
+		return "", errors.New("session has no root path")
+	}
+	return rootPath, nil
+}
+
+func (r *testSessionResolver) rename(oldSessionName, newSessionName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rootPath, ok := r.roots[oldSessionName]
+	if !ok {
+		return
+	}
+	delete(r.roots, oldSessionName)
+	r.roots[newSessionName] = rootPath
+}
+
 // newTestService creates a Service with a ResolveSessionDir that returns rootPath
 // for the given sessionName.
 func newTestService(sessionName, rootPath string) *Service {
-	return NewService(Deps{
-		ResolveSessionDir: func(name string, _ bool) (string, error) {
-			if name == sessionName {
-				if rootPath == "" {
-					return "", errors.New("session has no root path")
-				}
-				return rootPath, nil
-			}
-			return "", errors.New("session not found")
-		},
-		IsPathWithinBase: testIsPathWithinBase,
+	svc, _ := newTestServiceWithResolver(sessionName, rootPath)
+	return svc
+}
+
+func newTestServiceWithResolver(sessionName, rootPath string) (*Service, *testSessionResolver) {
+	resolver := newTestSessionResolver(map[string]string{sessionName: rootPath})
+	svc := NewService(Deps{
+		ResolveSessionDir: resolver.resolveSessionDir,
+		IsPathWithinBase:  testIsPathWithinBase,
 	})
+	return svc, resolver
 }
 
 type recordedEvent struct {
@@ -54,11 +94,17 @@ const testWatcherDebounceInterval = 20 * time.Millisecond
 type testEmitter struct {
 	mu     sync.Mutex
 	events []recordedEvent
+	notify chan struct{}
 }
 
 func (e *testEmitter) Emit(name string, payload any) {
 	e.mu.Lock()
 	e.events = append(e.events, recordedEvent{name: name, payload: payload})
+	notify := e.ensureNotifyLocked()
+	select {
+	case notify <- struct{}{}:
+	default:
+	}
 	e.mu.Unlock()
 }
 
@@ -66,44 +112,65 @@ func (e *testEmitter) EmitWithContext(_ context.Context, name string, payload an
 	e.Emit(name, payload)
 }
 
+func (e *testEmitter) ensureNotifyLocked() chan struct{} {
+	if e.notify == nil {
+		e.notify = make(chan struct{}, 1)
+	}
+	return e.notify
+}
+
+func (e *testEmitter) findEventLocked(name string) (recordedEvent, bool) {
+	for _, event := range e.events {
+		if event.name == name {
+			return event, true
+		}
+	}
+	return recordedEvent{}, false
+}
+
 func (e *testEmitter) waitForEvent(t *testing.T, name string, timeout time.Duration) recordedEvent {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		e.mu.Lock()
-		for _, event := range e.events {
-			if event.name == name {
-				e.mu.Unlock()
-				return event
-			}
-		}
-		e.mu.Unlock()
-		time.Sleep(10 * time.Millisecond)
-	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
-	t.Fatalf("timed out waiting for event %q", name)
-	return recordedEvent{}
+	for {
+		e.mu.Lock()
+		if event, ok := e.findEventLocked(name); ok {
+			e.mu.Unlock()
+			return event
+		}
+		notify := e.ensureNotifyLocked()
+		e.mu.Unlock()
+
+		select {
+		case <-notify:
+		case <-timer.C:
+			t.Fatalf("timed out waiting for event %q", name)
+		}
+	}
 }
 
 func (e *testEmitter) assertNoEvent(t *testing.T, name string, timeout time.Duration) {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for {
 		e.mu.Lock()
-		var matched *recordedEvent
-		for i := range e.events {
-			if e.events[i].name == name {
-				matched = &e.events[i]
-				break
-			}
+		if event, ok := e.findEventLocked(name); ok {
+			e.mu.Unlock()
+			t.Fatalf("unexpected event %q within %v: %#v", name, timeout, event)
 		}
+		notify := e.ensureNotifyLocked()
 		e.mu.Unlock()
-		if matched != nil {
-			t.Fatalf("unexpected event %q within %v: %#v", name, timeout, *matched)
+
+		select {
+		case <-notify:
+		case <-timer.C:
+			return
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -112,6 +179,29 @@ func configureWatcherManagerForTest(svc *Service) {
 		return
 	}
 	svc.watcherManager.debounceInterval = testWatcherDebounceInterval
+}
+
+type fakeManagedWatcher struct {
+	stopErr   error
+	degraded  bool
+	stopCalls int
+}
+
+func (w *fakeManagedWatcher) Stop() error {
+	w.stopCalls++
+	return w.stopErr
+}
+
+func (*fakeManagedWatcher) ignorePaths(...string) {}
+
+func (w *fakeManagedWatcher) isReusable() bool { return !w.degraded }
+
+func (w *fakeManagedWatcher) markDegraded(string) { w.degraded = true }
+
+func (*fakeManagedWatcher) unignorePaths(...string) {}
+
+func newFailingManagedWatcher() managedWatcher {
+	return &fakeManagedWatcher{stopErr: errors.New("stop failed")}
 }
 
 func TestResolveAndValidatePath(t *testing.T) {
@@ -363,6 +453,48 @@ func TestListDirCacheInvalidation(t *testing.T) {
 	}
 }
 
+func TestListDirLargeDirectoryUsesLazyHasChildrenHints(t *testing.T) {
+	tmpDir := t.TempDir()
+	for i := range maxDirHasChildrenProbes + 1 {
+		dirPath := filepath.Join(tmpDir, "dir"+strconv.Itoa(i))
+		if err := os.MkdirAll(dirPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) failed: %v", dirPath, err)
+		}
+	}
+
+	svc := newTestService("test-session", tmpDir)
+	svc.dirCache.Set("test-session", "dir0", []FileEntry{})
+
+	probeCalls := 0
+	originalProbe := dirHasVisibleChildrenFunc
+	dirHasVisibleChildrenFunc = func(string) (bool, error) {
+		probeCalls++
+		return false, nil
+	}
+	t.Cleanup(func() {
+		dirHasVisibleChildrenFunc = originalProbe
+	})
+
+	entries, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("ListDir failed: %v", err)
+	}
+	if probeCalls != 0 {
+		t.Fatalf("large listing should avoid per-directory probes, got %d", probeCalls)
+	}
+
+	entryByName := make(map[string]FileEntry, len(entries))
+	for _, entry := range entries {
+		entryByName[entry.Name] = entry
+	}
+	if entryByName["dir0"].HasChildren {
+		t.Fatal("cached empty directory should keep HasChildren=false")
+	}
+	if !entryByName["dir1"].HasChildren {
+		t.Fatal("uncached directory should keep lazy expansion hint")
+	}
+}
+
 func TestParentPanelPath(t *testing.T) {
 	tests := []struct {
 		name string
@@ -536,6 +668,449 @@ func TestServiceCleanupSessionStopsAllWatchersAndClearsCache(t *testing.T) {
 	}
 	if _, ok := svc.dirCache.Get("test-session", "src"); ok {
 		t.Fatal("descendant cache should be invalidated after CleanupSession")
+	}
+}
+
+func TestServiceRenameSessionMigratesWatcherAndCacheState(t *testing.T) {
+	tmpDir := t.TempDir()
+	svc := newTestService("old-session", tmpDir)
+	configureWatcherManagerForTest(svc)
+
+	if err := svc.StartWatcher("old-session"); err != nil {
+		t.Fatalf("StartWatcher failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = svc.StopAllWatchers()
+	})
+
+	svc.dirCache.Set("old-session", "", []FileEntry{{Name: "src", Path: "src", IsDir: true}})
+	svc.dirCache.Set("old-session", "src", []FileEntry{{Name: "nested.txt", Path: "src/nested.txt", Size: 12}})
+
+	if err := svc.RenameSession("old-session", "new-session"); err != nil {
+		t.Fatalf("RenameSession failed: %v", err)
+	}
+
+	svc.watcherManager.mu.Lock()
+	_, oldExists := svc.watcherManager.watchers["old-session"]
+	newEntry, newExists := svc.watcherManager.watchers["new-session"]
+	svc.watcherManager.mu.Unlock()
+	if oldExists {
+		t.Fatal("old watcher entry should be removed after RenameSession")
+	}
+	if !newExists || newEntry == nil {
+		t.Fatal("new watcher entry should exist after RenameSession")
+	}
+
+	treeWatcherEntry, ok := newEntry.watcher.(*treeWatcher)
+	if !ok {
+		t.Fatalf("watcher type = %T, want *treeWatcher", newEntry.watcher)
+	}
+	if got := treeWatcherEntry.sessionNameSnapshot(); got != "new-session" {
+		t.Fatalf("watcher session name = %q, want %q", got, "new-session")
+	}
+
+	if _, ok := svc.dirCache.Get("old-session", ""); ok {
+		t.Fatal("old root cache should be removed after RenameSession")
+	}
+	if _, ok := svc.dirCache.Get("old-session", "src"); ok {
+		t.Fatal("old descendant cache should be removed after RenameSession")
+	}
+	if entries, ok := svc.dirCache.Get("new-session", ""); !ok || len(entries) != 1 {
+		t.Fatalf("new root cache = %#v, ok=%v; want migrated root cache", entries, ok)
+	}
+	if entries, ok := svc.dirCache.Get("new-session", "src"); !ok || len(entries) != 1 {
+		t.Fatalf("new descendant cache = %#v, ok=%v; want migrated descendant cache", entries, ok)
+	}
+}
+
+func TestServiceRenameSessionAdoptsWatcherDuringFrontendHandoff(t *testing.T) {
+	tmpDir := t.TempDir()
+	svc, resolver := newTestServiceWithResolver("old-session", tmpDir)
+	configureWatcherManagerForTest(svc)
+
+	if err := svc.StartWatcher("old-session"); err != nil {
+		t.Fatalf("StartWatcher(old-session) failed: %v", err)
+	}
+	if err := svc.RenameSession("old-session", "new-session"); err != nil {
+		t.Fatalf("RenameSession failed: %v", err)
+	}
+	resolver.rename("old-session", "new-session")
+	if err := svc.StopWatcher("old-session"); err != nil {
+		t.Fatalf("StopWatcher(old-session) failed: %v", err)
+	}
+	if err := svc.StartWatcher("new-session"); err != nil {
+		t.Fatalf("StartWatcher(new-session) failed: %v", err)
+	}
+
+	svc.watcherManager.mu.Lock()
+	entry, ok := svc.watcherManager.watchers["new-session"]
+	if !ok {
+		svc.watcherManager.mu.Unlock()
+		t.Fatal("expected renamed watcher entry after StartWatcher(new-session)")
+	}
+	if entry.refCount != 1 {
+		svc.watcherManager.mu.Unlock()
+		t.Fatalf("watcher refCount after rename handoff = %d, want 1", entry.refCount)
+	}
+	svc.watcherManager.mu.Unlock()
+
+	if err := svc.StopWatcher("new-session"); err != nil {
+		t.Fatalf("StopWatcher(new-session) failed: %v", err)
+	}
+
+	svc.watcherManager.mu.Lock()
+	_, ok = svc.watcherManager.watchers["new-session"]
+	svc.watcherManager.mu.Unlock()
+	if ok {
+		t.Fatal("watcher entry should be removed after the final StopWatcher(new-session)")
+	}
+}
+
+func TestServiceRenameSessionWatcherHandoffLeavesOneActiveWatcher(t *testing.T) {
+	tests := []struct {
+		name  string
+		steps func(t *testing.T, svc *Service)
+	}{
+		{
+			name: "cleanup before restart",
+			steps: func(t *testing.T, svc *Service) {
+				t.Helper()
+				if err := svc.StopWatcher("old-session"); err != nil {
+					t.Fatalf("StopWatcher(old-session) failed: %v", err)
+				}
+				if err := svc.StartWatcher("new-session"); err != nil {
+					t.Fatalf("StartWatcher(new-session) after cleanup failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "restart before cleanup",
+			steps: func(t *testing.T, svc *Service) {
+				t.Helper()
+				if err := svc.StartWatcher("new-session"); err != nil {
+					t.Fatalf("StartWatcher(new-session) before cleanup failed: %v", err)
+				}
+				if err := svc.StopWatcher("old-session"); err != nil {
+					t.Fatalf("StopWatcher(old-session) failed: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			svc, resolver := newTestServiceWithResolver("old-session", tmpDir)
+			configureWatcherManagerForTest(svc)
+
+			if err := svc.StartWatcher("old-session"); err != nil {
+				t.Fatalf("StartWatcher(old-session) failed: %v", err)
+			}
+			t.Cleanup(func() {
+				_ = svc.StopAllWatchers()
+			})
+
+			if err := svc.RenameSession("old-session", "new-session"); err != nil {
+				t.Fatalf("RenameSession failed: %v", err)
+			}
+			resolver.rename("old-session", "new-session")
+
+			tt.steps(t, svc)
+
+			svc.watcherManager.mu.Lock()
+			_, oldExists := svc.watcherManager.watchers["old-session"]
+			entry, newExists := svc.watcherManager.watchers["new-session"]
+			svc.watcherManager.mu.Unlock()
+
+			if oldExists {
+				t.Fatal("old watcher entry should remain removed after the rename handoff")
+			}
+			if !newExists || entry == nil {
+				t.Fatal("new watcher entry should remain active after the rename handoff")
+			}
+			if entry.refCount != 1 {
+				t.Fatalf("new-session watcher refCount = %d, want 1", entry.refCount)
+			}
+		})
+	}
+}
+
+func TestServiceRenameSessionMultiRefHandoff(t *testing.T) {
+	// When refCount > 1 at rename time, every subscriber's re-attach after the
+	// rename should consume one handoff slot without inflating refCount.
+	tmpDir := t.TempDir()
+	svc, resolver := newTestServiceWithResolver("old-session", tmpDir)
+	configureWatcherManagerForTest(svc)
+
+	// Simulate two subscribers starting the watcher before the rename.
+	if err := svc.StartWatcher("old-session"); err != nil {
+		t.Fatalf("StartWatcher #1 failed: %v", err)
+	}
+	if err := svc.StartWatcher("old-session"); err != nil {
+		t.Fatalf("StartWatcher #2 failed: %v", err)
+	}
+	svc.watcherManager.mu.Lock()
+	preRenameRC := svc.watcherManager.watchers["old-session"].refCount
+	svc.watcherManager.mu.Unlock()
+	if preRenameRC != 2 {
+		t.Fatalf("pre-rename refCount = %d, want 2", preRenameRC)
+	}
+
+	if err := svc.RenameSession("old-session", "new-session"); err != nil {
+		t.Fatalf("RenameSession failed: %v", err)
+	}
+	resolver.rename("old-session", "new-session")
+
+	// Both old-session cleanups are no-ops (entry moved to new name).
+	if err := svc.StopWatcher("old-session"); err != nil {
+		t.Fatalf("StopWatcher(old) #1 failed: %v", err)
+	}
+	if err := svc.StopWatcher("old-session"); err != nil {
+		t.Fatalf("StopWatcher(old) #2 failed: %v", err)
+	}
+
+	// Both subscribers re-attach under the new name; each should consume a
+	// handoff slot, leaving refCount unchanged at 2.
+	if err := svc.StartWatcher("new-session"); err != nil {
+		t.Fatalf("StartWatcher(new) #1 failed: %v", err)
+	}
+	if err := svc.StartWatcher("new-session"); err != nil {
+		t.Fatalf("StartWatcher(new) #2 failed: %v", err)
+	}
+
+	svc.watcherManager.mu.Lock()
+	entry, ok := svc.watcherManager.watchers["new-session"]
+	svc.watcherManager.mu.Unlock()
+	if !ok {
+		t.Fatal("expected watcher entry under new-session")
+	}
+	if entry.refCount != 2 {
+		t.Fatalf("post-handoff refCount = %d, want 2", entry.refCount)
+	}
+
+	// Both subscribers stop cleanly.
+	if err := svc.StopWatcher("new-session"); err != nil {
+		t.Fatalf("StopWatcher(new) #1 failed: %v", err)
+	}
+	if err := svc.StopWatcher("new-session"); err != nil {
+		t.Fatalf("StopWatcher(new) #2 failed: %v", err)
+	}
+
+	svc.watcherManager.mu.Lock()
+	_, stillExists := svc.watcherManager.watchers["new-session"]
+	svc.watcherManager.mu.Unlock()
+	if stillExists {
+		t.Fatal("watcher entry should be removed after all subscribers stopped")
+	}
+}
+
+func TestWatcherManagerStopPreservesEntryOnStopError(t *testing.T) {
+	manager := newWatcherManager(nil, nil)
+	manager.watchers["test-session"] = &sessionWatcher{
+		refCount: 1,
+		rootDir:  t.TempDir(),
+		watcher:  newFailingManagedWatcher(),
+	}
+
+	if err := manager.stop("test-session"); err == nil {
+		t.Fatal("stop should return an error when watcher shutdown fails")
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	entry := manager.watchers["test-session"]
+	if entry == nil {
+		t.Fatal("watcher entry should be preserved after stop failure")
+	}
+	failingWatcher, ok := entry.watcher.(*fakeManagedWatcher)
+	if !ok {
+		t.Fatalf("watcher type = %T, want *fakeManagedWatcher", entry.watcher)
+	}
+	if !failingWatcher.degraded {
+		t.Fatal("watcher should be marked degraded after stop failure")
+	}
+	if _, ok := manager.starting["test-session"]; ok {
+		t.Fatal("pending marker should be cleared after stop failure")
+	}
+}
+
+func TestWatcherManagerStopAllPreservesFailedEntries(t *testing.T) {
+	manager := newWatcherManager(nil, nil)
+	manager.watchers["test-session"] = &sessionWatcher{
+		refCount: 1,
+		rootDir:  t.TempDir(),
+		watcher:  newFailingManagedWatcher(),
+	}
+
+	if err := manager.stopAll(); err == nil {
+		t.Fatal("stopAll should return an error when watcher shutdown fails")
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	entry := manager.watchers["test-session"]
+	if entry == nil {
+		t.Fatal("watcher entry should be preserved after stopAll failure")
+	}
+	failingWatcher, ok := entry.watcher.(*fakeManagedWatcher)
+	if !ok {
+		t.Fatalf("watcher type = %T, want *fakeManagedWatcher", entry.watcher)
+	}
+	if !failingWatcher.degraded {
+		t.Fatal("watcher should be marked degraded after stopAll failure")
+	}
+	if len(manager.starting) != 0 {
+		t.Fatalf("pending markers should be cleared after stopAll failure: %+v", manager.starting)
+	}
+}
+
+func TestWatcherManagerStopAllForSessionPreservesEntryOnStopError(t *testing.T) {
+	manager := newWatcherManager(nil, nil)
+	manager.watchers["test-session"] = &sessionWatcher{
+		refCount: 1,
+		rootDir:  t.TempDir(),
+		watcher:  newFailingManagedWatcher(),
+	}
+
+	if err := manager.stopAllForSession("test-session"); err == nil {
+		t.Fatal("stopAllForSession should return an error when watcher shutdown fails")
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	entry := manager.watchers["test-session"]
+	if entry == nil {
+		t.Fatal("watcher entry should be preserved after stopAllForSession failure")
+	}
+	failingWatcher, ok := entry.watcher.(*fakeManagedWatcher)
+	if !ok {
+		t.Fatalf("watcher type = %T, want *fakeManagedWatcher", entry.watcher)
+	}
+	if !failingWatcher.degraded {
+		t.Fatal("watcher should be marked degraded after stopAllForSession failure")
+	}
+	if _, ok := manager.starting["test-session"]; ok {
+		t.Fatal("pending marker should be cleared after stopAllForSession failure")
+	}
+}
+
+func TestWatcherManagerStartPreservesExistingEntryWhenRotationStopFails(t *testing.T) {
+	manager := newWatcherManager(nil, nil)
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	manager.watchers["test-session"] = &sessionWatcher{
+		refCount: 1,
+		rootDir:  oldRoot,
+		watcher:  newFailingManagedWatcher(),
+	}
+
+	if err := manager.start("test-session", newRoot); err == nil {
+		t.Fatal("start should fail when rotating away from a watcher that cannot stop")
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	entry := manager.watchers["test-session"]
+	if entry == nil {
+		t.Fatal("existing watcher entry should be preserved after rotation stop failure")
+	}
+	failingWatcher, ok := entry.watcher.(*fakeManagedWatcher)
+	if !ok {
+		t.Fatalf("watcher type = %T, want *fakeManagedWatcher", entry.watcher)
+	}
+	if !failingWatcher.degraded {
+		t.Fatal("watcher should be marked degraded after rotation stop failure")
+	}
+	if _, ok := manager.starting["test-session"]; ok {
+		t.Fatal("pending marker should be cleared after rotation stop failure")
+	}
+}
+
+func TestWatcherManagerStartPreservesEntryWhenReplacementCreationFails(t *testing.T) {
+	manager := newWatcherManager(nil, nil)
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	existingWatcher := &fakeManagedWatcher{}
+	manager.watchers["test-session"] = &sessionWatcher{
+		refCount: 1,
+		rootDir:  oldRoot,
+		watcher:  existingWatcher,
+	}
+
+	originalFactory := newTreeWatcherFunc
+	newTreeWatcherFunc = func(string, string, *DirCache, apptypes.RuntimeEventEmitter, time.Duration, time.Duration) (*treeWatcher, error) {
+		return nil, errors.New("create failed")
+	}
+	t.Cleanup(func() {
+		newTreeWatcherFunc = originalFactory
+	})
+
+	if err := manager.start("test-session", newRoot); err == nil {
+		t.Fatal("start should fail when replacement watcher creation fails")
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	entry := manager.watchers["test-session"]
+	if entry == nil {
+		t.Fatal("existing watcher entry should be preserved after replacement creation failure")
+	}
+	if entry.watcher != existingWatcher {
+		t.Fatalf("watcher entry replaced unexpectedly: got %T", entry.watcher)
+	}
+	if existingWatcher.stopCalls != 0 {
+		t.Fatalf("existing watcher stop calls = %d, want 0", existingWatcher.stopCalls)
+	}
+	if existingWatcher.degraded {
+		t.Fatal("existing watcher should remain reusable after replacement creation failure")
+	}
+	if _, ok := manager.starting["test-session"]; ok {
+		t.Fatal("pending marker should be cleared after replacement creation failure")
+	}
+}
+
+func TestTreeWatcherHandleWatcherErrorSkipsTransientWindowsErrors(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("transient watcher errors are Windows-specific")
+	}
+
+	emitter := &testEmitter{}
+	watcher := &treeWatcher{
+		sessionName:  "test-session",
+		emitter:      emitter,
+		pendingPaths: make(map[string]struct{}),
+		ignoredPaths: make(map[string]time.Time),
+	}
+
+	watcher.handleWatcherError(&os.PathError{Op: "watch", Path: "file.txt", Err: errorSharingViolation})
+
+	if !watcher.isReusable() {
+		t.Fatal("transient watcher error should not degrade reuse")
+	}
+	emitter.assertNoEvent(t, watcherFailedEventName, testWatcherDebounceInterval)
+}
+
+func TestTreeWatcherHandleWatcherErrorDegradesOnNonTransientErrors(t *testing.T) {
+	emitter := &testEmitter{}
+	watcher := &treeWatcher{
+		sessionName:  "test-session",
+		emitter:      emitter,
+		pendingPaths: make(map[string]struct{}),
+		ignoredPaths: make(map[string]time.Time),
+	}
+
+	watcher.handleWatcherError(errors.New("watcher broke"))
+
+	if watcher.isReusable() {
+		t.Fatal("non-transient watcher error should degrade reuse")
+	}
+	event := emitter.waitForEvent(t, watcherFailedEventName, time.Second)
+	payload, ok := event.payload.(WatcherFailedEvent)
+	if !ok {
+		t.Fatalf("payload type = %T, want WatcherFailedEvent", event.payload)
+	}
+	if payload.SessionName != "test-session" {
+		t.Fatalf("payload SessionName = %q, want %q", payload.SessionName, "test-session")
 	}
 }
 
@@ -782,6 +1357,14 @@ func TestFileContentFieldCountGuard(t *testing.T) {
 	}
 }
 
+func TestBinaryFileContentFieldCountGuard(t *testing.T) {
+	const expectedFieldCount = 3
+	got := reflect.TypeFor[BinaryFileContent]().NumField()
+	if got != expectedFieldCount {
+		t.Fatalf("BinaryFileContent field count = %d, want %d; update frontend documentTypes.ts and Wails bindings", got, expectedFieldCount)
+	}
+}
+
 func TestFileMetadataFieldCountGuard(t *testing.T) {
 	const expectedFieldCount = 3
 	got := reflect.TypeFor[FileMetadata]().NumField()
@@ -937,6 +1520,154 @@ func TestGetFileInfo(t *testing.T) {
 	}
 }
 
+func TestReadBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	textContent := []byte("hello from markdown image resolution")
+	pngContent := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x0d}
+	oversizedContent := bytes.Repeat([]byte("a"), int(maxBinaryFileSize)+1)
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "notes.txt"), textContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "image.png"), pngContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "empty.txt"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "oversized.bin"), oversizedContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test-session", tmpDir)
+
+	tests := []struct {
+		name    string
+		session string
+		path    string
+		wantErr string
+		check   func(t *testing.T, result BinaryFileContent)
+	}{
+		{
+			name:    "reads text file as base64",
+			session: "test-session",
+			path:    "notes.txt",
+			check: func(t *testing.T, result BinaryFileContent) {
+				t.Helper()
+				decoded, err := base64.StdEncoding.DecodeString(result.Data)
+				if err != nil {
+					t.Fatalf("DecodeString() error = %v", err)
+				}
+				if !bytes.Equal(decoded, textContent) {
+					t.Fatalf("decoded text content mismatch: got %q, want %q", decoded, textContent)
+				}
+				if result.Path != "notes.txt" {
+					t.Fatalf("Path = %q, want %q", result.Path, "notes.txt")
+				}
+				if result.Mime != "text/plain; charset=utf-8" {
+					t.Fatalf("Mime = %q, want %q", result.Mime, "text/plain; charset=utf-8")
+				}
+			},
+		},
+		{
+			name:    "reads binary file with image mime",
+			session: "test-session",
+			path:    "image.png",
+			check: func(t *testing.T, result BinaryFileContent) {
+				t.Helper()
+				decoded, err := base64.StdEncoding.DecodeString(result.Data)
+				if err != nil {
+					t.Fatalf("DecodeString() error = %v", err)
+				}
+				if !bytes.Equal(decoded, pngContent) {
+					t.Fatal("decoded png content mismatch")
+				}
+				if result.Mime != "image/png" {
+					t.Fatalf("Mime = %q, want %q", result.Mime, "image/png")
+				}
+			},
+		},
+		{
+			name:    "reads empty file",
+			session: "test-session",
+			path:    "empty.txt",
+			check: func(t *testing.T, result BinaryFileContent) {
+				t.Helper()
+				decoded, err := base64.StdEncoding.DecodeString(result.Data)
+				if err != nil {
+					t.Fatalf("DecodeString() error = %v", err)
+				}
+				if len(decoded) != 0 {
+					t.Fatalf("decoded length = %d, want 0", len(decoded))
+				}
+				if result.Mime != "text/plain; charset=utf-8" {
+					t.Fatalf("Mime = %q, want %q", result.Mime, "text/plain; charset=utf-8")
+				}
+			},
+		},
+		{
+			name:    "rejects empty session name",
+			session: "",
+			path:    "notes.txt",
+			wantErr: "session name is required",
+		},
+		{
+			name:    "rejects empty file path",
+			session: "test-session",
+			path:    "",
+			wantErr: "file path is required",
+		},
+		{
+			name:    "rejects directory path",
+			session: "test-session",
+			path:    "docs",
+			wantErr: "path is a directory",
+		},
+		{
+			name:    "rejects path traversal",
+			session: "test-session",
+			path:    "../escape.txt",
+			wantErr: "path is not local",
+		},
+		{
+			name:    "rejects missing path",
+			session: "test-session",
+			path:    "missing.png",
+			wantErr: "path does not exist",
+		},
+		{
+			name:    "rejects oversized file",
+			session: "test-session",
+			path:    "oversized.bin",
+			wantErr: "file exceeds binary read limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := svc.ReadBinary(tt.session, tt.path)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.check != nil {
+				tt.check(t, result)
+			}
+		})
+	}
+}
+
 func TestWriteFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmpDir, "existing.txt"), []byte("old"), 0o644); err != nil {
@@ -1011,6 +1742,20 @@ func TestWriteFile(t *testing.T) {
 		}
 	})
 
+	t.Run("binary target rejected", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(tmpDir, "binary.bin"), []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := svc.WriteFile("test", "binary.bin", "x")
+		if err == nil {
+			t.Fatal("expected error for binary target")
+		}
+		if !strings.Contains(err.Error(), "binary files cannot be overwritten through the editor") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("session root rejected", func(t *testing.T) {
 		_, err := svc.WriteFile("test", ".", "x")
 		if err == nil {
@@ -1028,6 +1773,34 @@ func TestWriteFile(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "not local") {
 			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects symlink overwrite without touching target", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "linked-target.txt")
+		if err := os.WriteFile(targetPath, []byte("original"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		linkPath := filepath.Join(tmpDir, "linked.txt")
+		createFileSymlinkOrSkip(t, targetPath, linkPath)
+
+		_, err := svc.WriteFile("test", "linked.txt", "changed")
+		if err == nil {
+			t.Fatal("expected error for symlink overwrite")
+		}
+		if !strings.Contains(err.Error(), "symbolic links cannot be overwritten") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		data, readErr := os.ReadFile(targetPath)
+		if readErr != nil {
+			t.Fatalf("failed to read target file: %v", readErr)
+		}
+		if string(data) != "original" {
+			t.Fatalf("target content = %q, want %q", string(data), "original")
+		}
+		if _, statErr := os.Lstat(linkPath); statErr != nil {
+			t.Fatalf("symlink missing after rejected overwrite: %v", statErr)
 		}
 	})
 }
@@ -1172,6 +1945,34 @@ func TestRenameFile(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+
+	t.Run("renames symlink entry without renaming target", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.txt")
+		if err := os.WriteFile(targetPath, []byte("target"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		linkPath := filepath.Join(tmpDir, "target-link.txt")
+		createFileSymlinkOrSkip(t, targetPath, linkPath)
+
+		err := svc.RenameFile("test", "target-link.txt", "renamed-link.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, statErr := os.Lstat(linkPath); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("old symlink still exists after rename: %v", statErr)
+		}
+		if _, statErr := os.Stat(targetPath); statErr != nil {
+			t.Fatalf("target missing after symlink rename: %v", statErr)
+		}
+		renamedLinkPath := filepath.Join(tmpDir, "renamed-link.txt")
+		linkInfo, statErr := os.Lstat(renamedLinkPath)
+		if statErr != nil {
+			t.Fatalf("renamed symlink missing: %v", statErr)
+		}
+		if linkInfo.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("renamed path mode = %v, want symlink", linkInfo.Mode())
+		}
+	})
 }
 
 func TestDeleteFile(t *testing.T) {
@@ -1219,6 +2020,33 @@ func TestDeleteFile(t *testing.T) {
 		err := svc.DeleteFile("test", ".")
 		if err == nil {
 			t.Fatal("expected error for session root")
+		}
+	})
+
+	t.Run("deletes symlink entry without deleting target directory", func(t *testing.T) {
+		targetDir := filepath.Join(tmpDir, "linked-dir-target")
+		if err := os.MkdirAll(filepath.Join(targetDir, "nested"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		targetFile := filepath.Join(targetDir, "nested", "child.txt")
+		if err := os.WriteFile(targetFile, []byte("child"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		linkPath := filepath.Join(tmpDir, "linked-dir")
+		createDirectorySymlinkOrSkip(t, targetDir, linkPath)
+
+		err := svc.DeleteFile("test", "linked-dir")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, statErr := os.Lstat(linkPath); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("symlink still exists after delete: %v", statErr)
+		}
+		if _, statErr := os.Stat(targetDir); statErr != nil {
+			t.Fatalf("target directory missing after symlink delete: %v", statErr)
+		}
+		if _, statErr := os.Stat(targetFile); statErr != nil {
+			t.Fatalf("target file missing after symlink delete: %v", statErr)
 		}
 	})
 }
@@ -3209,5 +4037,13 @@ func createDirectorySymlinkOrSkip(t *testing.T, targetDir, linkPath string) {
 
 	if err := os.Symlink(targetDir, linkPath); err != nil {
 		t.Skipf("directory symlink is not available in this environment: %v", err)
+	}
+}
+
+func createFileSymlinkOrSkip(t *testing.T, targetFile, linkPath string) {
+	t.Helper()
+
+	if err := os.Symlink(targetFile, linkPath); err != nil {
+		t.Skipf("file symlink is not available in this environment: %v", err)
 	}
 }

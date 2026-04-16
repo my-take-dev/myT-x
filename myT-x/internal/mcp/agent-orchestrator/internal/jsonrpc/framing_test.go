@@ -26,3 +26,13 @@ func TestReadMessageWithFramingRejectsOversizedLineJSON(t *testing.T) {
 		t.Fatalf("expected ErrFrameTooLarge, got %v", err)
 	}
 }
+
+func TestReadMessageWithFramingRejectsOversizedHeaderLine(t *testing.T) {
+	header := "Content-Length: " + strings.Repeat("9", int(maxHeaderLineBytes)) + "\r\n\r\n"
+	reader := bufio.NewReader(strings.NewReader(header))
+
+	_, _, err := ReadMessageWithFraming(reader)
+	if !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("expected ErrFrameTooLarge, got %v", err)
+	}
+}

@@ -2,6 +2,7 @@ package taskscheduler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"reflect"
 	"slices"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"myT-x/internal/apptypes"
+	"myT-x/internal/config"
+	orcdomain "myT-x/internal/mcp/agent-orchestrator/domain"
 	"myT-x/internal/workerutil"
 )
 
@@ -23,7 +26,7 @@ func testDeps() Deps {
 		SendMessagePaste: func(paneID, message string) error {
 			return nil
 		},
-		ResolveOrchestratorDBPath: func() (string, error) {
+		ResolveOrchestratorDBPath: func(string) (string, error) {
 			return ":memory:", nil
 		},
 		NewContext: func() (context.Context, context.CancelFunc) {
@@ -45,6 +48,90 @@ func testDeps() Deps {
 	}
 }
 
+type gatedErrorContext struct {
+	context.Context
+	errGate <-chan struct{}
+	err     error
+}
+
+func (c *gatedErrorContext) Err() error {
+	<-c.errGate
+	return c.err
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, description string, condition func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", description)
+}
+
+func assertConditionNeverMet(t *testing.T, duration time.Duration, description string, condition func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		if condition() {
+			t.Fatalf("unexpectedly observed %s", description)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func latestTaskStatus(t *testing.T, dbPath string) (string, string, bool) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close sqlite db: %v", err)
+		}
+	}()
+
+	var taskID string
+	var status string
+	err = db.QueryRow(`SELECT task_id, status FROM tasks ORDER BY sent_at DESC LIMIT 1`).Scan(&taskID, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false
+	}
+	if err != nil && strings.Contains(err.Error(), "database is locked") {
+		return "", "", false
+	}
+	if err != nil {
+		t.Fatalf("query latest task: %v", err)
+	}
+	return taskID, status, true
+}
+
+func taskStatusByID(t *testing.T, dbPath string, taskID string) string {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close sqlite db: %v", err)
+		}
+	}()
+
+	var status string
+	if err := db.QueryRow(`SELECT status FROM tasks WHERE task_id = ?`, taskID).Scan(&status); err != nil {
+		t.Fatalf("query task %s: %v", taskID, err)
+	}
+	return status
+}
+
 func TestNewService_PanicsOnNilRequiredFields(t *testing.T) {
 	t.Parallel()
 	defer func() {
@@ -53,6 +140,21 @@ func TestNewService_PanicsOnNilRequiredFields(t *testing.T) {
 		}
 	}()
 	NewService(Deps{})
+}
+
+func TestNewService_PanicsOnEmptySessionName(t *testing.T) {
+	t.Parallel()
+
+	deps := testDeps()
+	deps.SessionName = ""
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on empty session name, got none")
+		}
+	}()
+
+	NewService(deps)
 }
 
 func TestNewService_DefaultsOptionalFields(t *testing.T) {
@@ -127,6 +229,35 @@ func TestStart_ValidationErrors(t *testing.T) {
 	}
 }
 
+func TestStart_RetiredSkipsSideEffects(t *testing.T) {
+	t.Parallel()
+
+	checkPaneAliveCalled := 0
+	newContextCalled := 0
+	deps := testDeps()
+	deps.CheckPaneAlive = func(string) error {
+		checkPaneAliveCalled++
+		return nil
+	}
+	deps.NewContext = func() (context.Context, context.CancelFunc) {
+		newContextCalled++
+		return context.WithCancel(context.Background())
+	}
+	svc := NewService(deps)
+	svc.Retire()
+
+	err := svc.Start(QueueConfig{}, []QueueItem{{Title: "task1", Message: "msg", TargetPaneID: "%0"}})
+	if !errors.Is(err, errServiceRetired) {
+		t.Fatalf("Start on retired service: error = %v, want %v", err, errServiceRetired)
+	}
+	if checkPaneAliveCalled != 0 {
+		t.Fatalf("CheckPaneAlive called %d times, want 0 for retired start", checkPaneAliveCalled)
+	}
+	if newContextCalled != 0 {
+		t.Fatalf("NewContext called %d times, want 0 for retired start", newContextCalled)
+	}
+}
+
 func TestStart_AlreadyRunning(t *testing.T) {
 	t.Parallel()
 
@@ -164,6 +295,86 @@ func TestStop_NotRunning(t *testing.T) {
 	err := svc.Stop()
 	if err == nil {
 		t.Fatal("expected error when stopping idle queue")
+	}
+}
+
+func TestStop_EmitsStoppedEvent(t *testing.T) {
+	t.Parallel()
+
+	var stoppedPayload map[string]string
+
+	deps := testDeps()
+	deps.Emitter = apptypes.EventEmitterFunc(func(name string, payload any) {
+		if name != "task-scheduler:stopped" {
+			return
+		}
+		stoppedPayload, _ = payload.(map[string]string)
+	})
+	deps.LaunchWorker = func(name string, ctx context.Context, fn func(ctx context.Context), opts workerutil.RecoveryOptions) {
+		go func() {
+			<-ctx.Done()
+		}()
+	}
+	svc := NewService(deps)
+
+	if err := svc.Start(QueueConfig{}, []QueueItem{{Title: "task1", Message: "msg", TargetPaneID: "%0"}}); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	generationID := svc.GetStatus().GenerationID
+
+	if err := svc.Stop(); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+	if stoppedPayload == nil {
+		t.Fatal("Stop should emit a stopped event")
+	}
+	if got := stoppedPayload["reason"]; got != defaultStoppedReason {
+		t.Fatalf("stopped reason = %q, want %q", got, defaultStoppedReason)
+	}
+	if got := stoppedPayload["session_name"]; got != deps.SessionName {
+		t.Fatalf("stopped session_name = %q, want %q", got, deps.SessionName)
+	}
+	if got := stoppedPayload["generation_id"]; got != generationID {
+		t.Fatalf("stopped generation_id = %q, want %q", got, generationID)
+	}
+}
+
+func TestStopAll_EmitsStoppedEvent(t *testing.T) {
+	t.Parallel()
+
+	var stoppedPayload map[string]string
+
+	deps := testDeps()
+	deps.Emitter = apptypes.EventEmitterFunc(func(name string, payload any) {
+		if name != "task-scheduler:stopped" {
+			return
+		}
+		stoppedPayload, _ = payload.(map[string]string)
+	})
+	deps.LaunchWorker = func(name string, ctx context.Context, fn func(ctx context.Context), opts workerutil.RecoveryOptions) {
+		go func() {
+			<-ctx.Done()
+		}()
+	}
+	svc := NewService(deps)
+
+	if err := svc.Start(QueueConfig{}, []QueueItem{{Title: "task1", Message: "msg", TargetPaneID: "%0"}}); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	generationID := svc.GetStatus().GenerationID
+
+	svc.StopAll()
+	if stoppedPayload == nil {
+		t.Fatal("StopAll should emit a stopped event")
+	}
+	if got := stoppedPayload["reason"]; got != defaultShutdownReason {
+		t.Fatalf("stopped reason = %q, want %q", got, defaultShutdownReason)
+	}
+	if got := stoppedPayload["session_name"]; got != deps.SessionName {
+		t.Fatalf("stopped session_name = %q, want %q", got, deps.SessionName)
+	}
+	if got := stoppedPayload["generation_id"]; got != generationID {
+		t.Fatalf("stopped generation_id = %q, want %q", got, generationID)
 	}
 }
 
@@ -206,6 +417,45 @@ func TestPauseResume(t *testing.T) {
 	svc.StopAll()
 }
 
+func TestResumeRotatesGenerationAndIgnoresStaleFailure(t *testing.T) {
+	t.Parallel()
+
+	deps := testDeps()
+	deps.LaunchWorker = func(_ string, _ context.Context, _ func(ctx context.Context), _ workerutil.RecoveryOptions) {}
+
+	svc := NewService(deps)
+	items := []QueueItem{{Title: "task1", Message: "msg", TargetPaneID: "%0"}}
+	if err := svc.Start(QueueConfig{}, items); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	firstRun := svc.GetStatus()
+	if err := svc.Pause(); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if err := svc.Resume(); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	secondRun := svc.GetStatus()
+	if secondRun.GenerationID == firstRun.GenerationID {
+		t.Fatal("expected Resume to rotate generation_id")
+	}
+
+	svc.failItem(firstRun.GenerationID, 0, "stale failure")
+
+	current := svc.GetStatus()
+	if current.RunStatus != QueueRunning {
+		t.Fatalf("RunStatus after stale failure = %q, want %q", current.RunStatus, QueueRunning)
+	}
+	if current.GenerationID != secondRun.GenerationID {
+		t.Fatalf("GenerationID after stale failure = %q, want %q", current.GenerationID, secondRun.GenerationID)
+	}
+	if current.Items[0].Status != ItemStatusPending {
+		t.Fatalf("Item status after stale failure = %q, want %q", current.Items[0].Status, ItemStatusPending)
+	}
+}
+
 func TestPause_PreparingReturnsPausableStateError(t *testing.T) {
 	t.Parallel()
 
@@ -223,21 +473,101 @@ func TestPause_PreparingReturnsPausableStateError(t *testing.T) {
 	}
 }
 
-func TestApplyConfigDefaults_AllowsZeroResetDelay(t *testing.T) {
+func TestApplyConfigDefaults_AlignsWithValidatorBounds(t *testing.T) {
 	t.Parallel()
 
-	config := QueueConfig{
-		PreExecTargetMode: PreExecTargetModeTaskPanes,
-		PreExecResetDelay: 0,
+	tests := []struct {
+		name   string
+		config QueueConfig
+		want   QueueConfig
+	}{
+		{
+			name: "preserves valid values",
+			config: QueueConfig{
+				PreExecTargetMode:  PreExecTargetModeTaskPanes,
+				PreExecResetDelay:  config.MaxPreExecResetDelay,
+				PreExecIdleTimeout: config.MinPreExecIdleTimeout,
+			},
+			want: QueueConfig{
+				PreExecTargetMode:  PreExecTargetModeTaskPanes,
+				PreExecResetDelay:  config.MaxPreExecResetDelay,
+				PreExecIdleTimeout: config.MinPreExecIdleTimeout,
+			},
+		},
+		{
+			name: "clamps out-of-range reset delay",
+			config: QueueConfig{
+				PreExecTargetMode: PreExecTargetModeTaskPanes,
+				PreExecResetDelay: config.MaxPreExecResetDelay + 1,
+			},
+			want: QueueConfig{
+				PreExecTargetMode:  PreExecTargetModeTaskPanes,
+				PreExecResetDelay:  config.MinPreExecResetDelay,
+				PreExecIdleTimeout: config.DefaultPreExecIdleTimeout,
+			},
+		},
+		{
+			name: "defaults zero idle timeout",
+			config: QueueConfig{
+				PreExecTargetMode:  PreExecTargetModeTaskPanes,
+				PreExecResetDelay:  0,
+				PreExecIdleTimeout: 0,
+			},
+			want: QueueConfig{
+				PreExecTargetMode:  PreExecTargetModeTaskPanes,
+				PreExecResetDelay:  0,
+				PreExecIdleTimeout: config.DefaultPreExecIdleTimeout,
+			},
+		},
+		{
+			name: "clamps low idle timeout",
+			config: QueueConfig{
+				PreExecTargetMode:  PreExecTargetModeTaskPanes,
+				PreExecIdleTimeout: config.MinPreExecIdleTimeout - 1,
+			},
+			want: QueueConfig{
+				PreExecTargetMode:  PreExecTargetModeTaskPanes,
+				PreExecResetDelay:  0,
+				PreExecIdleTimeout: config.DefaultPreExecIdleTimeout,
+			},
+		},
+		{
+			name: "clamps high idle timeout",
+			config: QueueConfig{
+				PreExecTargetMode:  PreExecTargetModeTaskPanes,
+				PreExecIdleTimeout: config.MaxPreExecIdleTimeout + 1,
+			},
+			want: QueueConfig{
+				PreExecTargetMode:  PreExecTargetModeTaskPanes,
+				PreExecResetDelay:  0,
+				PreExecIdleTimeout: config.DefaultPreExecIdleTimeout,
+			},
+		},
 	}
 
-	applyConfigDefaults(&config)
-
-	if config.PreExecResetDelay != 0 {
-		t.Fatalf("expected zero reset delay to be preserved, got %d", config.PreExecResetDelay)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.config
+			applyConfigDefaults(&got)
+			if got != tt.want {
+				t.Fatalf("applyConfigDefaults() = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
-	if config.PreExecIdleTimeout != 120 {
-		t.Fatalf("expected idle timeout default to be applied, got %d", config.PreExecIdleTimeout)
+}
+
+func TestWaitingTaskIDTimedOut(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	if waitingTaskIDTimedOut(time.Time{}, now) {
+		t.Fatal("zero wait start should not time out")
+	}
+	if waitingTaskIDTimedOut(now.Add(-staleTaskIDWaitTimeout+time.Second), now) {
+		t.Fatal("recent wait start should not time out")
+	}
+	if !waitingTaskIDTimedOut(now.Add(-staleTaskIDWaitTimeout-time.Second), now) {
+		t.Fatal("expired wait start should time out")
 	}
 }
 
@@ -424,7 +754,7 @@ func TestRemoveItem_NonPendingStatuses(t *testing.T) {
 		ItemStatusCompleted,
 	}
 	for _, status := range editableStatuses {
-		t.Run(status, func(t *testing.T) {
+		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 			svc := NewService(testDeps())
 			if err := svc.AddItem("task1", "msg1", "%0", false, ""); err != nil {
@@ -477,7 +807,7 @@ func TestUpdateItem_NonPendingAutoReset(t *testing.T) {
 		ItemStatusCompleted,
 	}
 	for _, status := range editableStatuses {
-		t.Run(status, func(t *testing.T) {
+		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 			svc := NewService(testDeps())
 			if err := svc.AddItem("task1", "msg1", "%0", false, ""); err != nil {
@@ -568,7 +898,7 @@ func TestIsEditable(t *testing.T) {
 		{ItemStatusSkipped, true},
 	}
 	for _, tt := range tests {
-		t.Run(tt.status, func(t *testing.T) {
+		t.Run(string(tt.status), func(t *testing.T) {
 			t.Parallel()
 			if got := IsEditable(tt.status); got != tt.expected {
 				t.Errorf("IsEditable(%q) = %v, want %v", tt.status, got, tt.expected)
@@ -591,10 +921,38 @@ func TestIsTerminal(t *testing.T) {
 		{ItemStatusSkipped, true},
 	}
 	for _, tt := range tests {
-		t.Run(tt.status, func(t *testing.T) {
+		t.Run(string(tt.status), func(t *testing.T) {
 			t.Parallel()
 			if got := IsTerminal(tt.status); got != tt.expected {
 				t.Errorf("IsTerminal(%q) = %v, want %v", tt.status, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestClassifyOrchestratorTaskStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status orcdomain.TaskStatus
+		want   orchestratorTaskOutcome
+	}{
+		{name: "pending remains polling", status: orcdomain.TaskStatusPending, want: orchestratorTaskOutcomePolling},
+		{name: "blocked remains polling", status: orcdomain.TaskStatusBlocked, want: orchestratorTaskOutcomePolling},
+		{name: "completed is terminal success", status: orcdomain.TaskStatusCompleted, want: orchestratorTaskOutcomeCompleted},
+		{name: "failed is terminal failure", status: orcdomain.TaskStatusFailed, want: orchestratorTaskOutcomeFailed},
+		{name: "abandoned is terminal failure", status: orcdomain.TaskStatusAbandoned, want: orchestratorTaskOutcomeFailed},
+		{name: "cancelled is terminal failure", status: orcdomain.TaskStatusCancelled, want: orchestratorTaskOutcomeFailed},
+		{name: "expired is terminal failure", status: orcdomain.TaskStatusExpired, want: orchestratorTaskOutcomeFailed},
+		{name: "unknown status fails closed", status: orcdomain.TaskStatus("timeout"), want: orchestratorTaskOutcomeFailed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := classifyOrchestratorTaskStatus(tt.status); got != tt.want {
+				t.Fatalf("classifyOrchestratorTaskStatus(%q) = %v, want %v", tt.status, got, tt.want)
 			}
 		})
 	}
@@ -677,7 +1035,7 @@ func TestQueueConfigFieldCount(t *testing.T) {
 
 func TestQueueStatusFieldCount(t *testing.T) {
 	t.Parallel()
-	expected := 6
+	expected := 7
 	actual := reflect.TypeFor[QueueStatus]().NumField()
 	if actual != expected {
 		t.Errorf("QueueStatus has %d fields, expected %d.", actual, expected)
@@ -770,8 +1128,9 @@ func TestPause_EmitsUpdated(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	mu.Lock()
-	defer mu.Unlock()
-	found := slices.Contains(events, "task-scheduler:updated")
+	got := slices.Clone(events)
+	mu.Unlock()
+	found := slices.Contains(got, "task-scheduler:updated")
 	if !found {
 		t.Error("Pause() should emit 'task-scheduler:updated' event")
 	}
@@ -806,6 +1165,102 @@ func TestStop_MarksRunningItemAsSkipped(t *testing.T) {
 	status := svc.GetStatus()
 	if status.Items[0].Status != ItemStatusSkipped {
 		t.Errorf("expected running item to be skipped after Stop, got %q", status.Items[0].Status)
+	}
+}
+
+func TestStop_AbandonsTrackedOrchestratorTask(t *testing.T) {
+	t.Parallel()
+
+	dbPath := t.TempDir() + "/orchestrator.db"
+	prepareTaskSchedulerDB(t, dbPath)
+
+	db, err := openOrchestratorDB(dbPath)
+	if err != nil {
+		t.Fatalf("openOrchestratorDB: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.db.Exec(
+		`INSERT INTO tasks (
+			task_id, agent_name, assignee_pane_id, sender_pane_id,
+			sender_name, sender_instance_id, send_message_id, status, sent_at, is_now_session
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"task-stop", taskMasterAgentName, "%1", taskMasterPaneID,
+		taskMasterAgentName, "", "msg-stop", string(orcdomain.TaskStatusPending), now, 1,
+	); err != nil {
+		t.Fatalf("insert task: %v", err)
+	}
+
+	svc := NewService(testDeps())
+	svc.dbMu.Lock()
+	svc.orcDB = db
+	svc.dbMu.Unlock()
+
+	svc.mu.Lock()
+	svc.runStatus = QueueRunning
+	svc.cancel = func() {}
+	svc.items = []QueueItem{{
+		ID:        "item-1",
+		Status:    ItemStatusRunning,
+		OrcTaskID: "task-stop",
+	}}
+	svc.mu.Unlock()
+
+	if err := svc.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	if got := taskStatusByID(t, dbPath, "task-stop"); got != string(orcdomain.TaskStatusAbandoned) {
+		t.Fatalf("task status after Stop = %q, want %q", got, orcdomain.TaskStatusAbandoned)
+	}
+	status := svc.GetStatus()
+	if status.Items[0].Status != ItemStatusSkipped {
+		t.Fatalf("item status after Stop = %q, want %q", status.Items[0].Status, ItemStatusSkipped)
+	}
+}
+
+func TestStopAll_AbandonsPendingTrackedTaskID(t *testing.T) {
+	t.Parallel()
+
+	dbPath := t.TempDir() + "/orchestrator.db"
+	prepareTaskSchedulerDB(t, dbPath)
+
+	db, err := openOrchestratorDB(dbPath)
+	if err != nil {
+		t.Fatalf("openOrchestratorDB: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.db.Exec(
+		`INSERT INTO tasks (
+			task_id, agent_name, assignee_pane_id, sender_pane_id,
+			sender_name, sender_instance_id, send_message_id, status, sent_at, is_now_session
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"task-stopall", taskMasterAgentName, "%1", taskMasterPaneID,
+		taskMasterAgentName, "", "msg-stopall", string(orcdomain.TaskStatusPending), now, 1,
+	); err != nil {
+		t.Fatalf("insert task: %v", err)
+	}
+
+	svc := NewService(testDeps())
+	svc.dbMu.Lock()
+	svc.orcDB = db
+	svc.dbMu.Unlock()
+
+	svc.mu.Lock()
+	svc.runStatus = QueueRunning
+	svc.cancel = func() {}
+	svc.items = []QueueItem{{
+		ID:     "item-1",
+		Status: ItemStatusRunning,
+	}}
+	svc.pendingOrcTaskIDs["item-1"] = "task-stopall"
+	svc.mu.Unlock()
+
+	svc.StopAll()
+
+	if got := taskStatusByID(t, dbPath, "task-stopall"); got != string(orcdomain.TaskStatusAbandoned) {
+		t.Fatalf("task status after StopAll = %q, want %q", got, orcdomain.TaskStatusAbandoned)
 	}
 }
 
@@ -860,7 +1315,7 @@ func TestRunLoop_ResumesRunningItem(t *testing.T) {
 	svc.mu.Unlock()
 
 	ctx := t.Context()
-	svc.launchWorker(ctx)
+	svc.launchWorker(ctx, svc.generationID)
 
 	// Wait for item to complete (poll interval is 10s).
 	deadline := time.After(15 * time.Second)
@@ -885,6 +1340,197 @@ func TestRunLoop_ResumesRunningItem(t *testing.T) {
 	svc.StopAll()
 }
 
+func TestResumeWaitsForDelayedTaskIDBackfill(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	dbPath := tempDir + "/orchestrator.db"
+	prepareTaskSchedulerDB(t, dbPath)
+
+	sendStarted := make(chan struct{})
+	allowSend := make(chan struct{})
+
+	deps := testDeps()
+	deps.ResolveOrchestratorDBPath = func(string) (string, error) {
+		return dbPath, nil
+	}
+	deps.SendMessagePaste = func(string, string) error {
+		select {
+		case <-sendStarted:
+		default:
+			close(sendStarted)
+		}
+		<-allowSend
+		return nil
+	}
+
+	svc := NewService(deps)
+	items := []QueueItem{{Title: "task1", Message: "msg", TargetPaneID: "%0"}}
+	if err := svc.Start(QueueConfig{}, items); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	select {
+	case <-sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SendMessagePaste to start")
+	}
+
+	if err := svc.Pause(); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if err := svc.Resume(); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, "resume worker to observe a missing task ID", func() bool {
+		status := svc.GetStatus()
+		return status.RunStatus == QueueRunning && status.Items[0].OrcTaskID == ""
+	})
+	assertConditionNeverMet(t, 150*time.Millisecond, "queue completion before delayed task ID backfill", func() bool {
+		return svc.GetStatus().RunStatus == QueueCompleted
+	})
+
+	close(allowSend)
+
+	waitForCondition(t, 2*time.Second, "delayed worker to backfill OrcTaskID", func() bool {
+		return svc.GetStatus().Items[0].OrcTaskID != ""
+	})
+
+	status := svc.GetStatus()
+	if status.Items[0].Status != ItemStatusRunning {
+		t.Fatalf("item status after delayed task ID backfill = %q, want %q", status.Items[0].Status, ItemStatusRunning)
+	}
+
+	svc.StopAll()
+}
+
+func TestExecuteItem_CancelledAfterCreateTaskFailsStaleRunningItem(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	dbPath := tempDir + "/orchestrator.db"
+	prepareTaskSchedulerDB(t, dbPath)
+
+	deps := testDeps()
+	deps.ResolveOrchestratorDBPath = func(string) (string, error) {
+		return dbPath, nil
+	}
+	deps.SendMessagePaste = func(string, string) error {
+		t.Fatal("SendMessagePaste should not be called after the cancellation gate is released")
+		return nil
+	}
+
+	svc := NewService(deps)
+	item := QueueItem{
+		ID:           "item-1",
+		Title:        "task1",
+		Message:      "msg",
+		TargetPaneID: "%0",
+	}
+	svc.mu.Lock()
+	svc.items = []QueueItem{item}
+	svc.runStatus = QueueRunning
+	svc.currentIndex = 0
+	originalGenerationID := svc.generationID
+	svc.mu.Unlock()
+
+	errGate := make(chan struct{})
+	ctx := &gatedErrorContext{
+		Context: context.Background(),
+		errGate: errGate,
+		err:     context.Canceled,
+	}
+
+	resultCh := make(chan bool, 1)
+	go func() {
+		resultCh <- svc.executeItem(ctx, originalGenerationID, 0, item)
+	}()
+
+	var taskID string
+	waitForCondition(t, 2*time.Second, "orchestrator task creation", func() bool {
+		var ok bool
+		var status string
+		taskID, status, ok = latestTaskStatus(t, dbPath)
+		return ok && status == string(orcdomain.TaskStatusPending)
+	})
+
+	svc.mu.Lock()
+	svc.generationID = "generation-resumed"
+	svc.runStatus = QueueRunning
+	svc.currentIndex = 0
+	svc.mu.Unlock()
+
+	close(errGate)
+
+	select {
+	case result := <-resultCh:
+		if result {
+			t.Fatal("executeItem should stop after cancellation before send")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for executeItem to return")
+	}
+
+	waitForCondition(t, 2*time.Second, "item failure after cancellation", func() bool {
+		status := svc.GetStatus()
+		return len(status.Items) == 1 && status.Items[0].Status == ItemStatusFailed
+	})
+
+	status := svc.GetStatus()
+	if status.RunStatus != QueueIdle {
+		t.Fatalf("run status after cancellation = %q, want %q", status.RunStatus, QueueIdle)
+	}
+	if !strings.Contains(status.Items[0].ErrorMessage, "task could not be sent after cancellation") {
+		t.Fatalf("error message = %q, want cancellation failure", status.Items[0].ErrorMessage)
+	}
+	if got := taskStatusByID(t, dbPath, taskID); got != string(orcdomain.TaskStatusAbandoned) {
+		t.Fatalf("orchestrator task status = %q, want %q", got, orcdomain.TaskStatusAbandoned)
+	}
+}
+
+func TestSetItemOrcTaskIDIgnoresStaleOverwrite(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(testDeps())
+	svc.mu.Lock()
+	svc.generationID = "generation-current"
+	svc.items = []QueueItem{{
+		ID:        "item-1",
+		Status:    ItemStatusRunning,
+		OrcTaskID: "task-current",
+	}}
+	svc.mu.Unlock()
+
+	svc.setItemOrcTaskID(0, "item-1", "task-stale")
+
+	status := svc.GetStatus()
+	if status.Items[0].OrcTaskID != "task-current" {
+		t.Fatalf("OrcTaskID after stale overwrite attempt = %q, want %q", status.Items[0].OrcTaskID, "task-current")
+	}
+}
+
+func TestSetItemOrcTaskIDAllowsStaleBackfillForRunningItemWithoutTaskID(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(testDeps())
+	svc.mu.Lock()
+	svc.generationID = "generation-current"
+	svc.items = []QueueItem{{
+		ID:        "item-1",
+		Status:    ItemStatusRunning,
+		OrcTaskID: "",
+	}}
+	svc.mu.Unlock()
+
+	svc.setItemOrcTaskID(0, "item-1", "task-from-stale-worker")
+
+	status := svc.GetStatus()
+	if status.Items[0].OrcTaskID != "task-from-stale-worker" {
+		t.Fatalf("OrcTaskID after stale backfill = %q, want %q", status.Items[0].OrcTaskID, "task-from-stale-worker")
+	}
+}
+
 func TestGetStatus_IncludesSessionName(t *testing.T) {
 	t.Parallel()
 	deps := testDeps()
@@ -894,6 +1540,32 @@ func TestGetStatus_IncludesSessionName(t *testing.T) {
 	status := svc.GetStatus()
 	if status.SessionName != "my-session" {
 		t.Errorf("expected session_name=%q, got %q", "my-session", status.SessionName)
+	}
+}
+
+func TestPreExecTargetPanesUsesRenamedSessionName(t *testing.T) {
+	t.Parallel()
+
+	deps := testDeps()
+	var capturedSessionName string
+	deps.GetSessionPaneIDs = func(sessionName string) ([]string, error) {
+		capturedSessionName = sessionName
+		return []string{"%0"}, nil
+	}
+	svc := NewService(deps)
+	if err := svc.RenameSession("renamed-session"); err != nil {
+		t.Fatalf("RenameSession failed: %v", err)
+	}
+
+	paneIDs, err := svc.preExecTargetPanes(nil, QueueConfig{PreExecTargetMode: PreExecTargetModeAllPanes})
+	if err != nil {
+		t.Fatalf("preExecTargetPanes failed: %v", err)
+	}
+	if capturedSessionName != "renamed-session" {
+		t.Fatalf("GetSessionPaneIDs session = %q, want %q", capturedSessionName, "renamed-session")
+	}
+	if !slices.Equal(paneIDs, []string{"%0"}) {
+		t.Fatalf("paneIDs = %v, want [%s]", paneIDs, "%0")
 	}
 }
 
@@ -988,7 +1660,7 @@ func TestExecuteClearPreStep_SendsClearCommand(t *testing.T) {
 
 	ctx := t.Context()
 	item := QueueItem{TargetPaneID: "%0", ClearBefore: true, ClearCommand: "/reset"}
-	ok := svc.executeClearPreStep(ctx, item)
+	ok := svc.executeClearPreStep(ctx, svc.generationID, 0, item)
 
 	if !ok {
 		t.Fatal("expected executeClearPreStep to return true")
@@ -1014,7 +1686,7 @@ func TestExecuteClearPreStep_DefaultCommand(t *testing.T) {
 
 	ctx := t.Context()
 	item := QueueItem{TargetPaneID: "%0", ClearBefore: true, ClearCommand: ""}
-	svc.executeClearPreStep(ctx, item)
+	svc.executeClearPreStep(ctx, svc.generationID, 0, item)
 
 	if capturedCmd != "/new" {
 		t.Errorf("expected default command /new, got %q", capturedCmd)
@@ -1034,7 +1706,7 @@ func TestExecuteClearPreStep_SkipWhenFalse(t *testing.T) {
 
 	ctx := t.Context()
 	item := QueueItem{TargetPaneID: "%0", ClearBefore: false}
-	ok := svc.executeClearPreStep(ctx, item)
+	ok := svc.executeClearPreStep(ctx, svc.generationID, 0, item)
 
 	if !ok {
 		t.Fatal("expected executeClearPreStep to return true")
@@ -1044,7 +1716,7 @@ func TestExecuteClearPreStep_SkipWhenFalse(t *testing.T) {
 	}
 }
 
-func TestExecuteClearPreStep_ClearFailureContinues(t *testing.T) {
+func TestExecuteClearPreStep_ClearFailureFailsItem(t *testing.T) {
 	t.Parallel()
 
 	deps := testDeps()
@@ -1052,13 +1724,28 @@ func TestExecuteClearPreStep_ClearFailureContinues(t *testing.T) {
 		return errors.New("send failed")
 	}
 	svc := NewService(deps)
+	svc.mu.Lock()
+	svc.items = []QueueItem{{ID: "item-1", TargetPaneID: "%0", Status: ItemStatusRunning}}
+	svc.runStatus = QueueRunning
+	svc.currentIndex = 0
+	svc.mu.Unlock()
 
 	ctx := t.Context()
-	item := QueueItem{TargetPaneID: "%0", ClearBefore: true, ClearCommand: "/new"}
-	ok := svc.executeClearPreStep(ctx, item)
+	item := QueueItem{ID: "item-1", TargetPaneID: "%0", ClearBefore: true, ClearCommand: "/new"}
+	ok := svc.executeClearPreStep(ctx, svc.generationID, 0, item)
 
-	if !ok {
-		t.Fatal("expected executeClearPreStep to return true even on failure")
+	if ok {
+		t.Fatal("expected executeClearPreStep to return false on clear failure")
+	}
+	status := svc.GetStatus()
+	if status.RunStatus != QueueIdle {
+		t.Fatalf("runStatus = %q, want %q", status.RunStatus, QueueIdle)
+	}
+	if got := status.Items[0].Status; got != ItemStatusFailed {
+		t.Fatalf("item status = %q, want %q", got, ItemStatusFailed)
+	}
+	if !strings.Contains(status.Items[0].ErrorMessage, "clear command: send failed") {
+		t.Fatalf("error message = %q, want clear command failure", status.Items[0].ErrorMessage)
 	}
 }
 
@@ -1073,7 +1760,7 @@ func TestExecuteClearPreStep_ContextCancelled(t *testing.T) {
 	cancel() // Cancel immediately.
 
 	item := QueueItem{TargetPaneID: "%0", ClearBefore: true, ClearCommand: "/new"}
-	ok := svc.executeClearPreStep(ctx, item)
+	ok := svc.executeClearPreStep(ctx, svc.generationID, 0, item)
 
 	if ok {
 		t.Fatal("expected executeClearPreStep to return false on cancelled context")
@@ -1089,30 +1776,343 @@ func TestDepsFieldCount(t *testing.T) {
 	}
 }
 
-func TestEmitStopped_IncludesSessionName(t *testing.T) {
+func TestEmitStopped_UsesProvidedSnapshot(t *testing.T) {
 	t.Parallel()
 
 	var capturedPayload any
 
 	deps := testDeps()
-	deps.SessionName = "ses-abc"
 	deps.Emitter = apptypes.EventEmitterFunc(func(name string, payload any) {
 		if name == "task-scheduler:stopped" {
 			capturedPayload = payload
 		}
 	})
 	svc := NewService(deps)
+	svc.mu.Lock()
+	svc.sessionName = "ses-current"
+	svc.generationID = "gen-current"
+	svc.mu.Unlock()
 
-	svc.emitStopped("test reason")
+	svc.emitStopped("test reason", "ses-snap", "gen-snap")
 
 	payloadMap, ok := capturedPayload.(map[string]string)
 	if !ok {
 		t.Fatalf("expected map[string]string payload, got %T", capturedPayload)
 	}
-	if payloadMap["session_name"] != "ses-abc" {
-		t.Errorf("expected session_name=%q, got %q", "ses-abc", payloadMap["session_name"])
+	if payloadMap["session_name"] != "ses-snap" {
+		t.Errorf("expected session_name=%q, got %q", "ses-snap", payloadMap["session_name"])
+	}
+	if payloadMap["generation_id"] != "gen-snap" {
+		t.Errorf("expected generation_id=%q, got %q", "gen-snap", payloadMap["generation_id"])
 	}
 	if payloadMap["reason"] != "test reason" {
 		t.Errorf("expected reason=%q, got %q", "test reason", payloadMap["reason"])
+	}
+}
+
+func TestPollForCompletionFailsAfterConsecutiveDBErrors(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open failed: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close failed: %v", err)
+	}
+
+	svc := NewService(testDeps())
+	svc.orcDB = &orchestratorDB{db: db}
+
+	err = svc.pollForCompletionWithInterval(t.Context(), "task-1", time.Millisecond)
+	if err == nil {
+		t.Fatal("pollForCompletionWithInterval should fail after consecutive db errors")
+	}
+	if !strings.Contains(err.Error(), "failed after") {
+		t.Fatalf("pollForCompletionWithInterval error = %v, want bounded retry failure", err)
+	}
+}
+
+func TestExecuteItem_SendFailureAbandonsPendingTask(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	dbPath := tempDir + "/orchestrator.db"
+	prepareTaskSchedulerDB(t, dbPath)
+
+	deps := testDeps()
+	deps.ResolveOrchestratorDBPath = func(string) (string, error) {
+		return dbPath, nil
+	}
+	deps.SendMessagePaste = func(string, string) error {
+		return errors.New("paste failed")
+	}
+	svc := NewService(deps)
+
+	item := QueueItem{
+		ID:           "item-1",
+		Title:        "task1",
+		Message:      "msg",
+		TargetPaneID: "%0",
+		Status:       ItemStatusPending,
+	}
+	svc.mu.Lock()
+	svc.items = []QueueItem{item}
+	svc.runStatus = QueueRunning
+	svc.currentIndex = 0
+	generationID := svc.generationID
+	svc.mu.Unlock()
+
+	ok := svc.executeItem(t.Context(), generationID, 0, item)
+	if ok {
+		t.Fatal("executeItem should stop the worker after send failure")
+	}
+
+	status := svc.GetStatus()
+	if got := status.Items[0].Status; got != ItemStatusFailed {
+		t.Fatalf("item status = %q, want %q", got, ItemStatusFailed)
+	}
+	if status.Items[0].OrcTaskID != "" {
+		t.Fatalf("OrcTaskID = %q, want empty after undelivered failure", status.Items[0].OrcTaskID)
+	}
+	if !strings.Contains(status.Items[0].ErrorMessage, "send message: paste failed") {
+		t.Fatalf("error message = %q, want send failure", status.Items[0].ErrorMessage)
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatalf("db.Close: %v", closeErr)
+		}
+	}()
+
+	var taskCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&taskCount); err != nil {
+		t.Fatalf("count tasks: %v", err)
+	}
+	if taskCount != 1 {
+		t.Fatalf("task count = %d, want 1", taskCount)
+	}
+
+	var taskStatus string
+	var completedAt string
+	if err := db.QueryRow(`SELECT status, COALESCE(completed_at, '') FROM tasks LIMIT 1`).Scan(&taskStatus, &completedAt); err != nil {
+		t.Fatalf("query task status: %v", err)
+	}
+	if taskStatus != string(orcdomain.TaskStatusAbandoned) {
+		t.Fatalf("task status = %q, want %q", taskStatus, orcdomain.TaskStatusAbandoned)
+	}
+	if completedAt == "" {
+		t.Fatal("completed_at should be populated for abandoned undelivered task")
+	}
+}
+
+func TestExecuteItem_StaleSendFailureStillFailsWaitingItem(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	dbPath := tempDir + "/orchestrator.db"
+	prepareTaskSchedulerDB(t, dbPath)
+
+	deps := testDeps()
+	deps.ResolveOrchestratorDBPath = func(string) (string, error) {
+		return dbPath, nil
+	}
+
+	var svc *Service
+	deps.SendMessagePaste = func(string, string) error {
+		svc.mu.Lock()
+		svc.generationID = "generation-resumed"
+		svc.runStatus = QueueRunning
+		svc.currentIndex = 0
+		svc.mu.Unlock()
+		return errors.New("paste failed")
+	}
+
+	svc = NewService(deps)
+	item := QueueItem{
+		ID:           "item-1",
+		Title:        "task1",
+		Message:      "msg",
+		TargetPaneID: "%0",
+		Status:       ItemStatusPending,
+	}
+	svc.mu.Lock()
+	svc.items = []QueueItem{item}
+	svc.runStatus = QueueRunning
+	svc.currentIndex = 0
+	originalGenerationID := svc.generationID
+	svc.mu.Unlock()
+
+	ok := svc.executeItem(t.Context(), originalGenerationID, 0, item)
+	if ok {
+		t.Fatal("executeItem should stop the worker after stale send failure")
+	}
+
+	status := svc.GetStatus()
+	if status.RunStatus != QueueIdle {
+		t.Fatalf("run status after stale send failure = %q, want %q", status.RunStatus, QueueIdle)
+	}
+	if got := status.Items[0].Status; got != ItemStatusFailed {
+		t.Fatalf("item status after stale send failure = %q, want %q", got, ItemStatusFailed)
+	}
+	if status.Items[0].OrcTaskID != "" {
+		t.Fatalf("OrcTaskID = %q, want empty after stale send failure", status.Items[0].OrcTaskID)
+	}
+	if !strings.Contains(status.Items[0].ErrorMessage, "send message: paste failed") {
+		t.Fatalf("error message = %q, want stale send failure", status.Items[0].ErrorMessage)
+	}
+	if status.GenerationID != "generation-resumed" {
+		t.Fatalf("generation after stale send failure = %q, want %q", status.GenerationID, "generation-resumed")
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatalf("db.Close: %v", closeErr)
+		}
+	}()
+
+	var taskStatus string
+	if err := db.QueryRow(`SELECT status FROM tasks LIMIT 1`).Scan(&taskStatus); err != nil {
+		t.Fatalf("query task status: %v", err)
+	}
+	if taskStatus != string(orcdomain.TaskStatusAbandoned) {
+		t.Fatalf("task status = %q, want %q", taskStatus, orcdomain.TaskStatusAbandoned)
+	}
+}
+
+// ------------------------------------------------------------
+// Retirement tests
+// ------------------------------------------------------------
+
+func TestServiceRetireSuppressesEvents(t *testing.T) {
+	t.Parallel()
+
+	var emitted []string
+	var mu sync.Mutex
+
+	deps := testDeps()
+	deps.Emitter = apptypes.EventEmitterFunc(func(name string, _ any) {
+		mu.Lock()
+		emitted = append(emitted, name)
+		mu.Unlock()
+	})
+	svc := NewService(deps)
+
+	svc.Retire()
+	svc.emitUpdated()
+	svc.emitStopped("retired", "session", "gen")
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, name := range emitted {
+		if name == "task-scheduler:updated" {
+			t.Fatal("updated event should be suppressed after Retire")
+		}
+		if name == "task-scheduler:stopped" {
+			t.Fatal("stopped event should be suppressed after Retire")
+		}
+	}
+}
+
+func TestServiceRetiredRejectsPublicEntryPoints(t *testing.T) {
+	tests := []struct {
+		name   string
+		action func(*Service) error
+	}{
+		{
+			name: "start",
+			action: func(svc *Service) error {
+				return svc.Start(QueueConfig{PreExecTargetMode: PreExecTargetModeAllPanes}, []QueueItem{
+					{Title: "t", Message: "m", TargetPaneID: "%0"},
+				})
+			},
+		},
+		{
+			name: "stop",
+			action: func(svc *Service) error {
+				return svc.Stop()
+			},
+		},
+		{
+			name: "pause",
+			action: func(svc *Service) error {
+				return svc.Pause()
+			},
+		},
+		{
+			name: "resume",
+			action: func(svc *Service) error {
+				return svc.Resume()
+			},
+		},
+		{
+			name: "add item",
+			action: func(svc *Service) error {
+				return svc.AddItem("Task", "message", "%0", false, "")
+			},
+		},
+		{
+			name: "remove item",
+			action: func(svc *Service) error {
+				return svc.RemoveItem("nonexistent")
+			},
+		},
+		{
+			name: "reorder items",
+			action: func(svc *Service) error {
+				return svc.ReorderItems([]string{"a"})
+			},
+		},
+		{
+			name: "update item",
+			action: func(svc *Service) error {
+				return svc.UpdateItem("nonexistent", "T", "M", "%0", false, "")
+			},
+		},
+		{
+			name: "rename session",
+			action: func(svc *Service) error {
+				return svc.RenameSession("renamed")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := NewService(testDeps())
+			svc.Retire()
+
+			if err := tt.action(svc); !errors.Is(err, errServiceRetired) {
+				t.Fatalf("%s: error = %v, want %v", tt.name, err, errServiceRetired)
+			}
+		})
+	}
+}
+
+func TestServiceRetiredStatusSnapshotIsDefault(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(testDeps())
+	svc.Retire()
+
+	status := svc.GetStatus()
+	if len(status.Items) != 0 {
+		t.Fatalf("Items count = %d, want 0 for retired snapshot", len(status.Items))
+	}
+	if status.RunStatus != QueueIdle {
+		t.Fatalf("RunStatus = %q, want %q for retired snapshot", status.RunStatus, QueueIdle)
+	}
+	if status.CurrentIndex != -1 {
+		t.Fatalf("CurrentIndex = %d, want -1 for retired snapshot", status.CurrentIndex)
 	}
 }

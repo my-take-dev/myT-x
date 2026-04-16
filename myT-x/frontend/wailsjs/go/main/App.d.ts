@@ -10,14 +10,19 @@ import {inputhistory} from '../models';
 import {mcp} from '../models';
 import {scheduler} from '../models';
 import {sessionlog} from '../models';
+import {singletaskrunner} from '../models';
 import {taskscheduler} from '../models';
+import {usagedashboard} from '../models';
 import {install} from '../models';
 import {git} from '../models';
+import {promptpresets} from '../models';
 import {ipc} from '../models';
 
 export function AddMemberToUnaffiliatedTeam(arg1:orchestrator.TeamMember,arg2:string,arg3:string):Promise<void>;
 
-export function AddTaskSchedulerItem(arg1:string,arg2:string,arg3:string,arg4:boolean,arg5:string):Promise<void>;
+export function AddSingleTaskRunnerItem(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean,arg6:string):Promise<void>;
+
+export function AddTaskSchedulerItem(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean,arg6:string):Promise<void>;
 
 export function ApplyLayoutPreset(arg1:string,arg2:string):Promise<void>;
 
@@ -27,7 +32,7 @@ export function BuildStatusLine():Promise<string>;
 
 export function CheckDirectoryConflict(arg1:string):Promise<string>;
 
-export function CheckTaskSchedulerOrchestratorReady():Promise<main.TaskSchedulerOrchestratorReadiness>;
+export function CheckTaskSchedulerOrchestratorReady(arg1:string):Promise<main.TaskSchedulerOrchestratorReadiness>;
 
 export function CheckWorktreePathConflict(arg1:string):Promise<string>;
 
@@ -46,6 +51,8 @@ export function CreateSessionWithExistingWorktree(arg1:string,arg2:string,arg3:s
 export function CreateSessionWithWorktree(arg1:string,arg2:string,arg3:worktree.WorktreeSessionOptions):Promise<tmux.SessionSnapshot>;
 
 export function DeleteOrchestratorTeam(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function DeletePromptPreset(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function DeleteScheduler(arg1:string):Promise<void>;
 
@@ -89,11 +96,19 @@ export function DevPanelListBranches(arg1:string):Promise<Array<string>>;
 
 export function DevPanelListDir(arg1:string,arg2:string):Promise<Array<devpanel.FileEntry>>;
 
+export function DevPanelReadBinary(arg1:string,arg2:string):Promise<devpanel.BinaryFileContent>;
+
 export function DevPanelReadFile(arg1:string,arg2:string):Promise<devpanel.FileContent>;
 
 export function DevPanelRenameFile(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function DevPanelSearchFiles(arg1:string,arg2:string):Promise<Array<devpanel.SearchFileResult>>;
+
+export function DevPanelSqliteExportCSV(arg1:string,arg2:string,arg3:string,arg4:string):Promise<devpanel.SqliteExportResult>;
+
+export function DevPanelSqliteListTables(arg1:string,arg2:string):Promise<Array<devpanel.SqliteTableInfo>>;
+
+export function DevPanelSqliteQueryTable(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<devpanel.SqliteQueryResult>;
 
 export function DevPanelStartWatcher(arg1:string):Promise<void>;
 
@@ -141,9 +156,15 @@ export function GetSessionErrorLog():Promise<Array<sessionlog.Entry>>;
 
 export function GetSessionLogFilePath():Promise<string>;
 
+export function GetSingleTaskRunnerClearDelay(arg1:string):Promise<number>;
+
+export function GetSingleTaskRunnerStatus(arg1:string):Promise<singletaskrunner.QueueStatus>;
+
 export function GetTaskSchedulerSettings():Promise<config.TaskSchedulerConfig>;
 
-export function GetTaskSchedulerStatus():Promise<taskscheduler.QueueStatus>;
+export function GetTaskSchedulerStatus(arg1:string):Promise<taskscheduler.QueueStatus>;
+
+export function GetUsageDashboard(arg1:string,arg2:string,arg3:boolean):Promise<usagedashboard.UsageDashboardSnapshot>;
 
 export function GetValidationRules():Promise<main.ValidationRules>;
 
@@ -175,13 +196,15 @@ export function ListWorktreesByRepo(arg1:string):Promise<Array<git.WorktreeInfo>
 
 export function LoadOrchestratorTeams(arg1:string):Promise<Array<orchestrator.TeamDefinition>>;
 
+export function LoadPromptPresets(arg1:string):Promise<promptpresets.LoadResult>;
+
 export function LoadSchedulerTemplates(arg1:string):Promise<Array<scheduler.Template>>;
 
 export function LogFrontendEvent(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function OpenDirectoryInExplorer(arg1:string):Promise<void>;
 
-export function PauseTaskScheduler():Promise<void>;
+export function PauseTaskScheduler(arg1:string):Promise<void>;
 
 export function PickSessionDirectory():Promise<string>;
 
@@ -191,7 +214,9 @@ export function QuickStartSession():Promise<tmux.SessionSnapshot>;
 
 export function RecoverIMEWindowFocus():Promise<void>;
 
-export function RemoveTaskSchedulerItem(arg1:string):Promise<void>;
+export function RemoveSingleTaskRunnerItem(arg1:string,arg2:string):Promise<void>;
+
+export function RemoveTaskSchedulerItem(arg1:string,arg2:string):Promise<void>;
 
 export function RenamePane(arg1:string,arg2:string):Promise<void>;
 
@@ -199,7 +224,11 @@ export function RenameSession(arg1:string,arg2:string):Promise<void>;
 
 export function ReorderOrchestratorTeams(arg1:Array<string>,arg2:string,arg3:string):Promise<void>;
 
-export function ReorderTaskSchedulerItems(arg1:Array<string>):Promise<void>;
+export function ReorderPromptPresets(arg1:Array<string>,arg2:string,arg3:string):Promise<void>;
+
+export function ReorderSingleTaskRunnerItems(arg1:string,arg2:Array<string>):Promise<void>;
+
+export function ReorderTaskSchedulerItems(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function ResizePane(arg1:string,arg2:number,arg3:number):Promise<void>;
 
@@ -207,11 +236,13 @@ export function ResolveMCPStdio(arg1:string,arg2:string):Promise<ipc.MCPStdioRes
 
 export function ResumeScheduler(arg1:string):Promise<void>;
 
-export function ResumeTaskScheduler():Promise<void>;
+export function ResumeTaskScheduler(arg1:string):Promise<void>;
 
 export function SaveConfig(arg1:config.Config):Promise<void>;
 
 export function SaveOrchestratorTeam(arg1:orchestrator.TeamDefinition,arg2:string):Promise<void>;
+
+export function SavePromptPreset(arg1:promptpresets.PromptPreset,arg2:string):Promise<void>;
 
 export function SaveSchedulerTemplate(arg1:string,arg2:scheduler.Template):Promise<void>;
 
@@ -227,19 +258,25 @@ export function SendSyncInput(arg1:string,arg2:string):Promise<void>;
 
 export function SetActiveSession(arg1:string):Promise<void>;
 
+export function SetSingleTaskRunnerClearDelay(arg1:string,arg2:number):Promise<void>;
+
 export function SplitPane(arg1:string,arg2:boolean):Promise<string>;
 
 export function StartOrchestratorTeam(arg1:orchestrator.StartTeamRequest):Promise<orchestrator.StartTeamResult>;
 
 export function StartScheduler(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<string>;
 
-export function StartTaskScheduler(arg1:taskscheduler.QueueConfig,arg2:Array<taskscheduler.QueueItem>):Promise<void>;
+export function StartSingleTaskRunner(arg1:string):Promise<void>;
+
+export function StartTaskScheduler(arg1:string,arg2:taskscheduler.QueueConfig,arg3:Array<taskscheduler.QueueItem>):Promise<void>;
 
 export function StopAllSchedulers():Promise<void>;
 
 export function StopScheduler(arg1:string):Promise<void>;
 
-export function StopTaskScheduler():Promise<void>;
+export function StopSingleTaskRunner(arg1:string):Promise<void>;
+
+export function StopTaskScheduler(arg1:string):Promise<void>;
 
 export function SwapPanes(arg1:string,arg2:string):Promise<void>;
 
@@ -247,4 +284,6 @@ export function ToggleMCPServer(arg1:string,arg2:string,arg3:boolean):Promise<vo
 
 export function ToggleViewerSidebarMode():Promise<void>;
 
-export function UpdateTaskSchedulerItem(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean,arg6:string):Promise<void>;
+export function UpdateSingleTaskRunnerItem(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:boolean,arg7:string):Promise<void>;
+
+export function UpdateTaskSchedulerItem(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:boolean,arg7:string):Promise<void>;

@@ -7,10 +7,17 @@ import {QuickSearch} from "./components/QuickSearch";
 import {SessionView} from "./components/SessionView";
 import {SettingsModal} from "./components/SettingsModal";
 import {Sidebar} from "./components/Sidebar";
-import {ChatInputBar} from "./components/ChatInputBar";
+import {ChatLayout} from "./components/ChatLayout";
 import {StatusBar} from "./components/StatusBar";
 import {ToastContainer} from "./components/ToastContainer";
 import {ViewerSystem} from "./components/viewer";
+import {
+    buildDockedCssVariables,
+    buildDockedLayout,
+    type DockedCSSVariables,
+    type DockedLayout,
+    normalizeDockedViewportWidth,
+} from "./components/viewer/viewerDocking";
 import {useIsViewerDocked} from "./components/viewer/useIsViewerDocked";
 import {useViewerStore} from "./components/viewer/viewerStore";
 import {useAppImeRecovery} from "./hooks/useAppImeRecovery";
@@ -19,20 +26,24 @@ import {useFileDrop} from "./hooks/useFileDrop";
 import {usePrefixKeyMode} from "./hooks/usePrefixKeyMode";
 import {useI18n} from "./i18n";
 import {useTmuxStore} from "./stores/tmuxStore";
+import type {ValidationRules} from "./types/tmux";
 import {isImeTransitionalEvent} from "./utils/ime";
 import {notifyAndLog} from "./utils/notifyUtils";
 import {resolveActivePane, resolveActivePaneID, resolveActiveWindow} from "./utils/session";
 
-type DockedAppBodyStyle = CSSProperties & {
-    "--dock-main-width": string;
-    "--dock-viewer-width": string;
-};
+type AppBodyStyle = CSSProperties & Partial<DockedCSSVariables>;
+
+function readWindowWidth(): number {
+    return normalizeDockedViewportWidth(window.innerWidth);
+}
 
 function App() {
     useBackendSync();
     const {t} = useI18n();
     const [quickSearchOpen, setQuickSearchOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [validationRules, setValidationRules] = useState<ValidationRules | null>(null);
+    const [windowWidth, setWindowWidth] = useState(readWindowWidth);
     const lastSyncedSessionRef = useRef<string | null>(null);
 
     const sessions = useTmuxStore((s) => s.sessions);
@@ -51,18 +62,68 @@ function App() {
     const config = useTmuxStore((s) => s.config);
     const dockRatio = useViewerStore((s) => s.dockRatio);
     const isViewerDocked = useIsViewerDocked();
-    const appBodyClassName = isViewerDocked
-        ? "app-body app-body--viewer-docked"
-        : "app-body";
-    const appBodyStyle: DockedAppBodyStyle | undefined = isViewerDocked
-        ? {
-            "--dock-main-width": `${dockRatio * 100}%`,
-            "--dock-viewer-width": `${(1 - dockRatio) * 100}%`,
+    const dockedLayout = useMemo<DockedLayout | null>(() => {
+        if (!isViewerDocked) {
+            return null;
         }
-        : undefined;
+        return buildDockedLayout(windowWidth, dockRatio);
+    }, [dockRatio, isViewerDocked, windowWidth]);
+    const appBodyClassName = [
+        "app-body",
+        isViewerDocked && "app-body--viewer-docked",
+        dockedLayout?.isScaled && "app-body--viewer-scaled",
+    ].filter(Boolean).join(" ");
+
+    const appBodyStyle = useMemo<AppBodyStyle>(() => {
+        if (dockedLayout === null) {
+            return {};
+        }
+        // App only injects dock-specific variables here. Shared static widths
+        // stay in :root so the portaled ActivityStrip and overlay mode keep one
+        // source of truth.
+        return buildDockedCssVariables(dockedLayout);
+    }, [dockedLayout]);
     usePrefixKeyMode({activePaneId});
     useFileDrop(activePaneId);
     const imeRecoverySurfaceRef = useAppImeRecovery({activePaneId});
+
+    useEffect(() => {
+        let cancelled = false;
+        void api.GetValidationRules()
+            .then((rules) => {
+                if (!cancelled) {
+                    setValidationRules(rules);
+                }
+            })
+            .catch((err: unknown) => {
+                if (!cancelled) {
+                    console.warn("[app] GetValidationRules failed (non-fatal)", err);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        let resizeFrameID: number | null = null;
+        const handleResize = () => {
+            if (resizeFrameID !== null) {
+                return;
+            }
+            resizeFrameID = window.requestAnimationFrame(() => {
+                resizeFrameID = null;
+                setWindowWidth(readWindowWidth());
+            });
+        };
+        window.addEventListener("resize", handleResize);
+        return () => {
+            if (resizeFrameID !== null) {
+                window.cancelAnimationFrame(resizeFrameID);
+            }
+            window.removeEventListener("resize", handleResize);
+        };
+    }, []);
 
     useEffect(() => {
         const currentSessionName = current?.name ?? null;
@@ -109,18 +170,22 @@ function App() {
                 spellCheck={false}
             />
             <div className={appBodyClassName} style={appBodyStyle}>
-                <Sidebar sessions={sessions} activeSession={current?.name ?? null}/>
-                <main className="main-content">
-                    <SessionView session={current}/>
-                    <ChatInputBar
-                        activePaneId={activePaneId}
-                        activePaneTitle={activePane?.title ?? ""}
-                        panes={activeWindow?.panes ?? []}
-                        chatOverlayPercentage={config?.chat_overlay_percentage ?? 80}
-                    />
-                    <StatusBar/>
-                </main>
-                <ViewerSystem/>
+                <div className="app-body__inner">
+                    <Sidebar sessions={sessions} activeSession={current?.name ?? null}/>
+                    <main className="main-content">
+                        <ChatLayout
+                            activePaneId={activePaneId}
+                            activePaneTitle={activePane?.title ?? ""}
+                            panes={activeWindow?.panes ?? []}
+                            chatOverlayPercentage={config?.chat_overlay_percentage ?? 40}
+                            validationRules={validationRules}
+                        >
+                            <SessionView session={current}/>
+                        </ChatLayout>
+                        <StatusBar/>
+                    </main>
+                    <ViewerSystem/>
+                </div>
             </div>
             <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)}/>
             <ToastContainer/>

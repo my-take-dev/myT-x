@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"myT-x/internal/config"
 	gitpkg "myT-x/internal/git"
 	"myT-x/internal/tmux"
 )
@@ -66,20 +67,19 @@ type createWorktreeResult struct {
 	PullError          string
 }
 
-// progressFunc reports progress during worktree creation.
-// stage identifies the current operation; message provides human-readable details.
-type progressFunc func(stage, message string)
-
 // createWorktreeForSession creates the git worktree for a new session.
 // Handles pull, path generation, validation, and the actual worktree creation.
-// Pull failures are non-fatal: the worktree is created from local state and
-// PullFailed is set in the result for caller notification.
+// Pull failures are fatal by default. When ContinueOnPullFailure is enabled,
+// the worktree is created from local state and PullFailed is set in the result
+// for caller notification.
 func createWorktreeForSession(
 	repo *gitpkg.Repository, repoPath, sessionName string, opts WorktreeSessionOptions,
-	onProgress progressFunc,
+	currentBranch func(*gitpkg.Repository) (string, error),
 ) (result createWorktreeResult, err error) {
-	if onProgress == nil {
-		onProgress = func(_, _ string) {}
+	if currentBranch == nil {
+		currentBranch = func(repo *gitpkg.Repository) (string, error) {
+			return repo.CurrentBranch()
+		}
 	}
 
 	// BranchName is validated once in CreateSessionWithWorktree before this helper is called.
@@ -89,16 +89,16 @@ func createWorktreeForSession(
 	}
 
 	if opts.PullBeforeCreate {
-		onProgress("pulling", "Pulling latest changes...")
 		if pullErr := repo.Pull(); pullErr != nil {
+			if !opts.ContinueOnPullFailure {
+				return createWorktreeResult{}, fmt.Errorf("pull before worktree creation failed: %w", pullErr)
+			}
 			slog.Warn("[WARN-GIT] pull before worktree creation failed, continuing with local state",
 				"error", pullErr, "repoPath", repoPath)
 			result.PullFailed = true
 			result.PullError = pullErr.Error()
 		}
 	}
-
-	onProgress("creating", "Creating worktree...")
 
 	identifier := chooseWorktreeIdentifier(branchName, sessionName)
 
@@ -115,15 +115,22 @@ func createWorktreeForSession(
 
 	baseBranch := opts.BaseBranch
 	if baseBranch == "" {
-		// Resolve actual branch name for display purposes.
-		if resolved, brErr := repo.CurrentBranch(); brErr == nil && resolved != "" {
-			baseBranch = resolved
-		} else {
-			if brErr != nil {
-				slog.Warn("[WARN-GIT] failed to detect current branch, falling back to HEAD",
-					"path", repoPath, "error", brErr)
-			}
+		isDetached, headErr := repo.IsDetachedHead()
+		if headErr != nil {
+			return createWorktreeResult{}, fmt.Errorf("failed to check HEAD state: %w", headErr)
+		}
+		if isDetached {
 			baseBranch = "HEAD"
+		} else {
+			resolved, brErr := currentBranch(repo)
+			if brErr != nil {
+				return createWorktreeResult{}, fmt.Errorf("failed to detect current branch: %w", brErr)
+			}
+			resolved = strings.TrimSpace(resolved)
+			if resolved == "" {
+				return createWorktreeResult{}, errors.New("failed to detect current branch: current branch is empty")
+			}
+			baseBranch = resolved
 		}
 	}
 
@@ -178,14 +185,17 @@ func waitForSetupScriptsCancellation(done <-chan struct{}, timeout time.Duration
 
 // shellExecFlag returns the command-execution flag for the given shell.
 func shellExecFlag(shell string) string {
-	base := strings.ToLower(filepath.Base(shell))
+	base := config.CanonicalShellBaseName(shell)
 	switch base {
 	case "cmd.exe":
 		return "/c"
 	case "bash.exe", "wsl.exe":
 		return "-c"
+	case "powershell.exe", "pwsh.exe":
+		return "-Command"
 	default:
-		// PowerShell (powershell.exe, pwsh.exe) and unknown shells.
+		slog.Warn("[WARN-GIT] unrecognized setup shell; defaulting to PowerShell command flag",
+			"shell", shell, "base", strings.ToLower(filepath.Base(shell)))
 		return "-Command"
 	}
 }

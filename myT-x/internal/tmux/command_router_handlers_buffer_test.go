@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -956,15 +957,15 @@ func TestHandleCapturePane(t *testing.T) {
 			},
 		},
 		{
-			name:           "-S and -E flags are accepted as no-op full-history selectors",
+			name:           "-S and -E select a line range from retained history",
 			paneHasHistory: true,
-			historyContent: "full history",
-			flags:          map[string]any{"-p": true, "-t": "%0", "-S": "-10", "-E": "-1"},
+			historyContent: "line-0\nline-1\nline-2\nline-3\nline-4\n",
+			flags:          map[string]any{"-p": true, "-t": "%0", "-S": "-3", "-E": "-2"},
 			createPane:     true,
 			wantExitCode:   0,
 			verifyStdout: func(t *testing.T, stdout string) {
-				if stdout != "full history" {
-					t.Fatalf("stdout = %q, want %q", stdout, "full history")
+				if stdout != "line-2\nline-3\n" {
+					t.Fatalf("stdout = %q, want %q", stdout, "line-2\nline-3\n")
 				}
 			},
 		},
@@ -1009,5 +1010,61 @@ func TestHandleCapturePane(t *testing.T) {
 				tt.verifyBuffer(t, router.buffers)
 			}
 		})
+	}
+}
+
+func TestHandleCapturePaneTailSelectionAvoidsOversizedResponse(t *testing.T) {
+	sessions := NewSessionManager()
+	router := NewCommandRouter(sessions, nil, RouterOptions{})
+
+	if _, _, err := sessions.CreateSession("test", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession error: %v", err)
+	}
+
+	pane, err := sessions.ResolveTarget("%0", 0)
+	if err != nil {
+		t.Fatalf("ResolveTarget error: %v", err)
+	}
+
+	var history strings.Builder
+	for idx := range 5000 {
+		history.WriteString("line-")
+		history.WriteString(strconv.Itoa(idx))
+		history.WriteString(" ")
+		history.WriteString(strings.Repeat("x", 40))
+		history.WriteString("\n")
+	}
+	historyText := history.String()
+	pane.OutputHistory = NewPaneOutputHistory(len(historyText))
+	pane.OutputHistory.Write([]byte(historyText))
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "capture-pane",
+		Flags: map[string]any{
+			"-p": true,
+			"-t": "%0",
+			"-S": "-20",
+		},
+	})
+
+	if resp.ExitCode != 0 {
+		t.Fatalf("capture-pane exit code = %d, stderr = %q", resp.ExitCode, resp.Stderr)
+	}
+
+	lines := strings.Split(strings.TrimRight(resp.Stdout, "\n"), "\n")
+	if len(lines) != 20 {
+		t.Fatalf("captured line count = %d, want 20", len(lines))
+	}
+	if lines[0] != "line-4980 "+strings.Repeat("x", 40) {
+		t.Fatalf("first captured line = %q, want tail line", lines[0])
+	}
+	if lines[len(lines)-1] != "line-4999 "+strings.Repeat("x", 40) {
+		t.Fatalf("last captured line = %q, want final line", lines[len(lines)-1])
+	}
+	if strings.Count(resp.Stdout, "\n") != 20 {
+		t.Fatalf("captured newline count = %d, want 20", strings.Count(resp.Stdout, "\n"))
+	}
+	if len(resp.Stdout) >= 64*1024 {
+		t.Fatalf("captured output length = %d, want < 65536", len(resp.Stdout))
 	}
 }

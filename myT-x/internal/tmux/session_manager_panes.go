@@ -22,12 +22,12 @@ func (m *SessionManager) SplitPane(targetPaneID int, direction SplitDirection) (
 
 	newPane := &TmuxPane{
 		ID:       m.nextPaneID,
-		idString: fmt.Sprintf("%%%d", m.nextPaneID),
+		idString: formatPaneID(m.nextPaneID),
 		Index:    len(window.Panes),
 		Active:   true,
 		Width:    target.Width,
 		Height:   target.Height,
-		Env:      copyEnvMap(target.Env),
+		Env:      seedPaneIdentityEnv(copyEnvMap(target.Env), m.nextPaneID),
 		Window:   window,
 	}
 	m.nextPaneID++

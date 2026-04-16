@@ -12,7 +12,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
+	"myT-x/internal/mcp/agent-orchestrator/domain"
 	"myT-x/internal/mcp/agent-orchestrator/internal/jsonrpc"
 )
 
@@ -40,7 +42,7 @@ type Server struct {
 
 	wmu sync.Mutex
 
-	shutdown bool
+	shutdown atomic.Bool
 }
 
 type requestHandler func(context.Context, json.RawMessage) (any, *jsonrpc.Error)
@@ -93,13 +95,13 @@ func (s *Server) Serve(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
-		if s.shutdown {
+		if s.shutdown.Load() {
 			return nil
 		}
 
 		payload, mode, err := jsonrpc.ReadMessageWithFraming(s.reader)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || s.shutdown.Load() {
 				return nil
 			}
 			if errors.Is(err, jsonrpc.ErrFrameTooLarge) {
@@ -131,23 +133,43 @@ func (s *Server) Serve(ctx context.Context) error {
 				}
 				continue
 			}
+			s.logf("ignoring unsupported notification: %s", msg.Method)
 			continue
 		}
 
 		if !msg.IsRequest() {
+			if msg.Method != "" && !msg.IsNotification() {
+				s.logf("reject invalid request object")
+				if writeErr := s.writeError(nil, -32600, "Invalid Request", nil); writeErr != nil {
+					return writeErr
+				}
+				continue
+			}
+			s.logf("ignoring unknown message type")
 			continue
 		}
 
-		id := jsonrpc.ParseID(msg.ID)
 		result, rpcErr := s.handleRequest(ctx, msg.Method, msg.Params)
 		if rpcErr != nil {
-			if err := s.writeError(id, rpcErr.Code, rpcErr.Message, rpcErr.Data); err != nil {
+			if err := s.writeError(msg.ID, rpcErr.Code, rpcErr.Message, rpcErr.Data); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := s.writeResult(id, result); err != nil {
+		if err := s.writeResult(msg.ID, result); err != nil {
 			return err
+		}
+	}
+}
+
+// Shutdown signals the server to stop processing. It sets the shutdown
+// flag and, if the underlying reader implements io.Closer, closes it to
+// unblock the Serve loop's blocking read.
+func (s *Server) Shutdown() {
+	s.shutdown.Store(true)
+	if closer, ok := s.cfg.In.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			s.logf("shutdown: failed to close input reader: %v", err)
 		}
 	}
 }
@@ -170,15 +192,19 @@ func (s *Server) handleInitialize(_ context.Context, paramsRaw json.RawMessage) 
 	}
 	if err := json.Unmarshal(paramsRaw, &params); err != nil && len(paramsRaw) > 0 {
 		s.logf("parse initialize params: %v", err)
+		return nil, &jsonrpc.Error{
+			Code:    -32602, // Invalid params
+			Message: fmt.Sprintf("invalid initialize params: %v", err),
+		}
 	}
 
-	protocolVersion := s.cfg.ProtocolVersion
-	if params.ProtocolVersion != "" {
-		protocolVersion = params.ProtocolVersion
+	if params.ProtocolVersion != "" && params.ProtocolVersion != s.cfg.ProtocolVersion {
+		s.logf("client requested unsupported protocol version %q, responding with %q",
+			params.ProtocolVersion, s.cfg.ProtocolVersion)
 	}
 
 	return map[string]any{
-		"protocolVersion": protocolVersion,
+		"protocolVersion": s.cfg.ProtocolVersion,
 		"capabilities": map[string]any{
 			"tools": map[string]any{
 				"listChanged": false,
@@ -239,12 +265,7 @@ func (s *Server) handleToolsCall(ctx context.Context, paramsRaw json.RawMessage)
 	value, err := tool.Handler(ctx, params.Arguments)
 	if err != nil {
 		s.logf("tool %s failed: %v", params.Name, err)
-		return map[string]any{
-			"content": []map[string]any{
-				{"type": "text", "text": "tool execution failed"},
-			},
-			"isError": true,
-		}, nil
+		return renderToolError(err), nil
 	}
 	s.logf("tool %s succeeded", params.Name)
 
@@ -253,6 +274,11 @@ func (s *Server) handleToolsCall(ctx context.Context, paramsRaw json.RawMessage)
 		"content": []map[string]any{
 			{"type": "text", "text": text},
 		},
+	}
+	if structured, ok := value.(map[string]any); ok {
+		if isError, ok := structured["isError"].(bool); ok {
+			resp["isError"] = isError
+		}
 	}
 	if value != nil {
 		resp["structuredContent"] = value
@@ -265,11 +291,11 @@ func (s *Server) handlePing(_ context.Context, _ json.RawMessage) (any, *jsonrpc
 }
 
 func (s *Server) handleShutdown(_ context.Context, _ json.RawMessage) (any, *jsonrpc.Error) {
-	s.shutdown = true
+	s.Shutdown()
 	return map[string]any{}, nil
 }
 
-func (s *Server) writeResult(id any, result any) error {
+func (s *Server) writeResult(id json.RawMessage, result any) error {
 	response := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      id,
@@ -278,7 +304,7 @@ func (s *Server) writeResult(id any, result any) error {
 	return s.writeMessage(response)
 }
 
-func (s *Server) writeError(id any, code int, message string, data any) error {
+func (s *Server) writeError(id json.RawMessage, code int, message string, data any) error {
 	response := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      id,
@@ -367,4 +393,51 @@ func truncateLogValue(value string, maxLen int) string {
 		return value
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+func renderToolError(err error) map[string]any {
+	toolErr := classifyToolError(err)
+	return map[string]any{
+		"content": []map[string]any{
+			{"type": "text", "text": toolErr.Message},
+		},
+		"isError": true,
+		"structuredContent": map[string]any{
+			"error": map[string]any{
+				"code":    string(toolErr.Code),
+				"message": toolErr.Message,
+				"reason":  toolErr.Reason,
+			},
+		},
+	}
+}
+
+func classifyToolError(err error) *domain.OrchestratorError {
+	var toolErr *domain.OrchestratorError
+	if errors.As(err, &toolErr) {
+		return toolErr
+	}
+
+	message := err.Error()
+	if message == "" {
+		message = "tool execution failed"
+	}
+	if looksLikeValidationError(message) {
+		return domain.NewOrchestratorError(domain.ErrCodeValidation, message, message, err)
+	}
+	return domain.NewOrchestratorError(domain.ErrCodeInternal, message, "internal failure", err)
+}
+
+func looksLikeValidationError(message string) bool {
+	for _, fragment := range []string{
+		" is required",
+		" must ",
+		"invalid ",
+		"expected ",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
 }

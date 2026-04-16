@@ -2,7 +2,7 @@ package usecase
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -36,6 +36,12 @@ type UpdateTaskProgressResult struct {
 	ProgressUpdatedAt string
 }
 
+const (
+	TaskProgressPctMin     = 0
+	TaskProgressPctMax     = 100
+	MaxTaskProgressNoteLen = 500
+)
+
 // TaskUpdateService owns assignee-side task state changes.
 type TaskUpdateService struct {
 	agents   domain.AgentRepository
@@ -59,16 +65,23 @@ func NewTaskUpdateService(
 	}
 }
 
+func validateTaskProgressCmd(cmd UpdateTaskProgressCmd) error {
+	if cmd.ProgressPct == nil && cmd.ProgressNote == nil {
+		return validationError("progress_pct or progress_note is required")
+	}
+	if cmd.ProgressPct != nil && (*cmd.ProgressPct < TaskProgressPctMin || *cmd.ProgressPct > TaskProgressPctMax) {
+		return validationError("progress_pct must be between 0 and 100")
+	}
+	if cmd.ProgressNote != nil && len([]rune(*cmd.ProgressNote)) > MaxTaskProgressNoteLen {
+		return validationError(fmt.Sprintf("progress_note must be %d characters or fewer", MaxTaskProgressNoteLen))
+	}
+	return nil
+}
+
 // AcknowledgeTask records that the assignee has received a task.
 func (s *TaskUpdateService) AcknowledgeTask(ctx context.Context, cmd AcknowledgeTaskCmd) (AcknowledgeTaskResult, error) {
-	caller, err := resolveCaller(ctx, s.resolver, s.agents, s.logger)
+	caller, err := preflightAssigneeTaskAgentCaller(ctx, s.resolver, s.agents, s.tasks, s.logger, cmd.AgentName)
 	if err != nil {
-		return AcknowledgeTaskResult{}, err
-	}
-	if !IsTrustedCaller(caller) && caller.Name != cmd.AgentName {
-		return AcknowledgeTaskResult{}, errors.New("access denied")
-	}
-	if err := expirePendingTasks(ctx, s.tasks, s.logger); err != nil {
 		return AcknowledgeTaskResult{}, err
 	}
 
@@ -76,12 +89,12 @@ func (s *TaskUpdateService) AcknowledgeTask(ctx context.Context, cmd Acknowledge
 	if err != nil {
 		return AcknowledgeTaskResult{}, operationError(s.logger, "task is not available", err)
 	}
-	_, allowed := authorizeResponseCaller(task, caller)
-	if !allowed || task.AgentName != cmd.AgentName {
-		return AcknowledgeTaskResult{}, errors.New("access denied")
+	_, allowed := authorizeAssigneeCaller(task, caller)
+	if !allowed {
+		return AcknowledgeTaskResult{}, accessDeniedError("caller is not the task assignee")
 	}
 	if task.Status != domain.TaskStatusPending {
-		return AcknowledgeTaskResult{}, errors.New("task is not pending")
+		return AcknowledgeTaskResult{}, conflictError("task is not pending")
 	}
 
 	acknowledgedAt := task.AcknowledgedAt
@@ -101,14 +114,11 @@ func (s *TaskUpdateService) AcknowledgeTask(ctx context.Context, cmd Acknowledge
 
 // UpdateTaskProgress records structured progress for a pending task.
 func (s *TaskUpdateService) UpdateTaskProgress(ctx context.Context, cmd UpdateTaskProgressCmd) (UpdateTaskProgressResult, error) {
-	caller, err := resolveCaller(ctx, s.resolver, s.agents, s.logger)
-	if err != nil {
+	if err := validateTaskProgressCmd(cmd); err != nil {
 		return UpdateTaskProgressResult{}, err
 	}
-	if cmd.ProgressPct == nil && cmd.ProgressNote == nil {
-		return UpdateTaskProgressResult{}, errors.New("progress_pct or progress_note is required")
-	}
-	if err := expirePendingTasks(ctx, s.tasks, s.logger); err != nil {
+	caller, err := preflightAssigneeTaskCaller(ctx, s.resolver, s.agents, s.tasks, s.logger)
+	if err != nil {
 		return UpdateTaskProgressResult{}, err
 	}
 
@@ -116,12 +126,12 @@ func (s *TaskUpdateService) UpdateTaskProgress(ctx context.Context, cmd UpdateTa
 	if err != nil {
 		return UpdateTaskProgressResult{}, operationError(s.logger, "task is not available", err)
 	}
-	_, allowed := authorizeResponseCaller(task, caller)
+	_, allowed := authorizeAssigneeCaller(task, caller)
 	if !allowed {
-		return UpdateTaskProgressResult{}, errors.New("access denied")
+		return UpdateTaskProgressResult{}, accessDeniedError("caller is not the task assignee")
 	}
 	if task.Status != domain.TaskStatusPending {
-		return UpdateTaskProgressResult{}, errors.New("task is not pending")
+		return UpdateTaskProgressResult{}, conflictError("task is not pending")
 	}
 
 	progressUpdatedAt := time.Now().UTC().Format(time.RFC3339)

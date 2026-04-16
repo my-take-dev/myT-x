@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"myT-x/internal/apptypes"
@@ -37,10 +38,11 @@ func newTestDeps() Deps {
 		RuntimeContext: func() context.Context {
 			return context.Background()
 		},
-		RequestSnapshot:           func(bool) {},
-		EmitBackendEvent:          func(string, any) {},
-		McpCleanupSession:         func(string) {},
-		CleanupStaleSnapshotState: func(map[string]struct{}) {},
+		RequestSnapshot:               func(bool) {},
+		EmitBackendEvent:              func(string, any) {},
+		OnSessionDestroyed:            func(string) {},
+		OnSessionRenamed:              func(string, string) error { return nil },
+		OnSessionRenameRollbackFailed: func(string, string) error { return nil },
 		ExecuteRouterRequest: func(router *tmux.CommandRouter, req ipc.TmuxRequest) ipc.TmuxResponse {
 			return router.Execute(req)
 		},
@@ -77,7 +79,7 @@ func (e testEmitter) EmitWithContext(_ context.Context, name string, payload any
 // ---------------------------------------------------------------------------
 
 func TestDeps_FieldCount(t *testing.T) {
-	const expectedFieldCount = 11
+	const expectedFieldCount = 12
 	if got := reflect.TypeFor[Deps]().NumField(); got != expectedFieldCount {
 		t.Fatalf("Deps has %d fields, expected %d; update newTestDeps, "+
 			"newTestDepsWithRouter, newSessionServiceForTest, and this assertion", got, expectedFieldCount)
@@ -130,7 +132,7 @@ func TestNewService_PanicReportsIndividualMissingFields(t *testing.T) {
 	}()
 	deps := newTestDeps()
 	deps.RequireRouter = nil
-	deps.McpCleanupSession = nil
+	deps.OnSessionDestroyed = nil
 	NewService(deps)
 }
 
@@ -229,6 +231,127 @@ func TestRenameSession_RejectsWhenShuttingDown(t *testing.T) {
 	}
 }
 
+func TestRenameSession_RollsBackWhenFollowUpFails(t *testing.T) {
+	deps := newTestDeps()
+	sessions, err := deps.RequireSessions()
+	if err != nil {
+		t.Fatalf("RequireSessions() error = %v", err)
+	}
+	if _, _, err := sessions.CreateSession("old", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	deps.OnSessionRenamed = func(oldName, newName string) error {
+		return errors.New("follow-up failed")
+	}
+
+	svc := NewService(deps)
+	svc.SetActiveSessionName("old")
+
+	err = svc.RenameSession("old", "new")
+	if err == nil {
+		t.Fatal("RenameSession() expected follow-up failure")
+	}
+	if !strings.Contains(err.Error(), "follow-up failed") {
+		t.Fatalf("RenameSession() error = %v, want follow-up failure", err)
+	}
+	if sessions.HasSession("new") {
+		t.Fatal("new session should be rolled back after follow-up failure")
+	}
+	if !sessions.HasSession("old") {
+		t.Fatal("old session should remain after follow-up failure")
+	}
+	if got := svc.GetActiveSessionName(); got != "old" {
+		t.Fatalf("active session = %q, want %q after rollback", got, "old")
+	}
+}
+
+func TestRenameSession_AllowsNilOnSessionRenamedCallback(t *testing.T) {
+	deps := newTestDeps()
+	deps.OnSessionRenamed = nil
+	sessions, err := deps.RequireSessions()
+	if err != nil {
+		t.Fatalf("RequireSessions() error = %v", err)
+	}
+	if _, _, err := sessions.CreateSession("old", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	svc := NewService(deps)
+	svc.SetActiveSessionName("old")
+
+	if err := svc.RenameSession("old", "new"); err != nil {
+		t.Fatalf("RenameSession() error = %v", err)
+	}
+	if sessions.HasSession("old") {
+		t.Fatal("old session should be renamed")
+	}
+	if !sessions.HasSession("new") {
+		t.Fatal("new session should exist after rename")
+	}
+	if got := svc.GetActiveSessionName(); got != "new" {
+		t.Fatalf("active session = %q, want %q", got, "new")
+	}
+}
+
+func TestRenameSession_RequestsSnapshotWhenRollbackFails(t *testing.T) {
+	deps := newTestDeps()
+	sessions, err := deps.RequireSessions()
+	if err != nil {
+		t.Fatalf("RequireSessions() error = %v", err)
+	}
+	if _, _, err := sessions.CreateSession("old", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	snapshotRequests := 0
+	rollbackFailureCalls := 0
+	deps.RequestSnapshot = func(force bool) {
+		if !force {
+			t.Fatal("RequestSnapshot() expected force=true")
+		}
+		snapshotRequests++
+	}
+	deps.OnSessionRenamed = func(oldName, newName string) error {
+		if _, _, err := sessions.CreateSession(oldName, "main", 120, 40); err != nil {
+			t.Fatalf("CreateSession(%q) error = %v", oldName, err)
+		}
+		return errors.New("follow-up failed")
+	}
+	deps.OnSessionRenameRollbackFailed = func(oldName, newName string) error {
+		rollbackFailureCalls++
+		if oldName != "old" || newName != "new" {
+			t.Fatalf("OnSessionRenameRollbackFailed() = (%q, %q), want (%q, %q)", oldName, newName, "old", "new")
+		}
+		return nil
+	}
+
+	svc := NewService(deps)
+	svc.SetActiveSessionName("old")
+
+	err = svc.RenameSession("old", "new")
+	if err == nil {
+		t.Fatal("RenameSession() expected rollback failure")
+	}
+	if !strings.Contains(err.Error(), "rollback also failed") {
+		t.Fatalf("RenameSession() error = %v, want rollback failure context", err)
+	}
+	if snapshotRequests != 1 {
+		t.Fatalf("RequestSnapshot() calls = %d, want 1", snapshotRequests)
+	}
+	if rollbackFailureCalls != 1 {
+		t.Fatalf("OnSessionRenameRollbackFailed() calls = %d, want 1", rollbackFailureCalls)
+	}
+	if !sessions.HasSession("new") {
+		t.Fatal("new session should remain after rollback failure")
+	}
+	if !sessions.HasSession("old") {
+		t.Fatal("old session created during follow-up should remain after rollback failure")
+	}
+	if got := svc.GetActiveSessionName(); got != "new" {
+		t.Fatalf("active session = %q, want %q after rollback failure sync", got, "new")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Session lookup tests
 // ---------------------------------------------------------------------------
@@ -252,6 +375,43 @@ func TestFindAvailableSessionName_WithConflict(t *testing.T) {
 	got := svc.FindAvailableSessionName("taken")
 	if got != "taken-2" {
 		t.Errorf("FindAvailableSessionName(%q) = %q, want %q", "taken", got, "taken-2")
+	}
+}
+
+func TestFindAvailableSessionName_SkipsReservedNames(t *testing.T) {
+	deps := newTestDeps()
+	svc := NewService(deps)
+
+	first, releaseFirst := svc.ReserveAvailableSessionName("taken")
+	if first != "taken" {
+		t.Fatalf("ReserveAvailableSessionName(%q) = %q, want %q", "taken", first, "taken")
+	}
+	defer releaseFirst()
+
+	second := svc.FindAvailableSessionName("taken")
+	if second != "taken-2" {
+		t.Fatalf("FindAvailableSessionName(%q) = %q, want %q", "taken", second, "taken-2")
+	}
+}
+
+func TestReserveAvailableSessionName_ReleaseRestoresCandidate(t *testing.T) {
+	deps := newTestDeps()
+	svc := NewService(deps)
+
+	first, releaseFirst := svc.ReserveAvailableSessionName("alpha")
+	if first != "alpha" {
+		t.Fatalf("ReserveAvailableSessionName(%q) = %q, want %q", "alpha", first, "alpha")
+	}
+	second := svc.FindAvailableSessionName("alpha")
+	if second != "alpha-2" {
+		t.Fatalf("FindAvailableSessionName(%q) while reserved = %q, want %q", "alpha", second, "alpha-2")
+	}
+
+	releaseFirst()
+
+	third := svc.FindAvailableSessionName("alpha")
+	if third != "alpha" {
+		t.Fatalf("FindAvailableSessionName(%q) after release = %q, want %q", "alpha", third, "alpha")
 	}
 }
 

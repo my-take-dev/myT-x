@@ -234,6 +234,27 @@ func TestParseTmuxCommandLine(t *testing.T) {
 			wantArgs:    []string{"status-left", "#{session_name}"},
 		},
 		{
+			name:        "show-options parses quiet target option lookup",
+			input:       "show-options -q -t demo focus-events",
+			wantCommand: "show-options",
+			wantFlags:   map[string]any{"-q": true, "-t": "demo"},
+			wantArgs:    []string{"focus-events"},
+		},
+		{
+			name:        "show alias canonicalizes and expands combined bool flags",
+			input:       "show -gv focus-events",
+			wantCommand: "show-options",
+			wantFlags:   map[string]any{"-g": true, "-v": true},
+			wantArgs:    []string{"focus-events"},
+		},
+		{
+			name:        "show-options expands multiple combined bool flags",
+			input:       "show-options -gqv focus-events",
+			wantCommand: "show-options",
+			wantFlags:   map[string]any{"-g": true, "-q": true, "-v": true},
+			wantArgs:    []string{"focus-events"},
+		},
+		{
 			name:        "save-buffer with append and named buffer",
 			input:       "save-buffer -a -b clip out.txt",
 			wantCommand: "save-buffer",
@@ -272,7 +293,7 @@ func TestParseTmuxCommandLine(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseTmuxCommandLine(tt.input)
+			got := ParseTmuxCommandLine(tt.input)
 
 			if got.Command != tt.wantCommand {
 				t.Errorf("Command = %q, want %q", got.Command, tt.wantCommand)
@@ -314,7 +335,7 @@ func TestParseTmuxCommandLine(t *testing.T) {
 func TestParseTmuxCommandLineMultipleEnvFlags(t *testing.T) {
 	// Multiple -e flags: map semantics means last value wins.
 	// This is a known limitation of the current parser.
-	got := parseTmuxCommandLine("new-session -e FOO=bar -e BAZ=qux -s test")
+	got := ParseTmuxCommandLine("new-session -e FOO=bar -e BAZ=qux -s test")
 	if got.Command != "new-session" {
 		t.Fatalf("Command = %q, want %q", got.Command, "new-session")
 	}

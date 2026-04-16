@@ -1,20 +1,30 @@
-import {useState, useCallback} from "react";
+import {useState, useCallback, useEffect, useMemo, useRef} from "react";
 import {useI18n} from "../../../../i18n";
+import {api} from "../../../../api";
 import {config} from "../../../../../wailsjs/go/models";
+import type {ValidationRules} from "../../../../types/tmux";
 import type {TaskSchedulerSettings, MessageTemplate} from "./useTaskScheduler";
+import {toErrorMessage} from "../../../../utils/errorUtils";
 import {
     blockNonNumericKeys,
-    preExecFieldBounds,
+    getPreExecFieldBounds,
+    getTemplateFieldLimits,
     readNumberInput,
-    resolveInitialPreExecIdleTimeout,
-    resolveInitialPreExecResetDelay,
+    resolveInitialPreExecIdleTimeoutWithRules,
+    resolveInitialPreExecResetDelayWithRules,
     resolveInitialPreExecTargetMode,
 } from "./taskSchedulerConfigForm";
+import {
+    PRE_EXEC_TARGET_MODE_ALL_PANES,
+    PRE_EXEC_TARGET_MODE_TASK_PANES,
+} from "./preExecTargetModes";
 
 interface TaskSchedulerSettingsProps {
     initialSettings: TaskSchedulerSettings | null;
     onSave: (settings: TaskSchedulerSettings) => Promise<boolean>;
+    onError: (message: string | null) => void;
     onBack: () => void;
+    onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface TemplateDraft extends MessageTemplate {
@@ -26,6 +36,13 @@ interface TemplateEditState {
     templateID: string | null;
     name: string;
     message: string;
+}
+
+interface SettingsDraftState {
+    preExecResetDelay: number;
+    preExecIdleTimeout: number;
+    preExecTargetMode: string;
+    templates: MessageTemplate[];
 }
 
 let nextTemplateDraftCounter = 0;
@@ -47,23 +64,98 @@ function createTemplateDraft(template?: Partial<MessageTemplate>): TemplateDraft
     };
 }
 
+function createSettingsDraftState(
+    settings: TaskSchedulerSettings,
+    validationRules: ValidationRules | null,
+): SettingsDraftState {
+    return {
+        preExecResetDelay: resolveInitialPreExecResetDelayWithRules(settings.pre_exec_reset_delay_s, validationRules),
+        preExecIdleTimeout: resolveInitialPreExecIdleTimeoutWithRules(settings.pre_exec_idle_timeout_s, validationRules),
+        preExecTargetMode: resolveInitialPreExecTargetMode(settings.pre_exec_target_mode),
+        templates: (settings.message_templates ?? []).map(({name, message}) => ({name, message})),
+    };
+}
+
+function createDraftStateFromLocalState(
+    preExecResetDelay: number,
+    preExecIdleTimeout: number,
+    preExecTargetMode: string,
+    templates: TemplateDraft[],
+): SettingsDraftState {
+    return {
+        preExecResetDelay,
+        preExecIdleTimeout,
+        preExecTargetMode,
+        templates: templates.map(({name, message}) => ({name, message})),
+    };
+}
+
+function equalSettingsDraft(left: SettingsDraftState | null, right: SettingsDraftState | null): boolean {
+    if (left === right) {
+        return true;
+    }
+    if (left === null || right === null) {
+        return false;
+    }
+    if (
+        left.preExecResetDelay !== right.preExecResetDelay ||
+        left.preExecIdleTimeout !== right.preExecIdleTimeout ||
+        left.preExecTargetMode !== right.preExecTargetMode ||
+        left.templates.length !== right.templates.length
+    ) {
+        return false;
+    }
+
+    return left.templates.every((template, index) => (
+        template.name === right.templates[index]?.name &&
+        template.message === right.templates[index]?.message
+    ));
+}
+
+function isDuplicateTemplateName(
+    templates: TemplateDraft[],
+    editing: TemplateEditState | null,
+): boolean {
+    if (!editing) {
+        return false;
+    }
+
+    const trimmedName = editing.name.trim();
+    if (trimmedName === "") {
+        return false;
+    }
+
+    return templates.some((template) => (
+        template.id !== editing.templateID &&
+        template.name.trim() === trimmedName
+    ));
+}
+
 export function TaskSchedulerSettingsPanel({
-    initialSettings,
-    onSave,
-    onBack,
-}: TaskSchedulerSettingsProps) {
+                                               initialSettings,
+                                               onSave,
+                                               onError,
+                                               onBack,
+                                               onDirtyChange,
+                                           }: TaskSchedulerSettingsProps) {
     const {language, t} = useI18n();
     const tr = (key: string, jaText: string, enText: string) =>
         t(key, language === "ja" ? jaText : enText);
 
     const [submitting, setSubmitting] = useState(false);
+    // Incremented when the baseline ref advances during a dirty edit to force
+    // re-render and recalculate hasUnsavedChanges against the new baseline.
+    const [, setBaselineVersion] = useState(0);
+    const [validationRules, setValidationRules] = useState<ValidationRules | null>(null);
+    const fieldBounds = getPreExecFieldBounds(validationRules);
+    const templateLimits = getTemplateFieldLimits(validationRules);
 
     // Pre-exec settings
     const [preExecResetDelay, setPreExecResetDelay] = useState(
-        resolveInitialPreExecResetDelay(initialSettings?.pre_exec_reset_delay_s),
+        resolveInitialPreExecResetDelayWithRules(initialSettings?.pre_exec_reset_delay_s, validationRules),
     );
     const [preExecIdleTimeout, setPreExecIdleTimeout] = useState(
-        resolveInitialPreExecIdleTimeout(initialSettings?.pre_exec_idle_timeout_s),
+        resolveInitialPreExecIdleTimeoutWithRules(initialSettings?.pre_exec_idle_timeout_s, validationRules),
     );
     const [preExecTargetMode, setPreExecTargetMode] = useState(
         resolveInitialPreExecTargetMode(initialSettings?.pre_exec_target_mode),
@@ -74,10 +166,79 @@ export function TaskSchedulerSettingsPanel({
         () => (initialSettings?.message_templates ?? []).map((template) => createTemplateDraft(template)),
     );
     const [editing, setEditing] = useState<TemplateEditState | null>(null);
+    const syncedDraftRef = useRef<SettingsDraftState | null>(
+        initialSettings ? createSettingsDraftState(initialSettings, validationRules) : null,
+    );
+    const currentDraft = useMemo(() => createDraftStateFromLocalState(
+        preExecResetDelay,
+        preExecIdleTimeout,
+        preExecTargetMode,
+        templates,
+    ), [preExecIdleTimeout, preExecResetDelay, preExecTargetMode, templates]);
+    const settingsLoaded = syncedDraftRef.current !== null;
+    const hasUnsavedChanges = syncedDraftRef.current !== null
+        && !equalSettingsDraft(currentDraft, syncedDraftRef.current);
+
+    // The settings payload arrives asynchronously from the backend, so the form
+    // must refresh its local draft state when that source of truth changes.
+    useEffect(() => {
+        let cancelled = false;
+        void api.GetValidationRules()
+            .then((rules) => {
+                if (!cancelled) {
+                    setValidationRules(rules);
+                }
+            })
+            .catch((err: unknown) => {
+                console.warn("[task-scheduler] failed to load validation rules, using fallbacks", err);
+                if (!cancelled) {
+                    onError("Validation rules are unavailable; using fallback limits.");
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [onError]);
+
+    useEffect(() => {
+        if (initialSettings === null) {
+            syncedDraftRef.current = null;
+            return;
+        }
+
+        const nextDraft = createSettingsDraftState(initialSettings, validationRules);
+        // Always advance the baseline so dirty comparison uses the latest
+        // backend state, even when the user has in-progress edits.
+        // hasUnsavedChanges is computed during render against the PREVIOUS
+        // baseline, so it correctly reflects whether the user had pending edits
+        // before this settings update arrived.
+        syncedDraftRef.current = nextDraft;
+
+        if (hasUnsavedChanges || editing !== null) {
+            // Force re-render so hasUnsavedChanges recalculates against the
+            // updated baseline. Without this, the ref mutation alone would not
+            // trigger a re-render and dirty state would remain stale.
+            setBaselineVersion((v) => v + 1);
+            return;
+        }
+
+        setPreExecResetDelay(nextDraft.preExecResetDelay);
+        setPreExecIdleTimeout(nextDraft.preExecIdleTimeout);
+        setPreExecTargetMode(nextDraft.preExecTargetMode);
+        setTemplates(nextDraft.templates.map((template) => createTemplateDraft(template)));
+        setEditing(null);
+    }, [editing, hasUnsavedChanges, initialSettings, validationRules]);
+
+    useEffect(() => {
+        onDirtyChange?.(hasUnsavedChanges);
+    }, [hasUnsavedChanges, onDirtyChange]);
 
     const handleAddTemplate = useCallback(() => {
+        if (templates.length >= templateLimits.maxMessageTemplates) {
+            return;
+        }
         setEditing({mode: "add", templateID: null, name: "", message: ""});
-    }, []);
+    }, [templateLimits.maxMessageTemplates, templates.length]);
 
     const handleEditTemplate = useCallback((templateID: string) => {
         const tmpl = templates.find((template) => template.id === templateID);
@@ -94,9 +255,18 @@ export function TaskSchedulerSettingsPanel({
         const name = editing.name.trim();
         const message = editing.message.trim();
         if (name === "" || message === "") return;
+        if (name.length > templateLimits.maxTemplateNameLen || message.length > templateLimits.maxTemplateMessageLen) {
+            return;
+        }
+        if (isDuplicateTemplateName(templates, editing)) {
+            return;
+        }
 
         const entry = {name, message};
         if (editing.mode === "add") {
+            if (templates.length >= templateLimits.maxMessageTemplates) {
+                return;
+            }
             setTemplates((prev) => [...prev, createTemplateDraft(entry)]);
         } else {
             setTemplates((prev) =>
@@ -108,26 +278,33 @@ export function TaskSchedulerSettingsPanel({
             );
         }
         setEditing(null);
-    }, [editing]);
+    }, [editing, templateLimits.maxMessageTemplates, templateLimits.maxTemplateMessageLen, templateLimits.maxTemplateNameLen, templates]);
 
     const handleCancelTemplate = useCallback(() => {
         setEditing(null);
     }, []);
 
+    const hasDuplicateTemplate = isDuplicateTemplateName(templates, editing);
     const canSaveTemplate =
+        settingsLoaded &&
         editing !== null &&
         editing.name.trim() !== "" &&
-        editing.message.trim() !== "";
+        editing.message.trim() !== "" &&
+        editing.name.trim().length <= templateLimits.maxTemplateNameLen &&
+        editing.message.trim().length <= templateLimits.maxTemplateMessageLen &&
+        !hasDuplicateTemplate;
+    const canAddTemplate = settingsLoaded && editing === null && templates.length < templateLimits.maxMessageTemplates;
 
     const handleSave = useCallback(async () => {
-        if (submitting) return;
+        if (submitting || !settingsLoaded) return;
+        onError(null);
         setSubmitting(true);
         try {
             // Re-apply resolve as a safety net: ensures the submitted values are
             // within valid bounds even if local state was somehow corrupted.
             const settings = new config.TaskSchedulerConfig({
-                pre_exec_reset_delay_s: resolveInitialPreExecResetDelay(preExecResetDelay),
-                pre_exec_idle_timeout_s: resolveInitialPreExecIdleTimeout(preExecIdleTimeout),
+                pre_exec_reset_delay_s: resolveInitialPreExecResetDelayWithRules(preExecResetDelay, validationRules),
+                pre_exec_idle_timeout_s: resolveInitialPreExecIdleTimeoutWithRules(preExecIdleTimeout, validationRules),
                 pre_exec_target_mode: preExecTargetMode,
                 message_templates: templates.map(({name, message}) => ({name, message})),
             });
@@ -135,10 +312,12 @@ export function TaskSchedulerSettingsPanel({
             if (ok) {
                 onBack();
             }
+        } catch (err: unknown) {
+            onError(toErrorMessage(err, "Failed to save task scheduler settings"));
         } finally {
             setSubmitting(false);
         }
-    }, [submitting, onSave, onBack, preExecResetDelay, preExecIdleTimeout, preExecTargetMode, templates]);
+    }, [submitting, settingsLoaded, onSave, onError, onBack, preExecResetDelay, preExecIdleTimeout, preExecTargetMode, templates, validationRules]);
 
     return (
         <div className="task-scheduler-form">
@@ -150,6 +329,16 @@ export function TaskSchedulerSettingsPanel({
                 {tr("viewer.taskScheduler.settingsTitle", "\u30b9\u30b1\u30b8\u30e5\u30fc\u30e9\u8a2d\u5b9a", "Scheduler Settings")}
             </h3>
 
+            {!settingsLoaded ? (
+                <div className="viewer-message">
+                    {tr(
+                        "viewer.taskScheduler.preExecSettingsLoading",
+                        "\u30b9\u30b1\u30b8\u30e5\u30fc\u30e9\u8a2d\u5b9a\u3092\u8aad\u307f\u8fbc\u307f\u4e2d...",
+                        "Loading scheduler settings...",
+                    )}
+                </div>
+            ) : (
+                <>
             {/* Pre-exec timing settings */}
             <div className="task-scheduler-config-section">
                 <div className="task-scheduler-config-group">
@@ -171,8 +360,8 @@ export function TaskSchedulerSettingsPanel({
                                     readNumberInput(
                                         event.target.value,
                                         prev,
-                                        preExecFieldBounds.resetDelay.min,
-                                        preExecFieldBounds.resetDelay.max,
+                                        fieldBounds.resetDelay.min,
+                                        fieldBounds.resetDelay.max,
                                     ),
                                 );
                             }}
@@ -199,8 +388,8 @@ export function TaskSchedulerSettingsPanel({
                                     readNumberInput(
                                         event.target.value,
                                         prev,
-                                        preExecFieldBounds.idleTimeout.min,
-                                        preExecFieldBounds.idleTimeout.max,
+                                        fieldBounds.idleTimeout.min,
+                                        fieldBounds.idleTimeout.max,
                                     ),
                                 );
                             }}
@@ -222,8 +411,8 @@ export function TaskSchedulerSettingsPanel({
                         <input
                             type="radio"
                             name="task-scheduler-settings-target"
-                            checked={preExecTargetMode === "task_panes"}
-                            onChange={() => setPreExecTargetMode("task_panes")}
+                            checked={preExecTargetMode === PRE_EXEC_TARGET_MODE_TASK_PANES}
+                            onChange={() => setPreExecTargetMode(PRE_EXEC_TARGET_MODE_TASK_PANES)}
                         />
                         <span>
                             {tr(
@@ -237,8 +426,8 @@ export function TaskSchedulerSettingsPanel({
                         <input
                             type="radio"
                             name="task-scheduler-settings-target"
-                            checked={preExecTargetMode === "all_panes"}
-                            onChange={() => setPreExecTargetMode("all_panes")}
+                            checked={preExecTargetMode === PRE_EXEC_TARGET_MODE_ALL_PANES}
+                            onChange={() => setPreExecTargetMode(PRE_EXEC_TARGET_MODE_ALL_PANES)}
                         />
                         <span>
                             {tr(
@@ -299,6 +488,7 @@ export function TaskSchedulerSettingsPanel({
                             onChange={(e) =>
                                 setEditing((prev) => prev && {...prev, name: e.target.value})
                             }
+                            maxLength={templateLimits.maxTemplateNameLen}
                             placeholder={tr("viewer.taskScheduler.templateName", "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u540d", "Template name")}
                         />
                         <textarea
@@ -307,8 +497,18 @@ export function TaskSchedulerSettingsPanel({
                             onChange={(e) =>
                                 setEditing((prev) => prev && {...prev, message: e.target.value})
                             }
+                            maxLength={templateLimits.maxTemplateMessageLen}
                             placeholder={tr("viewer.taskScheduler.templateMessage", "\u30e1\u30c3\u30bb\u30fc\u30b8\u672c\u6587", "Message body")}
                         />
+                        {hasDuplicateTemplate && (
+                            <div className="task-scheduler-template-error">
+                                {tr(
+                                    "viewer.taskScheduler.templateNameDuplicate",
+                                    "\u540c\u540d\u306e\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u306f\u4fdd\u5b58\u3067\u304d\u307e\u305b\u3093",
+                                    "A template with this name already exists.",
+                                )}
+                            </div>
+                        )}
                         <div className="task-scheduler-template-form-actions">
                             <button
                                 type="button"
@@ -336,17 +536,21 @@ export function TaskSchedulerSettingsPanel({
                         type="button"
                         className="task-scheduler-template-add-btn"
                         onClick={handleAddTemplate}
+                        disabled={!canAddTemplate}
                     >
                         + {tr("viewer.taskScheduler.addTemplate", "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u8ffd\u52a0", "Add Template")}
                     </button>
                 )}
             </div>
 
+                </>
+            )}
+
             <button
                 type="button"
                 className="task-scheduler-submit-btn"
                 onClick={() => void handleSave()}
-                disabled={submitting}
+                disabled={submitting || !settingsLoaded}
             >
                 {tr("viewer.taskScheduler.saveSettings", "\u4fdd\u5b58", "Save")}
             </button>

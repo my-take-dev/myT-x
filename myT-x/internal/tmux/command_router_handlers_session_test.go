@@ -47,6 +47,41 @@ func TestHandleNewSessionRollbackFailureHidesRollbackError(t *testing.T) {
 	}
 }
 
+func TestHandleNewSessionParsesStringDimensions(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+
+	router := NewCommandRouter(sessions, &captureEmitter{}, RouterOptions{ShimAvailable: true})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "new-session",
+		Flags: map[string]any{
+			"-s": "string-dim",
+			"-x": "120",
+			"-y": "40",
+		},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	session, ok := sessions.GetSession("string-dim")
+	if !ok {
+		t.Fatal("session string-dim not found")
+	}
+	if len(session.Windows) != 1 || session.Windows[0] == nil {
+		t.Fatalf("session windows = %v, want one non-nil window", session.Windows)
+	}
+	if len(session.Windows[0].Panes) != 1 || session.Windows[0].Panes[0] == nil {
+		t.Fatalf("window panes = %v, want one non-nil pane", session.Windows[0].Panes)
+	}
+
+	pane := session.Windows[0].Panes[0]
+	if pane.Width != 120 || pane.Height != 40 {
+		t.Fatalf("pane size = %dx%d, want 120x40", pane.Width, pane.Height)
+	}
+}
+
 func TestHandleAttachSession(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -264,6 +299,28 @@ func TestHandleKillSessionCallsOnSessionDestroyed(t *testing.T) {
 	}
 }
 
+func TestHandleKillSessionRecoversOnSessionDestroyedPanic(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	if _, _, err := sessions.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	router := NewCommandRouter(sessions, &captureEmitter{}, RouterOptions{
+		ShimAvailable: true,
+		OnSessionDestroyed: func(string) {
+			panic("boom")
+		},
+	})
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "kill-session",
+		Flags:   map[string]any{"-t": "demo"},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+}
+
 func TestHandleRenameSessionCallsOnSessionRenamed(t *testing.T) {
 	sessions := NewSessionManager()
 	t.Cleanup(sessions.Close)
@@ -275,9 +332,10 @@ func TestHandleRenameSessionCallsOnSessionRenamed(t *testing.T) {
 	calledNew := ""
 	router := NewCommandRouter(sessions, &captureEmitter{}, RouterOptions{
 		ShimAvailable: true,
-		OnSessionRenamed: func(oldName, newName string) {
+		OnSessionRenamed: func(oldName, newName string) error {
 			calledOld = oldName
 			calledNew = newName
+			return nil
 		},
 	})
 
@@ -291,6 +349,171 @@ func TestHandleRenameSessionCallsOnSessionRenamed(t *testing.T) {
 	}
 	if calledOld != "demo" || calledNew != "renamed" {
 		t.Fatalf("OnSessionRenamed called with (%q, %q), want (%q, %q)", calledOld, calledNew, "demo", "renamed")
+	}
+}
+
+func TestHandleRenameSessionRollsBackWhenFollowUpFails(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	if _, _, err := sessions.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{
+		ShimAvailable: true,
+		OnSessionRenamed: func(oldName, newName string) error {
+			return errors.New("follow-up failed")
+		},
+	})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "rename-session",
+		Flags:   map[string]any{"-t": "demo"},
+		Args:    []string{"renamed"},
+	})
+	if resp.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1", resp.ExitCode)
+	}
+	if !strings.Contains(resp.Stderr, "follow-up failed") {
+		t.Fatalf("stderr = %q, want follow-up failure", resp.Stderr)
+	}
+	if !sessions.HasSession("demo") {
+		t.Fatal("old session should remain after follow-up failure")
+	}
+	if sessions.HasSession("renamed") {
+		t.Fatal("new session should be rolled back after follow-up failure")
+	}
+	events := emitter.Events()
+	if len(events) != 1 {
+		t.Fatalf("event count = %d, want 1", len(events))
+	}
+	if events[0].name != "tmux:session-rename-reverted" {
+		t.Fatalf("event name = %q, want %q", events[0].name, "tmux:session-rename-reverted")
+	}
+	payload, ok := events[0].payload.(map[string]any)
+	if !ok {
+		t.Fatalf("event payload type = %T, want map[string]any", events[0].payload)
+	}
+	if payload["originalName"] != "demo" || payload["attemptedName"] != "renamed" || payload["restoredName"] != "demo" {
+		t.Fatalf("event payload = %#v, want originalName=%q attemptedName=%q restoredName=%q", payload, "demo", "renamed", "demo")
+	}
+}
+
+func TestHandleRenameSessionRecoversOnSessionRenamedPanic(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	if _, _, err := sessions.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	router := NewCommandRouter(sessions, &captureEmitter{}, RouterOptions{
+		ShimAvailable: true,
+		OnSessionRenamed: func(string, string) error {
+			panic("boom")
+		},
+	})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "rename-session",
+		Flags:   map[string]any{"-t": "demo"},
+		Args:    []string{"renamed"},
+	})
+	if resp.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1", resp.ExitCode)
+	}
+	if !strings.Contains(resp.Stderr, "OnSessionRenamed callback panicked") {
+		t.Fatalf("stderr = %q, want panic details", resp.Stderr)
+	}
+	if !sessions.HasSession("demo") {
+		t.Fatal("old session should remain after callback panic")
+	}
+	if sessions.HasSession("renamed") {
+		t.Fatal("new session should be rolled back after callback panic")
+	}
+}
+
+func TestHandleRenameSessionRollbackFailureCallsOnSessionRenameRollbackFailed(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	if _, _, err := sessions.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	emitter := &captureEmitter{}
+	calledOld := ""
+	calledNew := ""
+	router := NewCommandRouter(sessions, emitter, RouterOptions{
+		ShimAvailable: true,
+		OnSessionRenamed: func(oldName, newName string) error {
+			if _, _, err := sessions.CreateSession(oldName, "replacement", 120, 40); err != nil {
+				t.Fatalf("CreateSession(%q) error = %v", oldName, err)
+			}
+			return errors.New("follow-up failed")
+		},
+		OnSessionRenameRollbackFailed: func(oldName, newName string) {
+			calledOld = oldName
+			calledNew = newName
+		},
+	})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "rename-session",
+		Flags:   map[string]any{"-t": "demo"},
+		Args:    []string{"renamed"},
+	})
+	if resp.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1", resp.ExitCode)
+	}
+	if !strings.Contains(resp.Stderr, "follow-up failed") {
+		t.Fatalf("stderr = %q, want follow-up failure", resp.Stderr)
+	}
+	if !strings.Contains(resp.Stderr, "rollback also failed") {
+		t.Fatalf("stderr = %q, want rollback failure details", resp.Stderr)
+	}
+	if calledOld != "demo" || calledNew != "renamed" {
+		t.Fatalf("OnSessionRenameRollbackFailed called with (%q, %q), want (%q, %q)", calledOld, calledNew, "demo", "renamed")
+	}
+	if len(emitter.Events()) != 0 {
+		t.Fatalf("event count = %d, want 0 when rollback failure callback handles reconciliation", len(emitter.Events()))
+	}
+}
+
+func TestHandleRenameSessionRollbackFailureRecoversOnRollbackFailedCallbackPanic(t *testing.T) {
+	sessions := NewSessionManager()
+	t.Cleanup(sessions.Close)
+	if _, _, err := sessions.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	emitter := &captureEmitter{}
+	router := NewCommandRouter(sessions, emitter, RouterOptions{
+		ShimAvailable: true,
+		OnSessionRenamed: func(oldName, newName string) error {
+			if _, _, err := sessions.CreateSession(oldName, "replacement", 120, 40); err != nil {
+				t.Fatalf("CreateSession(%q) error = %v", oldName, err)
+			}
+			return errors.New("follow-up failed")
+		},
+		OnSessionRenameRollbackFailed: func(string, string) {
+			panic("boom")
+		},
+	})
+
+	resp := router.Execute(ipc.TmuxRequest{
+		Command: "rename-session",
+		Flags:   map[string]any{"-t": "demo"},
+		Args:    []string{"renamed"},
+	})
+	if resp.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1", resp.ExitCode)
+	}
+	events := emitter.Events()
+	if len(events) != 1 {
+		t.Fatalf("event count = %d, want 1", len(events))
+	}
+	if events[0].name != "tmux:session-renamed" {
+		t.Fatalf("event name = %q, want %q", events[0].name, "tmux:session-renamed")
 	}
 }
 

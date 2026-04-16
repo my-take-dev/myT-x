@@ -66,10 +66,10 @@ func run() int {
 	}
 
 	err = wails.Run(&options.App{
-		Title:     "myT-x v1.0.3",
+		Title:     "myT-x v1.0.7",
 		Width:     1440,
 		Height:    900,
-		MinWidth:  980,
+		MinWidth:  980, // Keep in sync with DOCKED_WINDOW_MIN_WIDTH in frontend viewerDocking.ts.
 		MinHeight: 620,
 		AssetServer: &assetserver.Options{
 			Assets: assets,

@@ -53,7 +53,7 @@ export function fileEntriesToNodes(entries: readonly FileEntry[]): readonly File
         name: entry.name,
         path: normalizePath(entry.path),
         isDir: entry.is_dir,
-        hasChildren: entry.is_dir ? entry.has_children ?? true : false,
+        hasChildren: entry.is_dir ? entry.has_children : false,
         size: entry.is_dir ? undefined : entry.size,
     }));
 }
@@ -204,10 +204,11 @@ export function renamePathInTree(
             return nextNode;
         }
 
+        const nextPath = remapNodePath(nextNode.path, normalizedOldPath, normalizedNewPath);
         return {
             ...nextNode,
-            path: remapNodePath(nextNode.path, normalizedOldPath, normalizedNewPath),
-            name: remapNodePath(nextNode.path, normalizedOldPath, normalizedNewPath).split("/").pop() ?? nextNode.name,
+            path: nextPath,
+            name: nextPath.split("/").pop() ?? nextNode.name,
         };
     });
 }

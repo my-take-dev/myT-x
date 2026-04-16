@@ -1,5 +1,97 @@
 # Changelog
 
+## v1.0.7
+
+### Git Worktree セッション作成ロジック改善（`snoopy-humming-mist`）
+
+複数レイヤ（Wails API → worktree service → git CLI → tmux session → setup scripts → フロントエンド UI）を貫く `CreateSessionWithWorktree` 周辺の安定性・UX・プラットフォーム安全性を改善。
+
+---
+
+## v1.0.6
+
+### ビューアシステム
+
+- **File View**（旧 File Tree）への拡張（`Ctrl+Shift+E`）
+  - View ID を `file-tree` → `file-view` に改名（表示名「ファイルビュー」、旧設定との後方互換あり）
+  - 拡張子フィルタを常時適用（`.md` / `.mmd` / `.drawio` / `.drawio.svg` / `.drawio.xml` / `.yaml` / `.yml` / `.json`）
+
+- **SQLite Viewer** を File View に統合
+  - `.db` / `.sqlite` / `.sqlite3` ファイル選択時に SQLite Renderer で開く
+  - テーブル一覧（左ペイン）+ カラム情報 + 行データ（仮想スクロール）の 2 ペインレイアウト
+  - 行データのページング（前へ / 次へ）と CSV エクスポート
+
+- **Prompt Presets**（固定プロンプト登録、`Ctrl+Shift+P`）
+  - プロンプトテンプレート（名前 + 本文）の CRUD・並び替え
+  - グローバル保存（`%LOCALAPPDATA%\myT-x\prompt-presets.json`）と
+    プロジェクト保存（`{root}\.myT-x\prompt-presets.json`）の 2 スコープ対応
+  - チャット入力欄フッターに `PromptPresetSelector` 追加（ドロップダウンから本文をテキストエリア末尾に追記）
+  - 最大 200 件、UUID v4 ID、`order` フィールドで UI ソート、原子的 JSON 書込
+  - 右サイドバープラグインとして編集用 Viewer を提供
+
+---
+
+## v1.0.5
+
+### ビューアシステム
+
+- 使用状況ダッシュボード（Usage Dashboard）に `recharts` を統合（`Ctrl+Shift+U`）
+  - 日次活動グラフ（30 日窓 BarChart）の描画ライブラリとして `recharts@2` を採用
+
+---
+
+## v1.0.4
+
+### MCPオーケストレーター
+
+- **`add_members` ツール追加**（19 ツール体制、`fancy-greeting-star`）
+  - `add_member` のバッチ版。1〜10 名のメンバーを一括追加
+  - 二段階アプローチ（Phase 1: ペイン分割 + CLI 起動を高速連続 / Phase 2: 全 CLI 起動後に一回だけ待ち → ブートストラップ送信）
+  - 10 メンバー作成時間を従来 ~38s → ~14s（約 63% 短縮）
+  - 個別メンバーの失敗は全体を停止せず、`results[]` に `error` を記録
+
+### Single Task Runner（新機能、`shimmering-twirling-bee`）
+
+- オーケストレーター不要の軽量タスクランナーを新設（`Ctrl+Shift+J`）
+  - 対象ペインを 1 つ指定して順次実行（エージェント登録不要）
+  - In-memory + SQLite キュー、チャネルベースの完了検知（DB ポーリングなし）
+  - `last_stop_reason` フィールドで停止理由を表示
+  - `clear_before` precondition の strict/best-effort 契約を明示
+
+- 6 つの MCP ツール提供
+  - `enqueue_task` / `complete_task` / `fail_task` / `list_queue` / `cancel_task` / `help`
+
+- 右サイドバープラグインとして List / Form ビューを実装
+  - List: タスク状態（pending / sending / active / done / failed / cancelled）を表示
+  - Form: タイトル + メッセージ + クリア前実行オプション
+
+### Usage Dashboard（新機能、`purrfect-brewing-rainbow`）
+
+- Claude Code + Codex 利用統計の右サイドバープラグインを新設（`Ctrl+Shift+U`）
+  - [Claude] / [Codex] / [Both] タブ切替
+  - 概要カード、トップエージェント、トップスキル、トップスラッシュコマンド、30 日間日次アクティビティ
+
+
+### MCP Manager（`immutable-squishing-candy` / `polymorphic-purring-feather`）
+
+- Single Task Runner カテゴリを追加（3 カテゴリ体制）
+  - Agent Orchestrator / Single Task Runner / LSP-MCP の 3 つに整理
+  - `useMcpManager` に `isStrMcp()` フィルタを追加
+  - `SingleTaskRunnerDetailPanel.tsx` 新設
+
+### チャット入力（`declarative-petting-thimble` / `wiggly-tinkering-bonbon`）
+
+- ChatInputBar をオーバーレイ → ドッキングレイアウトへ移行
+  - `ChatLayout.tsx` ラッパー新設、4 方向アンカー（上/下/左/右）対応
+  - `ChatDivider.tsx` ドラッグハンドル追加、比率ベースサイズ管理（デフォルト 40%）
+  - 既存 absolute positioning とアニメーションを除去
+
+- ペインごとの `PaneChatBar` を追加
+  - 各ターミナルペイン下部に常時表示の薄いバー（~30px）
+  - クリックで対象ペインを指定して ChatLayout を展開
+  - `chatStore.ts` （Zustand）で `requestOpen` / `clearRequest` を共有
+---
+
 ## v1.0.3
 
 ### MCPオーケストレーター
@@ -102,6 +194,15 @@
   - `set-option` コマンド追加（ペインボーダー色設定、no-op実装）
   - `select-layout` コマンド追加（レイアウト整列、no-op実装）
 
+### 開発ツール
+
+- Claude Code ログ解析ツール追加（`tools/claude-log-analyzer/`）
+  - JSONL形式のセッションログからエージェント・スキル使用統計を集計・表示
+  - フィルタ: `--type`, `--top`, `--since`, `--branch`, `--project`
+
+- Codex ログ解析ツール追加（`tools/codex-log-analyzer/`）
+  - SQLite（`logs_1.sqlite`, `state_5.sqlite`）+ `history.jsonl` からCodexの使用統計を集計
+  - データソース優先順位: SQLite → history.jsonl → codex-tui.log
 
 ---
 

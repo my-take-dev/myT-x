@@ -219,11 +219,7 @@ func (r *CommandRouter) handleKillWindow(req ipc.TmuxRequest) ipc.TmuxResponse {
 		}
 	}
 
-	if result.SessionRemoved {
-		r.emitter.Emit("tmux:session-destroyed", map[string]any{
-			"name": sessionName,
-		})
-	} else if result.SessionEmptied {
+	if result.SessionEmptied {
 		r.emitter.Emit("tmux:session-emptied", map[string]any{
 			"name": sessionName,
 		})

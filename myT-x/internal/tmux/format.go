@@ -56,6 +56,17 @@ func formatPaneLine(pane *TmuxPane, customFormat string) string {
 	return expandFormat(format, pane)
 }
 
+func formatPaneLineSafe(pane *TmuxPane, customFormat string, sessions *SessionManager) string {
+	format := strings.TrimSpace(customFormat)
+	if format == "" {
+		format = defaultPaneListFormat
+	}
+	if pane == nil {
+		return expandFormat(format, nil)
+	}
+	return expandFormatSafeWithFallback(format, pane.ID, pane, sessions)
+}
+
 func firstPaneInSession(session *TmuxSession) *TmuxPane {
 	window := activeWindowInSession(session)
 	if window == nil || len(window.Panes) == 0 {
@@ -150,7 +161,7 @@ func resolveFormatExpr(expr string, pane *TmuxPane) string {
 func lookupFormatVariable(name string, pane *TmuxPane) string {
 	if pane == nil {
 		switch name {
-		case "session_name", "window_name", "pane_id", "pane_tty":
+		case "session_name", "session_id", "window_name", "window_id", "pane_id", "pane_tty":
 			return ""
 		case "session_windows", "window_index", "window_panes", "window_active", "pane_index", "pane_width", "pane_height", "pane_active", "session_created":
 			return "0"
@@ -191,17 +202,19 @@ func lookupFormatVariable(name string, pane *TmuxPane) string {
 	case "pane_title":
 		return pane.Title
 	case "window_index":
-		// Returns the stable window.ID (monotonically increasing, never reused).
-		// In real tmux, window_index is a positional index that can shift on
-		// removal/reorder. myT-x uses window.ID instead, which is stable.
-		// Target resolution (resolveWindowPaneTarget, ListPanesByWindowTarget)
-		// treats bare numeric targets as window IDs, so the output of
-		// #{window_index} is directly usable as a target — matching real tmux
-		// behavior where #{window_index} output round-trips through -t targeting.
-		if window == nil {
+		if window == nil || session == nil {
 			return "0"
 		}
-		return strconv.Itoa(window.ID)
+		windowIdx := findWindowIndexByID(session.Windows, window.ID)
+		if windowIdx < 0 {
+			return "0"
+		}
+		return strconv.Itoa(windowIdx)
+	case "window_id":
+		if window == nil {
+			return ""
+		}
+		return formatWindowID(window.ID)
 	case "window_name":
 		if window == nil {
 			return ""
@@ -226,6 +239,11 @@ func lookupFormatVariable(name string, pane *TmuxPane) string {
 			return ""
 		}
 		return session.Name
+	case "session_id":
+		if session == nil {
+			return ""
+		}
+		return formatSessionID(session.ID)
 	case "session_windows":
 		if session == nil {
 			return "0"

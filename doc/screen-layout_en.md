@@ -129,14 +129,18 @@ A vertical bar of icons for opening viewers.
 
 | Icon | Viewer | Shortcut |
 |------|--------|----------|
-| 📁 | File Tree | Ctrl+Shift+E |
+| ✏ | Editor | Ctrl+Shift+O |
+| 📁 | File View | Ctrl+Shift+E |
 | 🌿 | Git Graph | Ctrl+Shift+G |
 | ± | Diff | Ctrl+Shift+D |
 | 📜 | Input History | Ctrl+Shift+H |
 | 🔌 | MCP Manager | Ctrl+Shift+M |
 | ⏱ | Pane Scheduler | Ctrl+Shift+K |
 | 📋 | Task Scheduler | Ctrl+Shift+Q |
+| 🔁 | Single Task Runner | Ctrl+Shift+J |
 | 👥 | Orchestrator Teams | Ctrl+Shift+T |
+| 📊 | Usage Dashboard | Ctrl+Shift+U |
+| 📌 | Prompt Presets | Ctrl+Shift+P |
 | ⚠ | Error Log | Ctrl+Shift+L |
 
 - Click an icon to open its viewer; click again or press `Escape` to close
@@ -147,27 +151,36 @@ A vertical bar of icons for opening viewers.
 
 ## Chat Input Bar
 
-Located at the bottom of the main area for sending messages to panes.
+A dockable message-sending panel attached to the edge of the main area.
+Switched from overlay to docked layout in v1.0.4 so it no longer covers the terminal.
 
 ### Collapsed
 - Shows pane number and name
 - Click to expand
 
-### Expanded (Floating Window)
+### Expanded (Docked Panel)
+
+The chat panel docks to any edge (top, bottom, left, or right) of the main area. Drag the divider handle to resize.
 
 | Element | Description |
 |---------|-------------|
 | Pane selector buttons | Choose which pane to send to |
 | Text area | Enter your message (multiline supported) |
-| **½** button | Toggle half-size overlay |
-| Arrow buttons (↗↖↙↘) | Reposition the input panel |
+| **½** button | Toggle half-size panel |
+| Anchor buttons (↑↓←→) | Change docking direction (top / bottom / left / right) |
 | **Auto close** checkbox | Close the panel automatically after sending |
+| Prompt Presets | Append a registered preset body to the text area |
 | **Send** button | Send the message (also Ctrl+Enter) |
+
+### Per-pane Chat Bar (PaneChatBar)
+
+A thin always-visible shortcut bar at the bottom of every terminal pane (added in v1.0.4).
+Click it to expand the chat input panel pre-targeted to that pane — no need to scroll when many panes are open.
 
 ---
 
 ## Next Steps
 
 - [Terminal Operations](terminal-operations_en.md) — Detailed pane splitting and input guide
-- [Viewer System](viewer-system_en.md) — All 9 viewers explained
+- [Viewer System](viewer-system_en.md) — All 13 viewers explained
 - [Settings](settings_en.md) — Customization options

@@ -97,7 +97,7 @@ func (r *CommandRouter) runShellAsTmuxCommands(commands string, background bool)
 			if part == "" {
 				continue
 			}
-			tmuxReq := parseTmuxCommandLine(part)
+			tmuxReq := ParseTmuxCommandLine(part)
 			if tmuxReq.Command == "" {
 				continue
 			}

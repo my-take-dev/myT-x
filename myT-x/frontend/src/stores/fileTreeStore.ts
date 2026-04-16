@@ -20,6 +20,7 @@ interface FileTreeState {
     readonly error: string | null;
     readonly contentError: string | null;
     readonly dirError: string | null;
+    readonly watcherError: string | null;
 }
 
 interface FileTreeActions {
@@ -37,6 +38,7 @@ interface FileTreeActions {
     readonly setError: (error: string | null) => void;
     readonly setContentError: (error: string | null) => void;
     readonly setDirError: (error: string | null) => void;
+    readonly setWatcherError: (error: string | null) => void;
 }
 
 export type FileTreeStore = StoreApi<FileTreeState & FileTreeActions>;
@@ -53,6 +55,7 @@ function createInitialState(): FileTreeState {
         error: null,
         contentError: null,
         dirError: null,
+        watcherError: null,
     };
 }
 
@@ -156,5 +159,6 @@ export function createFileTreeStore(): FileTreeStore {
         setError: (error) => set({error}),
         setContentError: (contentError) => set({contentError}),
         setDirError: (dirError) => set({dirError}),
+        setWatcherError: (watcherError) => set({watcherError}),
     }));
 }

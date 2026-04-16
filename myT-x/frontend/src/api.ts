@@ -45,7 +45,11 @@ import {
     DevPanelGitUnstageAll,
     DevPanelListBranches,
     DevPanelListDir,
+    DevPanelReadBinary,
     DevPanelReadFile,
+    DevPanelSqliteExportCSV,
+    DevPanelSqliteListTables,
+    DevPanelSqliteQueryTable,
     DevPanelRenameFile,
     DevPanelSearchFiles,
     DevPanelStartWatcher,
@@ -95,8 +99,12 @@ import {
     SwapPanes,
     OpenDirectoryInExplorer,
     LoadOrchestratorTeams,
+    LoadPromptPresets as LoadPromptPresetsRaw,
     SaveOrchestratorTeam,
+    SavePromptPreset,
     DeleteOrchestratorTeam,
+    DeletePromptPreset,
+    ReorderPromptPresets,
     SendChatMessage,
     StartOrchestratorTeam,
     ListOrchestratorTasks,
@@ -107,6 +115,7 @@ import {
 import type {MCPSnapshot} from "./types/mcp";
 import {normalizeMCPSnapshot, normalizeMCPSnapshots} from "./types/mcp";
 import type {ValidationRules} from "./types/tmux";
+import type {PromptPresetLoadResult} from "./components/viewer/views/prompt-presets/types";
 
 async function ListMCPServers(sessionName: string): Promise<MCPSnapshot[]> {
     const result = await ListMCPServersRaw(sessionName);
@@ -121,6 +130,10 @@ async function GetMCPDetail(sessionName: string, mcpID: string): Promise<MCPSnap
         throw new Error("GetMCPDetail returned an invalid MCP payload");
     }
     return normalized;
+}
+
+async function LoadPromptPresets(sessionName: string): Promise<PromptPresetLoadResult> {
+    return await LoadPromptPresetsRaw(sessionName) as unknown as PromptPresetLoadResult;
 }
 
 export const api = {
@@ -174,7 +187,11 @@ export const api = {
     CleanupWorktree,
     GetWebSocketURL,
     DevPanelListDir,
+    DevPanelReadBinary,
     DevPanelReadFile,
+    DevPanelSqliteListTables,
+    DevPanelSqliteQueryTable,
+    DevPanelSqliteExportCSV,
     DevPanelGetFileInfo,
     DevPanelWriteFile,
     DevPanelCreateFile,
@@ -205,8 +222,12 @@ export const api = {
     LogFrontendEvent,
     OpenDirectoryInExplorer,
     LoadOrchestratorTeams,
+    LoadPromptPresets,
     SaveOrchestratorTeam,
+    SavePromptPreset,
     DeleteOrchestratorTeam,
+    DeletePromptPreset,
+    ReorderPromptPresets,
     SendChatMessage,
     StartOrchestratorTeam,
     ListOrchestratorTasks,

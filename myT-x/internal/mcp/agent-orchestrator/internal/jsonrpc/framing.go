@@ -2,6 +2,7 @@ package jsonrpc
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,8 @@ const (
 )
 
 const MaxFrameBytes int64 = 4 << 20
+const maxHeaderBytes int64 = 16 << 10
+const maxHeaderLineBytes int64 = 4096
 
 var ErrFrameTooLarge = fmt.Errorf("json-rpc frame exceeds %d bytes", MaxFrameBytes)
 
@@ -32,8 +35,7 @@ func ReadMessage(reader *bufio.Reader) ([]byte, error) {
 // ReadMessageWithFraming は 1 件の JSON-RPC メッセージを読み込み、使用されたフレーミングを返す。
 func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 	for {
-		limited := &io.LimitedReader{R: reader, N: MaxFrameBytes + 1}
-		line, err := readLineFromLimited(limited)
+		line, used, err := readLineWithLimit(reader, MaxFrameBytes+1)
 		if err != nil {
 			return nil, FramingUnknown, err
 		}
@@ -45,7 +47,13 @@ func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 
 		linePayload := strings.TrimSpace(trimmed)
 		if strings.HasPrefix(linePayload, "{") || strings.HasPrefix(linePayload, "[") {
+			if int64(len(linePayload)) > MaxFrameBytes {
+				return nil, FramingUnknown, ErrFrameTooLarge
+			}
 			return []byte(linePayload), FramingLineJSON, nil
+		}
+		if used > maxHeaderLineBytes || used > maxHeaderBytes {
+			return nil, FramingUnknown, ErrFrameTooLarge
 		}
 
 		contentLength, err := parseContentLengthHeader(trimmed)
@@ -53,11 +61,16 @@ func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 			return nil, FramingUnknown, err
 		}
 
+		headerBytesRemaining := maxHeaderBytes - used
 		for {
-			line, err = readLineFromLimited(limited)
+			if headerBytesRemaining <= 0 {
+				return nil, FramingUnknown, ErrFrameTooLarge
+			}
+			line, used, err = readLineWithLimit(reader, minInt64(maxHeaderLineBytes, headerBytesRemaining))
 			if err != nil {
 				return nil, FramingUnknown, err
 			}
+			headerBytesRemaining -= used
 
 			trimmed = strings.TrimRight(line, "\r\n")
 			if trimmed == "" {
@@ -81,10 +94,7 @@ func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 		}
 
 		payload := make([]byte, contentLength)
-		if _, err := io.ReadFull(limited, payload); err != nil {
-			if errors.Is(err, io.EOF) && limited.N == 0 {
-				return nil, FramingUnknown, ErrFrameTooLarge
-			}
+		if _, err := io.ReadFull(reader, payload); err != nil {
 			return nil, FramingUnknown, err
 		}
 
@@ -92,25 +102,42 @@ func ReadMessageWithFraming(reader *bufio.Reader) ([]byte, Framing, error) {
 	}
 }
 
-func readLineFromLimited(reader *io.LimitedReader) (string, error) {
-	var b strings.Builder
-	var buf [1]byte
-
+func readLineWithLimit(reader *bufio.Reader, maxBytes int64) (string, int64, error) {
+	var b bytes.Buffer
+	var used int64
 	for {
-		n, err := reader.Read(buf[:])
-		if n > 0 {
-			b.WriteByte(buf[0])
-			if buf[0] == '\n' {
-				return b.String(), nil
-			}
+		chunk, err := reader.ReadSlice('\n')
+		if int64(len(chunk)) > maxBytes-used {
+			return "", 0, ErrFrameTooLarge
 		}
-		if err != nil {
-			if errors.Is(err, io.EOF) && reader.N == 0 {
-				return "", ErrFrameTooLarge
+		if len(chunk) > 0 {
+			used += int64(len(chunk))
+			b.Write(chunk)
+		}
+		switch {
+		case err == nil:
+			return b.String(), used, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			if used >= maxBytes {
+				return "", 0, ErrFrameTooLarge
 			}
-			return "", err
+			continue
+		case errors.Is(err, io.EOF):
+			if used == 0 {
+				return "", 0, io.EOF
+			}
+			return "", 0, io.ErrUnexpectedEOF
+		default:
+			return "", 0, err
 		}
 	}
+}
+
+func minInt64(a int64, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func parseContentLengthHeader(line string) (int, error) {

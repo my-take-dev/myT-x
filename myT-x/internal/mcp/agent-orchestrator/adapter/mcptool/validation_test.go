@@ -1,6 +1,7 @@
 package mcptool
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -205,6 +206,118 @@ func TestRequiredBatchTasks(t *testing.T) {
 	}
 }
 
+func TestRequiredBatchTasksRejectsEmptyList(t *testing.T) {
+	_, err := requiredBatchTasks(map[string]any{"tasks": []any{}}, "tasks")
+	if err == nil || err.Error() != "tasks must contain at least 1 item" {
+		t.Fatalf("requiredBatchTasks error = %v", err)
+	}
+}
+
+func TestRequiredBatchTasksRejectsTooManyItems(t *testing.T) {
+	_, err := requiredBatchTasks(map[string]any{"tasks": makeObjectAnySlice(11)}, "tasks")
+	if err == nil || err.Error() != "tasks must contain 10 items or fewer" {
+		t.Fatalf("requiredBatchTasks error = %v", err)
+	}
+}
+
+func TestRequiredBatchMembers(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    map[string]any
+		wantLen int
+		wantErr string
+	}{
+		{
+			name: "valid",
+			args: map[string]any{
+				"members": []any{
+					map[string]any{"pane_title": "worker", "role": "implement", "command": "claude"},
+					map[string]any{"pane_title": "reviewer", "role": "review", "command": "python"},
+				},
+			},
+			wantLen: 2,
+		},
+		{
+			name:    "exactly max members",
+			args:    map[string]any{"members": makeObjectAnySlice(10)},
+			wantLen: 10,
+		},
+		{
+			name:    "missing key",
+			args:    map[string]any{},
+			wantErr: "members is required",
+		},
+		{
+			name:    "nil value",
+			args:    map[string]any{"members": nil},
+			wantErr: "members is required",
+		},
+		{
+			name:    "not array",
+			args:    map[string]any{"members": "worker"},
+			wantErr: "members must be an array",
+		},
+		{
+			name:    "item not object",
+			args:    map[string]any{"members": []any{"worker"}},
+			wantErr: "members[0] must be an object",
+		},
+		{
+			name: "missing pane_title",
+			args: map[string]any{
+				"members": []any{
+					map[string]any{"role": "implement", "command": "claude"},
+				},
+			},
+			wantErr: "members[0]: pane_title is required",
+		},
+		{
+			name: "missing role",
+			args: map[string]any{
+				"members": []any{
+					map[string]any{"pane_title": "worker", "command": "claude"},
+				},
+			},
+			wantErr: "members[0]: role is required",
+		},
+		{
+			name: "missing command",
+			args: map[string]any{
+				"members": []any{
+					map[string]any{"pane_title": "worker", "role": "implement"},
+				},
+			},
+			wantErr: "members[0]: command is required",
+		},
+		{
+			name:    "too many members",
+			args:    map[string]any{"members": makeObjectAnySlice(11)},
+			wantErr: "members must contain 10 items or fewer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := requiredBatchMembers(tt.args, "members")
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if err.Error() != tt.wantErr {
+					t.Fatalf("error = %q, want %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("requiredBatchMembers: %v", err)
+			}
+			if len(got) != tt.wantLen {
+				t.Fatalf("len(got) = %d, want %d", len(got), tt.wantLen)
+			}
+		})
+	}
+}
+
 func TestOptionalSkillListFormats(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -341,6 +454,18 @@ func makeStringAnySlice(count int, value string) []any {
 	items := make([]any, 0, count)
 	for range count {
 		items = append(items, value)
+	}
+	return items
+}
+
+func makeObjectAnySlice(count int) []any {
+	items := make([]any, 0, count)
+	for i := range count {
+		items = append(items, map[string]any{
+			"pane_title": fmt.Sprintf("worker-%d", i),
+			"role":       "implement",
+			"command":    "claude",
+		})
 	}
 	return items
 }

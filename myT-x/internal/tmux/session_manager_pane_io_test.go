@@ -201,6 +201,185 @@ func TestListPanesByWindowTargetStableIDInvalid(t *testing.T) {
 	}
 }
 
+func TestListPanesByWindowTargetBareWindowID_SingleSession(t *testing.T) {
+	manager := NewSessionManager()
+	session, pane, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	panes, err := manager.ListPanesByWindowTarget(formatWindowID(session.Windows[0].ID), -1, false)
+	if err != nil {
+		t.Fatalf("ListPanesByWindowTarget(@windowID) error = %v", err)
+	}
+	if len(panes) != 1 {
+		t.Fatalf("pane count = %d, want 1", len(panes))
+	}
+	if panes[0].ID != pane.ID {
+		t.Fatalf("resolved pane ID = %d, want %d", panes[0].ID, pane.ID)
+	}
+}
+
+func TestListPanesByWindowTargetBareWindowID_MultiSession(t *testing.T) {
+	manager := NewSessionManager()
+	firstSession, firstPane, err := manager.CreateSession("first", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(first) error = %v", err)
+	}
+	secondSession, secondPane, err := manager.CreateSession("second", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(second) error = %v", err)
+	}
+
+	firstPanes, err := manager.ListPanesByWindowTarget(formatWindowID(firstSession.Windows[0].ID), -1, false)
+	if err != nil {
+		t.Fatalf("ListPanesByWindowTarget(first @windowID) error = %v", err)
+	}
+	if len(firstPanes) != 1 || firstPanes[0].ID != firstPane.ID {
+		t.Fatalf("first target resolved panes = %#v, want pane %d", firstPanes, firstPane.ID)
+	}
+
+	secondPanes, err := manager.ListPanesByWindowTarget(formatWindowID(secondSession.Windows[0].ID), -1, false)
+	if err != nil {
+		t.Fatalf("ListPanesByWindowTarget(second @windowID) error = %v", err)
+	}
+	if len(secondPanes) != 1 || secondPanes[0].ID != secondPane.ID {
+		t.Fatalf("second target resolved panes = %#v, want pane %d", secondPanes, secondPane.ID)
+	}
+}
+
+func TestListPanesByWindowTargetBareWindowID_NotFound(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	_, err := manager.ListPanesByWindowTarget("@9999", -1, false)
+	if err == nil {
+		t.Fatal("expected error for non-existent bare window ID, got nil")
+	}
+	if !strings.Contains(err.Error(), "window id not found: 9999") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "window id not found: 9999")
+	}
+}
+
+func TestListPanesByWindowTargetBareWindowID_Malformed(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{name: "non-numeric", target: "@abc"},
+		{name: "negative", target: "@-1"},
+		{name: "empty suffix", target: "@"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := manager.ListPanesByWindowTarget(tt.target, -1, false)
+			if err == nil {
+				t.Fatalf("expected error for target %q, got nil", tt.target)
+			}
+			if !strings.Contains(err.Error(), "invalid window id:") {
+				t.Fatalf("error = %q, want substring %q", err.Error(), "invalid window id:")
+			}
+		})
+	}
+}
+
+func TestListPanesByWindowTargetBareWindowID_AllInSession(t *testing.T) {
+	manager := NewSessionManager()
+	firstSession, firstPane, err := manager.CreateSession("first", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(first) error = %v", err)
+	}
+	firstSplit, err := manager.SplitPane(firstPane.ID, SplitHorizontal)
+	if err != nil {
+		t.Fatalf("SplitPane(first) error = %v", err)
+	}
+	if _, _, err := manager.CreateSession("second", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession(second) error = %v", err)
+	}
+
+	panes, err := manager.ListPanesByWindowTarget(formatWindowID(firstSession.Windows[0].ID), -1, true)
+	if err != nil {
+		t.Fatalf("ListPanesByWindowTarget(@windowID, allInSession) error = %v", err)
+	}
+	if len(panes) != 2 {
+		t.Fatalf("pane count = %d, want 2", len(panes))
+	}
+	paneIDs := map[int]bool{}
+	for _, p := range panes {
+		paneIDs[p.ID] = true
+	}
+	if !paneIDs[firstPane.ID] || !paneIDs[firstSplit.ID] {
+		t.Fatalf("allInSession panes = %#v, want pane IDs %d and %d", panes, firstPane.ID, firstSplit.ID)
+	}
+}
+
+func TestListPanesByWindowTargetBareWindowID_WithSplitPane(t *testing.T) {
+	manager := NewSessionManager()
+	session, pane, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	secondPane, err := manager.SplitPane(pane.ID, SplitHorizontal)
+	if err != nil {
+		t.Fatalf("SplitPane() error = %v", err)
+	}
+
+	panes, err := manager.ListPanesByWindowTarget(formatWindowID(session.Windows[0].ID), -1, false)
+	if err != nil {
+		t.Fatalf("ListPanesByWindowTarget(@windowID) error = %v", err)
+	}
+	if len(panes) != 2 {
+		t.Fatalf("pane count = %d, want 2", len(panes))
+	}
+	paneIDs := map[int]bool{}
+	for _, p := range panes {
+		paneIDs[p.ID] = true
+	}
+	if !paneIDs[pane.ID] || !paneIDs[secondPane.ID] {
+		t.Fatalf("resolved panes = %#v, want pane IDs %d and %d", panes, pane.ID, secondPane.ID)
+	}
+}
+
+func TestAgentTeamsBareWindowIDRoundTrip(t *testing.T) {
+	manager := NewSessionManager()
+	_, pane, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	secondPane, err := manager.SplitPane(pane.ID, SplitHorizontal)
+	if err != nil {
+		t.Fatalf("SplitPane() error = %v", err)
+	}
+
+	windowTarget := expandFormatSafe("#{window_id}", pane.ID, manager)
+	if !strings.HasPrefix(windowTarget, "@") {
+		t.Fatalf("expandFormatSafe(window_id) = %q, want bare @N target", windowTarget)
+	}
+
+	panes, err := manager.ListPanesByWindowTarget(windowTarget, -1, false)
+	if err != nil {
+		t.Fatalf("ListPanesByWindowTarget(%q) error = %v", windowTarget, err)
+	}
+	if len(panes) != 2 {
+		t.Fatalf("pane count = %d, want 2", len(panes))
+	}
+	paneIDs := map[int]bool{}
+	for _, p := range panes {
+		paneIDs[p.ID] = true
+	}
+	if !paneIDs[pane.ID] || !paneIDs[secondPane.ID] {
+		t.Fatalf("round-trip panes = %#v, want pane IDs %d and %d", panes, pane.ID, secondPane.ID)
+	}
+}
+
 // C-05: WriteToPanesInWindow tests covering:
 // - Normal: multiple panes with nil Terminal are silently skipped (no error)
 // - Error: pane write failure returns first error but continues writing to remaining panes
@@ -462,9 +641,10 @@ func TestWriteToPanesInWindow_PaneKilledDuringWrite(t *testing.T) {
 	// (If we reach this line, no panic occurred — test passes.)
 }
 
-// TestListPanesByWindowTargetByID_NonZeroID verifies that bare numeric targets
-// in ListPanesByWindowTarget are resolved by window.ID (not slice index).
-func TestListPanesByWindowTargetByID_NonZeroID(t *testing.T) {
+// TestListPanesByWindowTargetByIndex_NonZeroWindowID verifies that bare
+// numeric targets in ListPanesByWindowTarget are resolved by session-local
+// window index, not global window ID.
+func TestListPanesByWindowTargetByIndex_NonZeroWindowID(t *testing.T) {
 	manager := NewSessionManager()
 
 	// First session: window.ID=0.
@@ -478,10 +658,11 @@ func TestListPanesByWindowTargetByID_NonZeroID(t *testing.T) {
 		t.Fatalf("CreateSession(second) error = %v", err)
 	}
 
-	// "second:1" must find window by ID=1, not slice index.
-	panes, listErr := manager.ListPanesByWindowTarget("second:1", -1, false)
+	// "second:0" must find the first window in the second session even though
+	// its stable ID is 1.
+	panes, listErr := manager.ListPanesByWindowTarget("second:0", -1, false)
 	if listErr != nil {
-		t.Fatalf("ListPanesByWindowTarget(%q) error = %v", "second:1", listErr)
+		t.Fatalf("ListPanesByWindowTarget(%q) error = %v", "second:0", listErr)
 	}
 	if len(panes) != 1 {
 		t.Fatalf("pane count = %d, want 1", len(panes))
@@ -491,9 +672,59 @@ func TestListPanesByWindowTargetByID_NonZeroID(t *testing.T) {
 	}
 }
 
-// TestListPanesByWindowTargetByID_NotFound verifies that a non-existent window
-// ID returns an error.
-func TestListPanesByWindowTargetByID_NotFound(t *testing.T) {
+func TestListPanesByWindowTargetSessionIDRoundTrip(t *testing.T) {
+	manager := NewSessionManager()
+	session, pane, err := manager.CreateSession("demo", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	secondPane, err := manager.SplitPane(pane.ID, SplitHorizontal)
+	if err != nil {
+		t.Fatalf("SplitPane() error = %v", err)
+	}
+
+	panes, err := manager.ListPanesByWindowTarget(formatSessionID(session.ID), -1, false)
+	if err != nil {
+		t.Fatalf("ListPanesByWindowTarget($sessionID) error = %v", err)
+	}
+	if len(panes) != 2 {
+		t.Fatalf("pane count = %d, want 2", len(panes))
+	}
+	paneIDs := map[int]bool{}
+	for _, listedPane := range panes {
+		paneIDs[listedPane.ID] = true
+	}
+	if !paneIDs[pane.ID] || !paneIDs[secondPane.ID] {
+		t.Fatalf("pane IDs = %#v, want %d and %d", panes, pane.ID, secondPane.ID)
+	}
+}
+
+func TestListPanesByWindowTargetSessionIDWindowIndex(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("first", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession(first) error = %v", err)
+	}
+	session, pane, err := manager.CreateSession("second", "main", 120, 40)
+	if err != nil {
+		t.Fatalf("CreateSession(second) error = %v", err)
+	}
+
+	target := fmt.Sprintf("%s:0", formatSessionID(session.ID))
+	panes, err := manager.ListPanesByWindowTarget(target, -1, false)
+	if err != nil {
+		t.Fatalf("ListPanesByWindowTarget(%q) error = %v", target, err)
+	}
+	if len(panes) != 1 {
+		t.Fatalf("pane count = %d, want 1", len(panes))
+	}
+	if panes[0].ID != pane.ID {
+		t.Fatalf("pane ID = %d, want %d", panes[0].ID, pane.ID)
+	}
+}
+
+// TestListPanesByWindowTargetByIndex_NotFound verifies that an out-of-range
+// window index returns an error.
+func TestListPanesByWindowTargetByIndex_NotFound(t *testing.T) {
 	manager := NewSessionManager()
 	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
@@ -503,7 +734,24 @@ func TestListPanesByWindowTargetByID_NotFound(t *testing.T) {
 	if listErr == nil {
 		t.Fatal("ListPanesByWindowTarget(demo:999) expected error, got nil")
 	}
-	if !strings.Contains(listErr.Error(), "window id not found") {
-		t.Fatalf("error = %q, want substring %q", listErr.Error(), "window id not found")
+	if !strings.Contains(listErr.Error(), "window index out of range") {
+		t.Fatalf("error = %q, want substring %q", listErr.Error(), "window index out of range")
+	}
+}
+
+// TestListPanesByWindowTargetByIndex_Empty verifies that an empty window index
+// returns a clear error.
+func TestListPanesByWindowTargetByIndex_Empty(t *testing.T) {
+	manager := NewSessionManager()
+	if _, _, err := manager.CreateSession("demo", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	_, listErr := manager.ListPanesByWindowTarget("demo:.", -1, false)
+	if listErr == nil {
+		t.Fatal("ListPanesByWindowTarget(demo:.) expected error, got nil")
+	}
+	if !strings.Contains(listErr.Error(), "invalid window index") {
+		t.Fatalf("error = %q, want substring %q", listErr.Error(), "invalid window index")
 	}
 }

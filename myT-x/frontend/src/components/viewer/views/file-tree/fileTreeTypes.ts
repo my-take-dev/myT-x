@@ -4,7 +4,7 @@ export interface FileEntry {
     readonly path: string;
     readonly is_dir: boolean;
     readonly size: number;
-    readonly has_children?: boolean;
+    readonly has_children: boolean;
 }
 
 /** Backend FileContent returned by DevPanelReadFile. */

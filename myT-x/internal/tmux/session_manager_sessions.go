@@ -76,12 +76,12 @@ func (m *SessionManager) createInitialWindowAndPaneLocked(session *TmuxSession, 
 
 	pane := &TmuxPane{
 		ID:       m.nextPaneID,
-		idString: fmt.Sprintf("%%%d", m.nextPaneID),
+		idString: formatPaneID(m.nextPaneID),
 		Index:    0,
 		Active:   true,
 		Width:    width,
 		Height:   height,
-		Env:      map[string]string{},
+		Env:      seedPaneIdentityEnv(map[string]string{}, m.nextPaneID),
 		Window:   window,
 	}
 	m.nextPaneID++

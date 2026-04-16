@@ -1,4 +1,4 @@
-import type {KeyboardEvent, MouseEvent} from "react";
+import type {KeyboardEvent} from "react";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {api} from "../api";
 import {toErrorMessage} from "../utils/errorUtils";
@@ -55,7 +55,7 @@ export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExp
             await api.SendChatMessage(targetPaneId, trimmed);
             setText("");
             if (autoClose) setExpanded(false);
-        } catch (err) {
+        } catch (err: unknown) {
             console.warn("[chat] SendChatMessage failed", err);
             setSendError(toErrorMessage(err, "Failed to send message."));
             notifyAndLog("Send chat message", "error", err, "ChatInput");
@@ -88,18 +88,6 @@ export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExp
         composingRef.current = false;
     }, []);
 
-    const handleBarClick = useCallback(
-        (e: MouseEvent<HTMLDivElement>) => {
-            // Avoid expanding when clicking the send button.
-            const target = e.target as HTMLElement;
-            if (target.tagName === "BUTTON") {
-                return;
-            }
-            setExpanded(true);
-        },
-        [setExpanded],
-    );
-
     return {
         text,
         setText,
@@ -114,6 +102,5 @@ export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExp
         handleExpandedKeyDown,
         handleCompositionStart,
         handleCompositionEnd,
-        handleBarClick,
     };
 }

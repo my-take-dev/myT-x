@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -15,11 +16,13 @@ import (
 	"github.com/Microsoft/go-winio"
 
 	"myT-x/internal/mcp/lspmcp"
+	"myT-x/internal/mcp/pipebridge"
 )
 
 const (
 	mcpPipeMaxConcurrentConnections = 8
 	mcpPipeConnSlotTimeout          = 5 * time.Second
+	mcpPipeHandshakeTimeout         = 5 * time.Second
 	mcpPipeRuntimeCloseTimeout      = 5 * time.Second
 	mcpPipeInputBufferSize          = 64 * 1024
 	mcpPipeOutputBufferSize         = 64 * 1024
@@ -97,11 +100,11 @@ func (s *MCPPipeServer) Start() error {
 // Stop gracefully shuts down the server.
 // It closes the listener, cancels the context (which terminates all active
 // lspmcp.Runtime instances), and waits for all goroutines to finish.
-func (s *MCPPipeServer) Stop() {
+func (s *MCPPipeServer) Stop() error {
 	s.mu.Lock()
 	if !s.started {
 		s.mu.Unlock()
-		return
+		return nil
 	}
 	s.started = false
 	s.cancel()
@@ -109,12 +112,15 @@ func (s *MCPPipeServer) Stop() {
 	s.listener = nil
 	s.mu.Unlock()
 
+	var stopErr error
 	if listener != nil {
 		if err := listener.Close(); err != nil {
 			slog.Warn("[WARN-MCP-PIPE] failed to close pipe listener", "error", err)
+			stopErr = fmt.Errorf("close pipe listener: %w", err)
 		}
 	}
 	s.wg.Wait()
+	return stopErr
 }
 
 func (s *MCPPipeServer) acceptLoop() {
@@ -173,13 +179,26 @@ func (s *MCPPipeServer) handleConnection(conn net.Conn) {
 		_ = closeConn()
 	}()
 
-	// Ensure a blocking MCP read is interrupted when the server is stopped.
+	if err := conn.SetReadDeadline(time.Now().Add(mcpPipeHandshakeTimeout)); err != nil {
+		slog.Debug("[DEBUG-MCP-PIPE] failed to set handshake deadline", "error", err)
+	}
+	// Ensure a blocked handshake read is interrupted when the server is stopped.
 	stopCloseOnCancel := context.AfterFunc(s.ctx, func() {
 		if err := closeConn(); err != nil && !errors.Is(err, net.ErrClosed) {
 			slog.Debug("[DEBUG-MCP-PIPE] close conn on cancel failed", "error", err)
 		}
 	})
 	defer stopCloseOnCancel()
+
+	connReader, callerPaneID, err := readConnectionMetadata(conn)
+	if clearErr := conn.SetReadDeadline(time.Time{}); clearErr != nil && !errors.Is(clearErr, net.ErrClosed) {
+		slog.Debug("[DEBUG-MCP-PIPE] failed to clear handshake deadline", "error", clearErr)
+	}
+	if err != nil {
+		slog.Warn("[WARN-MCP-PIPE] failed to read connection metadata", "error", err)
+		return
+	}
+	runtimeCtx := pipebridge.ContextWithCallerPaneID(s.ctx, callerPaneID)
 
 	slog.Debug("[DEBUG-MCP-PIPE] new connection accepted",
 		"pipe", s.cfg.PipeName,
@@ -188,15 +207,14 @@ func (s *MCPPipeServer) handleConnection(conn net.Conn) {
 	)
 
 	var runtime MCPRuntime
-	var err error
 	if s.cfg.RuntimeFactory != nil {
-		runtime, err = s.cfg.RuntimeFactory(conn, conn)
+		runtime, err = s.cfg.RuntimeFactory(connReader, conn)
 	} else {
 		runtime, err = lspmcp.NewRuntime(lspmcp.Config{
 			LSPCommand: s.cfg.LSPCommand,
 			LSPArgs:    append([]string(nil), s.cfg.LSPArgs...),
 			RootDir:    s.cfg.RootDir,
-			In:         conn,
+			In:         connReader,
 			Out:        conn,
 		})
 	}
@@ -206,7 +224,7 @@ func (s *MCPPipeServer) handleConnection(conn net.Conn) {
 		return
 	}
 
-	if err := runtime.Start(s.ctx); err != nil {
+	if err := runtime.Start(runtimeCtx); err != nil {
 		slog.Warn("[WARN-MCP-PIPE] failed to start runtime",
 			"error", err, "lsp", s.cfg.LSPCommand)
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), mcpPipeRuntimeCloseTimeout)
@@ -222,7 +240,7 @@ func (s *MCPPipeServer) handleConnection(conn net.Conn) {
 	}
 
 	// Serve blocks until the connection is closed or ctx is cancelled.
-	if err := runtime.Serve(s.ctx); err != nil && !errors.Is(err, context.Canceled) {
+	if err := runtime.Serve(runtimeCtx); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Debug("[DEBUG-MCP-PIPE] serve ended", "error", err)
 	}
 
@@ -310,6 +328,14 @@ func listenMCPPipe(pipeName string) (net.Listener, error) {
 		InputBufferSize:    int32(mcpPipeInputBufferSize),
 		OutputBufferSize:   int32(mcpPipeOutputBufferSize),
 	})
+}
+
+func readConnectionMetadata(conn net.Conn) (*bufio.Reader, string, error) {
+	reader, callerPaneID, err := pipebridge.ReadCallerPaneHandshake(conn)
+	if err != nil {
+		return nil, "", err
+	}
+	return reader, callerPaneID, nil
 }
 
 var validMCPPipeSIDPattern = regexp.MustCompile(`^S-1(-\d+)+$`)

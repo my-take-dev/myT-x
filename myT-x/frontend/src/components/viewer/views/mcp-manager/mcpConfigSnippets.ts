@@ -17,6 +17,7 @@ export interface BridgeLaunchRecommendation {
 
 export const lspMcpConfigServerName = "mytx-lsp-mcp";
 export const orchMcpConfigServerName = "mytx-agent-orchestrator";
+export const strMcpConfigServerName = "mytx-single-task-runner";
 export const lspMcpNamePlaceholder = "$LSP_NAME";
 
 export function escapeTomlBasicString(value: string): string {
@@ -184,6 +185,30 @@ export function buildOrchMcpLaunchRecommendation(
         return null;
     }
     const args = buildOrchMcpBridgeArgs();
+    return {
+        command,
+        args,
+        commandPreview: buildCommandPreview(command, args),
+    };
+}
+
+export function buildStrMcpBridgeArgs(): string[] {
+    return [
+        "mcp",
+        "stdio",
+        "--mcp",
+        "single-task-runner",
+    ];
+}
+
+export function buildStrMcpLaunchRecommendation(
+    bridgeCommand: string | null | undefined,
+): BridgeLaunchRecommendation | null {
+    const command = normalizeBridgeCommand(bridgeCommand);
+    if (command === "") {
+        return null;
+    }
+    const args = buildStrMcpBridgeArgs();
     return {
         command,
         args,

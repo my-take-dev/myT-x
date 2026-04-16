@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// ErrWorktreeHasUncommittedChanges reports that removal would discard local edits.
+var ErrWorktreeHasUncommittedChanges = errors.New("worktree has uncommitted changes")
+
 // Open opens an existing git repository using CLI-only detection.
 func Open(path string) (*Repository, error) {
 	path = strings.TrimSpace(path)
@@ -399,6 +402,23 @@ func (r *Repository) HasUncommittedChanges() (bool, error) {
 		return false, err
 	}
 	return strings.TrimSpace(output) != "", nil
+}
+
+// CheckWorktreeCleanForRemoval verifies that a worktree can be removed without
+// discarding uncommitted changes.
+func CheckWorktreeCleanForRemoval(wtPath string) error {
+	wtRepo, err := Open(wtPath)
+	if err != nil {
+		return fmt.Errorf("failed to open worktree for change check: %w", err)
+	}
+	hasChanges, err := wtRepo.HasUncommittedChanges()
+	if err != nil {
+		return fmt.Errorf("failed to check uncommitted changes: %w", err)
+	}
+	if hasChanges {
+		return ErrWorktreeHasUncommittedChanges
+	}
+	return nil
 }
 
 // Pull fetches and fast-forward merges the current branch from origin.

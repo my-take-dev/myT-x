@@ -1,9 +1,11 @@
 import React, {useCallback, useRef, useState, useSyncExternalStore} from "react";
+import {createPortal} from "react-dom";
 import {api} from "../../api";
 import {useI18n} from "../../i18n";
 import {useTmuxStore} from "../../stores/tmuxStore";
 import {notifyAndLog} from "../../utils/notifyUtils";
 import {normalizeViewerSidebarMode} from "../../utils/viewerSidebarMode";
+import {getViewerShortcutValue} from "./viewerShortcutDefinitions";
 import type {ViewPlugin} from "./viewerRegistry";
 import {getRegisteredViews} from "./viewerRegistry";
 import {getEffectiveViewerShortcut} from "./viewerShortcutUtils";
@@ -31,11 +33,11 @@ const ActivityButton = React.memo(function ActivityButton({
                                                               view,
                                                               isActive,
                                                               viewerShortcutsConfig,
-                                                              onToggle
+                                                          onToggle
                                                           }: ActivityButtonProps) {
     const Icon = view.icon;
     const effectiveShortcut = getEffectiveViewerShortcut(
-        viewerShortcutsConfig?.[view.id],
+        getViewerShortcutValue(viewerShortcutsConfig, view.id),
         view.shortcut,
     );
     const subscribeBadge = view.subscribeBadgeCount ?? EMPTY_SUBSCRIBE;
@@ -44,9 +46,11 @@ const ActivityButton = React.memo(function ActivityButton({
 
     return (
         <button
+            type="button"
             className={`viewer-strip-btn${isActive ? " active" : ""}`}
             onClick={() => onToggle(view.id)}
             title={effectiveShortcut ? `${view.label} (${effectiveShortcut})` : view.label}
+            aria-label={effectiveShortcut ? `${view.label} (${effectiveShortcut})` : view.label}
         >
             <Icon size={18}/>
             {badgeCount > 0 && (
@@ -78,13 +82,13 @@ export function ActivityStrip() {
         try {
             await api.ToggleViewerSidebarMode();
         } catch (err) {
-            console.warn("[activity-strip] toggle sidebar mode failed", err);
+            console.warn("[ActivityStrip] toggle sidebar mode failed", err);
             notifyAndLog("Toggle sidebar mode", "warn", err, "ActivityStrip");
         } finally {
             toggleInFlightRef.current = false;
             setIsTogglingSidebarMode(false);
         }
-    }, [isDocked]);
+    }, []);
 
     const toggleTitle = t(
         "viewer.activityStrip.toggleSidebarMode",
@@ -97,7 +101,7 @@ export function ActivityStrip() {
         return null;
     }
 
-    return (
+    const strip = (
         <div className="viewer-activity-strip">
             {topViews.map((view) => (
                 <ActivityButton
@@ -130,4 +134,13 @@ export function ActivityStrip() {
             </button>
         </div>
     );
+
+    if (document.body === null) {
+        if (import.meta.env.DEV) {
+            console.error("[ActivityStrip] document.body unavailable; skipping portal render");
+        }
+        return null;
+    }
+
+    return createPortal(strip, document.body);
 }

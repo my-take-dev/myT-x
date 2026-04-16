@@ -14,6 +14,7 @@ import {cleanupEventListeners, createEventSubscriber, notifyWarn, tr} from "./ev
 // EventsOn delivers `unknown` at runtime — every handler MUST still
 // validate with asObject/asArray before accessing properties.
 interface SnapshotEventMap {
+    "session:cleanup-degraded": {component?: string; session_name?: string; message?: string};
     "tmux:snapshot": SessionSnapshot[];
     "tmux:snapshot-delta": Partial<SessionSnapshotDelta>;
     "tmux:active-session": {name?: string};
@@ -238,6 +239,30 @@ export function useSnapshotSync(): void {
             useCanvasStore.getState().clearSessionData(oldName);
         });
 
+        onEvent("session:cleanup-degraded", (payload) => {
+            const event = asObject<{component?: unknown; session_name?: unknown; message?: unknown}>(payload);
+            if (!event) {
+                console.warn("[SYNC] session:cleanup-degraded: invalid payload received");
+                if (import.meta.env.DEV) {
+                    console.warn("[SYNC] session:cleanup-degraded: invalid payload", payload);
+                }
+                return;
+            }
+
+            const component = typeof event.component === "string" ? event.component.trim() : "";
+            const sessionName = typeof event.session_name === "string" ? event.session_name.trim() : "";
+            const message = typeof event.message === "string" ? event.message.trim() : "";
+            if (component === "" || sessionName === "" || message === "") {
+                console.warn("[SYNC] session:cleanup-degraded: incomplete payload received");
+                if (import.meta.env.DEV) {
+                    console.warn("[SYNC] session:cleanup-degraded: incomplete payload", payload);
+                }
+                return;
+            }
+
+            notifyWarn(`Session cleanup was only partially completed for ${sessionName} (${component}): ${message}`);
+        });
+
         onEvent("tmux:shim-installed", (payload) => {
             const event = asObject<{installed_path?: unknown}>(payload);
             const installedPath =
@@ -358,9 +383,13 @@ export function useSnapshotSync(): void {
             }
 
             const sessionLabel = sessionName !== "" ? ` (${sessionName})` : "";
-            const detailSuffix = error !== "" ? ` Error: ${error}` : "";
+            const detailSuffix = error !== "" ? ` ${tr("sync.notifications.worktreePullFailed.detail", "詳細: {error}", "Details: {error}", {error})}` : "";
             notifyWarn(
-                `Git pull failed while creating the worktree${sessionLabel}. Continuing with the local checkout state.${detailSuffix}`,
+                tr(
+                    "sync.notifications.worktreePullFailed",
+                    `worktree 作成時の Git pull に失敗しました${sessionLabel}。ローカルのチェックアウト状態で続行しました。${detailSuffix}`,
+                    `Git pull failed while creating the worktree${sessionLabel}. Continued with the local checkout state.${detailSuffix}`,
+                ),
             );
         });
 

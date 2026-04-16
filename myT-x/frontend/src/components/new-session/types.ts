@@ -23,6 +23,7 @@ export interface NewSessionState {
     readonly baseBranch: string;
     readonly branchName: string;
     readonly pullBefore: boolean;
+    readonly continueOnPullFailure: boolean;
 
     // Session options
     readonly enableAgentTeam: boolean;

@@ -4,10 +4,12 @@ import (
 	"context"
 	crand "crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +57,10 @@ func nullableString(s string) any {
 
 type queryRower interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type execContexter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
 // scanner is a common interface for sql.Row and sql.Rows.
@@ -265,7 +271,7 @@ func normalizeDBPath(dbPath string) (string, error) {
 }
 
 func sqliteDSN(dbPath string) string {
-	return dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	return dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
 }
 
 func createTables(db *sql.DB) error {
@@ -279,7 +285,7 @@ func createTables(db *sql.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS tasks (
 			task_id      TEXT PRIMARY KEY,
-			agent_name   TEXT NOT NULL REFERENCES agents(name),
+			agent_name   TEXT NOT NULL,
 			assignee_pane_id TEXT,
 			sender_pane_id TEXT,
 			sender_name  TEXT,
@@ -445,8 +451,161 @@ func createTables(db *sql.DB) error {
 			return fmt.Errorf("apply migration %q: %w", m.stmt, err)
 		}
 	}
+	if err := migrateTasksAgentForeignKey(db); err != nil {
+		return fmt.Errorf("migrate tasks agent foreign key: %w", err)
+	}
 
 	return nil
+}
+
+func migrateTasksAgentForeignKey(db *sql.DB) (retErr error) {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer restoreForeignKeysAndReleaseConn(ctx, conn, &retErr)
+
+	hasLegacyForeignKey, err := tasksTableHasLegacyAgentForeignKey(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("inspect tasks foreign keys: %w", err)
+	}
+	if !hasLegacyForeignKey {
+		return nil
+	}
+
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys: %w", err)
+	}
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin rebuild tasks table: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`CREATE TABLE tasks_migrated (
+		task_id TEXT PRIMARY KEY,
+		agent_name TEXT NOT NULL,
+		assignee_pane_id TEXT,
+		sender_pane_id TEXT,
+		sender_name TEXT,
+		sender_instance_id TEXT,
+		send_message_id TEXT,
+		send_response_id TEXT,
+		status TEXT NOT NULL DEFAULT 'pending',
+		sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+		completed_at TEXT,
+		acknowledged_at TEXT,
+		cancelled_at TEXT,
+		cancel_reason TEXT,
+		progress_pct INTEGER,
+		progress_note TEXT,
+		progress_updated_at TEXT,
+		expires_at TEXT,
+		group_id TEXT,
+		is_now_session INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		return fmt.Errorf("create migrated tasks table: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO tasks_migrated (` + taskSelectColumns + `) SELECT ` + taskSelectColumns + ` FROM tasks`); err != nil {
+		return fmt.Errorf("copy tasks rows: %w", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE tasks`); err != nil {
+		return fmt.Errorf("drop legacy tasks table: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE tasks_migrated RENAME TO tasks`); err != nil {
+		return fmt.Errorf("rename migrated tasks table: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tasks table rebuild: %w", err)
+	}
+	return nil
+}
+
+type migrationConn interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	Close() error
+	Raw(func(any) error) error
+}
+
+func restoreForeignKeysAndReleaseConn(ctx context.Context, conn migrationConn, retErr *error) {
+	if conn == nil {
+		return
+	}
+
+	restoreFailed := false
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		slog.Error("[ERROR-MCP-ORCH] restore sqlite foreign_keys pragma failed", "error", err)
+		restoreFailed = true
+		if retErr != nil && *retErr == nil {
+			*retErr = fmt.Errorf("re-enable foreign keys: %w", err)
+		}
+	}
+	if restoreFailed {
+		if err := discardMigrationConn(conn); err != nil {
+			slog.Error("[ERROR-MCP-ORCH] discard sqlite migration connection failed", "error", err)
+			if retErr != nil && *retErr == nil {
+				*retErr = fmt.Errorf("discard migration connection: %w", err)
+			}
+		}
+	}
+	if err := conn.Close(); err != nil {
+		slog.Error("[ERROR-MCP-ORCH] close sqlite migration connection failed", "error", err)
+		if retErr != nil && *retErr == nil {
+			*retErr = fmt.Errorf("close migration connection: %w", err)
+		}
+	}
+}
+
+type rawMigrationConn interface {
+	Raw(func(any) error) error
+}
+
+func discardMigrationConn(conn rawMigrationConn) error {
+	if conn == nil {
+		return nil
+	}
+	err := conn.Raw(func(any) error {
+		return driver.ErrBadConn
+	})
+	if errors.Is(err, driver.ErrBadConn) {
+		return nil
+	}
+	return err
+}
+
+func tasksTableHasLegacyAgentForeignKey(ctx context.Context, conn *sql.Conn) (bool, error) {
+	rows, err := conn.QueryContext(ctx, `PRAGMA foreign_key_list('tasks')`)
+	if err != nil {
+		return false, fmt.Errorf("query tasks foreign keys: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id       int
+			seq      int
+			table    string
+			from     string
+			to       string
+			onUpdate string
+			onDelete string
+			match    string
+		)
+		if err := rows.Scan(&id, &seq, &table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			return false, fmt.Errorf("scan tasks foreign keys: %w", err)
+		}
+		if strings.EqualFold(strings.TrimSpace(table), "agents") &&
+			strings.EqualFold(strings.TrimSpace(from), "agent_name") &&
+			strings.EqualFold(strings.TrimSpace(to), "name") {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate tasks foreign keys: %w", err)
+	}
+	return false, nil
 }
 
 func tableHasColumn(db *sql.DB, tableName string, columnName string) (bool, error) {
@@ -471,12 +630,16 @@ func tableHasColumn(db *sql.DB, tableName string, columnName string) (bool, erro
 
 // UpsertAgent はエージェントを登録または更新する。
 func (s *Store) UpsertAgent(ctx context.Context, agent domain.Agent) error {
+	return upsertAgentWithExecutor(ctx, s.db, agent)
+}
+
+func upsertAgentWithExecutor(ctx context.Context, executor execContexter, agent domain.Agent) error {
 	skillsJSON, err := json.Marshal(agent.Skills)
 	if err != nil {
 		return fmt.Errorf("marshal skills: %w", err)
 	}
 
-	_, err = s.db.ExecContext(
+	_, err = executor.ExecContext(
 		ctx,
 		`INSERT INTO agents (name, pane_id, role, skills, mcp_instance_id, created_at) VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name) DO UPDATE SET pane_id=excluded.pane_id, role=excluded.role, skills=excluded.skills, mcp_instance_id=excluded.mcp_instance_id`,
@@ -533,6 +696,38 @@ func (s *Store) GetAgentByPaneID(ctx context.Context, paneID string) (domain.Age
 	return agents[0], nil
 }
 
+// GetAgentByMCPInstanceID returns the single agent bound to the given MCP runtime instance.
+func (s *Store) GetAgentByMCPInstanceID(ctx context.Context, instanceID string) (domain.Agent, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT name, pane_id, role, skills, created_at, mcp_instance_id FROM agents WHERE mcp_instance_id = ? ORDER BY name`,
+		instanceID,
+	)
+	if err != nil {
+		return domain.Agent{}, fmt.Errorf("get agent by mcp_instance_id %q: %w", instanceID, err)
+	}
+	defer rows.Close()
+
+	var agents []domain.Agent
+	for rows.Next() {
+		a, scanErr := scanAgent(rows)
+		if scanErr != nil {
+			return domain.Agent{}, fmt.Errorf("scan agent by mcp_instance_id %q: %w", instanceID, scanErr)
+		}
+		agents = append(agents, a)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.Agent{}, fmt.Errorf("iterate agents by mcp_instance_id %q: %w", instanceID, err)
+	}
+	if len(agents) == 0 {
+		return domain.Agent{}, fmt.Errorf("get agent by mcp_instance_id %q: %w", instanceID, domain.ErrNotFound)
+	}
+	if len(agents) > 1 {
+		return domain.Agent{}, fmt.Errorf("multiple agents registered for mcp_instance_id %q", instanceID)
+	}
+	return agents[0], nil
+}
+
 // ListAgents は全エージェント情報を取得する。
 func (s *Store) ListAgents(ctx context.Context) ([]domain.Agent, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT name, pane_id, role, skills, created_at, mcp_instance_id FROM agents ORDER BY name`)
@@ -560,6 +755,16 @@ func (s *Store) DeleteAgentsByPaneID(ctx context.Context, paneID string) error {
 	}
 	defer tx.Rollback()
 
+	if err := deleteAgentsByPaneIDTx(ctx, tx, paneID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete agents by pane_id %q: commit: %w", paneID, err)
+	}
+	return nil
+}
+
+func deleteAgentsByPaneIDTx(ctx context.Context, tx *sql.Tx, paneID string) error {
 	if _, err := tx.ExecContext(
 		ctx,
 		`DELETE FROM agent_status WHERE agent_name IN (SELECT name FROM agents WHERE pane_id = ?)`,
@@ -570,14 +775,62 @@ func (s *Store) DeleteAgentsByPaneID(ctx context.Context, paneID string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM agents WHERE pane_id = ?`, paneID); err != nil {
 		return fmt.Errorf("delete agents by pane_id %q: %w", paneID, err)
 	}
+	return nil
+}
+
+// ReplaceAgentRegistration atomically replaces the pane mapping and status row.
+func (s *Store) ReplaceAgentRegistration(ctx context.Context, agent domain.Agent, defaultStatus *domain.AgentStatus) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("replace agent registration %q: begin tx: %w", agent.Name, err)
+	}
+	defer tx.Rollback()
+
+	statusToStore := defaultStatus
+	if defaultStatus != nil {
+		existingStatus, err := loadAgentStatusTx(ctx, tx, agent.Name)
+		switch {
+		case err == nil:
+			existingStatus.AgentName = agent.Name
+			statusToStore = &existingStatus
+		case errors.Is(err, sql.ErrNoRows):
+		default:
+			return fmt.Errorf("load existing agent status %q: %w", agent.Name, err)
+		}
+	}
+
+	if err := deleteAgentsByPaneIDTx(ctx, tx, agent.PaneID); err != nil {
+		return err
+	}
+	if err := upsertAgentWithExecutor(ctx, tx, agent); err != nil {
+		return err
+	}
+	if statusToStore != nil {
+		if err := upsertAgentStatusWithExecutor(ctx, tx, *statusToStore); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("delete agents by pane_id %q: commit: %w", paneID, err)
+		return fmt.Errorf("replace agent registration %q: commit: %w", agent.Name, err)
 	}
 	return nil
 }
 
+func loadAgentStatusTx(ctx context.Context, tx *sql.Tx, agentName string) (domain.AgentStatus, error) {
+	row := tx.QueryRowContext(
+		ctx,
+		`SELECT agent_name, status, current_task_id, note, updated_at FROM agent_status WHERE agent_name = ?`,
+		agentName,
+	)
+	return scanAgentStatus(row)
+}
+
 func (s *Store) UpsertAgentStatus(ctx context.Context, status domain.AgentStatus) error {
-	_, err := s.db.ExecContext(
+	return upsertAgentStatusWithExecutor(ctx, s.db, status)
+}
+
+func upsertAgentStatusWithExecutor(ctx context.Context, executor execContexter, status domain.AgentStatus) error {
+	_, err := executor.ExecContext(
 		ctx,
 		`INSERT INTO agent_status (agent_name, status, current_task_id, note, updated_at)
 		 VALUES (?, ?, ?, ?, ?)
@@ -640,7 +893,7 @@ func insertTask(ctx context.Context, executor interface {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		task.ID,
 		task.AgentName,
-		task.AssigneePaneID,
+		nullableString(task.AssigneePaneID),
 		nullableString(task.SenderPaneID),
 		task.SenderName,
 		nullableString(task.SenderInstanceID),
@@ -692,8 +945,43 @@ func validateDependencyTaskIDs(ctx context.Context, query queryRower, taskID str
 			}
 			return fmt.Errorf("lookup dependency task %q: %w", dependencyTaskID, err)
 		}
+		createsCycle, err := dependencyCreatesCycle(ctx, query, taskID, dependencyTaskID)
+		if err != nil {
+			return err
+		}
+		if createsCycle {
+			return fmt.Errorf("dependency task %q would create a cycle", dependencyTaskID)
+		}
 	}
 	return nil
+}
+
+func dependencyCreatesCycle(ctx context.Context, query queryRower, taskID string, dependencyTaskID string) (bool, error) {
+	var exists int
+	err := query.QueryRowContext(ctx, `
+WITH RECURSIVE dependency_chain(dep_id) AS (
+	SELECT depends_on_task_id
+	FROM task_dependencies
+	WHERE task_id = ?
+	UNION
+	SELECT td.depends_on_task_id
+	FROM task_dependencies td
+	JOIN dependency_chain dc ON td.task_id = dc.dep_id
+)
+SELECT 1
+FROM dependency_chain
+WHERE dep_id = ?
+LIMIT 1`,
+		dependencyTaskID,
+		taskID,
+	).Scan(&exists)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return false, fmt.Errorf("check dependency cycle %q -> %q: %w", taskID, dependencyTaskID, err)
 }
 
 // CreateTask はタスクを作成する。
@@ -717,6 +1005,24 @@ func (s *Store) CreateTaskGroup(ctx context.Context, group domain.TaskGroup) err
 		return fmt.Errorf("create task group %q: %w", group.ID, err)
 	}
 	return nil
+}
+
+// GetTaskGroup loads batch metadata for a grouped dispatch.
+func (s *Store) GetTaskGroup(ctx context.Context, groupID string) (domain.TaskGroup, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT group_id, group_label, created_at FROM task_groups WHERE group_id = ?`,
+		groupID,
+	)
+	var group domain.TaskGroup
+	var label sql.NullString
+	if err := row.Scan(&group.ID, &label, &group.CreatedAt); err != nil {
+		return domain.TaskGroup{}, wrapNotFound(err, fmt.Sprintf("get task group %q", groupID))
+	}
+	if label.Valid {
+		group.Label = label.String
+	}
+	return group, nil
 }
 
 // DeleteTaskGroup removes persisted batch metadata when no task was created.
@@ -751,29 +1057,6 @@ func (s *Store) CreateTaskWithDependencies(ctx context.Context, task domain.Task
 	return nil
 }
 
-// CreateTaskDependencies stores dependency edges for a blocked task.
-func (s *Store) CreateTaskDependencies(ctx context.Context, taskID string, dependencyTaskIDs []string) error {
-	if len(dependencyTaskIDs) == 0 {
-		return nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("create task dependencies %q: begin tx: %w", taskID, err)
-	}
-	defer tx.Rollback()
-
-	if err := validateDependencyTaskIDs(ctx, tx, taskID, dependencyTaskIDs); err != nil {
-		return fmt.Errorf("create task dependencies %q: %w", taskID, err)
-	}
-	if err := insertTaskDependencies(ctx, tx, taskID, dependencyTaskIDs); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("create task dependencies %q: commit: %w", taskID, err)
-	}
-	return nil
-}
-
 // GetTask はタスクIDでタスクを取得する。
 func (s *Store) GetTask(ctx context.Context, taskID string) (domain.Task, error) {
 	row := s.db.QueryRowContext(
@@ -793,7 +1076,7 @@ func (s *Store) ListTasks(ctx context.Context, filter domain.TaskFilter) ([]doma
 	query := `SELECT ` + taskSelectColumns + ` FROM tasks WHERE 1=1`
 	var args []any
 
-	if filter.Status != "" && filter.Status != "all" {
+	if filter.Status != "" && filter.Status != domain.TaskStatusFilterAll {
 		query += ` AND status = ?`
 		args = append(args, filter.Status)
 	}
@@ -915,7 +1198,7 @@ func classifyDependencyResolution(ctx context.Context, tx *sql.Tx, taskID string
 		if !dependencyTaskID.Valid {
 			return dependencyResolutionBroken, "", "", nil
 		}
-		switch dependencyStatus.String {
+		switch domain.TaskStatus(dependencyStatus.String) {
 		case domain.TaskStatusCompleted:
 			continue
 		case domain.TaskStatusCancelled, domain.TaskStatusFailed, domain.TaskStatusAbandoned, domain.TaskStatusExpired:
@@ -980,6 +1263,20 @@ func (s *Store) ActivateReadyTasks(ctx context.Context, now string, agentName st
 	activated := make([]domain.Task, 0, len(blockedTasks))
 	stillBlocked := 0
 	for _, task := range blockedTasks {
+		if task.ExpiresAt != "" && task.ExpiresAt <= now {
+			if _, err := tx.ExecContext(
+				ctx,
+				`UPDATE tasks SET status = ?, completed_at = ? WHERE task_id = ? AND status = ?`,
+				domain.TaskStatusExpired,
+				now,
+				task.ID,
+				domain.TaskStatusBlocked,
+			); err != nil {
+				return nil, 0, fmt.Errorf("activate ready tasks: expire %q: %w", task.ID, err)
+			}
+			continue
+		}
+
 		resolution, dependencyTaskID, dependencyStatus, err := classifyDependencyResolution(ctx, tx, task.ID)
 		if err != nil {
 			return nil, 0, fmt.Errorf("activate ready tasks: %w", err)
@@ -994,22 +1291,9 @@ func (s *Store) ActivateReadyTasks(ctx context.Context, now string, agentName st
 			stillBlocked++
 			continue
 		}
-		if task.ExpiresAt != "" && task.ExpiresAt <= now {
-			if _, err := tx.ExecContext(
-				ctx,
-				`UPDATE tasks SET status = ?, completed_at = ? WHERE task_id = ? AND status = ?`,
-				domain.TaskStatusExpired,
-				now,
-				task.ID,
-				domain.TaskStatusBlocked,
-			); err != nil {
-				return nil, 0, fmt.Errorf("activate ready tasks: expire %q: %w", task.ID, err)
-			}
-			continue
-		}
 		if _, err := tx.ExecContext(
 			ctx,
-			`UPDATE tasks SET status = ? WHERE task_id = ? AND status = ?`,
+			`UPDATE tasks SET status = ?, is_now_session = 1 WHERE task_id = ? AND status = ?`,
 			domain.TaskStatusPending,
 			task.ID,
 			domain.TaskStatusBlocked,
@@ -1017,6 +1301,7 @@ func (s *Store) ActivateReadyTasks(ctx context.Context, now string, agentName st
 			return nil, 0, fmt.Errorf("activate ready tasks: activate %q: %w", task.ID, err)
 		}
 		task.Status = domain.TaskStatusPending
+		task.IsNowSession = true
 		activated = append(activated, task)
 	}
 
@@ -1213,7 +1498,7 @@ func (s *Store) ExpirePendingTasks(ctx context.Context, now string) (int64, erro
 		ctx,
 		`UPDATE tasks
 		 SET status = 'expired', completed_at = ?
-		 WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?`,
+		 WHERE status IN ('pending', 'blocked') AND expires_at IS NOT NULL AND expires_at <= ?`,
 		now,
 		now,
 	)
@@ -1265,6 +1550,22 @@ func (s *Store) SaveMessage(ctx context.Context, msg domain.TaskMessage) error {
 	)
 	if err != nil {
 		return fmt.Errorf("save message %q: %w", msg.ID, err)
+	}
+	return nil
+}
+
+// DeleteMessage removes a persisted send message.
+func (s *Store) DeleteMessage(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM send_messages WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete message %q: %w", id, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete message %q rows affected: %w", id, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("delete message %q: %w", id, domain.ErrNotFound)
 	}
 	return nil
 }
@@ -1428,6 +1729,8 @@ func (s *Store) CleanupStaleAgents(ctx context.Context, activeInstanceIDs []stri
 
 // CleanupStaleTasks は生存リストに含まれないインスタンスの pending / blocked タスクを abandoned に更新する。
 // sender_instance_id が NULL（旧形式）の pending / blocked タスクも古いデータとして abandoned に更新する。
+// An empty activeInstanceIDs list intentionally abandons every pending / blocked
+// task so the NOT IN clause is never built with an empty placeholder set.
 func (s *Store) CleanupStaleTasks(ctx context.Context, activeInstanceIDs []string) (int64, error) {
 	if len(activeInstanceIDs) == 0 {
 		// No active instances: all pending / blocked tasks are stale, abandon everything.

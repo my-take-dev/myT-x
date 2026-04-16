@@ -1001,6 +1001,87 @@ func TestCleanupWorktreeSuccessClearsMetadata(t *testing.T) {
 	}
 }
 
+func TestCleanupWorktreeRejectsDirtyWorktree(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+	wtParent := testutil.ResolvePath(t.TempDir())
+	worktreePath := filepath.Join(wtParent, "dirty-worktree")
+	runGitInDir(t, repoPath, "worktree", "add", "-b", "feature/dirty-cleanup", worktreePath)
+	if err := os.WriteFile(filepath.Join(worktreePath, "dirty.txt"), []byte("local changes\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(dirty.txt) error = %v", err)
+	}
+
+	app := NewApp()
+	app.sessions = tmux.NewSessionManager()
+	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := app.sessions.SetWorktreeInfo("session-a", &tmux.SessionWorktreeInfo{
+		Path:       worktreePath,
+		RepoPath:   repoPath,
+		BranchName: "feature/dirty-cleanup",
+	}); err != nil {
+		t.Fatalf("SetWorktreeInfo() error = %v", err)
+	}
+
+	err := app.CleanupWorktree("session-a")
+	if err == nil {
+		t.Fatal("CleanupWorktree() expected dirty-worktree error")
+	}
+	if !errors.Is(err, gitpkg.ErrWorktreeHasUncommittedChanges) {
+		t.Fatalf("CleanupWorktree() error = %v, want ErrWorktreeHasUncommittedChanges", err)
+	}
+	if _, statErr := os.Stat(worktreePath); statErr != nil {
+		t.Fatalf("worktree path should remain after rejected cleanup, stat err = %v", statErr)
+	}
+	info, infoErr := app.sessions.GetWorktreeInfo("session-a")
+	if infoErr != nil {
+		t.Fatalf("GetWorktreeInfo() error = %v", infoErr)
+	}
+	if info == nil {
+		t.Fatal("worktree info should remain after rejected cleanup")
+	}
+}
+
+func TestCleanupWorktreeForceRemovesDirtyWorktreeWhenConfigured(t *testing.T) {
+	repoPath := testutil.CreateTempGitRepo(t)
+	wtParent := testutil.ResolvePath(t.TempDir())
+	worktreePath := filepath.Join(wtParent, "dirty-worktree-force")
+	runGitInDir(t, repoPath, "worktree", "add", "-b", "feature/dirty-force-cleanup", worktreePath)
+	if err := os.WriteFile(filepath.Join(worktreePath, "dirty.txt"), []byte("local changes\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(dirty.txt) error = %v", err)
+	}
+
+	app := NewApp()
+	cfg := config.DefaultConfig()
+	cfg.Worktree.ForceCleanup = true
+	app.configState.SetSnapshot(cfg)
+	app.sessions = tmux.NewSessionManager()
+	if _, _, err := app.sessions.CreateSession("session-a", "0", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := app.sessions.SetWorktreeInfo("session-a", &tmux.SessionWorktreeInfo{
+		Path:       worktreePath,
+		RepoPath:   repoPath,
+		BranchName: "feature/dirty-force-cleanup",
+	}); err != nil {
+		t.Fatalf("SetWorktreeInfo() error = %v", err)
+	}
+
+	if err := app.CleanupWorktree("session-a"); err != nil {
+		t.Fatalf("CleanupWorktree() error = %v", err)
+	}
+	if _, statErr := os.Stat(worktreePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("dirty worktree should be force-removed, stat err = %v", statErr)
+	}
+	info, infoErr := app.sessions.GetWorktreeInfo("session-a")
+	if infoErr != nil {
+		t.Fatalf("GetWorktreeInfo() error = %v", infoErr)
+	}
+	if info != nil {
+		t.Fatalf("worktree info = %#v, want nil after forced cleanup", info)
+	}
+}
+
 func TestCleanupWorktreeKeepsPushedBranch(t *testing.T) {
 	repoPath := testutil.CreateTempGitRepo(t)
 	defaultBranch := runGitInDir(t, repoPath, "rev-parse", "--abbrev-ref", "HEAD")

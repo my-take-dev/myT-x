@@ -1,4 +1,5 @@
 import type {FormDispatch, FormState} from "./types";
+import {DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS} from "./constants";
 import {DynamicStringList} from "./DynamicStringList";
 import {useSettingsI18n} from "./settingsI18n";
 
@@ -32,6 +33,8 @@ export function WorktreeSettings({s, dispatch}: WorktreeSettingsProps) {
     const {t} = useSettingsI18n();
     const copyFileItemErrors = pickIndexedValidationErrors(s.validationErrors, "wt_copy_files_");
     const copyDirItemErrors = pickIndexedValidationErrors(s.validationErrors, "wt_copy_dirs_");
+    const setupScriptTimeoutSeconds =
+        s.wtSetupScriptTimeoutSeconds > 0 ? s.wtSetupScriptTimeoutSeconds : DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS;
 
     return (
         <div className="settings-section">
@@ -76,10 +79,45 @@ export function WorktreeSettings({s, dispatch}: WorktreeSettingsProps) {
                 <span className="settings-desc">
                     {t(
                         "settings.worktree.setupScripts.description",
-                        "worktree作成後に自動実行するスクリプト（上から順に実行、各5分タイムアウト。最初の失敗で中止）",
-                        "Scripts executed after worktree creation (top-down, 5-minute timeout each, stops on first failure).",
+                        "worktree作成後に自動実行するスクリプト（上から順に実行し、失敗した時点で中止）",
+                        "Scripts executed after worktree creation in order and stopped at the first failure.",
                     )}
                 </span>
+                <div className="form-group" style={{marginTop: 8}}>
+                    <label className="form-label" htmlFor="wt-setup-script-timeout">
+                        {t(
+                            "settings.worktree.setupScriptTimeout.label",
+                            "スクリプトタイムアウト（秒）",
+                            "Script timeout (seconds)",
+                        )}
+                    </label>
+                    <input
+                        id="wt-setup-script-timeout"
+                        className="form-input"
+                        type="number"
+                        min={1}
+                        value={setupScriptTimeoutSeconds}
+                        onChange={(e) => {
+                            const parsedValue = Number.parseInt(e.target.value, 10);
+                            dispatch({
+                                type: "SET_FIELD",
+                                field: "wtSetupScriptTimeoutSeconds",
+                                value:
+                                    Number.isFinite(parsedValue) && parsedValue > 0
+                                        ? parsedValue
+                                        : DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS,
+                            });
+                        }}
+                        style={{width: "120px"}}
+                    />
+                    <span className="settings-desc">
+                        {t(
+                            "settings.worktree.setupScriptTimeout.description",
+                            "各スクリプトに適用するタイムアウト秒数（1以上、未設定時は300秒）",
+                            "Per-script timeout in seconds (minimum 1, default 300 seconds).",
+                        )}
+                    </span>
+                </div>
                 <DynamicStringList
                     items={s.wtSetupScripts}
                     onChange={(items) => dispatch({type: "SET_FIELD", field: "wtSetupScripts", value: items})}

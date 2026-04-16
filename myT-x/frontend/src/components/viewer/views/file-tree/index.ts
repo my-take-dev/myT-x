@@ -3,7 +3,7 @@ import {mustGetViewerShortcutDef} from "../../viewerShortcutDefinitions";
 import { FileTreeIcon } from "../../icons/FileTreeIcon";
 import { FileTreeView } from "./FileTreeView";
 
-const shortcutDef = mustGetViewerShortcutDef("file-tree");
+const shortcutDef = mustGetViewerShortcutDef("file-view");
 
 registerView({
   id: shortcutDef.viewId,

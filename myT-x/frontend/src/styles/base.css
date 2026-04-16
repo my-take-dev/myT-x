@@ -40,10 +40,13 @@
     /* ── Layout ── */
     --sidebar-width: 280px;
     --activity-strip-width: 36px;
+    --dock-divider-width: 4px;
+    --dock-app-scale: 1;
+    --dock-app-unscaled-width: 100%;
+    --dock-app-unscaled-height: 100%;
     /* ── Z-index ── */
     --z-activity-strip: 50;
     --z-viewer-overlay: 40;
-    --z-chat-overlay: 30;
     --z-context-menu: 100;
     --z-modal: 1000;
     /* ── Git colors ── */
@@ -113,6 +116,24 @@ button {
     display: flex;
     flex: 1 1 auto;
     min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.app-body__inner {
+    display: flex;
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    transform-origin: top left;
+}
+
+.app-body--viewer-scaled .app-body__inner {
+    width: var(--dock-app-unscaled-width, 100%);
+    height: var(--dock-app-unscaled-height, 100%);
+    transform: scale(var(--dock-app-scale, 1));
 }
 
 .sidebar {

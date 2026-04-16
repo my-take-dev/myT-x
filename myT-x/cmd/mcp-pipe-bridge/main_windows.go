@@ -43,10 +43,22 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if err := pipebridge.WriteCallerPaneHandshake(conn, callerPaneIDFromEnv()); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp-pipe-bridge: handshake failed: %v\n", err)
+		os.Exit(1)
+	}
+
 	if err := pipebridge.Bridge(ctx, os.Stdin, os.Stdout, conn); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "mcp-pipe-bridge: relay failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func callerPaneIDFromEnv() string {
+	if paneID := strings.TrimSpace(os.Getenv("TMUX_PANE")); paneID != "" {
+		return paneID
+	}
+	return strings.TrimSpace(os.Getenv("GO_TMUX_PANE"))
 }
 
 func parseCLI(args []string) (cliConfig, error) {

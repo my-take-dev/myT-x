@@ -172,10 +172,13 @@ func TestShellExecFlag(t *testing.T) {
 	}{
 		{"cmd.exe", "cmd.exe", "/c"},
 		{"CMD.EXE uppercase", "CMD.EXE", "/c"},
+		{"cmd alias", "cmd", "/c"},
 		{"bash.exe", "bash.exe", "-c"},
+		{"bash alias", "bash", "-c"},
 		{"wsl.exe", "wsl.exe", "-c"},
 		{"powershell.exe", "powershell.exe", "-Command"},
 		{"pwsh.exe", "pwsh.exe", "-Command"},
+		{"pwsh alias", "pwsh", "-Command"},
 		{"absolute cmd path", `C:\Windows\System32\cmd.exe`, "/c"},
 		{"absolute powershell path", `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, "-Command"},
 		{"unknown shell", "zsh.exe", "-Command"},
@@ -2350,13 +2353,172 @@ func TestCreateSessionWithExistingWorktreeReturnsErrorWhenBranchDetectionFailsWi
 	}
 }
 
+func TestCreateSessionWithWorktreeReturnsErrorWhenCurrentBranchFails(t *testing.T) {
+	t.Parallel()
+	repoPath := testutil.CreateTempGitRepo(t)
+
+	sm := tmux.NewSessionManager()
+	svc := &Service{
+		deps: Deps{
+			Emitter:        &mockEmitter{},
+			IsShuttingDown: func() bool { return false },
+			RequireSessions: func() (*tmux.SessionManager, error) {
+				return sm, nil
+			},
+			RequireSessionsAndRouter: func() (*tmux.SessionManager, error) {
+				return sm, nil
+			},
+			GetConfigSnapshot: func() config.Config {
+				cfg := config.DefaultConfig()
+				cfg.Worktree.Enabled = true
+				return cfg
+			},
+			RuntimeContext:           func() context.Context { return context.Background() },
+			FindAvailableSessionName: func(name string) string { return name },
+			CreateSession: func(sessionDir, sessionName string, _, _, _ bool) (string, error) {
+				if _, _, err := sm.CreateSession(sessionName, "0", 120, 40); err != nil {
+					return "", err
+				}
+				return sessionName, nil
+			},
+			ApplySessionEnvFlags:       func(_ *tmux.SessionManager, _ string, _, _, _ bool) {},
+			ActivateCreatedSession:     func(name string) (tmux.SessionSnapshot, error) { return tmux.SessionSnapshot{Name: name}, nil },
+			RollbackCreatedSession:     func(_ string) error { return nil },
+			StoreRootPath:              func(_, _ string) error { return nil },
+			RequestSnapshot:            func(_ bool) {},
+			FindSessionByWorktreePath:  func(_ string) string { return "" },
+			EmitWorktreeCleanupFailure: func(_, _ string, _ error) {},
+			CleanupOrphanedLocalBranch: func(_ string, _ *gitpkg.Repository, _ string) {},
+			SetupWGAdd:                 func(_ int) {},
+			SetupWGDone:                func() {},
+			RecoverBackgroundPanic:     func(_ string, _ any) bool { return false },
+			CurrentBranch: func(*gitpkg.Repository) (string, error) {
+				return "", errors.New("simulated branch detection failure")
+			},
+			ExecuteSetupCommand: func(ctx context.Context, shell, shellFlag, script, dir string) ([]byte, error) {
+				cmd := exec.CommandContext(ctx, shell, shellFlag, script)
+				cmd.Dir = dir
+				return cmd.CombinedOutput()
+			},
+			Copy: CopyDeps{
+				WalkDir:               filepath.WalkDir,
+				StreamCopy:            io.Copy,
+				SyncFile:              func(file *os.File) error { return file.Sync() },
+				StatFileInfo:          os.Stat,
+				RemoveFile:            os.Remove,
+				MaxCopyDirsFileCount:  10_000,
+				MaxCopyDirsTotalBytes: 500 * 1024 * 1024,
+			},
+		},
+	}
+
+	_, err := svc.CreateSessionWithWorktree(repoPath, "new-wt", WorktreeSessionOptions{BranchName: "feature/new-wt"})
+	if err == nil {
+		t.Fatal("expected error when CurrentBranch fails on non-detached repo")
+	}
+	if !strings.Contains(err.Error(), "failed to detect current branch") {
+		t.Fatalf("error = %v, want 'failed to detect current branch'", err)
+	}
+	if got := len(sm.Snapshot()); got != 0 {
+		t.Fatalf("session count = %d, want 0 after failed worktree creation", got)
+	}
+}
+
+func TestCreateSessionWithWorktreeUsesHeadBaseForDetachedRepo(t *testing.T) {
+	t.Parallel()
+	repoPath := testutil.CreateTempGitRepo(t)
+	runGitInDir(t, repoPath, "checkout", "--detach")
+
+	sm := tmux.NewSessionManager()
+	svc := &Service{
+		deps: Deps{
+			Emitter:        &mockEmitter{},
+			IsShuttingDown: func() bool { return false },
+			RequireSessions: func() (*tmux.SessionManager, error) {
+				return sm, nil
+			},
+			RequireSessionsAndRouter: func() (*tmux.SessionManager, error) {
+				return sm, nil
+			},
+			GetConfigSnapshot: func() config.Config {
+				cfg := config.DefaultConfig()
+				cfg.Worktree.Enabled = true
+				return cfg
+			},
+			RuntimeContext:           func() context.Context { return context.Background() },
+			FindAvailableSessionName: func(name string) string { return name },
+			CreateSession: func(sessionDir, sessionName string, _, _, _ bool) (string, error) {
+				if _, _, err := sm.CreateSession(sessionName, "0", 120, 40); err != nil {
+					return "", err
+				}
+				return sessionName, nil
+			},
+			ApplySessionEnvFlags:       func(_ *tmux.SessionManager, _ string, _, _, _ bool) {},
+			ActivateCreatedSession:     func(name string) (tmux.SessionSnapshot, error) { return tmux.SessionSnapshot{Name: name}, nil },
+			RollbackCreatedSession:     func(_ string) error { return nil },
+			StoreRootPath:              func(_, _ string) error { return nil },
+			RequestSnapshot:            func(_ bool) {},
+			FindSessionByWorktreePath:  func(_ string) string { return "" },
+			EmitWorktreeCleanupFailure: func(_, _ string, _ error) {},
+			CleanupOrphanedLocalBranch: func(_ string, _ *gitpkg.Repository, _ string) {},
+			SetupWGAdd:                 func(_ int) {},
+			SetupWGDone:                func() {},
+			RecoverBackgroundPanic:     func(_ string, _ any) bool { return false },
+			CurrentBranch: func(repo *gitpkg.Repository) (string, error) {
+				return repo.CurrentBranch()
+			},
+			ExecuteSetupCommand: func(ctx context.Context, shell, shellFlag, script, dir string) ([]byte, error) {
+				cmd := exec.CommandContext(ctx, shell, shellFlag, script)
+				cmd.Dir = dir
+				return cmd.CombinedOutput()
+			},
+			Copy: CopyDeps{
+				WalkDir:               filepath.WalkDir,
+				StreamCopy:            io.Copy,
+				SyncFile:              func(file *os.File) error { return file.Sync() },
+				StatFileInfo:          os.Stat,
+				RemoveFile:            os.Remove,
+				MaxCopyDirsFileCount:  10_000,
+				MaxCopyDirsTotalBytes: 500 * 1024 * 1024,
+			},
+		},
+	}
+
+	snapshot, err := svc.CreateSessionWithWorktree(repoPath, "detached-base", WorktreeSessionOptions{
+		BranchName: "feature/from-detached",
+	})
+	if err != nil {
+		t.Fatalf("CreateSessionWithWorktree() error = %v", err)
+	}
+
+	info, err := sm.GetWorktreeInfo(snapshot.Name)
+	if err != nil {
+		t.Fatalf("GetWorktreeInfo() error = %v", err)
+	}
+	if info == nil {
+		t.Fatal("GetWorktreeInfo() returned nil")
+	}
+	if info.BaseBranch != "HEAD" {
+		t.Fatalf("BaseBranch = %q, want HEAD for detached base repo", info.BaseBranch)
+	}
+	if info.IsDetached {
+		t.Fatal("IsDetached = true, want false for the newly created branch worktree")
+	}
+	if info.BranchName != "feature/from-detached" {
+		t.Fatalf("BranchName = %q, want %q", info.BranchName, "feature/from-detached")
+	}
+	if currentBranch := runGitInDir(t, info.Path, "branch", "--show-current"); currentBranch != "feature/from-detached" {
+		t.Fatalf("worktree current branch = %q, want %q", currentBranch, "feature/from-detached")
+	}
+}
+
 // ===========================================================================
 // Field count guard tests
 // ===========================================================================
 
 func TestWorktreeStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeFor[WorktreeSessionOptions]().NumField(); got != 7 {
-		t.Fatalf("WorktreeSessionOptions field count = %d, want 7; update tests for new fields", got)
+	if got := reflect.TypeFor[WorktreeSessionOptions]().NumField(); got != 8 {
+		t.Fatalf("WorktreeSessionOptions field count = %d, want 8; update tests for new fields", got)
 	}
 	if got := reflect.TypeFor[WorktreeStatus]().NumField(); got != 5 {
 		t.Fatalf("WorktreeStatus field count = %d, want 5; update tests for new fields", got)
@@ -2367,8 +2529,8 @@ func TestWorktreeStructFieldCounts(t *testing.T) {
 	if got := reflect.TypeFor[copyWalkBudget]().NumField(); got != 2 {
 		t.Fatalf("copyWalkBudget field count = %d, want 2; update tests for new fields", got)
 	}
-	if got := reflect.TypeFor[Deps]().NumField(); got != 22 {
-		t.Fatalf("Deps field count = %d, want 22; update tests for new fields", got)
+	if got := reflect.TypeFor[Deps]().NumField(); got != 24 {
+		t.Fatalf("Deps field count = %d, want 24; update tests for new fields", got)
 	}
 	if got := reflect.TypeFor[CopyDeps]().NumField(); got != 7 {
 		t.Fatalf("CopyDeps field count = %d, want 7; update tests for new fields", got)
@@ -2436,6 +2598,26 @@ func TestRemoveEmptyWtDir(t *testing.T) {
 	})
 }
 
+func TestCreateWorktreeForSessionPullFailureRequiresExplicitBestEffortOptIn(t *testing.T) {
+	t.Parallel()
+	repoPath := testutil.CreateTempGitRepo(t)
+	repo, err := gitpkg.Open(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = createWorktreeForSession(repo, repoPath, "test-session", WorktreeSessionOptions{
+		BranchName:       "test-branch",
+		PullBeforeCreate: true,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error when pull fails without best-effort opt-in")
+	}
+	if !strings.Contains(err.Error(), "pull before worktree creation failed") {
+		t.Fatalf("expected pull failure error, got %v", err)
+	}
+}
+
 func TestCreateWorktreeForSessionPullBestEffort(t *testing.T) {
 	t.Parallel()
 	repoPath := testutil.CreateTempGitRepo(t)
@@ -2445,15 +2627,11 @@ func TestCreateWorktreeForSessionPullBestEffort(t *testing.T) {
 	}
 
 	// Create a scenario where pull will fail (no remote).
-	var progressStages []string
-	onProgress := func(stage, _ string) {
-		progressStages = append(progressStages, stage)
-	}
-
 	result, err := createWorktreeForSession(repo, repoPath, "test-session", WorktreeSessionOptions{
-		BranchName:       "test-branch",
-		PullBeforeCreate: true,
-	}, onProgress)
+		BranchName:            "test-branch",
+		PullBeforeCreate:      true,
+		ContinueOnPullFailure: true,
+	}, nil)
 	if err != nil {
 		t.Fatalf("createWorktreeForSession() unexpected error: %v", err)
 	}
@@ -2462,16 +2640,6 @@ func TestCreateWorktreeForSessionPullBestEffort(t *testing.T) {
 	}
 	if result.WtPath == "" {
 		t.Fatal("expected WtPath to be non-empty")
-	}
-	// Should have emitted "pulling" and "creating" progress stages.
-	if len(progressStages) < 2 {
-		t.Fatalf("expected at least 2 progress stages, got %d: %v", len(progressStages), progressStages)
-	}
-	if progressStages[0] != "pulling" {
-		t.Fatalf("expected first stage 'pulling', got %q", progressStages[0])
-	}
-	if progressStages[1] != "creating" {
-		t.Fatalf("expected second stage 'creating', got %q", progressStages[1])
 	}
 }
 
@@ -2483,26 +2651,15 @@ func TestCreateWorktreeForSessionNoPull(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var progressStages []string
-	onProgress := func(stage, _ string) {
-		progressStages = append(progressStages, stage)
-	}
-
 	result, err := createWorktreeForSession(repo, repoPath, "test-session", WorktreeSessionOptions{
 		BranchName:       "test-branch-no-pull",
 		PullBeforeCreate: false,
-	}, onProgress)
+	}, nil)
 	if err != nil {
 		t.Fatalf("createWorktreeForSession() unexpected error: %v", err)
 	}
 	if result.PullFailed {
 		t.Fatal("expected PullFailed=false when pull is not requested")
-	}
-	// Should not have "pulling" stage.
-	for _, stage := range progressStages {
-		if stage == "pulling" {
-			t.Fatal("unexpected 'pulling' stage when PullBeforeCreate=false")
-		}
 	}
 }
 

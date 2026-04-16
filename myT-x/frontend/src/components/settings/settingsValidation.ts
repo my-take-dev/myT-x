@@ -1,6 +1,6 @@
 import type {ClaudeEnvEntry, OverrideEntry, PaneEnvEntry} from "./types";
 import {EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK, VALID_EFFORT_LEVELS} from "./constants";
-import {VIEWER_SHORTCUTS} from "../viewer/viewerShortcutDefinitions";
+import {getViewerShortcutValue, VIEWER_SHORTCUTS} from "../viewer/viewerShortcutDefinitions";
 import {getEffectiveViewerShortcut, hasShortcutModifier, normalizeShortcut} from "../viewer/viewerShortcutUtils";
 import {translateSettings} from "./settingsI18n";
 
@@ -20,7 +20,10 @@ export function validateViewerShortcuts(
     };
 
     for (const {viewId, defaultShortcut} of VIEWER_SHORTCUTS) {
-        const effectiveShortcut = getEffectiveViewerShortcut(viewerShortcuts[viewId], defaultShortcut);
+        const effectiveShortcut = getEffectiveViewerShortcut(
+            getViewerShortcutValue(viewerShortcuts, viewId),
+            defaultShortcut,
+        );
         if (!effectiveShortcut) {
             continue;
         }

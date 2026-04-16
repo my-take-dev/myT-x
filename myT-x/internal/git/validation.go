@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // branchNameRegex validates git branch names.
@@ -29,7 +30,34 @@ const (
 	// WtDirSuffix is the directory suffix for worktree directories (e.g. myapp.wt).
 	WtDirSuffix           = ".wt"
 	maxWorktreePathSuffix = 100
+	warnWorktreePathLen   = 240
+	maxWorktreePathLen    = 259
 )
+
+var windowsReservedPathNames = map[string]struct{}{
+	"CON":  {},
+	"PRN":  {},
+	"AUX":  {},
+	"NUL":  {},
+	"COM1": {},
+	"COM2": {},
+	"COM3": {},
+	"COM4": {},
+	"COM5": {},
+	"COM6": {},
+	"COM7": {},
+	"COM8": {},
+	"COM9": {},
+	"LPT1": {},
+	"LPT2": {},
+	"LPT3": {},
+	"LPT4": {},
+	"LPT5": {},
+	"LPT6": {},
+	"LPT7": {},
+	"LPT8": {},
+	"LPT9": {},
+}
 
 // IsValidBranchName checks if the given branch name is valid.
 func IsValidBranchName(name string) bool {
@@ -153,9 +181,23 @@ func ValidateWorktreePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("worktree path cannot be empty")
 	}
+	if strings.ContainsRune(path, '\x00') {
+		return fmt.Errorf("worktree path must not contain null bytes")
+	}
 	cleanedPath := filepath.Clean(path)
 	if !filepath.IsAbs(cleanedPath) {
 		return fmt.Errorf("worktree path must be absolute: %s", path)
+	}
+	if isUNCPath(cleanedPath) {
+		return fmt.Errorf("worktree path must not use UNC path: %s", path)
+	}
+	pathLen := utf8.RuneCountInString(cleanedPath)
+	if pathLen > maxWorktreePathLen {
+		return fmt.Errorf("worktree path exceeds Windows MAX_PATH limit (%d): %s", maxWorktreePathLen, path)
+	}
+	if pathLen > warnWorktreePathLen {
+		slog.Warn("[WARN-GIT] worktree path is approaching Windows MAX_PATH limit",
+			"path", cleanedPath, "length", pathLen, "limit", maxWorktreePathLen)
 	}
 
 	segments := strings.FieldsFunc(path, func(r rune) bool {
@@ -164,12 +206,52 @@ func ValidateWorktreePath(path string) error {
 	if slices.Contains(segments, "..") {
 		return fmt.Errorf("worktree path must not contain '..' path segment: %s", path)
 	}
+	for _, segment := range trimVolumePrefixFromSegments(cleanedPath, segments) {
+		if segment == "" {
+			continue
+		}
+		if strings.HasSuffix(segment, " ") || strings.HasSuffix(segment, ".") {
+			return fmt.Errorf("worktree path segment must not end with space or dot: %s", segment)
+		}
+		if isWindowsReservedPathName(segment) {
+			return fmt.Errorf("worktree path segment uses reserved Windows device name: %s", segment)
+		}
+	}
 
 	base := filepath.Base(cleanedPath)
 	if base == ".git" || base == ".hg" || base == ".svn" {
 		return fmt.Errorf("worktree path must not target VCS directory: %s", path)
 	}
 	return nil
+}
+
+func isUNCPath(path string) bool {
+	return strings.HasPrefix(path, `\\`) || strings.HasPrefix(path, `//`) ||
+		strings.HasPrefix(strings.ToLower(path), `\\?\`)
+}
+
+func trimVolumePrefixFromSegments(cleanedPath string, segments []string) []string {
+	volume := filepath.VolumeName(cleanedPath)
+	if volume == "" || len(segments) == 0 {
+		return segments
+	}
+	if strings.EqualFold(segments[0], volume) {
+		return segments[1:]
+	}
+	return segments
+}
+
+func isWindowsReservedPathName(segment string) bool {
+	trimmed := strings.TrimSpace(segment)
+	if trimmed == "" {
+		return false
+	}
+	base := trimmed
+	if dot := strings.IndexRune(base, '.'); dot >= 0 {
+		base = base[:dot]
+	}
+	_, ok := windowsReservedPathNames[strings.ToUpper(base)]
+	return ok
 }
 
 // PostRemovalCleanup runs standard post-worktree-removal housekeeping:
