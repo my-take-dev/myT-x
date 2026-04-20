@@ -197,6 +197,7 @@ type testMessageRepo struct{}
 
 func (testMessageRepo) SaveMessage(context.Context, domain.TaskMessage) error { return nil }
 func (testMessageRepo) DeleteMessage(context.Context, string) error           { return nil }
+func (testMessageRepo) DeleteResponse(context.Context, string) error          { return nil }
 func (testMessageRepo) SaveResponse(context.Context, domain.TaskMessage) error {
 	return nil
 }

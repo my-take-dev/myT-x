@@ -162,7 +162,9 @@ export function SettingsModal({open, onClose}: SettingsModalProps) {
                 </div>
 
                 {s.loading ? (
-                    <div className="modal-loading">{t("settings.modal.loading", "設定を読み込み中...", "Loading settings...")}</div>
+                    <div className="modal-loading settings-loading">
+                        {t("settings.modal.loading", "設定を読み込み中...", "Loading settings...")}
+                    </div>
                 ) : (
                     <SettingsTabs s={s} dispatch={dispatch} validationRules={validationRules}/>
                 )}

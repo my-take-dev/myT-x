@@ -3,7 +3,9 @@ import {
     AddMemberToUnaffiliatedTeam,
     BootstrapMemberToPane,
     DeleteOrchestratorTeam,
+    EnlistPane as EnlistPaneRaw,
     EnsureUnaffiliatedTeam,
+    GetSessionEnlistmentContext as GetSessionEnlistmentContextRaw,
     LoadOrchestratorTeams,
     ReorderOrchestratorTeams,
     SaveOrchestratorTeam,
@@ -17,7 +19,10 @@ import {toErrorMessage} from "../../../../utils/errorUtils";
 import type {
     BootstrapMemberToPaneRequest,
     BootstrapMemberToPaneResult,
+    EnlistPaneRequest,
+    EnlistPaneResult,
     OrchestratorStorageLocation,
+    OrchestratorSessionEnlistmentContext,
     OrchestratorTeamDefinition,
     OrchestratorTeamDraft,
     OrchestratorTeamMember,
@@ -176,6 +181,23 @@ export function useOrchestratorTeams() {
         return result as OrchestratorTeamDefinition;
     }, [activeSession]);
 
+    const getSessionEnlistmentContext = useCallback(async (): Promise<OrchestratorSessionEnlistmentContext> => {
+        const result = await GetSessionEnlistmentContextRaw(activeSession ?? "");
+        return result as OrchestratorSessionEnlistmentContext;
+    }, [activeSession]);
+
+    const enlistPane = useCallback(async (request: EnlistPaneRequest): Promise<EnlistPaneResult> => {
+        setError(null);
+        setNotice(null);
+        try {
+            const result = await EnlistPaneRaw(orchestrator.EnlistPaneRequest.createFrom(request)) as EnlistPaneResult;
+            return result;
+        } catch (err) {
+            setError(toErrorMessage(err, "Failed to enlist pane."));
+            throw err;
+        }
+    }, []);
+
     return {
         teams,
         activeSession,
@@ -194,5 +216,7 @@ export function useOrchestratorTeams() {
         addMemberToUnaffiliatedTeam,
         saveUnaffiliatedTeamMembers,
         ensureUnaffiliatedTeam,
+        getSessionEnlistmentContext,
+        enlistPane,
     };
 }

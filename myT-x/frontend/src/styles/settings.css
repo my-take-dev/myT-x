@@ -1,10 +1,15 @@
+:root {
+  --menu-bar-height: 32px;
+}
+
 /* Menu bar */
 .menu-bar {
-  height: 32px;
-  min-height: 32px;
-  display: flex;
-  justify-content: space-between;
+  height: var(--menu-bar-height);
+  min-height: var(--menu-bar-height);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
+  gap: 12px;
   padding: 0 12px;
   background: rgba(10, 15, 24, 0.98);
   border-bottom: 1px solid var(--line);
@@ -20,10 +25,58 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+  justify-self: start;
 }
 
 .menu-bar-group--end {
-  margin-left: 12px;
+  justify-self: end;
+}
+
+.menu-bar-center {
+  display: flex;
+  min-width: 0;
+  justify-self: center;
+}
+
+.menu-bar-search-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: clamp(180px, 28vw, 240px);
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+
+.menu-bar-search-trigger:hover {
+  border-color: var(--accent-22);
+  background: rgba(246, 211, 101, 0.08);
+  color: var(--fg-main);
+}
+
+.menu-bar-search-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-22);
+}
+
+.menu-bar-search-trigger svg {
+  flex-shrink: 0;
+}
+
+.menu-bar-search-placeholder {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: left;
+  text-overflow: ellipsis;
 }
 
 .menu-bar-trigger {
@@ -90,11 +143,48 @@
   cursor: default;
 }
 
+@media (max-width: 1180px) {
+  .menu-bar {
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .menu-bar-search-trigger {
+    width: clamp(148px, 24vw, 200px);
+  }
+
+  .menu-bar-language {
+    gap: 6px;
+  }
+
+  .menu-bar-segment {
+    padding: 3px 6px;
+  }
+}
+
+@media (max-width: 980px) {
+  .menu-bar {
+    gap: 6px;
+    grid-template-columns: minmax(0, 1fr) minmax(148px, 200px) auto;
+  }
+
+  .menu-bar-search-trigger {
+    width: 100%;
+  }
+
+  .menu-bar-label {
+    display: none;
+  }
+}
+
 /* ── Settings Modal (wider for sidebar layout) ── */
 .settings-panel {
   width: 740px;
   max-width: 92vw;
-  max-height: 85vh;
+  /* 540px fits the header, footer, and typical settings forms on standard desktop windows. */
+  height: 540px;
+  /* Keep 24px of breathing room above and below the modal when the viewport is unusually short. */
+  max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -120,6 +210,23 @@
   gap: 2px;
   min-height: 0;
   overflow-y: auto;
+}
+
+.settings-sidebar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.settings-sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-sidebar::-webkit-scrollbar-thumb {
+  background: var(--accent-22);
+  border-radius: 2px;
+}
+
+.settings-sidebar::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
 }
 
 .settings-sidebar-item {
@@ -158,6 +265,11 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.settings-loading {
+  flex-grow: 1;
+  min-height: 0;
 }
 
 /* ── Section Headers ── */

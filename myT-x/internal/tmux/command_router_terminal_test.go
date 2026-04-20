@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"myT-x/internal/config"
 	"myT-x/internal/ipc"
 )
 
@@ -467,39 +466,6 @@ func envSliceToMap(items []string) map[string]string {
 		out[key] = value
 	}
 	return out
-}
-
-// TestBlockedKeyListsMatch is a guard test that ensures config.warnOnlyBlockedKeys
-// and tmux.blockedEnvironmentKeys contain exactly the same key set.
-// INVARIANT: frontend settingsValidation.ts BLOCKED_ENV_KEYS must also match
-// (verified manually or via integration test, as TS is outside Go test scope).
-func TestBlockedKeyListsMatch(t *testing.T) {
-	configKeys := config.BlockedKeyNames()
-	tmuxKeys := blockedEnvironmentKeys
-
-	// Extract sorted key slices for readable diff on failure.
-	configSorted := make([]string, 0, len(configKeys))
-	for k := range configKeys {
-		configSorted = append(configSorted, k)
-	}
-	sort.Strings(configSorted)
-
-	tmuxSorted := make([]string, 0, len(tmuxKeys))
-	for k := range tmuxKeys {
-		tmuxSorted = append(tmuxSorted, k)
-	}
-	sort.Strings(tmuxSorted)
-
-	if len(configSorted) != len(tmuxSorted) {
-		t.Fatalf("blocked key count mismatch: config=%d (%v), tmux=%d (%v)",
-			len(configSorted), configSorted, len(tmuxSorted), tmuxSorted)
-	}
-	for i := range configSorted {
-		if configSorted[i] != tmuxSorted[i] {
-			t.Errorf("blocked key mismatch at index %d: config=%q, tmux=%q\nconfig keys: %v\ntmux keys:   %v",
-				i, configSorted[i], tmuxSorted[i], configSorted, tmuxSorted)
-		}
-	}
 }
 
 // TestFrontendBackendBlockedEnvKeysConsistency verifies that the backend

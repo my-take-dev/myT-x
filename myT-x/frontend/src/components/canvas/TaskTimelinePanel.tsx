@@ -39,6 +39,53 @@ function formatTime(iso: string): string {
     }
 }
 
+interface PayloadDetail {
+    content?: string;
+    preview?: string;
+    storageMode?: string;
+    artifactPaths?: string[];
+    partCount?: number;
+    contentChars?: number;
+    sha256?: string;
+}
+
+function hasPayloadDetail(detail: PayloadDetail): boolean {
+    return Boolean(
+        detail.content ||
+        detail.preview ||
+        detail.storageMode ||
+        (detail.artifactPaths && detail.artifactPaths.length > 0) ||
+        detail.partCount ||
+        detail.contentChars ||
+        detail.sha256
+    );
+}
+
+function formatPayloadDetail(detail: PayloadDetail): string {
+    if (detail.content) {
+        return detail.content;
+    }
+
+    const lines: string[] = [detail.preview || "(なし)"];
+    if (detail.storageMode && detail.storageMode !== "inline") {
+        lines.push(`storage: ${detail.storageMode}`);
+    }
+    if (detail.contentChars) {
+        lines.push(`chars: ${detail.contentChars}`);
+    }
+    if (detail.partCount) {
+        lines.push(`parts: ${detail.partCount}`);
+    }
+    if (detail.sha256) {
+        lines.push(`sha256: ${detail.sha256}`);
+    }
+    if (detail.artifactPaths && detail.artifactPaths.length > 0) {
+        lines.push("artifacts:");
+        lines.push(...detail.artifactPaths);
+    }
+    return lines.join("\n");
+}
+
 // --- TaskTicket ---
 
 interface TaskTicketProps {
@@ -51,6 +98,24 @@ interface TaskTicketProps {
 function TaskTicket({task, sessionName, isExpanded, onToggleExpand}: TaskTicketProps) {
     const [detail, setDetail] = useState<OrchestratorTaskDetail | null>(null);
     const [loading, setLoading] = useState(false);
+    const messageDetail = detail ? {
+        content: detail.message_content,
+        preview: detail.message_preview,
+        storageMode: detail.message_storage_mode,
+        artifactPaths: detail.message_artifact_paths,
+        partCount: detail.message_part_count,
+        contentChars: detail.message_content_chars,
+        sha256: detail.message_sha256,
+    } : null;
+    const responseDetail = detail ? {
+        content: detail.response_content,
+        preview: detail.response_preview,
+        storageMode: detail.response_storage_mode,
+        artifactPaths: detail.response_artifact_paths,
+        partCount: detail.response_part_count,
+        contentChars: detail.response_content_chars,
+        sha256: detail.response_sha256,
+    } : null;
 
     const handleClick = useCallback(() => {
         // 展開するときに詳細を取得
@@ -120,14 +185,14 @@ function TaskTicket({task, sessionName, isExpanded, onToggleExpand}: TaskTicketP
                             <div className="canvas-timeline-ticket-section">
                                 <div className="canvas-timeline-ticket-section-label">依頼</div>
                                 <div className="canvas-timeline-ticket-message canvas-timeline-ticket-full">
-                                    {detail.message_content || "(なし)"}
+                                    {messageDetail ? formatPayloadDetail(messageDetail) : "(なし)"}
                                 </div>
                             </div>
-                            {detail.response_content && (
+                            {responseDetail && hasPayloadDetail(responseDetail) && (
                                 <div className="canvas-timeline-ticket-section">
                                     <div className="canvas-timeline-ticket-section-label">応答</div>
                                     <div className="canvas-timeline-ticket-response canvas-timeline-ticket-full">
-                                        {detail.response_content}
+                                        {formatPayloadDetail(responseDetail)}
                                     </div>
                                 </div>
                             )}

@@ -15,7 +15,7 @@ const (
 	maxSkillLen         = 100
 	maxSkillDescLen     = 400
 	maxSkills           = 20
-	maxMessageLen       = 8000
+	maxMessageLen       = usecase.MaxAcceptedMessageChars
 	maxTaskIDLen        = 64
 	maxCaptureLines     = 200
 	maxPaneTitleLen     = 30

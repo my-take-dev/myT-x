@@ -1,15 +1,15 @@
 import {ErrorBoundary} from "../ErrorBoundary";
-import {getRegisteredViews} from "./viewerRegistry";
+import {useRegisteredViews} from "./useRegisteredViews";
 import {useViewerStore} from "./viewerStore";
 
 export function ViewOverlay() {
   const activeViewId = useViewerStore((s) => s.activeViewId);
+  const views = useRegisteredViews();
 
   if (activeViewId === null) {
     return null;
   }
 
-  const views = getRegisteredViews();
   const activeView = views.find((v) => v.id === activeViewId);
   if (!activeView) {
     return null;

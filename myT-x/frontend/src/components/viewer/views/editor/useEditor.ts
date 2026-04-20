@@ -33,7 +33,7 @@ export interface EditorMutationResult<T> {
 }
 
 export function useEditor(): UseEditorResult {
-    const sessions = useTmuxStore((state) => state.sessions ?? []);
+    const sessions = useTmuxStore((state) => state.sessions);
     const activeSession = useTmuxStore((state) => state.activeSession);
     const activeSessionSnapshot = useMemo(
         () => (activeSession ? sessions.find((entry) => entry.name === activeSession) ?? null : null),

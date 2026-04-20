@@ -15,8 +15,6 @@ interface ClaudePanelProps {
     readonly titlePrefix?: string;
 }
 
-const CLAUDE_COLOR = "#d97757";
-
 export function ClaudePanel({stats, compact = false, titlePrefix}: ClaudePanelProps) {
     const tr = useUsageDashboardI18n();
     const [ranking, setRanking] = useState<RankingKey>("skills");
@@ -88,7 +86,7 @@ export function ClaudePanel({stats, compact = false, titlePrefix}: ClaudePanelPr
                     labelSessions={tr("viewer.usageDashboard.sessions", "セッション", "Sessions")}
                     labelSecondary={tr("viewer.usageDashboard.messages", "メッセージ", "Messages")}
                     labelToolCalls={tr("viewer.usageDashboard.toolCalls", "ツール呼び出し", "Tool Calls")}
-                    color={CLAUDE_COLOR}
+                    colorVar="--udash-color-claude"
                 />
             </section>
         </div>

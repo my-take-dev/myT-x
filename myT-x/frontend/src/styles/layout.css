@@ -307,6 +307,14 @@
     color: var(--fg-dim);
 }
 
+.terminal-search-results {
+    min-width: 44px;
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
 .terminal-search-btn {
     border: 1px solid rgba(150, 182, 219, 0.35);
     background: rgba(150, 182, 219, 0.09);
@@ -424,6 +432,12 @@
     color: var(--accent);
 }
 
+.terminal-toolbar-btn-root-active {
+    border-color: var(--accent);
+    background: rgba(246, 211, 101, 0.25);
+    color: var(--accent);
+}
+
 .sync-indicator {
     color: var(--accent);
     font-weight: 700;
@@ -455,6 +469,13 @@
     padding-top: 15vh;
 }
 
+.quick-search-dropdown-shell {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    pointer-events: none;
+}
+
 .quick-search-panel {
     width: 480px;
     max-width: 90vw;
@@ -466,6 +487,15 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+}
+
+.quick-search-panel--dropdown {
+    position: fixed;
+    top: calc(var(--menu-bar-height) + 8px);
+    left: 50%;
+    width: min(480px, calc(100vw - 24px));
+    transform: translateX(-50%);
+    pointer-events: auto;
 }
 
 .quick-search-input {
@@ -530,4 +560,3 @@
     font-size: 0.82rem;
     background: var(--bg-panel-strong);
 }
-

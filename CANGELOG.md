@@ -1,4 +1,65 @@
-# Changelog
+# 変更履歴
+
+## v1.0.8
+
+### MCPオーケストレーター改善
+
+- **メンバー追加時のskill登録・Canvasライン描画改善**（`luminous-eclipse`）
+  - MCP経由のペイン作成をWails UI (`SplitWindowInternal`) と同一経路に統合（`routerBackedSplitter`）
+  - メンバー追加時にagentsテーブルへのprovisional登録を即時実行（Canvas即時反映）
+  - `register_agent(skills=nil)` で既存skills保持マージを追加（pre-populate値の保護）
+  - MCPブートストラッププロンプトにskill補完ヒントを追加（Wails UIと同強度）
+  - `orchestrator:agents-updated` イベント購読をフロントエンドに追加
+  - 未登録ペイン検出フック・Canvasノードマーカー・右サイドバーバナー・Enlistmentモーダルを実装
+  - `EnlistPaneModal` フロントエンドテスト追加（セッションコンテキスト表示、チームプリセレクト、リクエストペイロード生成）
+  - ブロック環境キー整合性ガードを `internal/tmux` テストから移動しインポートサイクルを解消
+
+- **オーケストレーターTask API拡張**
+  - 外部ファイル保存されたペイロードのメタデータ取得に対応
+  - TaskTimelinePanelの表示改善
+
+### キャンバスモード
+
+- **Treeレイアウト改善**（`validated-greeting-shore`）
+  - ルートペイン手動指定機能追加（王冠アイコンのトグルボタン、Canvasモード時のみ表示）
+  - ルート選出アルゴリズムを4段階に拡張（手動指定 → Orchestrator役割 → 自然ルート → 改良rootScore）
+  - タイブレークをペインID文字列比較からペインindex数値昇順に変更
+  - セッション別のrootPaneId保存・復元対応
+
+### ターミナル検索
+
+- **SearchBar機能拡張**
+  - インクリメンタル検索対応
+  - 検索結果カウンタ表示（`3 / 17` 形式）
+  - IME入力対応
+  - 装飾オプション追加（一致箇所のハイライト表示）
+
+### クイック検索（Ctrl+P）
+
+- **コマンドパレット実装**
+  - セッション切り替え、ビューアー起動、タスクスケジューラテンプレート選択に対応
+  - 共通コマンド実行機能
+
+- **MenuBarトリガーボタン追加**（`ctrl-p-ctrl-p-ctrl-p-distributed-sun`）
+  - MenuBar中央に検索バー風ボタンを配置
+  - クリックでドロップダウンモード、Ctrl+Pで従来のパレットモードを切替
+  - アンカー位置計算、外部クリック検出対応
+
+### 設定画面
+
+- **SettingsModal改善**（`myt-x-noble-squid`）
+  - パネルサイズを固定化（540px、極小ウィンドウ時の安全弁あり）
+  - サイドバーのスクロールバースタイリング追加
+  - カテゴリ切替時のスクロール位置リセット
+
+### 可視化ライブラリ
+
+- **File Viewに新しいレンダラーを追加**
+  - Markmap（マインドマップ）レンダラー追加
+  - Vega / Vega-Lite（チャート）レンダラー追加
+  - WaveDrom（デジタル波形）レンダラー追加
+
+---
 
 ## v1.0.7
 

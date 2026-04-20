@@ -1,4 +1,4 @@
-import {useState, useCallback, useMemo} from "react";
+import {useState, useCallback, useMemo, useEffect, useRef} from "react";
 import {useI18n} from "../../../../i18n";
 import type {QueueConfig, QueueItem, TaskSchedulerSettings} from "./useTaskScheduler";
 import {
@@ -15,6 +15,7 @@ interface TaskSchedulerConfigProps {
     onStart: (config: QueueConfig, items: QueueItem[]) => Promise<void>;
     onBack: () => void;
     onOpenSettings: () => void;
+    onDirtyChange?: (dirty: boolean) => void;
 }
 
 export function TaskSchedulerConfig({
@@ -24,13 +25,16 @@ export function TaskSchedulerConfig({
                                         onStart,
                                         onBack,
                                         onOpenSettings,
+                                        onDirtyChange,
                                     }: TaskSchedulerConfigProps) {
     const {language, t} = useI18n();
     const tr = (key: string, jaText: string, enText: string) =>
         t(key, language === "ja" ? jaText : enText);
 
+    const initialPreExecEnabledRef = useRef(initialConfig?.pre_exec_enabled ?? false);
     const [submitting, setSubmitting] = useState(false);
     const [preExecEnabled, setPreExecEnabled] = useState(initialConfig?.pre_exec_enabled ?? false);
+    const hasUnsavedChanges = preExecEnabled !== initialPreExecEnabledRef.current;
 
     const pendingItems = useMemo(
         () => items.filter((i) => i.status === "pending"),
@@ -39,7 +43,11 @@ export function TaskSchedulerConfig({
     const settingsLoaded = savedSettings !== null;
     const canStart = pendingItems.length > 0 && !submitting && (!preExecEnabled || settingsLoaded);
 
-    // Resolve timing values from saved settings (persisted in config.yaml).
+    useEffect(() => {
+        onDirtyChange?.(hasUnsavedChanges);
+    }, [hasUnsavedChanges, onDirtyChange]);
+
+    // Resolve the effective timing values returned by the backend settings API.
     const resetDelay = resolveInitialPreExecResetDelay(savedSettings?.pre_exec_reset_delay_s);
     const idleTimeout = resolveInitialPreExecIdleTimeout(savedSettings?.pre_exec_idle_timeout_s);
     const targetMode = resolveInitialPreExecTargetMode(savedSettings?.pre_exec_target_mode);

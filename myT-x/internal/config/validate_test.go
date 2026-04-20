@@ -153,3 +153,79 @@ func TestApplyDefaultsAndValidate_TaskSchedulerTemplateLimitTruncatesValidTempla
 		t.Fatalf("len(MessageTemplates) = %d, want %d", len(cfg.TaskScheduler.MessageTemplates), MaxMessageTemplates)
 	}
 }
+
+func TestApplyDefaultsAndValidate_CanonicalizesLegacyViewerShortcutAlias(t *testing.T) {
+	cfg := newValidConfigWithTaskScheduler()
+	cfg.ViewerShortcuts = map[string]string{
+		"file-tree": "Shift+Ctrl+1",
+	}
+
+	if err := applyDefaultsAndValidate(&cfg); err != nil {
+		t.Fatalf("applyDefaultsAndValidate: %v", err)
+	}
+
+	want := map[string]string{"file-view": "Ctrl+Shift+1"}
+	if !reflect.DeepEqual(cfg.ViewerShortcuts, want) {
+		t.Fatalf("ViewerShortcuts = %#v, want %#v", cfg.ViewerShortcuts, want)
+	}
+}
+
+func TestApplyDefaultsAndValidate_DropsReservedViewerShortcut(t *testing.T) {
+	cfg := newValidConfigWithTaskScheduler()
+	cfg.ViewerShortcuts = map[string]string{
+		"git-graph": "Ctrl+Shift+V",
+	}
+
+	if err := applyDefaultsAndValidate(&cfg); err != nil {
+		t.Fatalf("applyDefaultsAndValidate: %v", err)
+	}
+
+	if cfg.ViewerShortcuts != nil {
+		t.Fatalf("ViewerShortcuts = %#v, want nil", cfg.ViewerShortcuts)
+	}
+}
+
+func TestApplyDefaultsAndValidate_DropsViewerShortcutConflictingWithGlobalHotkey(t *testing.T) {
+	cfg := newValidConfigWithTaskScheduler()
+	cfg.GlobalHotkey = "Ctrl+Shift+1"
+	cfg.ViewerShortcuts = map[string]string{
+		"git-graph": "Shift+Ctrl+1",
+	}
+
+	if err := applyDefaultsAndValidate(&cfg); err != nil {
+		t.Fatalf("applyDefaultsAndValidate: %v", err)
+	}
+
+	if cfg.ViewerShortcuts != nil {
+		t.Fatalf("ViewerShortcuts = %#v, want nil", cfg.ViewerShortcuts)
+	}
+}
+
+func TestApplyDefaultsAndValidate_DropsViewerShortcutConflictingWithDefaultShortcut(t *testing.T) {
+	cfg := newValidConfigWithTaskScheduler()
+	cfg.ViewerShortcuts = map[string]string{
+		"git-graph": "Ctrl+Shift+E",
+	}
+
+	if err := applyDefaultsAndValidate(&cfg); err != nil {
+		t.Fatalf("applyDefaultsAndValidate: %v", err)
+	}
+
+	if cfg.ViewerShortcuts != nil {
+		t.Fatalf("ViewerShortcuts = %#v, want nil", cfg.ViewerShortcuts)
+	}
+}
+
+func TestApplyDefaultsAndValidate_ReservedGlobalHotkeyFallsBackWhenQuakeModeEnabled(t *testing.T) {
+	cfg := newValidConfigWithTaskScheduler()
+	cfg.QuakeMode = true
+	cfg.GlobalHotkey = "Ctrl+Shift+V"
+
+	if err := applyDefaultsAndValidate(&cfg); err != nil {
+		t.Fatalf("applyDefaultsAndValidate: %v", err)
+	}
+
+	if cfg.GlobalHotkey != DefaultConfig().GlobalHotkey {
+		t.Fatalf("GlobalHotkey = %q, want %q", cfg.GlobalHotkey, DefaultConfig().GlobalHotkey)
+	}
+}

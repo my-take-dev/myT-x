@@ -1,4 +1,4 @@
-import React, {useCallback, useRef, useState, useSyncExternalStore} from "react";
+import React, {useCallback, useMemo, useRef, useState, useSyncExternalStore} from "react";
 import {createPortal} from "react-dom";
 import {api} from "../../api";
 import {useI18n} from "../../i18n";
@@ -7,8 +7,8 @@ import {notifyAndLog} from "../../utils/notifyUtils";
 import {normalizeViewerSidebarMode} from "../../utils/viewerSidebarMode";
 import {getViewerShortcutValue} from "./viewerShortcutDefinitions";
 import type {ViewPlugin} from "./viewerRegistry";
-import {getRegisteredViews} from "./viewerRegistry";
-import {getEffectiveViewerShortcut} from "./viewerShortcutUtils";
+import {useRegisteredViews} from "./useRegisteredViews";
+import {analyzeViewerShortcuts} from "./viewerShortcutAnalysis";
 import {useViewerStore} from "./viewerStore";
 
 const EMPTY_UNSUBSCRIBE = () => {
@@ -25,21 +25,17 @@ function isBottomView(view: ViewPlugin): boolean {
 interface ActivityButtonProps {
     view: ViewPlugin;
     isActive: boolean;
-    viewerShortcutsConfig: Record<string, string> | null;
+    shortcutLabel: string | null;
     onToggle: (viewID: string) => void;
 }
 
 const ActivityButton = React.memo(function ActivityButton({
                                                               view,
                                                               isActive,
-                                                              viewerShortcutsConfig,
+                                                              shortcutLabel,
                                                           onToggle
                                                           }: ActivityButtonProps) {
     const Icon = view.icon;
-    const effectiveShortcut = getEffectiveViewerShortcut(
-        getViewerShortcutValue(viewerShortcutsConfig, view.id),
-        view.shortcut,
-    );
     const subscribeBadge = view.subscribeBadgeCount ?? EMPTY_SUBSCRIBE;
     const getBadgeCount = view.getBadgeCount ?? ZERO_BADGE;
     const badgeCount = useSyncExternalStore(subscribeBadge, getBadgeCount, getBadgeCount);
@@ -49,8 +45,8 @@ const ActivityButton = React.memo(function ActivityButton({
             type="button"
             className={`viewer-strip-btn${isActive ? " active" : ""}`}
             onClick={() => onToggle(view.id)}
-            title={effectiveShortcut ? `${view.label} (${effectiveShortcut})` : view.label}
-            aria-label={effectiveShortcut ? `${view.label} (${effectiveShortcut})` : view.label}
+            title={shortcutLabel ? `${view.label} (${shortcutLabel})` : view.label}
+            aria-label={shortcutLabel ? `${view.label} (${shortcutLabel})` : view.label}
         >
             <Icon size={18}/>
             {badgeCount > 0 && (
@@ -62,7 +58,7 @@ const ActivityButton = React.memo(function ActivityButton({
 
 export function ActivityStrip() {
     const {language, t} = useI18n();
-    const views = getRegisteredViews();
+    const views = useRegisteredViews();
     const activeViewId = useViewerStore((s) => s.activeViewId);
     const toggleView = useViewerStore((s) => s.toggleView);
     const viewerShortcutsConfig = useTmuxStore((s) => s.config?.viewer_shortcuts ?? null);
@@ -70,6 +66,15 @@ export function ActivityStrip() {
     const isDocked = sidebarMode === "docked";
     const toggleInFlightRef = useRef(false);
     const [isTogglingSidebarMode, setIsTogglingSidebarMode] = useState(false);
+    const viewerShortcutAnalyses = useMemo(() => {
+        return analyzeViewerShortcuts(
+            views.map((view) => ({
+                id: view.id,
+                configuredShortcut: getViewerShortcutValue(viewerShortcutsConfig, view.id),
+                defaultShortcut: view.shortcut,
+            })),
+        );
+    }, [viewerShortcutsConfig, views]);
     const topViews = views.filter((view) => !isBottomView(view));
     const bottomViews = views.filter(isBottomView);
 
@@ -108,7 +113,7 @@ export function ActivityStrip() {
                     key={view.id}
                     view={view}
                     isActive={activeViewId === view.id}
-                    viewerShortcutsConfig={viewerShortcutsConfig}
+                    shortcutLabel={viewerShortcutAnalyses.get(view.id)?.bindingShortcut ?? null}
                     onToggle={toggleView}
                 />
             ))}
@@ -118,7 +123,7 @@ export function ActivityStrip() {
                     key={view.id}
                     view={view}
                     isActive={activeViewId === view.id}
-                    viewerShortcutsConfig={viewerShortcutsConfig}
+                    shortcutLabel={viewerShortcutAnalyses.get(view.id)?.bindingShortcut ?? null}
                     onToggle={toggleView}
                 />
             ))}

@@ -81,3 +81,25 @@ export interface BootstrapMemberToPaneRequest {
 export interface BootstrapMemberToPaneResult {
     warnings: string[];
 }
+
+export interface OrchestratorSessionEnlistmentContext {
+    teams: OrchestratorTeamDefinition[];
+    unaffiliated_members: OrchestratorTeamMember[];
+    role_catalog: string[];
+    skill_catalog: OrchestratorTeamMemberSkill[];
+    registered_pane_ids?: string[];
+}
+
+export interface EnlistPaneRequest {
+    session_name: string;
+    pane_id: string;
+    team_id: string;
+    storage_location?: OrchestratorStorageLocation;
+    pane_state: PaneState;
+    bootstrap_delay_ms: number;
+    member: OrchestratorTeamMember;
+}
+
+export interface EnlistPaneResult {
+    warnings: string[];
+}

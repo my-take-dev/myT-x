@@ -27,11 +27,17 @@ type GetMyTasksResult struct {
 
 // InlineMessageEntry は get_my_tasks でインライン返却されるメッセージ。
 type InlineMessageEntry struct {
-	TaskID        string
-	FromAgent     string
-	SendMessageID string
-	Content       string
-	SentAt        string
+	TaskID         string
+	FromAgent      string
+	SendMessageID  string
+	Content        string
+	ContentPreview string
+	StorageMode    domain.MessageStorageMode
+	ArtifactPaths  []string
+	PartCount      int
+	ContentChars   int
+	SHA256         string
+	SentAt         string
 }
 
 // TaskEntry はタスクエントリ。
@@ -97,14 +103,26 @@ type GetTaskMessageResult struct {
 
 // MessageEntry はメッセージの内容を表す。
 type MessageEntry struct {
-	Content   string
-	CreatedAt string
+	Content        string
+	CreatedAt      string
+	ContentPreview string
+	StorageMode    domain.MessageStorageMode
+	ArtifactPaths  []string
+	PartCount      int
+	ContentChars   int
+	SHA256         string
 }
 
 // TaskResponseEntry captures a stored response for a completed task.
 type TaskResponseEntry struct {
-	Content   string
-	CreatedAt string
+	Content        string
+	CreatedAt      string
+	ContentPreview string
+	StorageMode    domain.MessageStorageMode
+	ArtifactPaths  []string
+	PartCount      int
+	ContentChars   int
+	SHA256         string
 }
 
 // GetTaskDetailCmd resolves rich task detail for a single task.
@@ -128,6 +146,7 @@ type GetTaskDetailResult struct {
 	ProgressUpdatedAt string
 	ExpiresAt         string
 	DependsOn         []string
+	Message           *MessageEntry
 	Response          *TaskResponseEntry
 }
 
@@ -154,8 +173,9 @@ type TaskQueryService struct {
 	agents   domain.AgentRepository
 	tasks    domain.TaskRepository
 	messages domain.MessageRepository
-	sender   domain.PaneSender
+	sender   domain.PanePasteSender
 	resolver domain.SelfPaneResolver
+	projectRoot string
 	logger   *log.Logger
 }
 
@@ -164,16 +184,22 @@ func NewTaskQueryService(
 	agents domain.AgentRepository,
 	tasks domain.TaskRepository,
 	messages domain.MessageRepository,
-	sender domain.PaneSender,
+	sender domain.PanePasteSender,
 	resolver domain.SelfPaneResolver,
 	logger *log.Logger,
+	projectRoots ...string,
 ) *TaskQueryService {
+	projectRoot := ""
+	if len(projectRoots) > 0 {
+		projectRoot = projectRoots[0]
+	}
 	return &TaskQueryService{
 		agents:   agents,
 		tasks:    tasks,
 		messages: messages,
 		sender:   sender,
 		resolver: resolver,
+		projectRoot: projectRoot,
 		logger:   ensureLogger(logger),
 	}
 }
@@ -222,15 +248,23 @@ func (s *TaskQueryService) GetMyTasks(ctx context.Context, cmd GetMyTasksCmd) (G
 				logf(s.logger, "get_my_tasks: inline message fetch for task %s: %v", t.ID, msgErr)
 			} else {
 				inlineMessages = append(inlineMessages, InlineMessageEntry{
-					TaskID:        t.ID,
-					FromAgent:     t.SenderName,
-					SendMessageID: t.SendMessageID,
-					Content:       msg.Content,
-					SentAt:        t.SentAt,
+					TaskID:         t.ID,
+					FromAgent:      t.SenderName,
+					SendMessageID:  t.SendMessageID,
+					Content:        msg.Content,
+					ContentPreview: msg.ContentPreview,
+					StorageMode:    msg.StorageMode,
+					ArtifactPaths:  domain.ResolveArtifactPaths(s.projectRoot, msg.ArtifactPaths),
+					PartCount:      msg.PartCount,
+					ContentChars:   msg.ContentChars,
+					SHA256:         msg.SHA256,
+					SentAt:         t.SentAt,
 				})
-				acknowledgedAt := time.Now().UTC().Format(time.RFC3339)
-				if ackErr := s.tasks.AcknowledgeTask(ctx, t.ID, acknowledgedAt); ackErr != nil {
-					logf(s.logger, "get_my_tasks: auto acknowledge task %s: %v", t.ID, ackErr)
+				if msg.StorageMode == "" || msg.StorageMode == domain.MessageStorageInline {
+					acknowledgedAt := time.Now().UTC().Format(time.RFC3339)
+					if ackErr := s.tasks.AcknowledgeTask(ctx, t.ID, acknowledgedAt); ackErr != nil {
+						logf(s.logger, "get_my_tasks: auto acknowledge task %s: %v", t.ID, ackErr)
+					}
 				}
 			}
 		}
@@ -275,8 +309,14 @@ func (s *TaskQueryService) GetTaskMessage(ctx context.Context, cmd GetTaskMessag
 		CompletedAt:   task.CompletedAt,
 		IsNowSession:  task.IsNowSession,
 		Message: MessageEntry{
-			Content:   msg.Content,
-			CreatedAt: msg.CreatedAt,
+			Content:        msg.Content,
+			CreatedAt:      msg.CreatedAt,
+			ContentPreview: msg.ContentPreview,
+			StorageMode:    msg.StorageMode,
+			ArtifactPaths:  domain.ResolveArtifactPaths(s.projectRoot, msg.ArtifactPaths),
+			PartCount:      msg.PartCount,
+			ContentChars:   msg.ContentChars,
+			SHA256:         msg.SHA256,
 		},
 	}, nil
 }
@@ -367,6 +407,22 @@ func (s *TaskQueryService) GetTaskDetail(ctx context.Context, cmd GetTaskDetailC
 		ProgressUpdatedAt: task.ProgressUpdatedAt,
 		ExpiresAt:         task.ExpiresAt,
 	}
+	if task.SendMessageID != "" {
+		message, err := s.messages.GetMessage(ctx, task.SendMessageID)
+		if err != nil {
+			return GetTaskDetailResult{}, operationError(s.logger, "message is not available", err)
+		}
+		result.Message = &MessageEntry{
+			Content:        message.Content,
+			CreatedAt:      message.CreatedAt,
+			ContentPreview: message.ContentPreview,
+			StorageMode:    message.StorageMode,
+			ArtifactPaths:  domain.ResolveArtifactPaths(s.projectRoot, message.ArtifactPaths),
+			PartCount:      message.PartCount,
+			ContentChars:   message.ContentChars,
+			SHA256:         message.SHA256,
+		}
+	}
 	if task.GroupID != "" {
 		group, err := s.tasks.GetTaskGroup(ctx, task.GroupID)
 		if err != nil {
@@ -389,8 +445,14 @@ func (s *TaskQueryService) GetTaskDetail(ctx context.Context, cmd GetTaskDetailC
 			return GetTaskDetailResult{}, operationError(s.logger, "response is not available", err)
 		}
 		result.Response = &TaskResponseEntry{
-			Content:   response.Content,
-			CreatedAt: response.CreatedAt,
+			Content:        response.Content,
+			CreatedAt:      response.CreatedAt,
+			ContentPreview: response.ContentPreview,
+			StorageMode:    response.StorageMode,
+			ArtifactPaths:  domain.ResolveArtifactPaths(s.projectRoot, response.ArtifactPaths),
+			PartCount:      response.PartCount,
+			ContentChars:   response.ContentChars,
+			SHA256:         response.SHA256,
 		}
 	}
 
@@ -462,7 +524,7 @@ func (s *TaskQueryService) deliverActivatedTask(ctx context.Context, task domain
 		)
 		return false, true
 	}
-	if err := s.sender.SendKeys(ctx, task.AssigneePaneID, msg.Content); err != nil {
+	if err := s.sender.SendKeysPaste(ctx, task.AssigneePaneID, deliveryTextForStoredMessage(s.projectRoot, task.ID, msg)); err != nil {
 		if failErr := s.tasks.MarkTaskFailed(ctx, task.ID); failErr != nil {
 			slog.Error("[ERROR-MCP-ORCH] activate_ready_tasks delivery failed and mark failed could not persist",
 				"taskID", task.ID,

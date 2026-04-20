@@ -16,18 +16,20 @@ Because of pane integration and related features, the application must be run wi
 
 ## Overview
 
-**Agent Team**
-![Working image](sample.png)
-**Directory View**
-![Working image](sample2.png)
-**Git Graph**
-![Working image](sample3.png)
-**Diff View**
-![Working image](sample4.png)
-**Start a New Session**
-![Working image](sample5.png)
-**Canvas Mode**
-![Working image](sample6.png)
+**Claude Codeエージェントチーム**
+![作業イメージ画像](sample.png)
+**File View Mode**
+md,openAPI(swagger),drawio...
+![作業イメージ画像](sample2.png)  
+![作業イメージ画像](sample2-2.png)  
+**Editor**
+![作業イメージ画像](sample3.png)
+**ダッシュボード**
+![作業イメージ画像](sample4.png)
+**よくある指示簡易登録機能**
+![作業イメージ画像](sample5.png)
+**オーケストレーターMCP&キャンバスモード＆タイムライン**
+![作業イメージ画像](sample6.png)
 
 **I want to enjoy native Claude Code team development on Windows.**
 **I want a good GUI. Nothing complicated. I want something visual and easy to understand.**
@@ -44,7 +46,7 @@ Because of pane integration and related features, the application must be run wi
 | Agent Teams | Team coordination with Claude Code / Codex CLI / Gemini CLI |
 | Auto Model Switch | Bulk or per-agent automatic model replacement for child agents |
 | Git Worktree | Independent working directories per branch (setup scripts + progress indicator) |
-| File View | Unified preview for Markdown / Mermaid / Swagger(OpenAPI) / draw.io / SQLite (`Ctrl+Shift+E`) |
+| File View | Unified preview for Markdown / Mermaid / Swagger(OpenAPI) / draw.io / SQLite / Markmap / Vega / Vega-Lite / WaveDrom (`Ctrl+Shift+E`) |
 | SQLite Viewer | Read-only table list + row data + CSV export for `.db` / `.sqlite` / `.sqlite3` |
 | Prompt Presets | Register reusable prompt templates and append to chat input (global / project scopes, up to 200, `Ctrl+Shift+P`) |
 | Usage Dashboard | Visualize Claude Code / Codex usage stats (agents / skills / slash commands aggregation, 30-day daily activity, `Ctrl+Shift+U`) |
@@ -52,7 +54,9 @@ Because of pane integration and related features, the application must be run wi
 | Built-in MCP | Orchestration MCP + Single Task Runner MCP + 200+ LSP-MCP integrations |
 | Task Automation | Pane Scheduler (recurring) + Task Scheduler (sequential) + Single Task Runner (lightweight, `Ctrl+Shift+J`) |
 | Per-pane Chat Bar | Chat input bar docked at the bottom of each pane, click to target that pane |
-| Canvas Mode | Visualize task flows between agents |
+| Command Palette | `Ctrl+P` for session switching, viewer launch, command execution (Menu Bar trigger button supported) |
+| Canvas Mode | Visualize task flows between agents (with manual root pane selection) |
+| Terminal Search | Incremental search, result counter, match highlighting (`Ctrl+F`) |
 | Quake Mode | Instantly summon the window with a hotkey |
 | Japanese IME | WebView2 process isolation + IME reset |
 

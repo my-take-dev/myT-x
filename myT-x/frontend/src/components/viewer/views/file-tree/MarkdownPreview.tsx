@@ -16,7 +16,7 @@ interface MarkdownPreviewProps {
     readonly codeBlockRenderer?: (props: MarkdownCodeBlockRendererProps) => ReactNode;
 }
 
-const MARKDOWN_REMARK_PLUGINS: PluggableList = [remarkGfm];
+const MARKDOWN_REMARK_PLUGINS: PluggableList = [[remarkGfm, {singleTilde: false}]];
 const EMPTY_REHYPE_PLUGINS: PluggableList = [];
 
 function translateViewerText(key: string, jaText: string, enText: string): string {

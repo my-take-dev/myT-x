@@ -79,8 +79,32 @@ export function UsageDashboardView() {
             />
             <div className="usage-dashboard-body">
                 {isLoading && !snapshot ? (
-                    <div className="usage-dashboard-empty">
-                        {tr("viewer.usageDashboard.loading", "集計中...", "Aggregating...")}
+                    <div
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                        aria-busy="true"
+                        aria-label={tr("viewer.usageDashboard.loading", "集計中...", "Aggregating...")}
+                    >
+                        <p className="usage-dashboard-loading-copy">
+                            {tr("viewer.usageDashboard.loading", "集計中...", "Aggregating...")}
+                        </p>
+                        {/* Overview cards skeleton */}
+                        <div className="usage-dashboard-skeleton-overview">
+                            <div className="usage-dashboard-skeleton-card"/>
+                            <div className="usage-dashboard-skeleton-card"/>
+                            <div className="usage-dashboard-skeleton-card"/>
+                        </div>
+                        {/* Chart skeleton */}
+                        <div className="usage-dashboard-skeleton-chart"/>
+                        {/* Ranking skeleton */}
+                        <div className="usage-dashboard-skeleton-rows">
+                            <div className="usage-dashboard-skeleton-row"/>
+                            <div className="usage-dashboard-skeleton-row"/>
+                            <div className="usage-dashboard-skeleton-row"/>
+                            <div className="usage-dashboard-skeleton-row"/>
+                            <div className="usage-dashboard-skeleton-row"/>
+                        </div>
                     </div>
                 ) : mode === "claude" ? (
                     <ClaudePanel stats={snapshot?.claude}/>

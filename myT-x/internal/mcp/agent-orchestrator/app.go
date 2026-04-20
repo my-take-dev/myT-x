@@ -34,6 +34,7 @@ type Config struct {
 	In            io.Reader
 	Out           io.Writer
 	Logger        *log.Logger
+	EmitFn        func(string, any)
 	ServerName    string
 	ServerVersion string
 
@@ -163,17 +164,6 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	}
 	stickyResolver := newStickySelfResolver(resolver, normalized.Logger)
 
-	// usecase サービス構築
-	agentSvc := usecase.NewAgentService(agentRepo, agentStatusRepo, stickyResolver, lister, titleSetter, normalized.Logger)
-	dispatchSvc := usecase.NewTaskDispatchService(agentRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
-	querySvc := usecase.NewTaskQueryService(agentRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
-	taskUpdateSvc := usecase.NewTaskUpdateService(agentRepo, taskRepo, stickyResolver, normalized.Logger)
-	responseSvc := usecase.NewResponseService(agentRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
-	statusSvc := usecase.NewStatusService(agentRepo, agentStatusRepo, taskRepo, messageRepo, sender, stickyResolver, normalized.Logger)
-	captureSvc := usecase.NewCaptureService(agentRepo, capturer, stickyResolver, normalized.Logger)
-
-	// projectRoot: DBPath を絶対パスに変換してから2階層上を導出
-	// （例: /project/.myT-x/orchestrator.db → /project）
 	absDBPath, err := filepath.Abs(normalized.DBPath)
 	if err != nil {
 		var cleanupErrs []error
@@ -188,9 +178,21 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("resolve db path: %w", err)
 	}
 	projectRoot := filepath.Dir(filepath.Dir(absDBPath))
+
+	// usecase サービス構築
+	agentSvc := usecase.NewAgentService(agentRepo, agentStatusRepo, stickyResolver, lister, titleSetter, normalized.Logger)
+	agentSvc.SetAgentsUpdatedEmitter(normalized.SessionName, normalized.EmitFn)
+	dispatchSvc := usecase.NewTaskDispatchService(agentRepo, taskRepo, messageRepo, pasteSender, stickyResolver, normalized.Logger, projectRoot)
+	querySvc := usecase.NewTaskQueryService(agentRepo, taskRepo, messageRepo, pasteSender, stickyResolver, normalized.Logger, projectRoot)
+	taskUpdateSvc := usecase.NewTaskUpdateService(agentRepo, taskRepo, stickyResolver, normalized.Logger)
+	responseSvc := usecase.NewResponseService(agentRepo, taskRepo, messageRepo, pasteSender, stickyResolver, normalized.Logger, projectRoot)
+	statusSvc := usecase.NewStatusService(agentRepo, agentStatusRepo, taskRepo, messageRepo, pasteSender, stickyResolver, normalized.Logger, projectRoot)
+	captureSvc := usecase.NewCaptureService(agentRepo, capturer, stickyResolver, normalized.Logger)
+
 	memberSvc := usecase.NewMemberBootstrapService(
 		agentRepo, stickyResolver, splitter, titleSetter, sender, pasteSender, projectRoot, normalized.Logger,
 	)
+	memberSvc.SetAgentsUpdatedEmitter(normalized.SessionName, normalized.EmitFn)
 
 	handler := mcptool.NewHandler(agentSvc, dispatchSvc, querySvc, taskUpdateSvc, responseSvc, statusSvc, captureSvc, memberSvc, instanceID)
 	registry, err := handler.BuildRegistry()

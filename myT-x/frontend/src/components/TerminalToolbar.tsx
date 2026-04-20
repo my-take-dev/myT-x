@@ -5,14 +5,16 @@ import {useI18n} from "../i18n";
 interface TerminalToolbarProps {
     readonly paneId: string;
     readonly titleDraft: string;
-    readonly titleEditing: boolean;
     readonly renameBusy: boolean;
     readonly autoRunning: boolean;
+    readonly isRootToggleVisible?: boolean;
+    readonly isRootPane?: boolean;
     readonly onTitleEditStart: () => void;
     readonly onTitleChange: (value: string) => void;
     readonly onTitleCommit: () => void;
     readonly onTitleCancel: () => void;
     readonly onAutoClick: () => void;
+    readonly onRootToggle?: () => void;
     readonly onSplitVertical: () => void;
     readonly onSplitHorizontal: () => void;
     readonly onAddMember: () => void;
@@ -23,14 +25,16 @@ interface TerminalToolbarProps {
 export const TerminalToolbar = memo(function TerminalToolbar({
     paneId,
     titleDraft,
-    titleEditing,
     renameBusy,
     autoRunning,
+    isRootToggleVisible = false,
+    isRootPane = false,
     onTitleEditStart,
     onTitleChange,
     onTitleCommit,
     onTitleCancel,
     onAutoClick,
+    onRootToggle,
     onSplitVertical,
     onSplitHorizontal,
     onAddMember,
@@ -56,6 +60,26 @@ export const TerminalToolbar = memo(function TerminalToolbar({
     const autoButtonClass = autoRunning
         ? "terminal-toolbar-btn terminal-toolbar-btn-auto-active"
         : "terminal-toolbar-btn";
+    const rootButtonClass = isRootPane
+        ? "terminal-toolbar-btn terminal-toolbar-btn-root-active"
+        : "terminal-toolbar-btn";
+    const rootTitle = isEn
+        ? (isRootPane ? "Unset as tree root" : "Set as tree root")
+        : t(
+            isRootPane
+                ? "terminalPane.action.rootUnset.title"
+                : "terminalPane.action.rootSet.title",
+            isRootPane ? "ツリールートを解除" : "ツリールートに設定",
+        );
+    const rootAriaLabel = isEn
+        ? (isRootPane ? `Unset pane ${paneId} as tree root` : `Set pane ${paneId} as tree root`)
+        : t(
+            isRootPane
+                ? "terminalPane.action.rootUnset.aria"
+                : "terminalPane.action.rootSet.aria",
+            isRootPane ? "ペイン {paneId} のツリールートを解除" : "ペイン {paneId} をツリールートに設定",
+            {paneId},
+        );
 
     return (
         <div
@@ -92,6 +116,27 @@ export const TerminalToolbar = memo(function TerminalToolbar({
                 />
             </div>
             <div className="terminal-toolbar-actions">
+                {isRootToggleVisible && (
+                    <button
+                        type="button"
+                        className={rootButtonClass}
+                        draggable={false}
+                        title={rootTitle}
+                        aria-label={rootAriaLabel}
+                        aria-pressed={isRootPane}
+                        onMouseDown={preventTerminalFocusSteal}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onRootToggle?.();
+                        }}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+                             strokeWidth="1.5">
+                            <path d="M1 10 L2 4 L4.5 7 L7 3 L9.5 7 L12 4 L13 10 Z"/>
+                            <path d="M1 10 L13 10 L13 12 L1 12 Z" fill="currentColor" fillOpacity="0.2"/>
+                        </svg>
+                    </button>
+                )}
                 <button
                     type="button"
                     className={autoButtonClass}

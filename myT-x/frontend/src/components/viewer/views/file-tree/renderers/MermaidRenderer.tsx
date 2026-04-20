@@ -1,5 +1,6 @@
 import {memo, useEffect, useId, useMemo, useRef, useState} from "react";
 import {toErrorMessage} from "../../../../../utils/errorUtils";
+import {createRetriableAsyncSingleton} from "../../../../../utils/createRetriableAsyncSingleton";
 
 type MermaidModule = typeof import("mermaid");
 type MermaidAPI = MermaidModule["default"];
@@ -13,19 +14,17 @@ interface MermaidRenderResult {
     readonly bindFunctions?: (element: Element) => void;
 }
 
-let mermaidModulePromise: Promise<MermaidAPI> | null = null;
+const MERMAID_CONFIG = {
+    htmlLabels: true,
+    markdownAutoWrap: true,
+    startOnLoad: false,
+} as const;
 
-async function loadMermaid(): Promise<MermaidAPI> {
-    if (mermaidModulePromise === null) {
-        mermaidModulePromise = import("mermaid").then(({default: mermaid}) => {
-            mermaid.initialize({
-                startOnLoad: false,
-            });
-            return mermaid;
-        });
-    }
-    return mermaidModulePromise;
-}
+const loadMermaid = createRetriableAsyncSingleton(async (): Promise<MermaidAPI> => {
+    const {default: mermaid} = await import("mermaid");
+    mermaid.initialize(MERMAID_CONFIG);
+    return mermaid;
+});
 
 export const MermaidRenderer = memo(function MermaidRenderer({code}: MermaidRendererProps) {
     const reactId = useId();

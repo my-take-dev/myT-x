@@ -1,4 +1,5 @@
 import {useEffect} from "react";
+import {EventsOn} from "../../wailsjs/runtime/runtime";
 import {api} from "../api";
 import {useCanvasStore} from "../stores/canvasStore";
 import {createConsecutiveFailureCounter, notifyAndLog} from "../utils/notifyUtils";
@@ -9,6 +10,14 @@ const POLL_INTERVAL_MS = 3000;
 // 3-second polling can produce many failures when backend is disconnected;
 // only notify after 3 consecutive failures (≈9 seconds of sustained failure).
 const canvasSyncFailureCounter = createConsecutiveFailureCounter(3);
+
+function eventTargetsSession(payload: unknown, sessionName: string): boolean {
+    if (!payload || typeof payload !== "object") {
+        return false;
+    }
+    const candidate = (payload as {sessionName?: unknown}).sessionName;
+    return typeof candidate === "string" && candidate === sessionName;
+}
 
 /**
  * Canvas Mode が有効な間、3秒間隔でオーケストレーターのタスク・エージェント・
@@ -30,8 +39,32 @@ export function useCanvasTaskSync(sessionName: string | null): void {
         if (mode !== "canvas" || !sessionName) return;
 
         let cancelled = false;
+        let timerId: ReturnType<typeof setTimeout> | null = null;
+        let pollInFlight = false;
+        let pollPending = false;
+
+        const schedulePoll = (delayMs: number): void => {
+            if (cancelled) {
+                return;
+            }
+            if (timerId != null) {
+                clearTimeout(timerId);
+            }
+            timerId = setTimeout(() => {
+                timerId = null;
+                void poll();
+            }, delayMs);
+        };
 
         const poll = async (): Promise<void> => {
+            if (cancelled) {
+                return;
+            }
+            if (pollInFlight) {
+                pollPending = true;
+                return;
+            }
+            pollInFlight = true;
             try {
                 const results = await Promise.allSettled([
                     api.ListOrchestratorTasks(sessionName),
@@ -64,6 +97,10 @@ export function useCanvasTaskSync(sessionName: string | null): void {
                 }
                 if (results[1].status === "fulfilled" && results[1].value) {
                     useCanvasStore.getState().updateAgents(results[1].value);
+                } else if (results[1].status === "rejected") {
+                    // Fail closed for auto-layout root selection: stale agent roles can
+                    // pick the wrong root after a partial polling failure.
+                    useCanvasStore.getState().clearAgents();
                 }
                 if (results[2].status === "fulfilled" && results[2].value) {
                     useCanvasStore.getState().updateProcessStatus(results[2].value);
@@ -73,22 +110,38 @@ export function useCanvasTaskSync(sessionName: string | null): void {
                 canvasSyncFailureCounter.recordFailure(() => {
                     notifyAndLog("Canvas data sync", "warn", err, "CanvasTaskSync");
                 });
+            } finally {
+                pollInFlight = false;
             }
 
-            if (!cancelled) {
-                timerId = setTimeout(() => {
-                    void poll();
-                }, POLL_INTERVAL_MS);
+            if (cancelled) {
+                return;
             }
+            if (pollPending) {
+                pollPending = false;
+                schedulePoll(0);
+                return;
+            }
+            schedulePoll(POLL_INTERVAL_MS);
         };
-
-        let timerId: ReturnType<typeof setTimeout> | null = null;
 
         // 初回即時実行
         void poll();
 
+        const cancelAgentsUpdated = EventsOn("orchestrator:agents-updated", (payload: unknown) => {
+            if (!eventTargetsSession(payload, sessionName)) {
+                return;
+            }
+            if (timerId != null) {
+                clearTimeout(timerId);
+                timerId = null;
+            }
+            void poll();
+        });
+
         return () => {
             cancelled = true;
+            cancelAgentsUpdated();
             if (timerId != null) {
                 clearTimeout(timerId);
             }

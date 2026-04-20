@@ -90,8 +90,9 @@ type TaskDispatchService struct {
 	agents   domain.AgentRepository
 	tasks    domain.TaskRepository
 	messages domain.MessageRepository
-	sender   domain.PaneSender
+	sender   domain.PanePasteSender
 	resolver domain.SelfPaneResolver
+	payloads *payloadWriter
 	logger   *log.Logger
 	// randRead is the random byte source for ID generation.
 	// Defaults to crypto/rand.Read. Tests inject deterministic sources.
@@ -103,16 +104,22 @@ func NewTaskDispatchService(
 	agents domain.AgentRepository,
 	tasks domain.TaskRepository,
 	messages domain.MessageRepository,
-	sender domain.PaneSender,
+	sender domain.PanePasteSender,
 	resolver domain.SelfPaneResolver,
 	logger *log.Logger,
+	projectRoots ...string,
 ) *TaskDispatchService {
+	projectRoot := ""
+	if len(projectRoots) > 0 {
+		projectRoot = projectRoots[0]
+	}
 	return &TaskDispatchService{
 		agents:   agents,
 		tasks:    tasks,
 		messages: messages,
 		sender:   sender,
 		resolver: resolver,
+		payloads: newPayloadWriter(projectRoot),
 		logger:   ensureLogger(logger),
 		randRead: rand.Read,
 	}
@@ -231,16 +238,18 @@ func (s *TaskDispatchService) sendWithSender(ctx context.Context, senderAgent do
 		expiresAt = nowTime.Add(time.Duration(cmd.ExpiresAfterMinutes) * time.Minute).Format(time.RFC3339)
 	}
 
-	// メッセージを保存
 	msgID, err := generateIDWith(s.randRead, "m-", "generate message id")
 	if err != nil {
 		return SendTaskResult{}, operationError(s.logger, "failed to generate message id", err)
 	}
-	if err := s.messages.SaveMessage(ctx, domain.TaskMessage{
-		ID:        msgID,
-		Content:   cmd.Message,
-		CreatedAt: now,
-	}); err != nil {
+	preparedMessage, err := s.payloads.PrepareTaskMessage(taskID, msgID, sendMessage, now)
+	if err != nil {
+		return SendTaskResult{}, operationError(s.logger, "failed to prepare message payload", err)
+	}
+	if err := s.messages.SaveMessage(ctx, preparedMessage.message); err != nil {
+		if cleanupErr := preparedMessage.Cleanup(); cleanupErr != nil {
+			return SendTaskResult{}, operationError(s.logger, "failed to persist message", fmt.Errorf("%w (cleanup payload artifacts: %v)", err, cleanupErr))
+		}
 		return SendTaskResult{}, operationError(s.logger, "failed to persist message", err)
 	}
 
@@ -262,9 +271,11 @@ func (s *TaskDispatchService) sendWithSender(ctx context.Context, senderAgent do
 	}
 
 	if err := s.tasks.CreateTaskWithDependencies(ctx, task, cmd.DependsOn); err != nil {
-		if rollbackErr := s.messages.DeleteMessage(ctx, msgID); rollbackErr != nil {
-			logf(s.logger, "rollback orphaned message %s after task create failure: %v", msgID, rollbackErr)
-			return SendTaskResult{}, operationError(s.logger, "failed to persist task", fmt.Errorf("%w (rollback message %s: %v)", err, msgID, rollbackErr))
+		rollbackMessageErr := s.messages.DeleteMessage(ctx, msgID)
+		cleanupErr := preparedMessage.Cleanup()
+		if rollbackMessageErr != nil || cleanupErr != nil {
+			logf(s.logger, "rollback message payload after task create failure message_id=%s delete_err=%v cleanup_err=%v", msgID, rollbackMessageErr, cleanupErr)
+			return SendTaskResult{}, operationError(s.logger, "failed to persist task", fmt.Errorf("%w (rollback message %s: %v, cleanup payload artifacts: %v)", err, msgID, rollbackMessageErr, cleanupErr))
 		}
 		return SendTaskResult{}, operationError(s.logger, "failed to persist task", err)
 	}
@@ -283,7 +294,14 @@ func (s *TaskDispatchService) sendWithSender(ctx context.Context, senderAgent do
 		return result, nil
 	}
 
-	if err := s.sender.SendKeys(ctx, agent.PaneID, sendMessage); err != nil {
+	deliveryText := preparedMessage.deliveryText
+	if preparedMessage.message.StorageMode != domain.MessageStorageInline && cmd.IncludeResponseInstructions {
+		deliveryText = appendResponseInstruction(deliveryText, taskID)
+	}
+
+	if err := s.sender.SendKeysPaste(ctx, agent.PaneID, deliveryText); err != nil {
+		// Keep persisted payload metadata for failed tasks so operators can inspect
+		// the original delivery artifact after the task is marked failed.
 		if failErr := s.tasks.MarkTaskFailed(ctx, taskID); failErr != nil {
 			logf(s.logger, "mark task %s failed: %v", taskID, failErr)
 			return SendTaskResult{}, operationError(s.logger, "message delivery failed; task may remain pending", fmt.Errorf("%w (mark task failed: %v)", err, failErr))
@@ -367,6 +385,13 @@ func buildResponseInstruction(taskID string) string {
 		"\nsend_response(task_id=\"" + taskID + "\", message=\"...\") を行いましょう。task_id が抜けるとタスクを完了できません。" +
 		"\n他エージェントへの相談・依頼：tmux のペインTitleからエージェントを確認するか、" +
 		"list_agents MCPツールで相手を確認し、send_task MCPツールで送信してください。"
+}
+
+func appendResponseInstruction(deliveryText string, taskID string) string {
+	if strings.Contains(deliveryText, "応答方法：send_response MCPツール") {
+		return deliveryText
+	}
+	return deliveryText + "\n\n---\n" + buildResponseInstruction(taskID)
 }
 
 // generateIDWith generates a random hex-encoded ID with the given prefix.

@@ -13,6 +13,7 @@ function resetStore(): void {
             taskEdgeMap: {},
             agentMap: {},
             processStatusMap: {},
+            rootPaneId: null,
             sessionDataMap: {},
         },
         true,
@@ -30,6 +31,7 @@ describe("resetForSession", () => {
 
         // サイズを設定
         useCanvasStore.getState().setNodeSize("%0", {width: 600, height: 400});
+        useCanvasStore.getState().setRootPaneId("%0");
 
         // 同一セッションで resetForSession → サイズが維持される
         useCanvasStore.getState().resetForSession("session-A");
@@ -37,6 +39,7 @@ describe("resetForSession", () => {
         const state = useCanvasStore.getState();
         expect(state.nodeSizes["%0"]).toEqual({width: 600, height: 400});
         expect(state.activeSessionName).toBe("session-A");
+        expect(state.rootPaneId).toBe("%0");
     });
 
     it("セッション切替時に現セッションを保存し対象を復元する", () => {
@@ -46,6 +49,7 @@ describe("resetForSession", () => {
         store.resetForSession("session-A");
         useCanvasStore.getState().setNodeSize("%0", {width: 500, height: 300});
         useCanvasStore.getState().setNodePosition("%0", {x: 100, y: 200});
+        useCanvasStore.getState().setRootPaneId("%0");
 
         // セッションBに切替 → Aのデータが保存される
         useCanvasStore.getState().resetForSession("session-B");
@@ -53,12 +57,15 @@ describe("resetForSession", () => {
         expect(afterSwitch.activeSessionName).toBe("session-B");
         expect(afterSwitch.nodeSizes).toEqual({});
         expect(afterSwitch.nodePositions).toEqual({});
+        expect(afterSwitch.rootPaneId).toBeNull();
         // Aのデータが sessionDataMap に保存されている
         expect(afterSwitch.sessionDataMap["session-A"]).toBeDefined();
         expect(afterSwitch.sessionDataMap["session-A"].nodeSizes["%0"]).toEqual({width: 500, height: 300});
+        expect(afterSwitch.sessionDataMap["session-A"].rootPaneId).toBe("%0");
 
         // セッションBにデータを設定
         useCanvasStore.getState().setNodeSize("%1", {width: 700, height: 500});
+        useCanvasStore.getState().setRootPaneId("%1");
 
         // セッションAに戻る → Aのデータが復元される
         useCanvasStore.getState().resetForSession("session-A");
@@ -66,10 +73,12 @@ describe("resetForSession", () => {
         expect(restored.activeSessionName).toBe("session-A");
         expect(restored.nodeSizes["%0"]).toEqual({width: 500, height: 300});
         expect(restored.nodePositions["%0"]).toEqual({x: 100, y: 200});
+        expect(restored.rootPaneId).toBe("%0");
 
         // Bのデータも sessionDataMap に保存されている
         expect(restored.sessionDataMap["session-B"]).toBeDefined();
         expect(restored.sessionDataMap["session-B"].nodeSizes["%1"]).toEqual({width: 700, height: 500});
+        expect(restored.sessionDataMap["session-B"].rootPaneId).toBe("%1");
 
         // 復元済みのAは sessionDataMap から除去されている（二重保持防止）
         expect(restored.sessionDataMap["session-A"]).toBeUndefined();
@@ -108,6 +117,7 @@ describe("clearSessionData", () => {
         store.resetForSession("session-A");
         useCanvasStore.getState().setNodeSize("%0", {width: 500, height: 300});
         useCanvasStore.getState().setNodePosition("%0", {x: 100, y: 200});
+        useCanvasStore.getState().setRootPaneId("%0");
 
         // アクティブセッション自身を削除
         useCanvasStore.getState().clearSessionData("session-A");
@@ -116,7 +126,50 @@ describe("clearSessionData", () => {
         expect(state.nodeSizes).toEqual({});
         expect(state.nodePositions).toEqual({});
         expect(state.taskEdgeMap).toEqual({});
+        expect(state.rootPaneId).toBeNull();
         expect(state.sessionDataMap["session-A"]).toBeUndefined();
+    });
+});
+
+describe("migrateSessionData", () => {
+    it("moves inactive session data to the renamed key", () => {
+        useCanvasStore.getState().resetForSession("session-A");
+        useCanvasStore.getState().setNodePosition("%0", {x: 10, y: 20});
+        useCanvasStore.getState().setRootPaneId("%0");
+        useCanvasStore.getState().resetForSession("session-B");
+
+        useCanvasStore.getState().migrateSessionData("session-A", "session-renamed");
+
+        const state = useCanvasStore.getState();
+        expect(state.sessionDataMap["session-A"]).toBeUndefined();
+        expect(state.sessionDataMap["session-renamed"]?.nodePositions["%0"]).toEqual({x: 10, y: 20});
+        expect(state.sessionDataMap["session-renamed"]?.rootPaneId).toBe("%0");
+    });
+
+    it("renames the active session without losing flat canvas state", () => {
+        useCanvasStore.getState().resetForSession("session-A");
+        useCanvasStore.getState().setNodeSize("%0", {width: 500, height: 300});
+        useCanvasStore.getState().setRootPaneId("%0");
+
+        useCanvasStore.getState().migrateSessionData("session-A", "session-renamed");
+
+        const state = useCanvasStore.getState();
+        expect(state.activeSessionName).toBe("session-renamed");
+        expect(state.nodeSizes["%0"]).toEqual({width: 500, height: 300});
+        expect(state.rootPaneId).toBe("%0");
+    });
+});
+
+describe("setRootPaneId", () => {
+    it("replaces the current root and clears it with null", () => {
+        useCanvasStore.getState().setRootPaneId("%0");
+        expect(useCanvasStore.getState().rootPaneId).toBe("%0");
+
+        useCanvasStore.getState().setRootPaneId("%1");
+        expect(useCanvasStore.getState().rootPaneId).toBe("%1");
+
+        useCanvasStore.getState().setRootPaneId(null);
+        expect(useCanvasStore.getState().rootPaneId).toBeNull();
     });
 });
 

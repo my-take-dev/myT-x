@@ -5,6 +5,8 @@ import {useI18n} from "../../../../i18n";
 import {notifyAndLog} from "../../../../utils/notifyUtils";
 import {useViewerStore} from "../../viewerStore";
 import type {
+    EnlistPaneRequest,
+    EnlistPaneResult,
     OrchestratorLaunchMode,
     OrchestratorMemberDraft,
     OrchestratorStorageLocation,
@@ -93,6 +95,7 @@ export interface UseTeamCRUDResult {
     readonly handleQuickBootstrap: (member: OrchestratorMemberDraft, paneState: PaneState, bootstrapDelayMs: number) => Promise<void>;
     readonly handleBootstrapMemberToPane: (paneState: PaneState, storageLocation: OrchestratorStorageLocation, bootstrapDelayMs: number) => Promise<void>;
     readonly ensureUnaffiliatedTeam: (storageLocation: OrchestratorStorageLocation) => Promise<OrchestratorTeamDefinition>;
+    readonly enlistPane: (request: EnlistPaneRequest) => Promise<EnlistPaneResult>;
     // Navigation
     readonly returnToList: () => void;
     readonly handleTeamBack: () => void;
@@ -134,6 +137,7 @@ export function useTeamCRUD(): UseTeamCRUDResult {
         addMemberToUnaffiliatedTeam,
         saveUnaffiliatedTeamMembers,
         ensureUnaffiliatedTeam,
+        enlistPane,
     } = useOrchestratorTeams();
 
     const [screen, setScreen] = useState<Screen>("list");
@@ -711,6 +715,7 @@ export function useTeamCRUD(): UseTeamCRUDResult {
         handleQuickBootstrap,
         handleBootstrapMemberToPane,
         ensureUnaffiliatedTeam,
+        enlistPane,
         // Navigation
         returnToList,
         handleTeamBack,

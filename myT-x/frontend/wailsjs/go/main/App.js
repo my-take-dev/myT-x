@@ -202,6 +202,10 @@ export function DevPanelWriteFile(arg1, arg2, arg3) {
   return window['go']['main']['App']['DevPanelWriteFile'](arg1, arg2, arg3);
 }
 
+export function EnlistPane(arg1) {
+  return window['go']['main']['App']['EnlistPane'](arg1);
+}
+
 export function EnsureUnaffiliatedTeam(arg1, arg2) {
   return window['go']['main']['App']['EnsureUnaffiliatedTeam'](arg1, arg2);
 }
@@ -264,6 +268,10 @@ export function GetPaneReplay(arg1) {
 
 export function GetSchedulerStatuses() {
   return window['go']['main']['App']['GetSchedulerStatuses']();
+}
+
+export function GetSessionEnlistmentContext(arg1) {
+  return window['go']['main']['App']['GetSessionEnlistmentContext'](arg1);
 }
 
 export function GetSessionEnv(arg1) {

@@ -235,8 +235,15 @@ export function useSnapshotSync(): void {
                 }
                 return;
             }
-            useMCPStore.getState().clearSession(oldName);
-            useCanvasStore.getState().clearSessionData(oldName);
+            const newName = typeof event.newName === "string" ? event.newName.trim() : "";
+            if (newName === "") {
+                if (import.meta.env.DEV) {
+                    console.warn("[SYNC] tmux:session-renamed: empty newName", payload);
+                }
+                return;
+            }
+            useMCPStore.getState().migrateSession(oldName, newName);
+            useCanvasStore.getState().migrateSessionData(oldName, newName);
         });
 
         onEvent("session:cleanup-degraded", (payload) => {

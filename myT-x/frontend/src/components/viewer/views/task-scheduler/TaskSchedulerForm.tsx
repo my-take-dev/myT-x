@@ -1,4 +1,4 @@
-import {useState, useCallback, type ChangeEvent} from "react";
+import {useState, useCallback, useEffect, useRef, type ChangeEvent} from "react";
 import {useI18n} from "../../../../i18n";
 import type {PaneSnapshot} from "../../../../types/tmux";
 import {isEditableStatus, type QueueItem, type MessageTemplate} from "./useTaskScheduler";
@@ -7,29 +7,57 @@ interface TaskSchedulerFormProps {
     availablePanes: PaneSnapshot[];
     messageTemplates: MessageTemplate[];
     editingItem: QueueItem | null;
+    initialDraft: {
+        title: string;
+        message: string;
+        targetPaneID: string;
+        clearBefore: boolean;
+        clearCommand: string;
+    } | null;
     onSave: (title: string, message: string, targetPaneID: string, clearBefore: boolean, clearCommand: string) => Promise<void>;
     onBack: () => void;
+    onDirtyChange?: (dirty: boolean) => void;
 }
 
 export function TaskSchedulerForm({
     availablePanes,
     messageTemplates,
     editingItem,
+    initialDraft,
     onSave,
     onBack,
+    onDirtyChange,
 }: TaskSchedulerFormProps) {
     const {language, t} = useI18n();
     const tr = (key: string, jaText: string, enText: string) =>
         t(key, language === "ja" ? jaText : enText);
 
-    const [title, setTitle] = useState(editingItem?.title ?? "");
-    const [message, setMessage] = useState(editingItem?.message ?? "");
-    const [targetPaneID, setTargetPaneID] = useState(editingItem?.target_pane_id ?? "");
-    const [clearBefore, setClearBefore] = useState(editingItem?.clear_before ?? false);
-    const [clearCommand, setClearCommand] = useState(editingItem?.clear_command ?? "");
+    const initialSnapshotRef = useRef({
+        title: editingItem?.title ?? initialDraft?.title ?? "",
+        message: editingItem?.message ?? initialDraft?.message ?? "",
+        targetPaneID: editingItem?.target_pane_id ?? initialDraft?.targetPaneID ?? "",
+        clearBefore: editingItem?.clear_before ?? initialDraft?.clearBefore ?? false,
+        clearCommand: editingItem?.clear_command ?? initialDraft?.clearCommand ?? "",
+    });
+    const [title, setTitle] = useState(editingItem?.title ?? initialDraft?.title ?? "");
+    const [message, setMessage] = useState(editingItem?.message ?? initialDraft?.message ?? "");
+    const [targetPaneID, setTargetPaneID] = useState(editingItem?.target_pane_id ?? initialDraft?.targetPaneID ?? "");
+    const [clearBefore, setClearBefore] = useState(editingItem?.clear_before ?? initialDraft?.clearBefore ?? false);
+    const [clearCommand, setClearCommand] = useState(editingItem?.clear_command ?? initialDraft?.clearCommand ?? "");
     const [selectedTemplateIndex, setSelectedTemplateIndex] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const isEditingLocked = editingItem !== null && !isEditableStatus(editingItem.status);
+    const hasUnsavedChanges = (
+        title !== initialSnapshotRef.current.title
+        || message !== initialSnapshotRef.current.message
+        || targetPaneID !== initialSnapshotRef.current.targetPaneID
+        || clearBefore !== initialSnapshotRef.current.clearBefore
+        || clearCommand !== initialSnapshotRef.current.clearCommand
+    );
+
+    useEffect(() => {
+        onDirtyChange?.(hasUnsavedChanges);
+    }, [hasUnsavedChanges, onDirtyChange]);
 
     const handleTemplateSelect = useCallback((e: ChangeEvent<HTMLSelectElement>) => {
         const nextIndex = e.target.value;
@@ -61,7 +89,7 @@ export function TaskSchedulerForm({
 
             <div className="form-group">
                 <label className="form-label">
-                    {tr("viewer.taskScheduler.title", "\u30bf\u30a4\u30c8\u30eb", "Title")}
+                    {tr("viewer.taskScheduler.titleLabel", "\u30bf\u30a4\u30c8\u30eb", "Title")}
                 </label>
                 <input
                     className="form-input"

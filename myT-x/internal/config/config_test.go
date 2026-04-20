@@ -2379,6 +2379,28 @@ func TestLoadViewerShortcuts(t *testing.T) {
 				"git-graph": "Ctrl+Shift+2",
 			},
 		},
+		{
+			name: "legacy file-tree alias is canonicalized on load",
+			yaml: "viewer_shortcuts:\n  file-tree: \"Shift+Ctrl+1\"\n",
+			wantMap: map[string]string{
+				"file-view": "Ctrl+Shift+1",
+			},
+		},
+		{
+			name:    "reserved shortcut is dropped on load",
+			yaml:    "viewer_shortcuts:\n  git-graph: \"Ctrl+Shift+V\"\n",
+			wantNil: true,
+		},
+		{
+			name:    "shortcut conflicting with global hotkey is dropped on load",
+			yaml:    "global_hotkey: \"Ctrl+Shift+1\"\nviewer_shortcuts:\n  git-graph: \"Shift+Ctrl+1\"\n",
+			wantNil: true,
+		},
+		{
+			name:    "shortcut conflicting with another view default is dropped on load",
+			yaml:    "viewer_shortcuts:\n  git-graph: \"Ctrl+Shift+E\"\n",
+			wantNil: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

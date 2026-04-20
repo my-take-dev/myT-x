@@ -4,6 +4,8 @@ import {
     isUnsafeWorktreeCopyPath,
     normalizeRelativePath,
     validateDefaultSessionDir,
+    validateGlobalHotkey,
+    validatePrefixShortcut,
     validateViewerShortcuts,
     validateWorktreeCopyPathSettings,
 } from "../src/components/settings/settingsValidation";
@@ -123,6 +125,39 @@ describe("validateViewerShortcuts", () => {
             "Ctrl+Shift+F12",
         );
         expect(errors).toHaveProperty("viewer_shortcut_diff");
+    });
+
+    it("rejects shortcuts reserved by file content preview toggle", () => {
+        const errors = validateViewerShortcuts({
+            "git-graph": "Ctrl+Shift+V",
+        });
+        expect(errors["viewer_shortcut_git-graph"]).toBe("予約済みショートカット Ctrl+Shift+V (ファイルビューのプレビュー切替) と重複しています");
+    });
+
+    it("rejects shortcuts reserved by the command palette", () => {
+        const errors = validateViewerShortcuts({
+            "git-graph": "Ctrl+P",
+        });
+        expect(errors["viewer_shortcut_git-graph"]).toBe("予約済みショートカット Ctrl+P (コマンドパレット) と重複しています");
+    });
+
+    it("rejects a reserved global hotkey when quake mode is enabled", () => {
+        const errors = validateGlobalHotkey("Ctrl+Shift+V", true);
+        expect(errors).toHaveProperty("global_hotkey");
+    });
+
+    it("rejects Ctrl+P as a reserved global hotkey when quake mode is enabled", () => {
+        const errors = validateGlobalHotkey("Ctrl+P", true);
+        expect(errors).toHaveProperty("global_hotkey");
+    });
+
+    it("allows a reserved global hotkey when quake mode is disabled", () => {
+        expect(validateGlobalHotkey("Ctrl+Shift+V", false)).toEqual({});
+    });
+
+    it("rejects a prefix shortcut reserved by the command palette", () => {
+        const errors = validatePrefixShortcut("Ctrl+P");
+        expect(errors).toHaveProperty("prefix");
     });
 });
 

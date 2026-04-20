@@ -64,6 +64,13 @@ Use `Ctrl` + mouse wheel to zoom in and out.
 Press `Ctrl+F` to search within the pane output.
 Useful for finding error messages in long log output.
 
+| Feature | Description |
+|---------|-------------|
+| Incremental search | Matches are found in real-time as you type |
+| Result counter | Shows current position and total matches (e.g. `3 / 17`) |
+| Highlight decorations | Matching locations are visually highlighted in the terminal |
+| IME support | Works with Japanese input composition |
+
 ---
 
 ## File Drop
@@ -72,15 +79,20 @@ Drag and drop a file onto a pane to paste its file path.
 
 ---
 
-## Quick Search
+## Quick Search (Command Palette)
 
-Press `Ctrl+P` to open the quick search palette.
+Press `Ctrl+P` or click the search button in the center of the Menu Bar.
 
-- Fuzzy-search by session name, repository name, or branch name
-- Use arrow keys to navigate, `Enter` to switch
+| Feature | Description |
+|---------|-------------|
+| Session switching | Fuzzy-search by session name, repository name, or branch name |
+| Viewer launch | Type a viewer name to open it directly |
+| Command execution | Run common commands (e.g. open settings) |
+| Template selection | Select task scheduler templates |
+
+- Use arrow keys to navigate, `Enter` to execute
 - `Escape` to close
-
-Quickly jump to any session when you have many open.
+- Menu Bar button opens as a dropdown; `Ctrl+P` opens as a centered palette
 
 ---
 

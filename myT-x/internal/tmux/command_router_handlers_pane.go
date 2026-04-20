@@ -168,10 +168,11 @@ func (r *CommandRouter) splitWindowResolved(target *TmuxPane, direction SplitDir
 	r.bestEffortSendKeys(newPane, args, true, "DEBUG-SPLIT", targetCtx.SessionName)
 
 	r.emitter.Emit("tmux:pane-created", map[string]any{
-		"sessionName": targetCtx.SessionName,
-		"paneId":      newPane.IDString(),
-		"env":         env,
-		"layout":      layoutSnapshot,
+		"sessionName":  targetCtx.SessionName,
+		"paneId":       newPane.IDString(),
+		"parentPaneId": target.IDString(),
+		"env":          env,
+		"layout":       layoutSnapshot,
 	})
 	r.emitter.Emit("tmux:layout-changed", map[string]any{
 		"sessionName": targetCtx.SessionName,

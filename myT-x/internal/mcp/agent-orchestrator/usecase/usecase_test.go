@@ -480,6 +480,17 @@ func (r *testMessageRepo) DeleteMessage(_ context.Context, id string) error {
 	return nil
 }
 
+func (r *testMessageRepo) DeleteResponse(_ context.Context, id string) error {
+	if r.deleteErr != nil {
+		return r.deleteErr
+	}
+	if _, ok := r.responses[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(r.responses, id)
+	return nil
+}
+
 func (r *testMessageRepo) GetMessage(_ context.Context, id string) (domain.TaskMessage, error) {
 	msg, ok := r.messages[id]
 	if !ok {
@@ -520,6 +531,10 @@ func (p *testPaneOps) SendKeys(ctx context.Context, paneID string, text string) 
 	}
 	p.sent = append(p.sent, sentCall{paneID: paneID, text: text})
 	return nil
+}
+
+func (p *testPaneOps) SendKeysPaste(ctx context.Context, paneID string, text string) error {
+	return p.SendKeys(ctx, paneID, text)
 }
 
 func (p *testPaneOps) GetPaneID(context.Context) (string, error) {
@@ -757,6 +772,95 @@ func TestAgentServiceRegisterRollsBackWhenStatusPersistFails(t *testing.T) {
 	}
 }
 
+func TestAgentServiceRegisterPreservesExistingSkillsWhenOmitted(t *testing.T) {
+	repo := newTestAgentRepo()
+	repo.agents["worker"] = domain.Agent{
+		Name:   "worker",
+		PaneID: "%1",
+		Role:   "existing",
+		Skills: []domain.Skill{{Name: "go", Description: "backend"}},
+	}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	result, err := svc.Register(context.Background(), RegisterAgentCmd{
+		Name:   "worker",
+		PaneID: "%1",
+		Role:   "reviewer",
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if !reflect.DeepEqual(result.Skills, repo.agents["worker"].Skills) {
+		t.Fatalf("skills = %#v, want %#v", result.Skills, repo.agents["worker"].Skills)
+	}
+}
+
+func TestAgentServiceRegisterReturnsErrorWhenSkillPreservationLookupFails(t *testing.T) {
+	repo := newTestAgentRepo()
+	repo.getAgentErr = errors.New("read failed")
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	if _, err := svc.Register(context.Background(), RegisterAgentCmd{
+		Name:   "worker",
+		PaneID: "%1",
+	}); err == nil || !strings.Contains(err.Error(), "failed to preserve provisional skills") {
+		t.Fatalf("Register() error = %v, want provisional skill preservation failure", err)
+	}
+}
+
+func TestAgentServiceRegisterOverwritesSkillsWhenProvided(t *testing.T) {
+	repo := newTestAgentRepo()
+	repo.agents["worker"] = domain.Agent{
+		Name:   "worker",
+		PaneID: "%1",
+		Skills: []domain.Skill{{Name: "go", Description: "backend"}},
+	}
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	result, err := svc.Register(context.Background(), RegisterAgentCmd{
+		Name:   "worker",
+		PaneID: "%1",
+		Skills: []domain.Skill{{Name: "testing", Description: "quality"}},
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	want := []domain.Skill{{Name: "testing", Description: "quality"}}
+	if !reflect.DeepEqual(result.Skills, want) {
+		t.Fatalf("skills = %#v, want %#v", result.Skills, want)
+	}
+}
+
+func TestAgentServiceRegisterEmitsAgentsUpdated(t *testing.T) {
+	repo := newTestAgentRepo()
+	panes := &testPaneOps{selfPane: "%1"}
+	svc := NewAgentService(repo, repo, panes, panes, panes, discardLogger())
+
+	var emittedName string
+	var emittedPayload map[string]any
+	svc.SetAgentsUpdatedEmitter("alpha", func(name string, payload any) {
+		emittedName = name
+		var ok bool
+		emittedPayload, ok = payload.(map[string]any)
+		if !ok {
+			t.Fatalf("payload type = %T", payload)
+		}
+	})
+
+	if _, err := svc.Register(context.Background(), RegisterAgentCmd{Name: "worker", PaneID: "%1"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if emittedName != "orchestrator:agents-updated" {
+		t.Fatalf("event name = %q", emittedName)
+	}
+	if got := emittedPayload["sessionName"]; got != "alpha" {
+		t.Fatalf("sessionName payload = %#v, want alpha", got)
+	}
+}
+
 func TestAgentServiceListRemovesStalePaneRegistrations(t *testing.T) {
 	repo := newTestAgentRepo()
 	repo.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
@@ -944,8 +1048,45 @@ func TestTaskDispatchServiceSendAllowsUnregisteredCallerWhenSenderExists(t *test
 	if len(messages.messages) != 1 {
 		t.Fatalf("expected 1 message saved, got %d", len(messages.messages))
 	}
-	if saved := messages.messages[task.SendMessageID]; saved.Content != "implement it" {
-		t.Fatalf("saved message content = %q, want %q", saved.Content, "implement it")
+	if saved := messages.messages[task.SendMessageID]; !strings.Contains(saved.Content, "implement it") {
+		t.Fatalf("saved message content = %q, want to contain original message", saved.Content)
+	} else if !strings.Contains(saved.Content, "task_id="+result.TaskID) {
+		t.Fatalf("saved message content = %q, want concrete task_id", saved.Content)
+	}
+}
+
+func TestTaskDispatchServiceSendIncludesResponseInstructionsInSpilloverNotification(t *testing.T) {
+	t.Parallel()
+
+	projectRoot := t.TempDir()
+	agents := newTestAgentRepo()
+	agents.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%2"}
+	agents.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
+	tasks := newTestTaskRepo()
+	messages := newTestMessageRepo()
+	panes := &testPaneOps{selfPane: "%9"}
+	svc := NewTaskDispatchService(agents, tasks, messages, panes, panes, discardLogger(), projectRoot)
+
+	result, err := svc.Send(context.Background(), SendTaskCmd{
+		AgentName:                   "codex",
+		FromAgent:                   "worker",
+		Message:                     strings.Repeat("x", MaxInlineDeliveryChars+1),
+		IncludeResponseInstructions: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(panes.sent) != 1 || panes.sent[0].paneID != "%1" {
+		t.Fatalf("unexpected sent calls: %+v", panes.sent)
+	}
+	if !strings.Contains(panes.sent[0].text, "payload_path=") {
+		t.Fatalf("spillover notification = %q, want payload path", panes.sent[0].text)
+	}
+	if !strings.Contains(panes.sent[0].text, "task_id="+result.TaskID) {
+		t.Fatalf("spillover notification = %q, want task_id", panes.sent[0].text)
+	}
+	if !strings.Contains(panes.sent[0].text, "send_response(task_id=\""+result.TaskID+"\", message=\"...\")") {
+		t.Fatalf("spillover notification = %q, want send_response example", panes.sent[0].text)
 	}
 }
 
@@ -3214,7 +3355,7 @@ func TestGetMyTasksAccessControl(t *testing.T) {
 
 			// Mock the resolver to return the specific caller
 			mockResolver := &mockCallerResolver{agent: tt.caller}
-			svc := NewTaskQueryService(agents, tasks, messages, mockResolver, mockResolver, discardLogger())
+			svc := NewTaskQueryService(agents, tasks, messages, &testPaneOps{}, mockResolver, discardLogger())
 
 			ctx := context.Background()
 			if tt.instanceID != "" {

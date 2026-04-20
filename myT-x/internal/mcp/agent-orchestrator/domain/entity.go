@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -234,11 +235,76 @@ type Task struct {
 	IsNowSession      bool   `json:"is_now_session"`
 }
 
-// TaskMessage はタスクメッセージを表す。
+// MessageStorageMode describes how a task message or response body is stored.
+type MessageStorageMode string
+
+const (
+	MessageStorageInline        MessageStorageMode = "inline"
+	MessageStorageFile          MessageStorageMode = "file"
+	MessageStorageMultipartFile MessageStorageMode = "multipart_file"
+)
+
+func NormalizeMessageStorageMode(mode MessageStorageMode) MessageStorageMode {
+	switch mode {
+	case "", MessageStorageInline:
+		return MessageStorageInline
+	case MessageStorageFile:
+		return MessageStorageFile
+	case MessageStorageMultipartFile:
+		return MessageStorageMultipartFile
+	default:
+		return mode
+	}
+}
+
+func (mode MessageStorageMode) IsValid() bool {
+	switch NormalizeMessageStorageMode(mode) {
+	case MessageStorageInline, MessageStorageFile, MessageStorageMultipartFile:
+		return true
+	default:
+		return false
+	}
+}
+
+func ResolveArtifactPath(projectRoot, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	projectRoot = strings.TrimSpace(projectRoot)
+	if projectRoot == "" {
+		return filepath.Clean(filepath.FromSlash(path))
+	}
+	return filepath.Clean(filepath.Join(projectRoot, filepath.FromSlash(path)))
+}
+
+func ResolveArtifactPaths(projectRoot string, paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	resolved := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if resolvedPath := ResolveArtifactPath(projectRoot, path); resolvedPath != "" {
+			resolved = append(resolved, resolvedPath)
+		}
+	}
+	return resolved
+}
+
+// TaskMessage stores message content or metadata for spillover payloads.
 type TaskMessage struct {
-	ID        string `json:"id"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"created_at"`
+	ID             string             `json:"id"`
+	Content        string             `json:"content,omitempty"`
+	CreatedAt      string             `json:"created_at"`
+	StorageMode    MessageStorageMode `json:"storage_mode,omitempty"`
+	ContentPreview string             `json:"content_preview,omitempty"`
+	ArtifactPaths  []string           `json:"artifact_paths,omitempty"`
+	PartCount      int                `json:"part_count,omitempty"`
+	ContentChars   int                `json:"content_chars,omitempty"`
+	SHA256         string             `json:"sha256,omitempty"`
 }
 
 // TaskFilter はタスク検索のフィルタ条件を表す。

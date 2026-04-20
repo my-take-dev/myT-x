@@ -15,8 +15,6 @@ interface CodexPanelProps {
     readonly titlePrefix?: string;
 }
 
-const CODEX_COLOR = "#61afef";
-
 export function CodexPanel({stats, compact = false, titlePrefix}: CodexPanelProps) {
     const tr = useUsageDashboardI18n();
     const [ranking, setRanking] = useState<RankingKey>("agents");
@@ -83,7 +81,7 @@ export function CodexPanel({stats, compact = false, titlePrefix}: CodexPanelProp
                     labelSessions={tr("viewer.usageDashboard.sessions", "セッション", "Sessions")}
                     labelSecondary={tr("viewer.usageDashboard.prompts", "プロンプト", "Prompts")}
                     labelToolCalls={tr("viewer.usageDashboard.spawnedAgents", "起動エージェント", "Spawned Agents")}
-                    color={CODEX_COLOR}
+                    colorVar="--udash-color-codex"
                 />
             </section>
         </div>

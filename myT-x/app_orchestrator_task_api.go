@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"myT-x/internal/mcp/agent-orchestrator/domain"
 	"myT-x/internal/orchestrator"
 
 	_ "modernc.org/sqlite"
@@ -28,16 +30,28 @@ type OrchestratorTask struct {
 	ResponsePreview string `json:"response_preview"` // 応答メッセージ冒頭80文字
 }
 
-// OrchestratorTaskDetail はタスクの詳細情報（メッセージ全文含む）。
+// OrchestratorTaskDetail contains task payload content or stored-payload metadata.
 type OrchestratorTaskDetail struct {
-	TaskID          string `json:"task_id"`
-	AgentName       string `json:"agent_name"`
-	SenderName      string `json:"sender_name"`
-	Status          string `json:"status"`
-	SentAt          string `json:"sent_at"`
-	CompletedAt     string `json:"completed_at"`
-	MessageContent  string `json:"message_content"`
-	ResponseContent string `json:"response_content"`
+	TaskID                string   `json:"task_id"`
+	AgentName             string   `json:"agent_name"`
+	SenderName            string   `json:"sender_name"`
+	Status                string   `json:"status"`
+	SentAt                string   `json:"sent_at"`
+	CompletedAt           string   `json:"completed_at"`
+	MessageContent        string   `json:"message_content"`
+	MessagePreview        string   `json:"message_preview"`
+	MessageStorageMode    string   `json:"message_storage_mode"`
+	MessageArtifactPaths  []string `json:"message_artifact_paths"`
+	MessagePartCount      int      `json:"message_part_count"`
+	MessageContentChars   int      `json:"message_content_chars"`
+	MessageSHA256         string   `json:"message_sha256"`
+	ResponseContent       string   `json:"response_content"`
+	ResponsePreview       string   `json:"response_preview"`
+	ResponseStorageMode   string   `json:"response_storage_mode"`
+	ResponseArtifactPaths []string `json:"response_artifact_paths"`
+	ResponsePartCount     int      `json:"response_part_count"`
+	ResponseContentChars  int      `json:"response_content_chars"`
+	ResponseSHA256        string   `json:"response_sha256"`
 }
 
 // OrchestratorAgent はフロントエンドに返すエージェント情報。
@@ -65,8 +79,8 @@ func (a *App) ListOrchestratorTasks(sessionName string) ([]OrchestratorTask, err
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.task_id, t.agent_name, COALESCE(t.assignee_pane_id,''), COALESCE(t.sender_pane_id,''),
 		        COALESCE(t.sender_name,''), t.status, t.sent_at, COALESCE(t.completed_at,''),
-		        COALESCE(SUBSTR(m.content, 1, 80), ''),
-		        COALESCE(SUBSTR(r.content, 1, 80), '')
+		        COALESCE(NULLIF(SUBSTR(m.content_preview, 1, 80), ''), SUBSTR(m.content, 1, 80), ''),
+		        COALESCE(NULLIF(SUBSTR(r.content_preview, 1, 80), ''), SUBSTR(r.content, 1, 80), '')
 		 FROM tasks t
 		 LEFT JOIN send_messages m ON t.send_message_id = m.id
 		 LEFT JOIN send_responses r ON t.send_response_id = r.id
@@ -90,11 +104,15 @@ func (a *App) ListOrchestratorTasks(sessionName string) ([]OrchestratorTask, err
 	return result, rows.Err()
 }
 
-// GetOrchestratorTaskDetail はタスクの詳細情報（メッセージ全文含む）を返す。
+// GetOrchestratorTaskDetail returns task payload content or stored-payload metadata.
 func (a *App) GetOrchestratorTaskDetail(sessionName, taskID string) (*OrchestratorTaskDetail, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
 		return nil, fmt.Errorf("task ID is required")
+	}
+	projectRoot, err := a.resolveOrchestratorProjectRoot(sessionName)
+	if err != nil {
+		return nil, err
 	}
 
 	db, cleanup, err := a.openOrchestratorDB(sessionName)
@@ -107,23 +125,58 @@ func (a *App) GetOrchestratorTaskDetail(sessionName, taskID string) (*Orchestrat
 	row := db.QueryRowContext(ctx,
 		`SELECT t.task_id, t.agent_name, COALESCE(t.sender_name,''), t.status,
 		        t.sent_at, COALESCE(t.completed_at,''),
-		        COALESCE(m.content, ''), COALESCE(r.content, '')
+		        COALESCE(m.content, ''), COALESCE(m.content_preview, ''), COALESCE(m.storage_mode, ''),
+		        COALESCE(m.artifact_paths_json, '[]'), COALESCE(m.part_count, 0), COALESCE(m.content_chars, 0), COALESCE(m.sha256, ''),
+		        COALESCE(r.content, ''), COALESCE(r.content_preview, ''), COALESCE(r.storage_mode, ''),
+		        COALESCE(r.artifact_paths_json, '[]'), COALESCE(r.part_count, 0), COALESCE(r.content_chars, 0), COALESCE(r.sha256, '')
 		 FROM tasks t
 		 LEFT JOIN send_messages m ON t.send_message_id = m.id
 		 LEFT JOIN send_responses r ON t.send_response_id = r.id
 		 WHERE t.task_id = ? AND t.is_now_session = 1`, taskID,
 	)
 
-	var d OrchestratorTaskDetail
-	if err := row.Scan(&d.TaskID, &d.AgentName, &d.SenderName, &d.Status,
-		&d.SentAt, &d.CompletedAt, &d.MessageContent, &d.ResponseContent); err != nil {
+	var (
+		d                         OrchestratorTaskDetail
+		messageArtifactPathsJSON  string
+		responseArtifactPathsJSON string
+	)
+	if err := row.Scan(
+		&d.TaskID,
+		&d.AgentName,
+		&d.SenderName,
+		&d.Status,
+		&d.SentAt,
+		&d.CompletedAt,
+		&d.MessageContent,
+		&d.MessagePreview,
+		&d.MessageStorageMode,
+		&messageArtifactPathsJSON,
+		&d.MessagePartCount,
+		&d.MessageContentChars,
+		&d.MessageSHA256,
+		&d.ResponseContent,
+		&d.ResponsePreview,
+		&d.ResponseStorageMode,
+		&responseArtifactPathsJSON,
+		&d.ResponsePartCount,
+		&d.ResponseContentChars,
+		&d.ResponseSHA256,
+	); err != nil {
 		return nil, fmt.Errorf("[DEBUG-canvas] get task detail: %w", err)
+	}
+	d.MessageArtifactPaths, err = parseArtifactPaths(projectRoot, messageArtifactPathsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("[DEBUG-canvas] parse message artifact paths: %w", err)
+	}
+	d.ResponseArtifactPaths, err = parseArtifactPaths(projectRoot, responseArtifactPathsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("[DEBUG-canvas] parse response artifact paths: %w", err)
 	}
 	return &d, nil
 }
 
 // ListOrchestratorAgents は現在のセッションの登録エージェント一覧を返す。
-// mcp_instance_id IS NOT NULL でフィルタし、有効なインスタンスに紐づくエージェントのみ返す。
+// Provisional registrations are included so freshly enlisted panes appear immediately.
 func (a *App) ListOrchestratorAgents(sessionName string) ([]OrchestratorAgent, error) {
 	db, cleanup, err := a.openOrchestratorDB(sessionName)
 	if err != nil {
@@ -133,7 +186,7 @@ func (a *App) ListOrchestratorAgents(sessionName string) ([]OrchestratorAgent, e
 
 	ctx := context.Background()
 	rows, err := db.QueryContext(ctx,
-		`SELECT name, pane_id, COALESCE(role,'') FROM agents WHERE mcp_instance_id IS NOT NULL ORDER BY name`,
+		`SELECT name, pane_id, COALESCE(role,'') FROM agents ORDER BY name`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("[DEBUG-canvas] list agents: %w", err)
@@ -153,38 +206,79 @@ func (a *App) ListOrchestratorAgents(sessionName string) ([]OrchestratorAgent, e
 
 // openOrchestratorDB はセッション名からオーケストレーターDBを開く。
 func (a *App) openOrchestratorDB(sessionName string) (*sql.DB, func(), error) {
+	return a.openOrchestratorDBWithMode(sessionName, "ro")
+}
+
+func (a *App) openOrchestratorDBWritable(sessionName string) (*sql.DB, func(), error) {
+	return a.openOrchestratorDBWithMode(sessionName, "rwc")
+}
+
+func (a *App) openOrchestratorDBWithMode(sessionName string, mode string) (*sql.DB, func(), error) {
+	dbPath, err := a.resolveOrchestratorDBPath(sessionName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	dsn := dbPath + "?mode=" + mode
+	if mode == "ro" {
+		dsn += "&_pragma=busy_timeout(5000)"
+	} else {
+		dsn += "&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	}
+
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("[DEBUG-canvas] open orchestrator db: %w", err)
+	}
+
+	return db, func() {
+		if closeErr := db.Close(); closeErr != nil {
+			slog.Warn("[WARN-canvas] failed to close orchestrator db", "error", closeErr)
+		}
+	}, nil
+}
+
+func (a *App) resolveOrchestratorProjectRoot(sessionName string) (string, error) {
 	sessionName = strings.TrimSpace(sessionName)
 	if sessionName == "" {
-		return nil, nil, fmt.Errorf("session name is required")
+		return "", fmt.Errorf("session name is required")
 	}
 
 	snapshot, err := a.sessionService.FindSessionSnapshotByName(sessionName)
 	if err != nil {
-		return nil, nil, err
+		return "", err
 	}
 
 	rootPath, err := orchestrator.ResolveSourceRootPath(snapshot)
 	if err != nil {
-		return nil, nil, err
+		return "", err
+	}
+	return rootPath, nil
+}
+
+func (a *App) resolveOrchestratorDBPath(sessionName string) (string, error) {
+	rootPath, err := a.resolveOrchestratorProjectRoot(sessionName)
+	if err != nil {
+		return "", err
 	}
 
 	dbPath := filepath.Join(rootPath, ".myT-x", "orchestrator.db")
 
 	// I-8: DBファイルの存在確認
 	if _, statErr := os.Stat(dbPath); statErr != nil {
-		return nil, nil, fmt.Errorf("[DEBUG-canvas] orchestrator db not found: %w", statErr)
+		return "", fmt.Errorf("[DEBUG-canvas] orchestrator db not found: %w", statErr)
+	}
+	return dbPath, nil
+}
+
+func parseArtifactPaths(projectRoot string, raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
 	}
 
-	// I-8: _busy_timeout=5000 で他プロセスのロック待ちに対応
-	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_busy_timeout=5000")
-	if err != nil {
-		return nil, nil, fmt.Errorf("[DEBUG-canvas] open orchestrator db: %w", err)
+	var paths []string
+	if err := json.Unmarshal([]byte(raw), &paths); err != nil {
+		return nil, err
 	}
-
-	// M-4: クローズエラーをログ出力
-	return db, func() {
-		if closeErr := db.Close(); closeErr != nil {
-			slog.Warn("[WARN-canvas] failed to close orchestrator db", "error", closeErr)
-		}
-	}, nil
+	return domain.ResolveArtifactPaths(projectRoot, paths), nil
 }

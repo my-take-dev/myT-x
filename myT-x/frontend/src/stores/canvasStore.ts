@@ -17,6 +17,7 @@ interface PerSessionCanvasData {
     taskEdgeMap: Record<string, OrchestratorTask>;
     agentMap: Record<string, OrchestratorAgent>;
     processStatusMap: Record<string, boolean>;
+    rootPaneId: string | null;
 }
 
 interface CanvasState {
@@ -39,10 +40,14 @@ interface CanvasState {
     /** エージェント情報（pane_id → agent）。 */
     agentMap: Record<string, OrchestratorAgent>;
     updateAgents: (agents: OrchestratorAgent[]) => void;
+    clearAgents: () => void;
 
     /** プロセス実行状態（pane_id → hasChildProcess）。 */
     processStatusMap: Record<string, boolean>;
     updateProcessStatus: (statuses: PaneProcessStatus[]) => void;
+
+    rootPaneId: string | null;
+    setRootPaneId: (paneId: string | null) => void;
 
     /** セッション別キャンバスデータのマップ。セッション切替時に保存/復元する。 */
     sessionDataMap: Record<string, PerSessionCanvasData>;
@@ -52,6 +57,7 @@ interface CanvasState {
 
     /** セッション破棄時にセッション固有データを削除する。 */
     clearSessionData: (sessionName: string) => void;
+    migrateSessionData: (oldName: string, newName: string) => void;
 }
 
 /** 空のセッションデータを生成する。参照共有を防ぐため毎回新規オブジェクトを返す。 */
@@ -62,6 +68,7 @@ function createEmptySessionData(): PerSessionCanvasData {
         taskEdgeMap: {},
         agentMap: {},
         processStatusMap: {},
+        rootPaneId: null,
     };
 }
 
@@ -120,6 +127,7 @@ export const useCanvasStore = create<CanvasState>((set) => ({
             }
             return {agentMap: next};
         }),
+    clearAgents: () => set({agentMap: {}}),
 
     processStatusMap: {},
     updateProcessStatus: (statuses) =>
@@ -130,6 +138,9 @@ export const useCanvasStore = create<CanvasState>((set) => ({
             }
             return {processStatusMap: next};
         }),
+
+    rootPaneId: null,
+    setRootPaneId: (paneId) => set({rootPaneId: paneId}),
 
     sessionDataMap: {},
 
@@ -148,6 +159,7 @@ export const useCanvasStore = create<CanvasState>((set) => ({
                     taskEdgeMap: state.taskEdgeMap,
                     agentMap: state.agentMap,
                     processStatusMap: state.processStatusMap,
+                    rootPaneId: state.rootPaneId,
                 };
             }
             // 対象セッションのデータを復元（なければ空状態）
@@ -161,6 +173,7 @@ export const useCanvasStore = create<CanvasState>((set) => ({
                 taskEdgeMap: restored.taskEdgeMap,
                 agentMap: restored.agentMap,
                 processStatusMap: restored.processStatusMap,
+                rootPaneId: restored.rootPaneId,
                 sessionDataMap: nextMap,
             };
         }),
@@ -177,5 +190,27 @@ export const useCanvasStore = create<CanvasState>((set) => ({
                 };
             }
             return {sessionDataMap: rest};
+        }),
+
+    migrateSessionData: (oldName, newName) =>
+        set((state) => {
+            if (oldName === newName) {
+                return {};
+            }
+
+            const nextMap = {...state.sessionDataMap};
+            if (Object.prototype.hasOwnProperty.call(nextMap, oldName)) {
+                nextMap[newName] = nextMap[oldName];
+                delete nextMap[oldName];
+            }
+
+            if (state.activeSessionName !== oldName) {
+                return {sessionDataMap: nextMap};
+            }
+
+            return {
+                activeSessionName: newName,
+                sessionDataMap: nextMap,
+            };
         }),
 }));

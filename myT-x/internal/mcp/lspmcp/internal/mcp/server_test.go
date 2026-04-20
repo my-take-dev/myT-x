@@ -408,20 +408,17 @@ func TestServerToolsCallHandlerError(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	serveDone := make(chan struct{})
 	go func() {
-		if err := srv.Serve(ctx); err != nil {
-			t.Logf("Serve error: %v", err)
-		}
-		if err := serverToClientW.Close(); err != nil {
-			t.Logf("Close serverToClientW: %v", err)
-		}
+		defer close(serveDone)
+		_ = srv.Serve(ctx)
+		_ = serverToClientW.Close()
 	}()
-	defer func() {
-		if err := clientToServerW.Close(); err != nil {
-			t.Logf("Close clientToServerW: %v", err)
-		}
-	}()
+	t.Cleanup(func() {
+		_ = clientToServerW.Close()
+		cancel()
+		<-serveDone
+	})
 
 	initReq := map[string]any{
 		"jsonrpc": "2.0",

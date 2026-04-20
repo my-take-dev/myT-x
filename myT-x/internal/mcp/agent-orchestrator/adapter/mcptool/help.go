@@ -17,8 +17,8 @@ func helpOverview() map[string]any {
 			"title": "Typical Workflow",
 			"steps": []string{
 				"1. register_agent: Register yourself as an agent for inbox, status, and monitoring tools. Direct send_task calls can still work without caller-pane registration when from_agent resolves.",
-				"2. get_my_tasks: Check your pending tasks. Inline-returned tasks are auto-acknowledged best-effort.",
-				"3. get_task_message: Fetch the task message body by send_message_id.",
+				"2. get_my_tasks: Check your pending tasks. Only inline-content returns are auto-acknowledged best-effort.",
+				"3. get_task_message: Fetch task message metadata by send_message_id. Inline payloads include content; larger payloads expose preview and artifact paths.",
 				"4. acknowledge_task: Optionally record task acknowledgment with task_id when the task was not auto-acknowledged inline.",
 				"5. Execute the task.",
 				"6. send_response: Reply with task_id to complete the task and send the response.",
@@ -106,7 +106,7 @@ var toolHelps = map[string]map[string]any{
 		"parameters": map[string]any{
 			"agent_name (required)":                    "Target agent name.",
 			"from_agent (required)":                    "Your registered agent name. This becomes the reply target when the assignee uses send_response.",
-			"message (required)":                       "Task message. Maximum 8000 characters.",
+			"message (required)":                       "Task message. Maximum 200000 characters. Inline delivery is used up to 16000 characters; larger payloads spill to files and can be inspected later through get_task_message or get_task_detail.",
 			"include_response_instructions (optional)": "Automatically append the response template. Default: true.",
 			"expires_after_minutes (optional)":         "Task expiry in minutes. Range: 1-1440.",
 			"depends_on (optional)":                    "Dependency task ID array with up to 20 items. When provided, the task is created as blocked.",
@@ -125,7 +125,7 @@ var toolHelps = map[string]map[string]any{
 	},
 	"get_my_tasks": {
 		"tool":        "get_my_tasks",
-		"description": "Return your assigned tasks together with response instructions. Use it as your inbox view. Pending unacknowledged tasks returned inline are auto-acknowledged best-effort. agent_name is required because pipe mode cannot infer the assignee name from the caller pane alone.",
+		"description": "Return your assigned tasks together with response instructions. Use it as your inbox view. Pending unacknowledged tasks returned with inline content are auto-acknowledged best-effort. agent_name is required because pipe mode cannot infer the assignee name from the caller pane alone.",
 		"parameters": map[string]any{
 			"agent_name (required)":    "Assignee agent name. Required because pipe mode cannot infer it from the caller pane alone.",
 			"status_filter (optional)": taskStatusFilterDesc + ". Default: pending.",
@@ -134,18 +134,18 @@ var toolHelps = map[string]map[string]any{
 		"notes": []string{
 			"Registered callers read their own inbox. Trusted local-pipe callers can specify the assignee name explicitly.",
 			"Pipe mode still cannot derive which registered assignee name you intend to use without agent_name.",
-			"Inline-returned tasks are auto-acknowledged after the message body is fetched. Acknowledge failures are logged and do not block the response.",
-			"Pending unacknowledged tasks include inline_messages with full message content.",
+			"Inline-content returns are auto-acknowledged after the inline payload is fetched. Acknowledge failures are logged and do not block the response.",
+			"Pending unread tasks may include inline content for small payloads or preview/file metadata for larger payloads.",
 			"Task entries and inline_messages include from_agent when the sender name is available.",
-			"Use acknowledge_task for tasks obtained through non-inline paths or when you want an explicit acknowledgment call.",
-			"For already-acknowledged tasks, use send_message_id with get_task_message to fetch the message body.",
+			"Use acknowledge_task for stored-payload metadata returns or when you want an explicit acknowledgment call.",
+			"For already-acknowledged tasks, use send_message_id with get_task_message to fetch the message content or stored-payload metadata.",
 			"The response also includes response_instructions.",
 			"Call this periodically (every 30-60 seconds) when idle to ensure you receive all tasks.",
 		},
 	},
 	"get_task_message": {
 		"tool":        "get_task_message",
-		"description": "Return the task message body and metadata for a given send_message_id. Assignee or trusted local-pipe caller. agent_name selects the assignee identity in pipe mode.",
+		"description": "Return task message metadata for a given send_message_id. Inline payloads include content; larger payloads return preview and artifact paths.",
 		"parameters": map[string]any{
 			"agent_name (required)":      "Assignee agent name. Required because pipe mode cannot infer it from the caller pane alone.",
 			"send_message_id (required)": "Target send_message_id with the m- prefix.",
@@ -154,22 +154,22 @@ var toolHelps = map[string]map[string]any{
 			"Use the send_message_id returned by get_my_tasks.",
 			"Registered assignees and trusted local-pipe callers can use this tool.",
 			"Pipe mode still cannot derive which registered assignee name you intend to use without agent_name.",
-			"The response includes message.content and message.created_at.",
-			"Use this tool for the message body. Use get_task_detail for progress, dependencies, or response inspection.",
+			"The response always includes message.created_at and may include content, content_preview, storage_mode, artifact_paths, part_count, content_chars, and sha256.",
+			"Use this tool for message content lookup and stored-payload metadata. Use get_task_detail for progress, dependencies, or response inspection.",
 		},
 	},
 	"get_task_detail": {
 		"tool":        "get_task_detail",
-		"description": "Return detailed state for a single task, including batch group metadata when present.",
+		"description": "Return detailed state for a single task, including payload storage metadata and batch group metadata when present.",
 		"parameters": map[string]any{
 			"task_id (required)": "Target task_id.",
 		},
 		"notes": []string{
 			"The sender, the assignee, and trusted callers can use this tool.",
 			"Trusted callers (pipe bridge) may act on behalf of the sender or the assignee. This is by design for environments where TMUX_PANE is unresolvable.",
-			"Completed tasks include response.content and response.created_at.",
-			"Use it for fields such as group_id, group_label, acknowledged_at, progress, cancel_reason, expires_at, and depends_on.",
-			"The message body is not included. The assignee uses get_task_message to read it.",
+			"Completed tasks include response metadata and inline content when the response is stored inline.",
+			"Use it for fields such as group_id, group_label, acknowledged_at, progress, cancel_reason, expires_at, depends_on, message, and response.",
+			"Large payloads are represented by preview and artifact path metadata instead of returning the full body.",
 		},
 	},
 	"acknowledge_task": {
@@ -192,12 +192,12 @@ var toolHelps = map[string]map[string]any{
 		"description": "Reply to the task sender and mark the target task as completed.",
 		"parameters": map[string]any{
 			"task_id (required)": "Task ID to respond to.",
-			"message (required)": "Reply message. Maximum 8000 characters.",
+			"message (required)": "Reply message. Maximum 200000 characters. Inline delivery is used up to 16000 characters; larger payloads spill to files and can be inspected later through get_task_detail.",
 		},
 		"notes": []string{
 			"The pending-task assignee and trusted local-pipe callers can use this tool.",
 			"Omitting task_id is an error and prevents the task from being completed.",
-			"The reply is delivered to the sender's pane and the task becomes completed.",
+			"The reply is delivered to the sender's pane, and the task becomes completed only after response persistence succeeds.",
 		},
 	},
 	"update_status": {

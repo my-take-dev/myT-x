@@ -328,5 +328,97 @@ describe("computeTreeLayout", () => {
             const uniqueY = new Set(Object.values(result).map(p => p.y));
             expect(uniqueY.size).toBeGreaterThanOrEqual(2);
         });
+
+        it("honors a manual root over orchestrator auto-selection", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%0", assignee_pane_id: "%2"}),
+            ];
+
+            const result = computeTreeLayout(["%0", "%1", "%2"], tasks, undefined, {
+                rootPaneId: "%2",
+                orchestratorPaneIds: ["%0"],
+            });
+
+            expect(result["%2"].y).toBe(0);
+            expect(result["%0"].y).toBeGreaterThan(result["%2"].y);
+        });
+
+        it("falls back when the manual root is not present", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%1", assignee_pane_id: "%0"}),
+            ];
+
+            const result = computeTreeLayout(["%0", "%1"], tasks, undefined, {
+                rootPaneId: "%99",
+            });
+
+            expect(result["%0"].y).toBe(0);
+            expect(result["%1"].y).toBeGreaterThan(result["%0"].y);
+        });
+
+        it("prefers orchestrator panes when auto-selecting a root", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%1", assignee_pane_id: "%0"}),
+                makeTask({task_id: "t-3", sender_pane_id: "%1", assignee_pane_id: "%2"}),
+                makeTask({task_id: "t-4", sender_pane_id: "%2", assignee_pane_id: "%1"}),
+            ];
+
+            const result = computeTreeLayout(["%0", "%1", "%2"], tasks, undefined, {
+                orchestratorPaneIds: ["%1"],
+            });
+
+            expect(result["%1"].y).toBe(0);
+            expect(result["%0"].y).toBeGreaterThan(result["%1"].y);
+            expect(result["%2"].y).toBeGreaterThan(result["%1"].y);
+        });
+
+        it("sorts pane IDs by numeric pane index instead of lexicographic order", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%10", assignee_pane_id: "%2"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%2", assignee_pane_id: "%10"}),
+            ];
+
+            const result = computeTreeLayout(["%10", "%2"], tasks);
+
+            expect(result["%2"].y).toBe(0);
+            expect(result["%10"].y).toBeGreaterThan(result["%2"].y);
+        });
+
+        it("keeps an isolated manual root at level 0", () => {
+            const tasks = [makeTask({task_id: "t-1", sender_pane_id: "%0", assignee_pane_id: "%1"})];
+
+            const result = computeTreeLayout(["%0", "%1", "%2"], tasks, undefined, {
+                rootPaneId: "%2",
+            });
+
+            expect(result["%2"].y).toBe(0);
+        });
+
+        it("keeps a hand-calculated reference layout for manual root plus disconnected orchestrator component", () => {
+            const tasks = [
+                makeTask({task_id: "t-1", sender_pane_id: "%1", assignee_pane_id: "%2"}),
+                makeTask({task_id: "t-2", sender_pane_id: "%2", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-3", sender_pane_id: "%0", assignee_pane_id: "%1"}),
+                makeTask({task_id: "t-4", sender_pane_id: "%1", assignee_pane_id: "%0"}),
+                makeTask({task_id: "t-5", sender_pane_id: "%3", assignee_pane_id: "%4"}),
+                makeTask({task_id: "t-6", sender_pane_id: "%4", assignee_pane_id: "%3"}),
+            ];
+
+            const result = computeTreeLayout(["%0", "%1", "%2", "%3", "%4"], tasks, undefined, {
+                rootPaneId: "%2",
+                orchestratorPaneIds: ["%0", "%3"],
+            });
+
+            expect(result).toEqual({
+                "%0": {x: 0, y: 820},
+                "%1": {x: 0, y: 410},
+                "%2": {x: 0, y: 0},
+                "%3": {x: 610, y: 0},
+                "%4": {x: 610, y: 410},
+            });
+        });
     });
 });

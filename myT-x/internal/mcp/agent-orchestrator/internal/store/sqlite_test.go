@@ -126,6 +126,86 @@ INSERT INTO tasks(task_id, agent_name, status, sent_at, is_now_session) VALUES (
 	}
 }
 
+func TestMigrateAddsStorageModeChecksToLegacyPayloadTables(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "legacy-payload.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(dbPath))
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := db.Exec(`
+CREATE TABLE send_messages (
+	id TEXT PRIMARY KEY,
+	content TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT (datetime('now')),
+	storage_mode TEXT NOT NULL DEFAULT 'inline',
+	content_preview TEXT NOT NULL DEFAULT '',
+	artifact_paths_json TEXT NOT NULL DEFAULT '[]',
+	part_count INTEGER NOT NULL DEFAULT 0,
+	content_chars INTEGER NOT NULL DEFAULT 0,
+	sha256 TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE send_responses (
+	id TEXT PRIMARY KEY,
+	content TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT (datetime('now')),
+	storage_mode TEXT NOT NULL DEFAULT 'inline',
+	content_preview TEXT NOT NULL DEFAULT '',
+	artifact_paths_json TEXT NOT NULL DEFAULT '[]',
+	part_count INTEGER NOT NULL DEFAULT 0,
+	content_chars INTEGER NOT NULL DEFAULT 0,
+	sha256 TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO send_messages(id, content, created_at, storage_mode) VALUES ('m-legacy', '', '2026-04-18T01:02:03Z', 'file');
+INSERT INTO send_responses(id, content, created_at, storage_mode) VALUES ('r-legacy', '', '2026-04-18T01:02:03Z', 'multipart_file');
+`); err != nil {
+		t.Fatalf("seed legacy payload schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	message, err := st.GetMessage(context.Background(), "m-legacy")
+	if err != nil {
+		t.Fatalf("GetMessage(m-legacy): %v", err)
+	}
+	if message.StorageMode != domain.MessageStorageFile {
+		t.Fatalf("migrated message storage_mode = %q, want file", message.StorageMode)
+	}
+	response, err := st.GetResponse(context.Background(), "r-legacy")
+	if err != nil {
+		t.Fatalf("GetResponse(r-legacy): %v", err)
+	}
+	if response.StorageMode != domain.MessageStorageMultipartFile {
+		t.Fatalf("migrated response storage_mode = %q, want multipart_file", response.StorageMode)
+	}
+
+	if _, err := st.db.ExecContext(context.Background(), `INSERT INTO send_messages (
+		id, content, created_at, storage_mode, content_preview, artifact_paths_json, part_count, content_chars, sha256
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"m-invalid-after-migrate", "", "2026-04-18T01:02:03Z", "zipfile", "", "[]", 0, 0, "",
+	); err == nil {
+		t.Fatal("insert invalid migrated message row = nil error, want CHECK constraint failure")
+	}
+	if _, err := st.db.ExecContext(context.Background(), `INSERT INTO send_responses (
+		id, content, created_at, storage_mode, content_preview, artifact_paths_json, part_count, content_chars, sha256
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"r-invalid-after-migrate", "", "2026-04-18T01:02:03Z", "zipfile", "", "[]", 0, 0, "",
+	); err == nil {
+		t.Fatal("insert invalid migrated response row = nil error, want CHECK constraint failure")
+	}
+}
+
 func TestUpsertAndGetAgent(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -624,6 +704,38 @@ func TestSaveAndRetrieveMessage(t *testing.T) {
 	}
 }
 
+func TestSaveAndGetMessagePreservesStoredPayloadMetadata(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	msg := domain.TaskMessage{
+		ID:             "m-meta",
+		Content:        "",
+		CreatedAt:      "2026-03-07T10:00:00Z",
+		StorageMode:    domain.MessageStorageMultipartFile,
+		ContentPreview: "stored preview",
+		ArtifactPaths: []string{
+			".myT-x/orchestrator/payloads/task-1/message.manifest.json",
+			".myT-x/orchestrator/payloads/task-1/message.part1.txt",
+		},
+		PartCount:    2,
+		ContentChars: 32001,
+		SHA256:       "abc123",
+	}
+	if err := st.SaveMessage(ctx, msg); err != nil {
+		t.Fatalf("SaveMessage: %v", err)
+	}
+
+	got, err := st.GetMessage(ctx, msg.ID)
+	if err != nil {
+		t.Fatalf("GetMessage: %v", err)
+	}
+
+	if !reflect.DeepEqual(got, normalizeTaskMessage(msg)) {
+		t.Fatalf("GetMessage() = %+v, want %+v", got, normalizeTaskMessage(msg))
+	}
+}
+
 func TestSaveAndRetrieveResponse(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -641,6 +753,62 @@ func TestSaveAndRetrieveResponse(t *testing.T) {
 	}
 	if content != "task completed" {
 		t.Fatalf("content = %q, want 'task completed'", content)
+	}
+}
+
+func TestSaveAndGetResponsePreservesStoredPayloadMetadata(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	resp := domain.TaskMessage{
+		ID:             "r-meta",
+		Content:        "",
+		CreatedAt:      "2026-03-07T10:00:00Z",
+		StorageMode:    domain.MessageStorageFile,
+		ContentPreview: "stored response preview",
+		ArtifactPaths:  []string{".myT-x/orchestrator/payloads/task-1/response.txt"},
+		PartCount:      1,
+		ContentChars:   16001,
+		SHA256:         "def456",
+	}
+	if err := st.SaveResponse(ctx, resp); err != nil {
+		t.Fatalf("SaveResponse: %v", err)
+	}
+
+	got, err := st.GetResponse(ctx, resp.ID)
+	if err != nil {
+		t.Fatalf("GetResponse: %v", err)
+	}
+
+	if !reflect.DeepEqual(got, normalizeTaskMessage(resp)) {
+		t.Fatalf("GetResponse() = %+v, want %+v", got, normalizeTaskMessage(resp))
+	}
+}
+
+func TestSaveMessageRejectsInvalidStorageMode(t *testing.T) {
+	st := newTestStore(t)
+	err := st.SaveMessage(context.Background(), domain.TaskMessage{
+		ID:          "m-invalid",
+		Content:     "",
+		CreatedAt:   "2026-04-18T01:02:03Z",
+		StorageMode: domain.MessageStorageMode("zipfile"),
+	})
+	if err == nil || !strings.Contains(err.Error(), `invalid storage_mode "zipfile"`) {
+		t.Fatalf("SaveMessage() error = %v, want invalid storage_mode", err)
+	}
+}
+
+func TestSendResponsesTableRejectsInvalidStorageMode(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	_, err := st.db.ExecContext(ctx, `INSERT INTO send_responses (
+		id, content, created_at, storage_mode, content_preview, artifact_paths_json, part_count, content_chars, sha256
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"r-invalid", "", "2026-04-18T01:02:03Z", "zipfile", "", "[]", 0, 0, "",
+	)
+	if err == nil {
+		t.Fatal("insert invalid response row = nil error, want CHECK constraint failure")
 	}
 }
 
@@ -1998,8 +2166,9 @@ func TestGetMessage(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetMessage(%q): %v", tt.id, err)
 			}
-			if got != tt.want {
-				t.Errorf("GetMessage(%q) = %+v, want %+v", tt.id, got, tt.want)
+			want := normalizeTaskMessage(tt.want)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("GetMessage(%q) = %+v, want %+v", tt.id, got, want)
 			}
 		})
 	}
@@ -2020,6 +2189,24 @@ func TestDeleteMessage(t *testing.T) {
 	}
 	if err := st.DeleteMessage(ctx, "m-001"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("DeleteMessage(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteResponse(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.SaveResponse(ctx, domain.TaskMessage{ID: "r-001", Content: "done", CreatedAt: "2026-03-07T10:00:00Z"}); err != nil {
+		t.Fatalf("SaveResponse: %v", err)
+	}
+	if err := st.DeleteResponse(ctx, "r-001"); err != nil {
+		t.Fatalf("DeleteResponse(existing): %v", err)
+	}
+	if _, err := st.GetResponse(ctx, "r-001"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("GetResponse(after delete) error = %v, want ErrNotFound", err)
+	}
+	if err := st.DeleteResponse(ctx, "r-001"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteResponse(missing) error = %v, want ErrNotFound", err)
 	}
 }
 

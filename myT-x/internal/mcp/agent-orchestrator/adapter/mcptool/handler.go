@@ -73,6 +73,58 @@ func (h *Handler) BuildRegistry() (*mcp.Registry, error) {
 	})
 }
 
+func messageEntryMap(entry usecase.MessageEntry) map[string]any {
+	return payloadEntryMap(
+		entry.Content,
+		entry.CreatedAt,
+		entry.ContentPreview,
+		entry.StorageMode,
+		entry.ArtifactPaths,
+		entry.PartCount,
+		entry.ContentChars,
+		entry.SHA256,
+	)
+}
+
+func taskResponseEntryMap(entry usecase.TaskResponseEntry) map[string]any {
+	return payloadEntryMap(
+		entry.Content,
+		entry.CreatedAt,
+		entry.ContentPreview,
+		entry.StorageMode,
+		entry.ArtifactPaths,
+		entry.PartCount,
+		entry.ContentChars,
+		entry.SHA256,
+	)
+}
+
+func payloadEntryMap(
+	content string,
+	createdAt string,
+	contentPreview string,
+	storageMode domain.MessageStorageMode,
+	artifactPaths []string,
+	partCount int,
+	contentChars int,
+	sha256 string,
+) map[string]any {
+	paths := artifactPaths
+	if paths == nil {
+		paths = []string{}
+	}
+	return map[string]any{
+		"content":         content,
+		"created_at":      createdAt,
+		"content_preview": contentPreview,
+		"storage_mode":    storageMode,
+		"artifact_paths":  paths,
+		"part_count":      partCount,
+		"content_chars":   contentChars,
+		"sha256":          sha256,
+	}
+}
+
 // register_agent binds a pane ID to an agent name and stores optional role and skill metadata.
 // Re-calling with the same name updates the registration. Registration can be changed
 // regardless of the caller's pane. Registration is required before using tools other than help.
@@ -209,7 +261,7 @@ func (h *Handler) handleListAgents(ctx context.Context, _ map[string]any) (any, 
 // パラメータ:
 //   - agent_name（必須）: 宛先エージェント名
 //   - from_agent（必須）: 自分の登録済みエージェント名（相手が send_response で返信する際の宛先）
-//   - message（必須）: 送信メッセージ（最大8000文字）
+//   - message（必須）: 送信メッセージ（最大200000文字）
 //   - include_response_instructions（任意）: 応答方法テンプレートを末尾に自動付与（デフォルト: true）
 //   - expires_after_minutes（任意）: タスク有効期限（分、1-1440）
 //   - depends_on（任意）: 依存タスクID配列（最大20件）。blocked で作成され、依存完了後に activate_ready_tasks で活性化
@@ -222,7 +274,7 @@ func (h *Handler) sendTaskTool() mcp.Tool {
 			"properties": map[string]any{
 				"agent_name":                    map[string]any{"type": "string", "description": "Target agent name"},
 				"from_agent":                    map[string]any{"type": "string", "description": "Sender's registered agent name (used as reply-to address for send_response)"},
-				"message":                       map[string]any{"type": "string", "description": "Task message (max 8000 chars)"},
+				"message":                       map[string]any{"type": "string", "description": "Task message (max 200000 chars)"},
 				"include_response_instructions": map[string]any{"type": "boolean", "description": "Auto-append response instructions template (default: true)"},
 				"expires_after_minutes":         map[string]any{"type": "integer", "description": "Task expiry in minutes (1-1440)"},
 				"depends_on": map[string]any{
@@ -308,7 +360,7 @@ func (h *Handler) sendTasksTool() mcp.Tool {
 						"type": "object",
 						"properties": map[string]any{
 							"agent_name":                    map[string]any{"type": "string", "description": "Target agent name"},
-							"message":                       map[string]any{"type": "string", "description": "Task message (max 8000 chars)"},
+							"message":                       map[string]any{"type": "string", "description": "Task message (max 200000 chars)"},
 							"include_response_instructions": map[string]any{"type": "boolean", "description": "Auto-append response instructions template (default: true)"},
 							"expires_after_minutes":         map[string]any{"type": "integer", "description": "Task expiry in minutes (1-1440)"},
 						},
@@ -374,15 +426,14 @@ func (h *Handler) handleSendTasks(ctx context.Context, args map[string]any) (any
 }
 
 // get_task_detail: 単一タスクの詳細状態を取得する。
-// 送信者・担当者・trusted caller が実行可能。completed タスクは保存済み response を含む。
-// メッセージ本文は含まない（本文取得には get_task_message を使う）。
+// 送信者・担当者・trusted caller が実行可能。message/response は metadata ベースで返す。
 //
 // パラメータ:
 //   - task_id（必須）: 取得対象の task_id
 func (h *Handler) getTaskDetailTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_task_detail",
-		Description: "Get detailed task state, including batch group metadata when present. Accessible by sender, assignee, or trusted caller. Completed tasks include the stored response. Does not include the message body; use get_task_message for that.",
+		Description: "Get detailed task state, including payload storage metadata. Inline payloads include content; file-backed payloads return preview and artifact paths.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -443,11 +494,11 @@ func (h *Handler) handleGetTaskDetail(ctx context.Context, args map[string]any) 
 	if len(result.DependsOn) > 0 {
 		entry["depends_on"] = result.DependsOn
 	}
+	if result.Message != nil {
+		entry["message"] = messageEntryMap(*result.Message)
+	}
 	if result.Response != nil {
-		entry["response"] = map[string]any{
-			"content":    result.Response.Content,
-			"created_at": result.Response.CreatedAt,
-		}
+		entry["response"] = taskResponseEntryMap(*result.Response)
 	}
 	return entry, nil
 }
@@ -510,7 +561,7 @@ func (h *Handler) handleAcknowledgeTask(ctx context.Context, args map[string]any
 func (h *Handler) getMyTasksTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_my_tasks",
-		Description: "Get tasks assigned to you (inbox). Registered callers use their own agent_name; trusted local-pipe callers may specify the assignee name explicitly. agent_name is required because pipe mode cannot infer the assignee name from the caller pane alone. Default filter: pending; blocked, completed, all, failed, abandoned, cancelled, and expired are also supported. Pending unacknowledged tasks returned inline are auto-acknowledged best-effort. Task and inline message entries include from_agent when available. Response includes response_instructions.",
+		Description: "Get tasks assigned to you (inbox). Supports pending, blocked, completed, all, failed, abandoned, cancelled, and expired filters. Task entries include from_agent when available. agent_name is required because pipe mode cannot infer the assignee name from the caller pane alone. Small unread messages may be returned inline; larger payloads return preview and file metadata instead of the full body. Inline-content unread tasks are auto-acknowledged best-effort.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -579,13 +630,21 @@ func (h *Handler) handleGetMyTasks(ctx context.Context, args map[string]any) (an
 	if len(result.InlineMessages) > 0 {
 		inlineList := make([]map[string]any, 0, len(result.InlineMessages))
 		for _, m := range result.InlineMessages {
-			inlineList = append(inlineList, map[string]any{
-				"task_id":         m.TaskID,
-				"send_message_id": m.SendMessageID,
-				"content":         m.Content,
-				"sent_at":         m.SentAt,
-				"from_agent":      m.FromAgent,
-			})
+			entry := payloadEntryMap(
+				m.Content,
+				"",
+				m.ContentPreview,
+				m.StorageMode,
+				m.ArtifactPaths,
+				m.PartCount,
+				m.ContentChars,
+				m.SHA256,
+			)
+			entry["task_id"] = m.TaskID
+			entry["send_message_id"] = m.SendMessageID
+			entry["sent_at"] = m.SentAt
+			entry["from_agent"] = m.FromAgent
+			inlineList = append(inlineList, entry)
 		}
 		resp["inline_messages"] = inlineList
 	}
@@ -604,7 +663,7 @@ func (h *Handler) handleGetMyTasks(ctx context.Context, args map[string]any) (an
 func (h *Handler) getTaskMessageTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_task_message",
-		Description: "Get task message body and metadata by send_message_id. Assignee or trusted local-pipe caller. agent_name selects the assignee identity in pipe mode. Use get_task_detail for progress/dependencies/responses.",
+		Description: "Get task message metadata by send_message_id. Inline payloads include content; file-backed payloads return preview and artifact paths instead of the full body.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -642,10 +701,7 @@ func (h *Handler) handleGetTaskMessage(ctx context.Context, args map[string]any)
 		"status":          result.Status,
 		"sent_at":         result.SentAt,
 		"is_now_session":  result.IsNowSession,
-		"message": map[string]any{
-			"content":    result.Message.Content,
-			"created_at": result.Message.CreatedAt,
-		},
+		"message":         messageEntryMap(result.Message),
 	}
 	if result.SenderPaneID != "" {
 		entry["sender_pane_id"] = result.SenderPaneID
@@ -663,15 +719,15 @@ func (h *Handler) handleGetTaskMessage(ctx context.Context, args map[string]any)
 //
 // パラメータ:
 //   - task_id（必須）: 応答対象の task_id
-//   - message（必須）: 返信メッセージ（最大8000文字）
+//   - message（必須）: 返信メッセージ（最大200000文字）
 func (h *Handler) sendResponseTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        "send_response",
-		Description: "Reply to the task sender and mark the task as completed. Pending-task assignee or trusted local-pipe caller. task_id is required.",
+		Description: "Reply to the task sender. The task is marked completed only after response persistence succeeds. Pending-task assignee or trusted local-pipe caller. task_id is required.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"message": map[string]any{"type": "string", "description": "Reply message (max 8000 chars)"},
+				"message": map[string]any{"type": "string", "description": "Reply message (max 200000 chars). Spillover metadata is available later through get_task_detail."},
 				"task_id": map[string]any{"type": "string", "description": "Task ID to respond to"},
 			},
 			"required": []string{"message", "task_id"},

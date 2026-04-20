@@ -1,7 +1,10 @@
+import {getLanguage} from "../../i18n";
 import type {ClaudeEnvEntry, OverrideEntry, PaneEnvEntry} from "./types";
 import {EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK, VALID_EFFORT_LEVELS} from "./constants";
 import {getViewerShortcutValue, VIEWER_SHORTCUTS} from "../viewer/viewerShortcutDefinitions";
-import {getEffectiveViewerShortcut, hasShortcutModifier, normalizeShortcut} from "../viewer/viewerShortcutUtils";
+import {normalizeShortcut} from "../viewer/viewerShortcutUtils";
+import {getReservedViewerShortcutDef, getReservedViewerShortcutLabel} from "../viewer/viewerReservedShortcuts";
+import {analyzeViewerShortcuts} from "../viewer/viewerShortcutAnalysis";
 import {translateSettings} from "./settingsI18n";
 
 export function validateViewerShortcuts(
@@ -9,75 +12,107 @@ export function validateViewerShortcuts(
     globalHotkey: string = "",
 ): Record<string, string> {
     const errors: Record<string, string> = {};
-    const ownersByShortcut = new Map<string, string[]>();
-    const normalizedGlobalHotkey = normalizeShortcut(globalHotkey);
-
-    const setShortcutError = (viewId: string, message: string) => {
-        const key = `viewer_shortcut_${viewId}`;
-        if (!errors[key]) {
-            errors[key] = message;
-        }
-    };
-
-    for (const {viewId, defaultShortcut} of VIEWER_SHORTCUTS) {
-        const effectiveShortcut = getEffectiveViewerShortcut(
-            getViewerShortcutValue(viewerShortcuts, viewId),
+    const analyses = analyzeViewerShortcuts(
+        VIEWER_SHORTCUTS.map(({viewId, defaultShortcut}) => ({
+            id: viewId,
+            configuredShortcut: getViewerShortcutValue(viewerShortcuts, viewId),
             defaultShortcut,
-        );
-        if (!effectiveShortcut) {
-            continue;
-        }
-        if (!hasShortcutModifier(effectiveShortcut)) {
-            setShortcutError(
-                viewId,
-                translateSettings(
-                    "settings.validation.viewerShortcut.modifierRequired",
-                    "修飾キーが必要です",
-                    "Modifier key is required.",
-                ),
-            );
-            continue;
-        }
-        const normalized = normalizeShortcut(effectiveShortcut);
-        if (!normalized) {
-            continue;
-        }
-        if (normalizedGlobalHotkey !== "" && normalized === normalizedGlobalHotkey) {
-            setShortcutError(
-                viewId,
-                translateSettings(
-                    "settings.validation.viewerShortcut.duplicateWithGlobalHotkey",
-                    "グローバルホットキーと重複しています",
-                    "Duplicated with global hotkey.",
-                ),
-            );
-            continue;
-        }
-        const owners = ownersByShortcut.get(normalized);
-        if (owners) {
-            owners.push(viewId);
-        } else {
-            ownersByShortcut.set(normalized, [viewId]);
-        }
-    }
+        })),
+        globalHotkey,
+    );
 
-    for (const owners of ownersByShortcut.values()) {
-        if (owners.length < 2) {
+    for (const analysis of analyses.values()) {
+        if (!analysis.issue) {
             continue;
         }
-        for (const viewId of owners) {
-            setShortcutError(
-                viewId,
-                translateSettings(
-                    "settings.validation.viewerShortcut.duplicateAcrossViews",
-                    "他のビューと重複しています",
-                    "Duplicated with another view.",
-                ),
+        const key = `viewer_shortcut_${analysis.id}`;
+        if (analysis.issue.kind === "modifier-required") {
+            errors[key] = translateSettings(
+                "settings.validation.viewerShortcut.modifierRequired",
+                "修飾キーが必要です",
+                "Modifier key is required.",
+            );
+            continue;
+        }
+        if (analysis.issue.kind === "duplicate-global-hotkey") {
+            errors[key] = translateSettings(
+                "settings.validation.viewerShortcut.duplicateWithGlobalHotkey",
+                "グローバルホットキーと重複しています",
+                "Duplicated with global hotkey.",
+            );
+            continue;
+        }
+        if (analysis.issue.kind === "reserved") {
+            errors[key] = translateSettings(
+                "settings.validation.viewerShortcut.reserved",
+                "予約済みショートカット {shortcut} ({label}) と重複しています",
+                "Duplicated with reserved shortcut {shortcut} ({label}).",
+                {
+                    shortcut: analysis.issue.reservedShortcut.shortcut,
+                    label: getReservedViewerShortcutLabel(analysis.issue.reservedShortcut, getLanguage()),
+                },
+            );
+            continue;
+        }
+        if (analysis.issue.kind === "duplicate-view") {
+            errors[key] = translateSettings(
+                "settings.validation.viewerShortcut.duplicateAcrossViews",
+                "他のビューと重複しています",
+                "Duplicated with another view.",
             );
         }
     }
 
     return errors;
+}
+
+export function validateGlobalHotkey(globalHotkey: string, quakeMode: boolean): Record<string, string> {
+    if (!quakeMode) {
+        return {};
+    }
+    const normalizedGlobalHotkey = normalizeShortcut(globalHotkey);
+    if (normalizedGlobalHotkey === "") {
+        return {};
+    }
+    const globalHotkeyAnalysis = analyzeViewerShortcuts([
+        {
+            id: "global_hotkey",
+            configuredShortcut: normalizedGlobalHotkey,
+            defaultShortcut: "",
+        },
+    ]).get("global_hotkey");
+    if (globalHotkeyAnalysis?.issue?.kind !== "reserved") {
+        return {};
+    }
+    return {
+        global_hotkey: translateSettings(
+            "settings.validation.viewerShortcut.reserved",
+            "予約済みショートカット {shortcut} ({label}) と重複しています",
+            "Duplicated with reserved shortcut {shortcut} ({label}).",
+            {
+                shortcut: globalHotkeyAnalysis.issue.reservedShortcut.shortcut,
+                label: getReservedViewerShortcutLabel(globalHotkeyAnalysis.issue.reservedShortcut, getLanguage()),
+            },
+        ),
+    };
+}
+
+export function validatePrefixShortcut(prefix: string): Record<string, string> {
+    const reservedShortcut = getReservedViewerShortcutDef(prefix);
+    if (!reservedShortcut) {
+        return {};
+    }
+    return {
+        prefix: translateSettings(
+            "settings.validation.viewerShortcut.reserved",
+            "予約済みショートカット {shortcut} ({label}) と重複しています",
+            "Duplicated with reserved shortcut {shortcut} ({label}).",
+            {
+                shortcut: reservedShortcut.shortcut,
+                label: getReservedViewerShortcutLabel(reservedShortcut, getLanguage()),
+            },
+        ),
+    };
 }
 
 // SYNC: Must match blockedEnvironmentKeys in internal/tmux/command_router_terminal.go
@@ -257,7 +292,7 @@ export function validateClaudeEnvSettings(
 // filepath.IsAbs, which rejects bare "/" on Windows. The frontend accepts
 // it here to avoid confusing "not absolute" errors for WSL-style paths;
 // the backend serves as the authoritative gate.
-const ABSOLUTE_SESSION_DIR_PATTERN = /^(?:~(?:[\\/]|$)|%[A-Za-z_][A-Za-z0-9_]*%(?:[\\/]|$)|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})(?:[\\/]|$)|[A-Za-z]:[\\/]|[\\/]{2}|\/)/;
+const ABSOLUTE_SESSION_DIR_PATTERN = /^(?:~(?:[\\/]|$)|%[A-Za-z_][A-Za-z0-9_]*%(?:[\\/]|$)|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*})(?:[\\/]|$)|[A-Za-z]:[\\/]|[\\/]{2}|\/)/;
 const ABSOLUTE_OR_DRIVE_PATH_PATTERN = /^(?:[A-Za-z]:|[\\/]{2}|[\\/])/;
 
 export function validateDefaultSessionDir(rawPath: string): Record<string, string> {

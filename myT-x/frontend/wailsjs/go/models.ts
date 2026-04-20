@@ -855,7 +855,19 @@ export namespace main {
 	    sent_at: string;
 	    completed_at: string;
 	    message_content: string;
+	    message_preview: string;
+	    message_storage_mode: string;
+	    message_artifact_paths: string[];
+	    message_part_count: number;
+	    message_content_chars: number;
+	    message_sha256: string;
 	    response_content: string;
+	    response_preview: string;
+	    response_storage_mode: string;
+	    response_artifact_paths: string[];
+	    response_part_count: number;
+	    response_content_chars: number;
+	    response_sha256: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new OrchestratorTaskDetail(source);
@@ -870,7 +882,19 @@ export namespace main {
 	        this.sent_at = source["sent_at"];
 	        this.completed_at = source["completed_at"];
 	        this.message_content = source["message_content"];
+	        this.message_preview = source["message_preview"];
+	        this.message_storage_mode = source["message_storage_mode"];
+	        this.message_artifact_paths = source["message_artifact_paths"];
+	        this.message_part_count = source["message_part_count"];
+	        this.message_content_chars = source["message_content_chars"];
+	        this.message_sha256 = source["message_sha256"];
 	        this.response_content = source["response_content"];
+	        this.response_preview = source["response_preview"];
+	        this.response_storage_mode = source["response_storage_mode"];
+	        this.response_artifact_paths = source["response_artifact_paths"];
+	        this.response_part_count = source["response_part_count"];
+	        this.response_content_chars = source["response_content_chars"];
+	        this.response_sha256 = source["response_sha256"];
 	    }
 	}
 	export class PaneProcessStatus {
@@ -1133,39 +1157,57 @@ export namespace orchestrator {
 	        this.warnings = source["warnings"];
 	    }
 	}
-	export class StartTeamRequest {
-	    team_id: string;
-	    launch_mode: string;
-	    source_session_name: string;
-	    new_session_name: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new StartTeamRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.team_id = source["team_id"];
-	        this.launch_mode = source["launch_mode"];
-	        this.source_session_name = source["source_session_name"];
-	        this.new_session_name = source["new_session_name"];
-	    }
-	}
-	export class StartTeamResult {
+	export class EnlistPaneRequest {
 	    session_name: string;
-	    launch_mode: string;
-	    member_pane_ids: Record<string, string>;
-	    warnings: string[];
+	    pane_id: string;
+	    team_id: string;
+	    storage_location?: string;
+	    pane_state: string;
+	    bootstrap_delay_ms: number;
+	    member: TeamMember;
 	
 	    static createFrom(source: any = {}) {
-	        return new StartTeamResult(source);
+	        return new EnlistPaneRequest(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.session_name = source["session_name"];
-	        this.launch_mode = source["launch_mode"];
-	        this.member_pane_ids = source["member_pane_ids"];
+	        this.pane_id = source["pane_id"];
+	        this.team_id = source["team_id"];
+	        this.storage_location = source["storage_location"];
+	        this.pane_state = source["pane_state"];
+	        this.bootstrap_delay_ms = source["bootstrap_delay_ms"];
+	        this.member = this.convertValues(source["member"], TeamMember);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EnlistPaneResult {
+	    warnings: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EnlistPaneResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.warnings = source["warnings"];
 	    }
 	}
@@ -1211,6 +1253,81 @@ export namespace orchestrator {
 		    return a;
 		}
 	}
+	export class SessionEnlistmentContext {
+	    teams: TeamDefinition[];
+	    unaffiliated_members: TeamMember[];
+	    role_catalog: string[];
+	    skill_catalog: TeamMemberSkill[];
+	    registered_pane_ids?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionEnlistmentContext(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.teams = this.convertValues(source["teams"], TeamDefinition);
+	        this.unaffiliated_members = this.convertValues(source["unaffiliated_members"], TeamMember);
+	        this.role_catalog = source["role_catalog"];
+	        this.skill_catalog = this.convertValues(source["skill_catalog"], TeamMemberSkill);
+	        this.registered_pane_ids = source["registered_pane_ids"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StartTeamRequest {
+	    team_id: string;
+	    launch_mode: string;
+	    source_session_name: string;
+	    new_session_name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StartTeamRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.team_id = source["team_id"];
+	        this.launch_mode = source["launch_mode"];
+	        this.source_session_name = source["source_session_name"];
+	        this.new_session_name = source["new_session_name"];
+	    }
+	}
+	export class StartTeamResult {
+	    session_name: string;
+	    launch_mode: string;
+	    member_pane_ids: Record<string, string>;
+	    warnings: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StartTeamResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session_name = source["session_name"];
+	        this.launch_mode = source["launch_mode"];
+	        this.member_pane_ids = source["member_pane_ids"];
+	        this.warnings = source["warnings"];
+	    }
+	}
+	
 	
 
 }

@@ -739,10 +739,50 @@
 
 /* ── Swagger Preview ── */
 .file-view-swagger {
+    display: flex;
+    flex-direction: column;
     flex: 1;
     min-height: 0;
     overflow: auto;
     background: var(--bg-main);
+}
+
+.file-view-swagger-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-elev);
+}
+
+.file-view-swagger-toolbar-copy {
+    margin: 0;
+    color: var(--fg-dim);
+    font-size: 0.82rem;
+}
+
+.file-view-swagger-try-it-out-toggle {
+    flex-shrink: 0;
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg-main);
+    color: var(--fg-main);
+    cursor: pointer;
+    font: inherit;
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.file-view-swagger-try-it-out-toggle:hover {
+    border-color: var(--accent);
+}
+
+.file-view-swagger-try-it-out-toggle.is-enabled {
+    border-color: var(--accent);
+    background: var(--accent-06);
 }
 
 .file-view-swagger .swagger-ui {

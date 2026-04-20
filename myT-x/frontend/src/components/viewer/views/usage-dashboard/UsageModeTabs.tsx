@@ -39,6 +39,7 @@ function ModeTab({current, target, label, onSelect}: ModeTabProps) {
             type="button"
             role="tab"
             aria-selected={selected}
+            data-mode={target}
             className="usage-dashboard-tab"
             onClick={() => {
                 if (!selected) onSelect(target);

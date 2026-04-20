@@ -2,6 +2,8 @@ import {act} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {useSnapshotSync} from "../src/hooks/sync/useSnapshotSync";
+import {useCanvasStore} from "../src/stores/canvasStore";
+import {useMCPStore} from "../src/stores/mcpStore";
 import {useNotificationStore} from "../src/stores/notificationStore";
 import {useTmuxStore} from "../src/stores/tmuxStore";
 
@@ -78,6 +80,21 @@ describe("useSnapshotSync", () => {
         vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
         useNotificationStore.setState((state) => ({...state, notifications: []}));
+        useCanvasStore.setState((state) => ({
+            ...state,
+            activeSessionName: null,
+            nodePositions: {},
+            nodeSizes: {},
+            taskEdgeMap: {},
+            agentMap: {},
+            processStatusMap: {},
+            rootPaneId: null,
+            sessionDataMap: {},
+        }));
+        useMCPStore.setState({
+            snapshots: {},
+            sessionStates: {},
+        });
         useTmuxStore.setState((state) => ({
             ...state,
             activeSession: null,
@@ -188,5 +205,50 @@ describe("useSnapshotSync", () => {
 
         expect(useNotificationStore.getState().notifications).toEqual([]);
         expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("session:cleanup-degraded"));
+    });
+
+    it("migrates session-scoped frontend state on tmux:session-renamed", async () => {
+        useCanvasStore.setState((state) => ({
+            ...state,
+            activeSessionName: "old-session",
+            nodePositions: {"%1": {x: 10, y: 20}},
+            rootPaneId: "%1",
+            sessionDataMap: {
+                parked: {
+                    nodePositions: {"%9": {x: 90, y: 100}},
+                    nodeSizes: {},
+                    taskEdgeMap: {},
+                    agentMap: {},
+                    processStatusMap: {},
+                    rootPaneId: "%9",
+                },
+            },
+        }));
+        useMCPStore.setState({
+            snapshots: {
+                "old-session": [{id: "mcp-1", name: "MCP 1", description: "", enabled: true, status: "running"}],
+            },
+            sessionStates: {
+                "old-session": {loading: false, error: "stale"},
+            },
+        });
+
+        act(() => {
+            root.render(<SnapshotSyncProbe/>);
+        });
+        await flushEffects();
+
+        const handler = eventHandlers.get("tmux:session-renamed");
+        expect(handler).toBeTypeOf("function");
+
+        act(() => {
+            handler?.({oldName: "old-session", newName: "renamed-session"});
+        });
+
+        expect(useCanvasStore.getState().activeSessionName).toBe("renamed-session");
+        expect(useCanvasStore.getState().rootPaneId).toBe("%1");
+        expect(useMCPStore.getState().snapshots["old-session"]).toBeUndefined();
+        expect(useMCPStore.getState().snapshots["renamed-session"]?.[0]?.id).toBe("mcp-1");
+        expect(useMCPStore.getState().sessionStates["renamed-session"]?.error).toBe("stale");
     });
 });

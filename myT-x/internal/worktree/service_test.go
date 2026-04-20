@@ -2529,8 +2529,8 @@ func TestWorktreeStructFieldCounts(t *testing.T) {
 	if got := reflect.TypeFor[copyWalkBudget]().NumField(); got != 2 {
 		t.Fatalf("copyWalkBudget field count = %d, want 2; update tests for new fields", got)
 	}
-	if got := reflect.TypeFor[Deps]().NumField(); got != 24 {
-		t.Fatalf("Deps field count = %d, want 24; update tests for new fields", got)
+	if got := reflect.TypeFor[Deps]().NumField(); got != 25 {
+		t.Fatalf("Deps field count = %d, want 25; update tests for new fields", got)
 	}
 	if got := reflect.TypeFor[CopyDeps]().NumField(); got != 7 {
 		t.Fatalf("CopyDeps field count = %d, want 7; update tests for new fields", got)

@@ -118,6 +118,8 @@ export function DevPanelWorkingDiff(arg1:string):Promise<devpanel.WorkingDiffRes
 
 export function DevPanelWriteFile(arg1:string,arg2:string,arg3:string):Promise<devpanel.WriteFileResult>;
 
+export function EnlistPane(arg1:orchestrator.EnlistPaneRequest):Promise<orchestrator.EnlistPaneResult>;
+
 export function EnsureUnaffiliatedTeam(arg1:string,arg2:string):Promise<orchestrator.TeamDefinition>;
 
 export function FocusPane(arg1:string):Promise<void>;
@@ -149,6 +151,8 @@ export function GetPaneProcessStatus(arg1:string):Promise<Array<main.PaneProcess
 export function GetPaneReplay(arg1:string):Promise<string>;
 
 export function GetSchedulerStatuses():Promise<Array<scheduler.EntryStatus>>;
+
+export function GetSessionEnlistmentContext(arg1:string):Promise<orchestrator.SessionEnlistmentContext>;
 
 export function GetSessionEnv(arg1:string):Promise<Record<string, string>>;
 

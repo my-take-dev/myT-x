@@ -1,5 +1,10 @@
+import {useI18n} from "../../../../i18n";
 import type {CopyNoticeState} from "../../../../utils/clipboardUtils";
 import {CopyPathButton} from "../shared/CopyPathButton";
+import {
+    FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT_ARIA,
+    FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT_LABEL,
+} from "./fileContentShortcuts";
 import {formatFileSize} from "./treeUtils";
 
 interface FileContentHeaderProps {
@@ -48,6 +53,15 @@ export function FileContentHeader({
     headerNotice,
     headerNoticeClass,
 }: FileContentHeaderProps) {
+    const {t} = useI18n();
+    const toggleButtonLabel = isPreviewMode
+        ? t("viewer.fileContent.showSourceWithShortcut", "ソース表示 ({shortcut})", {
+            shortcut: FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT_LABEL,
+        })
+        : t("viewer.fileContent.showPreviewWithShortcut", "プレビュー表示 ({shortcut})", {
+            shortcut: FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT_LABEL,
+        });
+
     return (
         <div className="file-content-header">
             <span className="file-content-path">{path}</span>
@@ -57,8 +71,9 @@ export function FileContentHeader({
                     type="button"
                     className={`file-content-toggle-preview${isPreviewMode ? " active" : ""}`}
                     onClick={onTogglePreview}
-                    title={isPreviewMode ? "Show source" : "Show preview"}
-                    aria-label={isPreviewMode ? "Show source" : "Show preview"}
+                    title={toggleButtonLabel}
+                    aria-label={toggleButtonLabel}
+                    aria-keyshortcuts={FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT_ARIA}
                     aria-pressed={isPreviewMode}
                 >
                     {isPreviewMode ? <SourceCodeIcon/> : <PreviewIcon/>}

@@ -19,7 +19,13 @@ import {FileContentRow, type FileContentRowData} from "./FileContentRow";
 import {FileContentHeader} from "./FileContentHeader";
 import {useRowHeight} from "./useRowHeight";
 import {useFileContentSelection} from "./useFileContentSelection";
-import {canPreviewDocumentKind, type DocumentKind, type RenderMode} from "./documentTypes";
+import {
+    canPreviewBinaryDocumentKind,
+    canPreviewDocumentKind,
+    getUncontrolledDefaultRenderModeForDocumentKind,
+    type DocumentKind,
+    type RenderMode,
+} from "./documentTypes";
 
 export interface FileContentViewerProps {
     readonly content: FileContentResult | null;
@@ -86,7 +92,9 @@ export function FileContentViewer({
 
     useEffect(() => {
         if (!isControlledRenderMode) {
-            setInternalRenderMode(effectiveDocumentKind === "sqlite" ? "preview" : "raw");
+            // Preserve the standalone FileContentViewer contract for uncontrolled callers.
+            // FileTreeView controls render mode separately and opts previewable text documents into preview mode.
+            setInternalRenderMode(getUncontrolledDefaultRenderModeForDocumentKind(effectiveDocumentKind));
         }
     }, [content?.path, effectiveDocumentKind, isControlledRenderMode]);
 
@@ -195,7 +203,7 @@ export function FileContentViewer({
     }
 
     if (content.binary) {
-        if (!(effectiveDocumentKind === "sqlite" && isPreviewMode && previewRenderer)) {
+        if (!(canPreviewBinaryDocumentKind(effectiveDocumentKind) && isPreviewMode && previewRenderer)) {
             return <div className="file-content-binary">Binary file ({formatFileSize(content.size)})</div>;
         }
     }

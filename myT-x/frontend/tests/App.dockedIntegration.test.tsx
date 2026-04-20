@@ -3,6 +3,7 @@ import {resolve} from "node:path";
 import {act, type ReactNode} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
+import type {MenuBarProps} from "../src/components/MenuBar";
 
 const mocked = vi.hoisted(() => ({
     addNotification: vi.fn(),
@@ -33,7 +34,7 @@ vi.mock("../src/components/ConfirmDialog", () => ({
 }));
 
 vi.mock("../src/components/MenuBar", () => ({
-    MenuBar: () => <div className="menu-bar"/>,
+    MenuBar: (_props: MenuBarProps) => <div className="menu-bar"/>,
 }));
 
 vi.mock("../src/components/QuickSearch", () => ({
@@ -66,6 +67,7 @@ vi.mock("../src/components/ToastContainer", () => ({
 
 vi.mock("../src/components/viewer/viewerRegistry", () => ({
     getRegisteredViews: () => mocked.views,
+    registerView: () => undefined,
     subscribeRegistry: () => () => undefined,
 }));
 

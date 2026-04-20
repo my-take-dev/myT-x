@@ -1,5 +1,6 @@
 import {useMemo} from "react";
 import {useI18n} from "../../../../i18n";
+import type {UnregisteredPaneEntry} from "../../../../hooks/useUnregisteredPanes";
 import {isSystemTeam} from "./orchestratorTeamUtils";
 import type {OrchestratorTeamDefinition} from "./types";
 
@@ -17,6 +18,8 @@ interface TeamListProps {
     onOpenUnaffiliated: () => void;
     onMoveUp: (teamID: string) => void;
     onMoveDown: (teamID: string) => void;
+    unregisteredPanes: UnregisteredPaneEntry[];
+    onOpenEnlistment: (paneId: string) => void;
 }
 
 const MAX_VISIBLE_CHIPS = 4;
@@ -35,6 +38,8 @@ export function TeamList({
     onOpenUnaffiliated,
     onMoveUp,
     onMoveDown,
+    unregisteredPanes,
+    onOpenEnlistment,
 }: TeamListProps) {
     const {t} = useI18n();
 
@@ -67,6 +72,28 @@ export function TeamList({
             {activeSession === null && (
                 <div className="orchestrator-teams-inline-note">
                     {t("viewer.orchestratorTeams.list.noActiveSession", "アクティブなセッションが選択されるまで開始できません。")}
+                </div>
+            )}
+
+            {unregisteredPanes.length > 0 && (
+                <div className="orchestrator-teams-banner notice orchestrator-teams-unregistered-banner">
+                    <div className="orchestrator-teams-unregistered-content">
+                        <strong>
+                            {t("viewer.orchestratorTeams.enlist.banner", "{count} unregistered panes detected", {
+                                count: unregisteredPanes.length,
+                            })}
+                        </strong>
+                        <div className="orchestrator-teams-unregistered-list">
+                            {unregisteredPanes.map((entry) => (
+                                <div key={entry.pane.id} className="orchestrator-teams-unregistered-item">
+                                    <span>{entry.pane.title?.trim() || entry.pane.id}</span>
+                                    <button type="button" onClick={() => onOpenEnlistment(entry.pane.id)}>
+                                        {t("viewer.orchestratorTeams.enlist.bannerAction", "Register")}
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                 </div>
             )}
 

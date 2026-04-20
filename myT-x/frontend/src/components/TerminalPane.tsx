@@ -9,6 +9,7 @@ import {PaneChatBar} from "./PaneChatBar";
 import {TerminalToolbar} from "./TerminalToolbar";
 import {useTmuxStore} from "../stores/tmuxStore";
 import {useAutoEnterStore, startAutoEnter, stopAutoEnter} from "../stores/autoEnterStore";
+import {useCanvasStore} from "../stores/canvasStore";
 import {useViewerStore} from "./viewer/viewerStore";
 import {notifyAndLog} from "../utils/notifyUtils";
 import {useTerminalSetup} from "../hooks/useTerminalSetup";
@@ -55,6 +56,11 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
     const [autoPopoverOpen, setAutoPopoverOpen] = useState(false);
 
     const paneTitle = (props.paneTitle || "").trim();
+    const canvasMode = useCanvasStore((s) => s.mode);
+    const rootPaneId = useCanvasStore((s) => s.rootPaneId);
+    const setRootPaneId = useCanvasStore((s) => s.setRootPaneId);
+    const isRootPane = rootPaneId === props.paneId;
+    const isRootToggleVisible = canvasMode === "canvas";
 
     // Auto Enter state from store (re-renders only when this pane's state changes).
     const autoRunning = useAutoEnterStore(
@@ -92,7 +98,7 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
         }
         setRenameBusy(true);
         try {
-            await Promise.resolve(props.onRenamePane(props.paneId, next));
+            await props.onRenamePane(props.paneId, next);
         } catch {
             setTitleDraft(current);
         } finally {
@@ -190,8 +196,15 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
     }, []);
 
     const handleAddMember = useCallback(() => {
-        useViewerStore.getState().openViewWithContext("orchestrator-teams", {addTermMemberPaneId: props.paneId});
+        useViewerStore.getState().openViewWithContext("orchestrator-teams", {
+            kind: "orchestrator-teams-add-term-member",
+            addTermMemberPaneId: props.paneId,
+        });
     }, [props.paneId]);
+
+    const handleRootToggle = useCallback(() => {
+        setRootPaneId(isRootPane ? null : props.paneId);
+    }, [isRootPane, props.paneId, setRootPaneId]);
 
     return (
         <div
@@ -221,9 +234,10 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
             <TerminalToolbar
                 paneId={props.paneId}
                 titleDraft={titleDraft}
-                titleEditing={titleEditing}
                 renameBusy={renameBusy}
                 autoRunning={autoRunning}
+                isRootToggleVisible={isRootToggleVisible}
+                isRootPane={isRootPane}
                 onTitleEditStart={() => setTitleEditing(true)}
                 onTitleChange={setTitleDraft}
                 onTitleCommit={() => {
@@ -243,6 +257,7 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                     setTitleEditing(false);
                 }}
                 onAutoClick={handleAutoClick}
+                onRootToggle={handleRootToggle}
                 onSplitVertical={() => {
                     props.onFocus(props.paneId);
                     props.onSplitVertical(props.paneId);

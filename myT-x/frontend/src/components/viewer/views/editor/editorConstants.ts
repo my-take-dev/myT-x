@@ -7,9 +7,16 @@ export const MONACO_OPTIONS = {
     automaticLayout: true,
     bracketPairColorization: {enabled: true},
     fontSize: 13,
+    guides: {
+        bracketPairs: true,
+        indentation: true,
+    },
+    inlayHints: {enabled: "on"},
     lineNumbers: "on",
     minimap: {enabled: true, scale: 0.8},
     scrollBeyondLastLine: false,
+    "semanticHighlighting.enabled": true,
+    stickyScroll: {enabled: true},
     tabSize: 2,
     wordWrap: "off",
 } as const;

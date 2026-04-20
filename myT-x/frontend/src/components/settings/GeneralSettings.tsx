@@ -19,6 +19,8 @@ export function GeneralSettings({s, dispatch, validationRules}: GeneralSettingsP
     const chatOverlayRules = getChatOverlayValidationRules(validationRules);
     const defaultSessionDirInputId = "default-session-dir";
     const defaultSessionDirError = s.validationErrors.default_session_dir;
+    const prefixError = s.validationErrors.prefix;
+    const globalHotkeyError = s.validationErrors.global_hotkey;
 
     const handlePickDefaultDir = useCallback(async () => {
         try {
@@ -84,6 +86,7 @@ export function GeneralSettings({s, dispatch, validationRules}: GeneralSettingsP
                         "tmux-compatible prefix key. Press this key before action keys.",
                     )}
                 </span>
+                {prefixError && <span className="settings-field-error">{prefixError}</span>}
             </div>
 
             <div className="form-checkbox-row">
@@ -119,6 +122,7 @@ export function GeneralSettings({s, dispatch, validationRules}: GeneralSettingsP
                         "Toggle key for Quake mode (used only when Quake mode is enabled, default: Ctrl+Shift+F12).",
                     )}
                 </span>
+                {globalHotkeyError && <span className="settings-field-error">{globalHotkeyError}</span>}
             </div>
 
             <div className="form-group">

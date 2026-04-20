@@ -189,9 +189,9 @@ func (e *RealExecutor) SplitPane(ctx context.Context, targetPaneID string, horiz
 	return newPaneID, nil
 }
 
-// SendKeysPaste はブラケットペーストモードでテキストを送信する。
-// ESC[200~ → テキスト（チャンク送信） → ESC[201~ → C-m の順で送信する。
-// チャンク送信失敗時もペーストモード終了を保証する。
+// SendKeysPaste loads the content into a tmux buffer, pastes it in one shot,
+// then sends Enter. paste-buffer -p adds bracketed-paste markers when the
+// target application requests them.
 func (e *RealExecutor) SendKeysPaste(ctx context.Context, paneID string, text string) error {
 	if err := ValidatePaneID(paneID); err != nil {
 		return err
@@ -201,38 +201,29 @@ func (e *RealExecutor) SendKeysPaste(ctx context.Context, paneID string, text st
 	if err := e.selectPane(ctx, paneID); err != nil {
 		return err
 	}
-
-	// ペーストモード開始
-	if err := e.sendText(ctx, paneID, "\x1b[200~"); err != nil {
-		return fmt.Errorf("send paste-start: %w", err)
+	bufferName := fmt.Sprintf("orch-paste-%d", time.Now().UTC().UnixNano())
+	bufferFile, err := os.CreateTemp("", "orch-paste-*.txt")
+	if err != nil {
+		return fmt.Errorf("create paste temp file: %w", err)
+	}
+	bufferPath := bufferFile.Name()
+	defer os.Remove(bufferPath)
+	if _, err := bufferFile.WriteString(text); err != nil {
+		bufferFile.Close()
+		return fmt.Errorf("write paste temp file: %w", err)
+	}
+	if err := bufferFile.Close(); err != nil {
+		return fmt.Errorf("close paste temp file: %w", err)
 	}
 
-	// テキスト送信（チャンク）
-	runes := []rune(text)
-	var sendErr error
-	for i := 0; i < len(runes); i += maxSendKeysLength {
-		end := min(i+maxSendKeysLength, len(runes))
-		chunk := string(runes[i:end])
-		if err := e.sendText(ctx, paneID, chunk); err != nil {
-			sendErr = fmt.Errorf("send paste-text: %w", err)
-			break
-		}
-		if err := sleepContext(ctx, sendKeysDelay); err != nil {
-			sendErr = err
-			break
-		}
+	if err := e.loadBufferFromFile(ctx, bufferName, bufferPath); err != nil {
+		return err
 	}
-
-	// ペーストモード終了（テキスト送信失敗時も必ず実行）
-	if endErr := e.sendText(ctx, paneID, "\x1b[201~"); endErr != nil {
-		if sendErr != nil {
-			return sendErr
-		}
-		return fmt.Errorf("send paste-end: %w", endErr)
-	}
-
-	if sendErr != nil {
-		return sendErr
+	defer func() {
+		_ = e.deleteBuffer(context.Background(), bufferName)
+	}()
+	if err := e.pasteBuffer(ctx, paneID, bufferName); err != nil {
+		return err
 	}
 
 	return e.sendEnter(ctx, paneID)
@@ -262,4 +253,28 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func (e *RealExecutor) loadBufferFromFile(ctx context.Context, bufferName string, path string) error {
+	cmd := newTmuxCommand(ctx, "load-buffer", "-b", bufferName, path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("load-buffer: %w: %s", err, out)
+	}
+	return nil
+}
+
+func (e *RealExecutor) pasteBuffer(ctx context.Context, paneID string, bufferName string) error {
+	cmd := newTmuxCommand(ctx, "paste-buffer", "-d", "-p", "-b", bufferName, "-t", paneID)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("paste-buffer: %w: %s", err, out)
+	}
+	return nil
+}
+
+func (e *RealExecutor) deleteBuffer(ctx context.Context, bufferName string) error {
+	cmd := newTmuxCommand(ctx, "delete-buffer", "-b", bufferName)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("delete-buffer: %w: %s", err, out)
+	}
+	return nil
 }

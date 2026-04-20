@@ -1,5 +1,7 @@
+import {useId} from "react";
 import {useI18n} from "../../../../i18n";
 import type {OrchestratorMemberDraft, OrchestratorMemberDraftSkill} from "./types";
+import type {OrchestratorTeamMemberSkill} from "./types";
 import {isMemberDraftValid} from "./orchestratorTeamUtils";
 
 interface MemberEditorProps {
@@ -10,15 +12,27 @@ interface MemberEditorProps {
     onSave: () => void;
     /** When true, hides the back button and footer save button. Used when embedded in a parent form. */
     hideNavigation?: boolean;
+    roleSuggestions?: string[];
+    skillSuggestions?: OrchestratorTeamMemberSkill[];
 }
 
 const maxPaneTitle = 30;
 const maxRole = 50;
 const maxCommand = 100;
 
-export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSave, hideNavigation}: MemberEditorProps) {
+export function MemberEditor({
+    draft,
+    existingPaneTitles,
+    onChange,
+    onBack,
+    onSave,
+    hideNavigation,
+    roleSuggestions = [],
+    skillSuggestions = [],
+}: MemberEditorProps) {
     const {t} = useI18n();
     const maxSkills = 20;
+    const roleSuggestionsId = useId();
 
     const paneTitleDuplicate = draft.paneTitle.trim() !== "" &&
         existingPaneTitles.some((title) => title === draft.paneTitle.trim());
@@ -86,7 +100,15 @@ export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSav
                     onChange={(event) => onChange({...draft, role: event.target.value})}
                     placeholder={t("viewer.orchestratorTeams.member.rolePlaceholder", "リードエンジニア")}
                     maxLength={maxRole}
+                    list={roleSuggestions.length > 0 ? roleSuggestionsId : undefined}
                 />
+                {roleSuggestions.length > 0 && (
+                    <datalist id={roleSuggestionsId}>
+                        {roleSuggestions.map((role) => (
+                            <option key={role} value={role}/>
+                        ))}
+                    </datalist>
+                )}
             </div>
 
             <div className="orchestrator-teams-grid">
@@ -173,6 +195,35 @@ export function MemberEditor({draft, existingPaneTitles, onChange, onBack, onSav
                 >
                     + {t("viewer.orchestratorTeams.member.addSkill", "スキルを追加")}
                 </button>
+                {skillSuggestions.length > 0 && (
+                    <div className="orchestrator-team-suggestion-list">
+                        {skillSuggestions
+                            .filter((skill) => skill.name.trim() !== "")
+                            .filter((skill) => !draft.skills.some((candidate) => candidate.name.trim() === skill.name.trim()))
+                            .map((skill) => (
+                                <button
+                                    key={`${skill.name}-${skill.description ?? ""}`}
+                                    type="button"
+                                    className="orchestrator-team-suggestion-chip"
+                                    onClick={() => {
+                                        if (draft.skills.length >= maxSkills) {
+                                            return;
+                                        }
+                                        onChange({
+                                            ...draft,
+                                            skills: [...draft.skills, {
+                                                id: globalThis.crypto?.randomUUID?.() ?? `skill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                                                name: skill.name,
+                                                description: skill.description ?? "",
+                                            }],
+                                        });
+                                    }}
+                                >
+                                    {skill.name}
+                                </button>
+                            ))}
+                    </div>
+                )}
             </div>
 
             {!hideNavigation && (

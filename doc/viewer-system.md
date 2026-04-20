@@ -76,6 +76,10 @@ Monaco Editor ベースのコードエディタです。ファイルツリーと
 | `.drawio` / `.drawio.svg` / `.drawio.xml` | draw.io 図 |
 | `.yaml` / `.yml` / `.json` | Swagger / OpenAPI 自動判定（先頭 1KB に `openapi:` / `swagger:` を検出時のみ Swagger UI を起動、そうでなければ Raw 表示） |
 | `.db` / `.sqlite` / `.sqlite3` | SQLite Viewer（テーブル一覧 + 行データ + CSV エクスポート） |
+| `.vg.json` / `.vl.json` | Vega / Vega-Lite チャート（SVG レンダリング、エクスポート・ソース表示対応） |
+| `.wavedrom.json` | WaveDrom デジタル波形図 |
+
+Markdown 内の Markmap（マインドマップ）記法にも対応しています。
 
 子孫に対象ファイルが存在しないフォルダは Tree から自動的に隠れます。
 
@@ -92,9 +96,12 @@ Monaco Editor ベースのコードエディタです。ファイルツリーと
 | 種類 | 表示 |
 |------|------|
 | Markdown | `react-markdown` + GFM。相対パス `<img>` は `DevPanelReadBinary` 経由で blob URL 化 |
+| Markmap | Markdown 内のマインドマップ記法を `markmap-view` でインタラクティブ表示 |
 | Mermaid | `mermaid@11`（lazy load） |
 | Swagger / OpenAPI | `swagger-ui-react@5`（YAML/JSON 両対応、lazy load） |
 | draw.io | `.drawio.svg` は `<img>`、`.drawio` / `.drawio.xml` は XML プレビュー |
+| Vega / Vega-Lite | `vega-embed` によるチャート・グラフ表示（SVG エクスポート・ソース表示対応） |
+| WaveDrom | デジタル波形図レンダリング |
 | SQLite | テーブル一覧 + カラム情報 + 行データ（仮想スクロール）+ ページング + CSV エクスポート |
 | その他 | Raw テキスト表示（行選択・コピー対応） |
 

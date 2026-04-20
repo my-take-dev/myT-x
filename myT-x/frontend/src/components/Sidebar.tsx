@@ -18,6 +18,7 @@ import {SessionRow, sessionRowHeight, type SessionRowData, type SessionVisualSta
 interface SidebarProps {
     sessions: SessionSnapshot[];
     activeSession: string | null;
+    newSessionSignal: number;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -35,6 +36,7 @@ export function Sidebar(props: SidebarProps) {
     const [killTarget, setKillTarget] = useState<string | null>(null);
     const [promoteTarget, setPromoteTarget] = useState<string | null>(null);
     const activeSessionRef = useRef(props.activeSession);
+    const lastNewSessionSignalRef = useRef(props.newSessionSignal);
     const renameInFlightRef = useRef<Set<string>>(new Set());
 
     const sessionListOuter = useMemo(
@@ -65,6 +67,17 @@ export function Sidebar(props: SidebarProps) {
     useEffect(() => {
         activeSessionRef.current = props.activeSession;
     }, [props.activeSession]);
+
+    useEffect(() => {
+        if (props.newSessionSignal === lastNewSessionSignalRef.current) {
+            return;
+        }
+        lastNewSessionSignalRef.current = props.newSessionSignal;
+        if (props.newSessionSignal <= 0) {
+            return;
+        }
+        setShowNewSession(true);
+    }, [props.newSessionSignal]);
 
     const activateSession = useCallback(
         async (sessionName: string) => {

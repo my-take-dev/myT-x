@@ -11,7 +11,9 @@ import {
     validateAgentModelSettings,
     validateClaudeEnvSettings,
     validateDefaultSessionDir,
+    validateGlobalHotkey,
     validatePaneEnvSettings,
+    validatePrefixShortcut,
     validateViewerShortcuts,
     validateWorktreeCopyPathSettings,
 } from "./settingsValidation";
@@ -166,6 +168,8 @@ export function useSettingsSave(
             ...validateClaudeEnvSettings(s.claudeEnvEntries),
             ...validatePaneEnvSettings(s.paneEnvEntries, s.effortLevel),
             ...validateWorktreeCopyPathSettings(s.wtCopyFiles, s.wtCopyDirs),
+            ...validatePrefixShortcut(s.prefix),
+            ...validateGlobalHotkey(s.globalHotkey, s.quakeMode),
             ...validateViewerShortcuts(s.viewerShortcuts, s.quakeMode ? s.globalHotkey : ""),
             ...validateDefaultSessionDir(s.defaultSessionDir),
         };
@@ -180,6 +184,10 @@ export function useSettingsSave(
             } else if (Object.keys(errors).some((k) => k.startsWith("wt_copy_"))) {
                 dispatch({type: "SET_FIELD", field: "activeCategory", value: "worktree"});
             } else if (Object.keys(errors).some((k) => k === "default_session_dir")) {
+                dispatch({type: "SET_FIELD", field: "activeCategory", value: "general"});
+            } else if (Object.keys(errors).some((k) => k === "prefix")) {
+                dispatch({type: "SET_FIELD", field: "activeCategory", value: "general"});
+            } else if (Object.keys(errors).some((k) => k === "global_hotkey")) {
                 dispatch({type: "SET_FIELD", field: "activeCategory", value: "general"});
             } else if (Object.keys(errors).some((k) => k.startsWith("viewer_shortcut_"))) {
                 dispatch({type: "SET_FIELD", field: "activeCategory", value: "keybinds"});

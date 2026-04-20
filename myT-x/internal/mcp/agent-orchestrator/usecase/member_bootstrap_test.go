@@ -190,6 +190,108 @@ func TestAddMemberHappyPath(t *testing.T) {
 	}
 }
 
+func TestAddMemberPreRegistersAgentAndEmitsUpdate(t *testing.T) {
+	d := newMemberBootstrapDeps()
+	registerTestCaller(d.agents, "orchestrator", "%1")
+	svc := buildMemberBootstrapService(d)
+
+	var events []map[string]any
+	svc.SetAgentsUpdatedEmitter("alpha", func(name string, payload any) {
+		if name != "orchestrator:agents-updated" {
+			t.Fatalf("unexpected event name: %s", name)
+		}
+		eventPayload, ok := payload.(map[string]any)
+		if !ok {
+			t.Fatalf("payload type = %T", payload)
+		}
+		events = append(events, eventPayload)
+	})
+
+	skills := []domain.Skill{{Name: "go", Description: "backend"}}
+	result, err := svc.AddMember(context.Background(), AddMemberCmd{
+		PaneTitle: "worker",
+		Role:      "developer",
+		Command:   "python",
+		Skills:    skills,
+	})
+	if err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+
+	registered, ok := d.agents.agents[result.AgentName]
+	if !ok {
+		t.Fatalf("expected provisional agent registration for %s", result.AgentName)
+	}
+	if registered.PaneID != result.PaneID || registered.Role != "developer" {
+		t.Fatalf("registered agent = %+v", registered)
+	}
+	if !reflect.DeepEqual(registered.Skills, skills) {
+		t.Fatalf("registered skills = %#v, want %#v", registered.Skills, skills)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if got := events[0]["sessionName"]; got != "alpha" {
+		t.Fatalf("sessionName payload = %#v, want alpha", got)
+	}
+}
+
+func TestAddMemberRollbacksProvisionalRegistrationOnLaunchFailure(t *testing.T) {
+	d := newMemberBootstrapDeps()
+	registerTestCaller(d.agents, "orchestrator", "%1")
+	sendCalls := 0
+	d.paneOps.sendFn = func(_ context.Context, _ string, _ string) error {
+		sendCalls++
+		if sendCalls == 2 {
+			return errors.New("launch failed")
+		}
+		return nil
+	}
+	svc := buildMemberBootstrapService(d)
+
+	_, err := svc.AddMember(context.Background(), AddMemberCmd{
+		PaneTitle: "worker",
+		Role:      "developer",
+		Command:   "python",
+	})
+	if err == nil {
+		t.Fatal("expected launch failure")
+	}
+	if _, ok := d.agents.agents["worker"]; ok {
+		t.Fatalf("provisional registration should be rolled back: %+v", d.agents.agents["worker"])
+	}
+}
+
+func TestAddMemberRollbacksProvisionalRegistrationOnBootstrapWaitCancellation(t *testing.T) {
+	d := newMemberBootstrapDeps()
+	registerTestCaller(d.agents, "orchestrator", "%1")
+	svc := buildMemberBootstrapService(d)
+
+	sleepCalls := 0
+	svc.SetSleepFn(func(_ context.Context, _ time.Duration) error {
+		sleepCalls++
+		if sleepCalls == 3 {
+			return context.Canceled
+		}
+		return nil
+	})
+
+	_, err := svc.AddMember(context.Background(), AddMemberCmd{
+		PaneTitle: "worker",
+		Role:      "developer",
+		Command:   "python",
+	})
+	if err == nil {
+		t.Fatal("expected bootstrap wait cancellation")
+	}
+	if !strings.Contains(err.Error(), "bootstrap wait") {
+		t.Fatalf("error = %q, want bootstrap wait", err.Error())
+	}
+	if _, ok := d.agents.agents["worker"]; ok {
+		t.Fatalf("provisional registration should be rolled back: %+v", d.agents.agents["worker"])
+	}
+}
+
 func TestAddMemberClaudeDetection(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1464,6 +1566,7 @@ func TestAddMembersPhaseTwoContextCancellationReturnsPartialResult(t *testing.T)
 		wantBootstrapSent   int
 		wantWarningContains string
 		wantErrorContains   string
+		wantRemainingAgents int
 	}{
 		{
 			name:                "bootstrap wait",
@@ -1472,6 +1575,7 @@ func TestAddMembersPhaseTwoContextCancellationReturnsPartialResult(t *testing.T)
 			wantBootstrapSent:   0,
 			wantWarningContains: "bootstrap wait",
 			wantErrorContains:   "bootstrap wait",
+			wantRemainingAgents: 1,
 		},
 		{
 			name:                "inter-message wait",
@@ -1480,6 +1584,7 @@ func TestAddMembersPhaseTwoContextCancellationReturnsPartialResult(t *testing.T)
 			wantBootstrapSent:   1,
 			wantWarningContains: "inter-message wait",
 			wantErrorContains:   "inter-message wait",
+			wantRemainingAgents: 2,
 		},
 	}
 
@@ -1529,6 +1634,9 @@ func TestAddMembersPhaseTwoContextCancellationReturnsPartialResult(t *testing.T)
 			}
 			if !strings.Contains(result.Results[tt.wantWarningIndex].Warnings[0], tt.wantWarningContains) {
 				t.Fatalf("warning = %q, want %q", result.Results[tt.wantWarningIndex].Warnings[0], tt.wantWarningContains)
+			}
+			if len(d.agents.agents) != tt.wantRemainingAgents {
+				t.Fatalf("remaining provisional agents = %#v, want %d entries", d.agents.agents, tt.wantRemainingAgents)
 			}
 		})
 	}
@@ -1972,6 +2080,113 @@ func TestDeduplicateMemberAgentNamesWithTaken(t *testing.T) {
 			got := deduplicateMemberAgentNamesWithTaken(members, tt.taken)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("deduplicateMemberAgentNamesWithTaken(%v, %v) = %v, want %v", tt.input, tt.taken, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddMembersPreRegisterAgentsAndEmitUpdate(t *testing.T) {
+	d := newMemberBootstrapDeps()
+	registerTestCaller(d.agents, "orchestrator", "%1")
+	setupSequentialSplitter(&d, []string{"%5", "%6"})
+	svc := buildMemberBootstrapService(d)
+
+	var eventCount int
+	svc.SetAgentsUpdatedEmitter("alpha", func(name string, payload any) {
+		if name != "orchestrator:agents-updated" {
+			t.Fatalf("unexpected event name: %s", name)
+		}
+		eventPayload, ok := payload.(map[string]any)
+		if !ok {
+			t.Fatalf("payload type = %T", payload)
+		}
+		if got := eventPayload["sessionName"]; got != "alpha" {
+			t.Fatalf("sessionName payload = %#v, want alpha", got)
+		}
+		eventCount++
+	})
+
+	result, err := svc.AddMembers(context.Background(), AddMembersCmd{
+		Members: []AddMemberBatchItemCmd{
+			{PaneTitle: "worker", Role: "developer", Command: "python"},
+			{PaneTitle: "reviewer", Role: "review", Command: "python"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AddMembers: %v", err)
+	}
+	if result.Summary.Created != 2 {
+		t.Fatalf("created = %d, want 2", result.Summary.Created)
+	}
+	if got := d.agents.agents["worker"].PaneID; got != "%5" {
+		t.Fatalf("worker pane = %q, want %%5", got)
+	}
+	if got := d.agents.agents["reviewer"].PaneID; got != "%6" {
+		t.Fatalf("reviewer pane = %q, want %%6", got)
+	}
+	if eventCount != 2 {
+		t.Fatalf("eventCount = %d, want 2", eventCount)
+	}
+}
+
+func TestBuildMemberBootstrapMessageAddsSkillCompletionHints(t *testing.T) {
+	message := buildMemberBootstrapMessage("team", AddMemberCmd{
+		Role:      "developer",
+		PaneTitle: "worker",
+		Command:   "python",
+	}, "%5", "worker")
+
+	if !strings.Contains(message, "--- 得意分野の補完 ---") {
+		t.Fatalf("message = %q", message)
+	}
+	if !strings.Contains(message, "得意分野（skills）が未設定です。") {
+		t.Fatalf("message = %q", message)
+	}
+	if !strings.Contains(message, "include_response_instructions=false") {
+		t.Fatalf("message = %q", message)
+	}
+}
+
+func TestBuildMCPSkillCompletionHints(t *testing.T) {
+	tests := []struct {
+		name   string
+		role   string
+		skills []domain.Skill
+		want   string
+	}{
+		{
+			name: "empty",
+			role: "developer",
+			want: "得意分野（skills）が未設定です。あなたの役割「developer」に基づき、register_agent 実行時に適切な得意分野を3〜5件、name と description 付きで追加してください。",
+		},
+		{
+			name: "missing description",
+			role: "developer",
+			skills: []domain.Skill{
+				{Name: "go"},
+				{Name: "testing", Description: "quality"},
+			},
+			want: strings.Join([]string{
+				"得意分野の一部に説明（description）がありません。あなたの役割「developer」に基づき、register_agent 実行時に不足している description を推測して補完してください。",
+				"得意分野が少ない可能性があります。あなたの役割「developer」に応じて、register_agent 実行時に関連する得意分野を追加してください（合計3〜5件を目安）。",
+			}, "\n"),
+		},
+		{
+			name: "few skills",
+			role: "developer",
+			skills: []domain.Skill{
+				{Name: "go", Description: "backend"},
+				{Name: "testing", Description: "quality"},
+			},
+			want: "得意分野が少ない可能性があります。あなたの役割「developer」に応じて、register_agent 実行時に関連する得意分野を追加してください（合計3〜5件を目安）。",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildMCPSkillCompletionHints(tt.role, tt.skills)
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
 			}
 		})
 	}

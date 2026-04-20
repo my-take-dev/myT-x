@@ -1,6 +1,10 @@
-import {useEffect} from "react";
+import {useEffect, useMemo, useState} from "react";
 import {useI18n} from "../../../../i18n";
+import {useTmuxStore} from "../../../../stores/tmuxStore";
+import {resolveActiveWindow} from "../../../../utils/session";
+import {useUnregisteredPanes} from "../../../../hooks/useUnregisteredPanes";
 import {ConfirmDialog} from "../../../ConfirmDialog";
+import {EnlistPaneModal} from "../../../canvas/EnlistPaneModal";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {AddTermMemberQuickScreen} from "./AddTermMemberQuickScreen";
@@ -18,16 +22,35 @@ export function OrchestratorTeamsView() {
     const {t} = useI18n();
     const crud = useTeamCRUD();
     const viewContext = useViewerStore((s) => s.viewContext);
+    const clearViewContext = useViewerStore((s) => s.clearViewContext);
+    const sessions = useTmuxStore((state) => state.sessions);
+    const [enlistPaneId, setEnlistPaneId] = useState<string | null>(null);
+    const activeSessionSnapshot = useMemo(
+        () => sessions.find((session) => session.name === crud.activeSession) ?? null,
+        [crud.activeSession, sessions],
+    );
+    const activeWindow = useMemo(
+        () => resolveActiveWindow(activeSessionSnapshot),
+        [activeSessionSnapshot],
+    );
+    const panes = activeWindow?.panes ?? [];
+    const {context: enlistmentContext, unregisteredPanes} = useUnregisteredPanes(crud.activeSession, panes);
+    const selectedUnregisteredPane = useMemo(
+        () => unregisteredPanes.find((entry) => entry.pane.id === enlistPaneId) ?? null,
+        [enlistPaneId, unregisteredPanes],
+    );
 
     // Consume addTermMemberPaneId from viewContext when arriving at list screen.
     useEffect(() => {
-        const paneId = viewContext?.addTermMemberPaneId;
+        const paneId = viewContext?.kind === "orchestrator-teams-add-term-member"
+            ? viewContext.addTermMemberPaneId
+            : undefined;
         if (typeof paneId === "string" && crud.screen === "list") {
             crud.handleInitAddTermMember(paneId);
             // Clear context so it doesn't re-trigger.
-            useViewerStore.setState({viewContext: null});
+            clearViewContext();
         }
-    }, [viewContext, crud.screen, crud.handleInitAddTermMember]);
+    }, [viewContext, clearViewContext, crud.screen, crud.handleInitAddTermMember]);
 
     return (
         <ViewerPanelShell
@@ -69,6 +92,8 @@ export function OrchestratorTeamsView() {
                         })}
                         onMoveDown={(teamID) => crud.moveTeamDown(teamID).catch(() => { /* hook側でsetError済み */
                         })}
+                        unregisteredPanes={unregisteredPanes}
+                        onOpenEnlistment={setEnlistPaneId}
                     />
                 )}
 
@@ -199,6 +224,21 @@ export function OrchestratorTeamsView() {
                 actions={crud.unsavedDialogActions}
                 onAction={(value) => void crud.handleUnsavedAction(value)}
                 onClose={() => crud.setPendingNavigation(null)}
+            />
+
+            <EnlistPaneModal
+                open={selectedUnregisteredPane !== null && crud.activeSession !== null}
+                sessionName={crud.activeSession ?? ""}
+                pane={selectedUnregisteredPane?.pane ?? null}
+                parentPane={selectedUnregisteredPane?.parentPaneId != null
+                    ? panes.find((pane) => pane.id === selectedUnregisteredPane.parentPaneId) ?? null
+                    : null}
+                context={enlistmentContext}
+                suggestedTeamID={selectedUnregisteredPane?.suggestedTeamID ?? null}
+                suggestedStorageLocation={selectedUnregisteredPane?.suggestedStorageLocation ?? "global"}
+                suggestedRole={selectedUnregisteredPane?.suggestedRole ?? ""}
+                onClose={() => setEnlistPaneId(null)}
+                onEnlist={crud.enlistPane}
             />
         </ViewerPanelShell>
     );
