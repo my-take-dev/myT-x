@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -55,6 +56,35 @@ var shellNameAliases = map[string]string{
 	"cmd":        "cmd.exe",
 	"bash":       "bash.exe",
 	"wsl":        "wsl.exe",
+}
+
+var functionKeyPattern = regexp.MustCompile(`^f(?:[1-9]|1[0-9]|2[0-4])$`)
+
+var viewerShortcutAliases = map[string]string{
+	"file-tree": "file-view",
+}
+
+var reservedViewerShortcuts = map[string]string{
+	"ctrl+shift+v": "file-content-preview-toggle",
+}
+
+var viewerShortcutDefinitions = []struct {
+	viewID          string
+	defaultShortcut string
+}{
+	{viewID: "file-view", defaultShortcut: "Ctrl+Shift+E"},
+	{viewID: "git-graph", defaultShortcut: "Ctrl+Shift+G"},
+	{viewID: "error-log", defaultShortcut: "Ctrl+Shift+L"},
+	{viewID: "diff", defaultShortcut: "Ctrl+Shift+D"},
+	{viewID: "input-history", defaultShortcut: "Ctrl+Shift+H"},
+	{viewID: "mcp-manager", defaultShortcut: "Ctrl+Shift+M"},
+	{viewID: "pane-scheduler", defaultShortcut: "Ctrl+Shift+K"},
+	{viewID: "prompt-presets", defaultShortcut: "Ctrl+Shift+P"},
+	{viewID: "single-task-runner", defaultShortcut: "Ctrl+Shift+J"},
+	{viewID: "task-scheduler", defaultShortcut: "Ctrl+Shift+Q"},
+	{viewID: "editor", defaultShortcut: "Ctrl+Shift+O"},
+	{viewID: "orchestrator-teams", defaultShortcut: "Ctrl+Shift+T"},
+	{viewID: "usage-dashboard", defaultShortcut: "Ctrl+Shift+U"},
 }
 
 // AllowedShellList returns the permitted shell executable names for UI display.
@@ -152,6 +182,7 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	validateWebSocketPort(cfg)
 	validateViewerSidebarMode(cfg)
 	validateChatOverlayPercentage(cfg)
+	sanitizeViewerHotkeys(cfg)
 	sanitizePaneEnv(cfg)
 	sanitizeClaudeEnv(cfg)
 	sanitizeMCPServers(cfg)
@@ -315,6 +346,184 @@ func CanonicalShellBaseName(shell string) string {
 		return canonical
 	}
 	return baseName
+}
+
+func canonicalizeViewerShortcutConfig(shortcuts map[string]string) map[string]string {
+	if len(shortcuts) == 0 {
+		return shortcuts
+	}
+
+	for legacyViewID, canonicalViewID := range viewerShortcutAliases {
+		if direct, ok := shortcuts[canonicalViewID]; !ok || strings.TrimSpace(direct) == "" {
+			if legacy, legacyExists := shortcuts[legacyViewID]; legacyExists && strings.TrimSpace(legacy) != "" {
+				shortcuts[canonicalViewID] = legacy
+			}
+		}
+		delete(shortcuts, legacyViewID)
+	}
+	return shortcuts
+}
+
+func normalizeShortcut(rawShortcut string) string {
+	tokens := strings.Split(rawShortcut, "+")
+	if len(tokens) == 0 {
+		return ""
+	}
+
+	modifiers := make(map[string]struct{}, 4)
+	key := ""
+	for _, rawToken := range tokens {
+		token := strings.ToLower(strings.TrimSpace(rawToken))
+		if token == "" {
+			continue
+		}
+		switch token {
+		case "ctrl", "control":
+			modifiers["ctrl"] = struct{}{}
+		case "shift":
+			modifiers["shift"] = struct{}{}
+		case "alt", "option":
+			modifiers["alt"] = struct{}{}
+		case "meta", "cmd", "command":
+			modifiers["meta"] = struct{}{}
+		default:
+			key = token
+		}
+	}
+	if key == "" {
+		return ""
+	}
+
+	orderedModifiers := make([]string, 0, len(modifiers)+1)
+	for _, modifier := range []string{"ctrl", "shift", "alt", "meta"} {
+		if _, ok := modifiers[modifier]; ok {
+			orderedModifiers = append(orderedModifiers, modifier)
+		}
+	}
+	orderedModifiers = append(orderedModifiers, key)
+	return strings.Join(orderedModifiers, "+")
+}
+
+func isFunctionKeyToken(token string) bool {
+	return functionKeyPattern.MatchString(token)
+}
+
+func hasShortcutModifier(shortcut string) bool {
+	normalizedShortcut := normalizeShortcut(shortcut)
+	if normalizedShortcut == "" {
+		return false
+	}
+	tokens := strings.Split(normalizedShortcut, "+")
+	if len(tokens) == 1 {
+		return isFunctionKeyToken(tokens[0])
+	}
+	return len(tokens) >= 2
+}
+
+func formatShortcutDisplay(shortcut string) string {
+	if shortcut == "" {
+		return ""
+	}
+
+	labels := map[string]string{
+		"ctrl":  "Ctrl",
+		"shift": "Shift",
+		"alt":   "Alt",
+		"meta":  "Meta",
+	}
+	tokens := strings.Split(shortcut, "+")
+	formatted := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if label, ok := labels[token]; ok {
+			formatted = append(formatted, label)
+			continue
+		}
+		if isFunctionKeyToken(token) {
+			formatted = append(formatted, strings.ToUpper(token))
+			continue
+		}
+		if len(token) == 1 {
+			formatted = append(formatted, strings.ToUpper(token))
+			continue
+		}
+		formatted = append(formatted, token)
+	}
+	return strings.Join(formatted, "+")
+}
+
+func sanitizeViewerHotkeys(cfg *Config) {
+	normalizedGlobalHotkey := normalizeShortcut(cfg.GlobalHotkey)
+	if cfg.QuakeMode && normalizedGlobalHotkey != "" {
+		if reservedID, reserved := reservedViewerShortcuts[normalizedGlobalHotkey]; reserved {
+			slog.Warn("[WARN-CONFIG] global_hotkey uses a reserved viewer shortcut, falling back to default",
+				"configured", cfg.GlobalHotkey,
+				"reservedID", reservedID,
+				"default", DefaultConfig().GlobalHotkey)
+			cfg.GlobalHotkey = DefaultConfig().GlobalHotkey
+			normalizedGlobalHotkey = normalizeShortcut(cfg.GlobalHotkey)
+		}
+	}
+
+	if len(cfg.ViewerShortcuts) == 0 {
+		return
+	}
+
+	shortcuts := canonicalizeViewerShortcutConfig(cfg.ViewerShortcuts)
+	cleaned := make(map[string]string, len(shortcuts))
+	ownersByShortcut := make(map[string]string, len(viewerShortcutDefinitions))
+	for _, definition := range viewerShortcutDefinitions {
+		defaultShortcut := normalizeShortcut(definition.defaultShortcut)
+		configuredShortcut, hasConfigured := shortcuts[definition.viewID]
+		configuredShortcut = strings.TrimSpace(configuredShortcut)
+		effectiveShortcut := defaultShortcut
+		keepConfigured := false
+
+		if hasConfigured && configuredShortcut != "" {
+			normalizedShortcut := normalizeShortcut(configuredShortcut)
+			switch {
+			case normalizedShortcut == "":
+				slog.Warn("[WARN-CONFIG] viewer_shortcuts entry uses an invalid shortcut, dropping",
+					"viewID", definition.viewID, "configured", configuredShortcut)
+			case !hasShortcutModifier(normalizedShortcut):
+				slog.Warn("[WARN-CONFIG] viewer_shortcuts entry is missing a modifier key, dropping",
+					"viewID", definition.viewID, "configured", configuredShortcut)
+			case normalizedGlobalHotkey != "" && normalizedShortcut == normalizedGlobalHotkey:
+				slog.Warn("[WARN-CONFIG] viewer_shortcuts entry conflicts with global_hotkey, dropping",
+					"viewID", definition.viewID,
+					"configured", configuredShortcut,
+					"globalHotkey", cfg.GlobalHotkey)
+			case reservedViewerShortcuts[normalizedShortcut] != "":
+				slog.Warn("[WARN-CONFIG] viewer_shortcuts entry uses a reserved shortcut, dropping",
+					"viewID", definition.viewID,
+					"configured", configuredShortcut,
+					"reservedID", reservedViewerShortcuts[normalizedShortcut])
+			case ownersByShortcut[normalizedShortcut] != "":
+				slog.Warn("[WARN-CONFIG] viewer_shortcuts entry duplicates another effective shortcut, dropping",
+					"viewID", definition.viewID,
+					"configured", configuredShortcut,
+					"existingOwner", ownersByShortcut[normalizedShortcut])
+			default:
+				effectiveShortcut = normalizedShortcut
+				keepConfigured = true
+			}
+		}
+
+		if effectiveShortcut == "" {
+			continue
+		}
+		if _, exists := ownersByShortcut[effectiveShortcut]; !exists {
+			ownersByShortcut[effectiveShortcut] = definition.viewID
+		}
+		if keepConfigured {
+			cleaned[definition.viewID] = formatShortcutDisplay(effectiveShortcut)
+		}
+	}
+
+	if len(cleaned) == 0 {
+		cfg.ViewerShortcuts = nil
+		return
+	}
+	cfg.ViewerShortcuts = cleaned
 }
 
 // sanitizeTaskScheduler validates and normalizes task scheduler settings in place.

@@ -15,17 +15,19 @@
 
 ## 概要
 
-**エージェントチーム**
+**Claude Codeエージェントチーム**
 ![作業イメージ画像](sample.png)
-**ディレクトリ確認**
-![作業イメージ画像](sample2.png)
-**Git グラフ**
+**File View Mode**
+md,openAPI(swagger),drawio...
+![作業イメージ画像](sample2.png)  
+![作業イメージ画像](sample2-2.png)  
+**Editor**
 ![作業イメージ画像](sample3.png)
-**DIFF 表示**
+**ダッシュボード**
 ![作業イメージ画像](sample4.png)
-**新規セッション開始**
+**よくある指示簡易登録機能**
 ![作業イメージ画像](sample5.png)
-**キャンバスモード**
+**オーケストレーターMCP&キャンバスモード＆タイムライン**
 ![作業イメージ画像](sample6.png)
 
 **WindowでもネイティブにClaude Codeチーム開発を楽しみたい！**  <br>
@@ -43,7 +45,7 @@
 | Agent Teams | Claude Code / Codex CLI / Gemini CLI のチーム連携 |
 | モデル自動切替 | 子エージェントのモデルを一括/個別に自動置換 |
 | Git Worktree | ブランチごとの独立作業フォルダ管理（セットアップスクリプト + 進捗表示対応） |
-| ファイルビュー (File View) | Markdown / Mermaid / Swagger(OpenAPI) / draw.io / SQLite の統合プレビュー（`Ctrl+Shift+E`） |
+| ファイルビュー (File View) | Markdown / Mermaid / Swagger(OpenAPI) / draw.io / SQLite / Markmap / Vega / Vega-Lite / WaveDrom の統合プレビュー（`Ctrl+Shift+E`） |
 | SQLite Viewer | `.db` / `.sqlite` / `.sqlite3` のテーブル一覧 + 行データ表示 + CSV エクスポート（読み取り専用） |
 | Prompt Presets | 固定プロンプトテンプレートを登録してチャット入力に追記（グローバル / プロジェクトの 2 スコープ、最大 200 件、`Ctrl+Shift+P`） |
 | Usage Dashboard | Claude Code / Codex の利用統計を可視化（エージェント / スキル / スラッシュコマンドの集計、30 日間日次アクティビティ、`Ctrl+Shift+U`） |
@@ -51,7 +53,9 @@
 | MCP内蔵 | オーケストレーションMCP + Single Task Runner MCP + LSP-MCP 200種以上 |
 | タスク自動化 | ペインスケジューラ（定期実行）+ タスクスケジューラ（順次実行）+ Single Task Runner（軽量版、`Ctrl+Shift+J`） |
 | ペインチャットバー | 各ペイン下部にチャット入力バーを常時ドッキング、クリックで対象ペインへ送信 |
-| キャンバスモード | エージェント間のタスクフローを視覚化 |
+| コマンドパレット | `Ctrl+P` でセッション切替・ビューアー起動・コマンド実行（MenuBarトリガーボタン対応） |
+| キャンバスモード | エージェント間のタスクフローを視覚化（ルートペイン手動指定対応） |
+| ターミナル検索 | インクリメンタル検索・検索結果カウンタ・一致箇所ハイライト表示（`Ctrl+F`） |
 | Quake Mode | ホットキーでウィンドウ即呼び出し |
 | 日本語IME対応 | WebView2プロセス分離 + IMEリセット機能 |
 

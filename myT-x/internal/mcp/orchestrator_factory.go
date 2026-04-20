@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -9,23 +10,35 @@ import (
 
 	orchestrator "myT-x/internal/mcp/agent-orchestrator"
 	"myT-x/internal/singletaskrunner"
+	"myT-x/internal/tmux"
 )
 
 // orchestratorRuntimeFactory creates a RuntimeFactory that produces
 // orchestrator.Runtime instances for each pipe connection. The returned
 // runtime shares a SQLite database at dbPath for cross-connection state.
-func orchestratorRuntimeFactory(dbPath, sessionName string, allPanes bool) RuntimeFactory {
+func orchestratorRuntimeFactory(
+	dbPath string,
+	sessionName string,
+	allPanes bool,
+	router *tmux.CommandRouter,
+	emitFn func(string, any),
+) RuntimeFactory {
 	return func(in io.Reader, out io.Writer) (MCPRuntime, error) {
-		return orchestrator.NewRuntime(orchestrator.Config{
+		cfg := orchestrator.Config{
 			DBPath:          dbPath,
 			In:              in,
 			Out:             out,
 			Logger:          log.New(os.Stderr, "[orchestrator] ", log.LstdFlags),
 			SessionName:     sessionName,
 			SessionAllPanes: allPanes,
+			EmitFn:          emitFn,
 			// SelfResolver is nil → defaults to tmux executor
 			// → pipe mode has no TMUX_PANE → trusted mode activates
-		})
+		}
+		if router != nil {
+			cfg.Splitter = &routerBackedSplitter{router: router}
+		}
+		return orchestrator.NewRuntime(cfg)
 	}
 }
 
@@ -43,7 +56,20 @@ func configParamValue(params []ConfigParam, key, fallback string) string {
 type pipeConfigContext struct {
 	rootDir                 string
 	sessionName             string
+	router                  *tmux.CommandRouter
+	emitFn                  func(string, any)
 	singleTaskRunnerManager *singletaskrunner.ServiceManager
+}
+
+type routerBackedSplitter struct {
+	router *tmux.CommandRouter
+}
+
+func (r *routerBackedSplitter) SplitPane(_ context.Context, targetPaneID string, horizontal bool) (string, error) {
+	if r == nil || r.router == nil {
+		return "", fmt.Errorf("router-backed splitter requires a router")
+	}
+	return r.router.SplitWindowInternal(targetPaneID, horizontal)
 }
 
 // buildPipeConfig constructs an MCPPipeConfig for the given definition.
@@ -57,7 +83,7 @@ func buildPipeConfig(pipeName string, def Definition, ctx pipeConfigContext) (MC
 		allPanes := configParamValue(def.ConfigParams, "session_all_panes", "false") == "true"
 		return MCPPipeConfig{
 			PipeName:       pipeName,
-			RuntimeFactory: orchestratorRuntimeFactory(dbPath, ctx.sessionName, allPanes),
+			RuntimeFactory: orchestratorRuntimeFactory(dbPath, ctx.sessionName, allPanes, ctx.router, ctx.emitFn),
 		}, nil
 	case DefinitionKindSingleTaskRunner:
 		if ctx.singleTaskRunnerManager == nil {

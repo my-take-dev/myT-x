@@ -46,4 +46,13 @@ describe("MarkdownPreview", () => {
         });
         expect(container.querySelector("[data-testid='mermaid-block']")?.textContent).toBe("graph TD;");
     });
+
+    it("keeps single tildes as literal text instead of strikethrough", async () => {
+        await act(async () => {
+            root.render(<MarkdownPreview content={"alpha ~beta~ gamma"}/>);
+        });
+
+        expect(container.querySelector("del")).toBeNull();
+        expect(container.textContent).toContain("alpha ~beta~ gamma");
+    });
 });

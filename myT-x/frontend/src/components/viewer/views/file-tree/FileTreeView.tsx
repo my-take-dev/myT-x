@@ -1,12 +1,24 @@
-import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from "react";
+import {lazy, useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useViewerStore} from "../../viewerStore";
+import {findViewerViewForShortcut} from "../../viewerShortcutDefinitions";
+import {isImeTransitionalEvent} from "../../../../utils/ime";
+import {useI18n} from "../../../../i18n";
+import {useTmuxStore} from "../../../../stores/tmuxStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {FileContentViewer} from "./FileContentViewer";
 import {FileSearchPanel} from "./FileSearchPanel";
 import {FileTreeSidebar} from "./FileTreeSidebar";
+import {buildShortcutFromKeyboardEvent} from "../../viewerShortcutUtils";
 import {DrawioRenderer} from "./renderers/DrawioRenderer";
 import {MarkdownRenderer} from "./renderers/MarkdownRenderer";
-import type {DocumentKind} from "./documentTypes";
+import {RendererSurface} from "./renderers/RendererSurface";
+import {
+    canPreviewDocumentKind,
+    getDefaultRenderModeForDocumentKind,
+    type DocumentKind,
+    type RenderMode,
+} from "./documentTypes";
+import {FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT} from "./fileContentShortcuts";
 import {classifyDocument, filterDocumentTree, isDocumentFile} from "./documentFilter";
 import {flattenTree} from "./treeUtils";
 import type {FileContentResult} from "./fileTreeTypes";
@@ -25,8 +37,49 @@ const LazySqliteRenderer = lazy(async () => ({
     default: (await import("./renderers/SqliteRenderer")).SqliteRenderer,
 }));
 
+const LazyGraphvizRenderer = lazy(async () => ({
+    default: (await import("./renderers/GraphvizRenderer")).GraphvizRenderer,
+}));
+
+const LazyMarkmapRenderer = lazy(async () => ({
+    default: (await import("./renderers/MarkmapRenderer")).MarkmapRenderer,
+}));
+
+const LazyWavedromRenderer = lazy(async () => ({
+    default: (await import("./renderers/WavedromRenderer")).WavedromRenderer,
+}));
+
+const LazyVegaLiteRenderer = lazy(async () => ({
+    default: (await import("./renderers/VegaLiteRenderer")).VegaLiteRenderer,
+}));
+
+interface FileContentRenderState {
+    readonly path: string | null;
+    readonly mode: RenderMode;
+}
+
+function isSearchShortcutBlocked(activeElement: Element | null): boolean {
+    return activeElement instanceof HTMLElement && activeElement.closest(".xterm") !== null;
+}
+
+function isPreviewShortcutBlocked(activeElement: Element | null): boolean {
+    if (!(activeElement instanceof HTMLElement)) {
+        return false;
+    }
+
+    return activeElement instanceof HTMLInputElement
+        || activeElement instanceof HTMLTextAreaElement
+        || activeElement instanceof HTMLSelectElement
+        || activeElement.isContentEditable
+        || activeElement.closest("[contenteditable]") !== null
+        || activeElement.closest(".monaco-editor") !== null
+        || activeElement.closest(".xterm") !== null;
+}
+
 export function FileTreeView() {
+    const {t} = useI18n();
     const closeView = useViewerStore((s) => s.closeView);
+    const viewerShortcutsConfig = useTmuxStore((state) => state.config?.viewer_shortcuts ?? null);
     const {
         tree,
         expandedPaths,
@@ -75,12 +128,38 @@ export function FileTreeView() {
         const fileName = segments[segments.length - 1] ?? fileContent.path;
         return classifyDocument(fileName, fileContent.content);
     }, [fileContent]);
+    const currentFilePath = fileContent?.path ?? null;
+    const defaultRenderMode = getDefaultRenderModeForDocumentKind(currentDocumentKind);
+    const canPreviewCurrentDocument = canPreviewDocumentKind(currentDocumentKind);
+    const [fileContentRenderState, setFileContentRenderState] = useState<FileContentRenderState>(() => ({
+        path: currentFilePath,
+        mode: defaultRenderMode,
+    }));
+    const currentRenderMode = fileContentRenderState.path === currentFilePath
+        ? fileContentRenderState.mode
+        : defaultRenderMode;
+    const previewShortcutOwner = useMemo(
+        () => findViewerViewForShortcut(viewerShortcutsConfig, FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT),
+        [viewerShortcutsConfig],
+    );
+    const previewShortcutStateRef = useRef({
+        canPreviewCurrentDocument,
+        currentFilePath,
+        defaultRenderMode,
+        previewShortcutOwner,
+    });
 
     const handleSearchOpen = useCallback(() => setIsSearchMode(true), []);
     const handleSearchClose = useCallback(() => {
         setIsSearchMode(false);
         clearSearch();
     }, [clearSearch]);
+    const handleRenderModeChange = useCallback((mode: RenderMode) => {
+        setFileContentRenderState({
+            path: currentFilePath,
+            mode,
+        });
+    }, [currentFilePath]);
 
     // Double-click handler: select file + close search.
     const handleOpenFile = useCallback((path: string) => {
@@ -88,15 +167,57 @@ export function FileTreeView() {
         setIsSearchMode(false);
     }, [selectFile]);
 
-    // Ctrl+F handler — skip when focus is inside a terminal pane to avoid
-    // conflicting with the terminal's own Ctrl+F search bar.
+    useEffect(() => {
+        previewShortcutStateRef.current = {
+            canPreviewCurrentDocument,
+            currentFilePath,
+            defaultRenderMode,
+            previewShortcutOwner,
+        };
+    }, [canPreviewCurrentDocument, currentFilePath, defaultRenderMode, previewShortcutOwner]);
+
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            if (e.ctrlKey && e.key === "f") {
-                if (document.activeElement?.closest(".xterm")) return;
+            if (e.defaultPrevented || isImeTransitionalEvent(e)) {
+                return;
+            }
+            const {
+                canPreviewCurrentDocument: latestCanPreviewCurrentDocument,
+                currentFilePath: latestCurrentFilePath,
+                defaultRenderMode: latestDefaultRenderMode,
+                previewShortcutOwner: latestPreviewShortcutOwner,
+            } = previewShortcutStateRef.current;
+
+            const shortcut = buildShortcutFromKeyboardEvent(e);
+            if (shortcut === "ctrl+f") {
+                if (isSearchShortcutBlocked(document.activeElement)) {
+                    return;
+                }
                 e.preventDefault();
                 setIsSearchMode(true);
+                return;
             }
+
+            if (shortcut !== FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT) {
+                return;
+            }
+
+            if (latestPreviewShortcutOwner !== null) {
+                return;
+            }
+
+            if (!latestCanPreviewCurrentDocument || isPreviewShortcutBlocked(document.activeElement)) {
+                return;
+            }
+
+            e.preventDefault();
+            setFileContentRenderState((previous) => {
+                const effectiveMode = previous.path === latestCurrentFilePath ? previous.mode : latestDefaultRenderMode;
+                return {
+                    path: latestCurrentFilePath,
+                    mode: effectiveMode === "preview" ? "raw" : "preview",
+                };
+            });
         };
         document.addEventListener("keydown", handler);
         return () => document.removeEventListener("keydown", handler);
@@ -107,6 +228,26 @@ export function FileTreeView() {
         setIsSearchMode(false);
         clearSearch();
     }, [activeSession, clearSearch]);
+
+    useEffect(() => {
+        setFileContentRenderState((previous) => {
+            if (previous.path !== currentFilePath) {
+                return {
+                    path: currentFilePath,
+                    mode: defaultRenderMode,
+                };
+            }
+
+            if (defaultRenderMode === "raw" && previous.mode !== "raw") {
+                return {
+                    path: currentFilePath,
+                    mode: "raw",
+                };
+            }
+
+            return previous;
+        });
+    }, [currentFilePath, defaultRenderMode]);
 
     const previewRenderer = useCallback((content: FileContentResult, kind: DocumentKind) => {
         switch (kind) {
@@ -121,15 +262,23 @@ export function FileTreeView() {
                 );
             case "mermaid":
                 return (
-                    <Suspense fallback={<div className="file-content-empty">Loading Mermaid preview...</div>}>
+                        <RendererSurface
+                        filePath={content.path}
+                        loadingMessage={t("viewer.preview.loading.mermaid", "Mermaid プレビューを読み込み中...")}
+                        rendererName="Mermaid"
+                    >
                         <LazyMermaidRenderer code={content.content}/>
-                    </Suspense>
+                    </RendererSurface>
                 );
             case "swagger":
                 return (
-                    <Suspense fallback={<div className="file-content-empty">Loading Swagger preview...</div>}>
+                    <RendererSurface
+                        filePath={content.path}
+                        loadingMessage={t("viewer.preview.loading.swagger", "Swagger プレビューを読み込み中...")}
+                        rendererName="Swagger"
+                    >
                         <LazySwaggerRenderer content={content.content} filePath={content.path}/>
-                    </Suspense>
+                    </RendererSurface>
                 );
             case "drawio-svg":
             case "drawio-xml":
@@ -144,26 +293,80 @@ export function FileTreeView() {
                 );
             case "sqlite":
                 return (
-                    <Suspense fallback={<div className="file-content-empty">Loading SQLite preview...</div>}>
+                    <RendererSurface
+                        filePath={content.path}
+                        loadingMessage={t("viewer.preview.loading.sqlite", "SQLite プレビューを読み込み中...")}
+                        rendererName="SQLite"
+                    >
                         <LazySqliteRenderer
                             filePath={content.path}
                             sessionKey={activeSessionKey}
                             sessionName={activeSession}
                         />
-                    </Suspense>
+                    </RendererSurface>
+                );
+            case "graphviz":
+                return (
+                    <RendererSurface
+                        filePath={content.path}
+                        loadingMessage={t("viewer.preview.loading.graphviz", "Graphviz プレビューを読み込み中...")}
+                        rendererName="Graphviz"
+                    >
+                        <LazyGraphvizRenderer code={content.content}/>
+                    </RendererSurface>
+                );
+            case "markmap":
+                return (
+                    <RendererSurface
+                        filePath={content.path}
+                        loadingMessage={t("viewer.preview.loading.markmap", "Markmap プレビューを読み込み中...")}
+                        rendererName="Markmap"
+                    >
+                        <LazyMarkmapRenderer code={content.content}/>
+                    </RendererSurface>
+                );
+            case "wavedrom":
+                return (
+                    <RendererSurface
+                        filePath={content.path}
+                        loadingMessage={t("viewer.preview.loading.wavedrom", "WaveDrom プレビューを読み込み中...")}
+                        rendererName="WaveDrom"
+                    >
+                        <LazyWavedromRenderer code={content.content}/>
+                    </RendererSurface>
+                );
+            case "vega-lite":
+                return (
+                    <RendererSurface
+                        filePath={content.path}
+                        loadingMessage={t("viewer.preview.loading.vegaLite", "Vega-Lite プレビューを読み込み中...")}
+                        rendererName="Vega-Lite"
+                    >
+                        <LazyVegaLiteRenderer code={content.content} kind="vega-lite"/>
+                    </RendererSurface>
+                );
+            case "vega":
+                return (
+                    <RendererSurface
+                        filePath={content.path}
+                        loadingMessage={t("viewer.preview.loading.vega", "Vega プレビューを読み込み中...")}
+                        rendererName="Vega"
+                    >
+                        <LazyVegaLiteRenderer code={content.content} kind="vega"/>
+                    </RendererSurface>
                 );
             case "yaml-json-raw":
                 return null;
         }
-    }, [activeSession, activeSessionKey]);
+    }, [activeSession, activeSessionKey, t]);
 
     if (!activeSession) {
         return (
             <ViewerPanelShell
                 className="file-tree-view"
-                title="File View"
+                title={t("viewer.fileTree.title", "ファイルツリー")}
                 onClose={closeView}
-                message="No active session"
+                message={t("viewer.fileTree.noActiveSession", "アクティブなセッションがありません")}
             />
         );
     }
@@ -172,7 +375,7 @@ export function FileTreeView() {
         return (
             <ViewerPanelShell
                 className="file-tree-view"
-                title="File View"
+                title={t("viewer.fileTree.title", "ファイルツリー")}
                 onClose={closeView}
                 onRefresh={loadRoot}
                 message={error}
@@ -183,13 +386,13 @@ export function FileTreeView() {
     return (
         <ViewerPanelShell
             className="file-tree-view"
-            title="File View"
+            title={t("viewer.fileTree.title", "ファイルツリー")}
             onClose={closeView}
             onRefresh={loadRoot}
         >
             <div className="file-tree-body">
                 {isRootLoading ? (
-                    <div className="viewer-message">Loading file tree...</div>
+                    <div className="viewer-message">{t("viewer.fileTree.loading", "ファイルツリーを読み込み中...")}</div>
                 ) : (
                     <>
                         {/* Left panel: search mode or tree mode */}
@@ -232,6 +435,9 @@ export function FileTreeView() {
                                     content={fileContent}
                                     isLoading={isLoadingContent}
                                     documentKind={currentDocumentKind}
+                                    renderMode={currentRenderMode}
+                                    canPreview={canPreviewCurrentDocument}
+                                    onRenderModeChange={handleRenderModeChange}
                                     previewRenderer={previewRenderer}
                                 />
                             )}

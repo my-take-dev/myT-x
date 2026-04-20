@@ -168,6 +168,27 @@ Click the toggle button to display panes as nodes with task flows shown as conne
 | failed | Failed tasks |
 | abandoned | Interrupted tasks |
 
+### Root Pane Selection (v1.0.8)
+
+When using Tree layout, you can manually specify which pane should be placed at the top (root) of the tree.
+
+| Action | Description |
+|--------|-------------|
+| Click crown icon (👑) | Set this pane as the tree root (exclusive: only one) |
+| Click again | Unset root (returns to automatic selection) |
+
+- The crown icon appears in each pane's toolbar only in Canvas mode
+- When no root is specified, panes with the orchestrator role are automatically selected
+- Root selection is saved and restored per session
+
+### Unregistered Pane Detection (v1.0.8)
+
+Panes created without going through MCP (e.g. manual split) are detected as "unregistered".
+
+- An "Unregistered" badge appears on the Canvas node
+- A banner appears in the Teams viewer in the right sidebar
+- Click to open the Enlistment modal and register the pane to a team
+
 ---
 
 ## Team Storage Locations

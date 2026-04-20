@@ -190,7 +190,7 @@ export function useTaskScheduler() {
         return activeSessionSnapshot.windows.flatMap((window) => window.panes);
     }, [activeSessionSnapshot]);
 
-    const shouldIgnoreMutationResult = useCallback((capturedSessionKey: string): boolean => {
+    const shouldIgnoreSessionResult = useCallback((capturedSessionKey: string): boolean => {
         return shouldIgnoreSessionMutation(capturedSessionKey, isMountedRef, latestSessionKeyRef);
     }, []);
 
@@ -315,20 +315,20 @@ export function useTaskScheduler() {
         }
         try {
             await StartTaskScheduler(capturedSessionKey, config, items);
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return false;
             }
             generationIdRef.current = null;
             void refreshStatus(capturedSessionKey);
             return true;
         } catch (err: unknown) {
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return false;
             }
             setError(toErrorMessage(err, "Failed to start task scheduler"));
             return false;
         }
-    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreSessionResult]);
 
     const stop = useCallback(async () => {
         const capturedSessionKey = resolveMutationSessionKey();
@@ -338,17 +338,17 @@ export function useTaskScheduler() {
         }
         try {
             await StopTaskScheduler(capturedSessionKey);
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             void refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             setError(toErrorMessage(err, "Failed to stop task scheduler"));
         }
-    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreSessionResult]);
 
     const pause = useCallback(async () => {
         const capturedSessionKey = resolveMutationSessionKey();
@@ -358,18 +358,18 @@ export function useTaskScheduler() {
         }
         try {
             await PauseTaskScheduler(capturedSessionKey);
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             // Pause/resume updates arrive through task-scheduler:updated, so pause
             // intentionally avoids a second eager refresh here.
         } catch (err: unknown) {
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             setError(toErrorMessage(err, "Failed to pause task scheduler"));
         }
-    }, [resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [resolveMutationSessionKey, shouldIgnoreSessionResult]);
 
     const resume = useCallback(async () => {
         const capturedSessionKey = resolveMutationSessionKey();
@@ -379,18 +379,18 @@ export function useTaskScheduler() {
         }
         try {
             await ResumeTaskScheduler(capturedSessionKey);
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             generationIdRef.current = null;
             void refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             setError(toErrorMessage(err, "Failed to resume task scheduler"));
         }
-    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreSessionResult]);
 
     const addItem = useCallback(async (
         title: string, message: string, targetPaneID: string,
@@ -403,15 +403,15 @@ export function useTaskScheduler() {
         }
         try {
             await AddTaskSchedulerItem(capturedSessionKey, title, message, targetPaneID, clearBefore, clearCommand);
-            return !shouldIgnoreMutationResult(capturedSessionKey);
+            return !shouldIgnoreSessionResult(capturedSessionKey);
         } catch (err: unknown) {
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return false;
             }
             setError(toErrorMessage(err, "Failed to add task scheduler item"));
             return false;
         }
-    }, [resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [resolveMutationSessionKey, shouldIgnoreSessionResult]);
 
     const removeItem = useCallback(async (id: string) => {
         const capturedSessionKey = resolveMutationSessionKey();
@@ -421,17 +421,17 @@ export function useTaskScheduler() {
         }
         try {
             await RemoveTaskSchedulerItem(capturedSessionKey, id);
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             void refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             setError(toErrorMessage(err, "Failed to remove task scheduler item"));
         }
-    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreSessionResult]);
 
     const reorderItems = useCallback(async (orderedIDs: string[]) => {
         const capturedSessionKey = resolveMutationSessionKey();
@@ -441,17 +441,17 @@ export function useTaskScheduler() {
         }
         try {
             await ReorderTaskSchedulerItems(capturedSessionKey, orderedIDs);
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             void refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return;
             }
             setError(toErrorMessage(err, "Failed to reorder task scheduler items"));
         }
-    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreSessionResult]);
 
     const updateItem = useCallback(async (
         id: string, title: string, message: string, targetPaneID: string,
@@ -464,15 +464,15 @@ export function useTaskScheduler() {
         }
         try {
             await UpdateTaskSchedulerItem(capturedSessionKey, id, title, message, targetPaneID, clearBefore, clearCommand);
-            return !shouldIgnoreMutationResult(capturedSessionKey);
+            return !shouldIgnoreSessionResult(capturedSessionKey);
         } catch (err: unknown) {
-            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (shouldIgnoreSessionResult(capturedSessionKey)) {
                 return false;
             }
             setError(toErrorMessage(err, "Failed to update task scheduler item"));
             return false;
         }
-    }, [resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [resolveMutationSessionKey, shouldIgnoreSessionResult]);
 
     const loadSettings = useCallback(async (requestID?: number): Promise<boolean> => {
         if (requestID !== undefined && settingsRequestIDRef.current !== requestID) {
@@ -580,19 +580,20 @@ export function useTaskScheduler() {
         try {
             return await CheckTaskSchedulerOrchestratorReady(capturedSessionKey);
         } catch (err: unknown) {
-            if (!shouldIgnoreMutationResult(capturedSessionKey)) {
+            if (!shouldIgnoreSessionResult(capturedSessionKey)) {
                 // View callbacks intentionally stop after this throw because the
                 // shared hook error state already owns the user-visible message.
                 setError(toErrorMessage(err, "Failed to check task scheduler readiness"));
             }
             throw err;
         }
-    }, [resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [resolveMutationSessionKey, shouldIgnoreSessionResult]);
 
     return {
         status,
         error,
         setError,
+        activeSessionKey,
         availablePanes,
         settings,
         start,
@@ -606,5 +607,6 @@ export function useTaskScheduler() {
         refreshStatus,
         checkOrchestratorReady,
         saveSettings,
+        shouldIgnoreSessionResult,
     };
 }

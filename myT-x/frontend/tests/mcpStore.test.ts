@@ -177,6 +177,29 @@ describe("mcpStore", () => {
         });
     });
 
+    describe("migrateSession", () => {
+        it("moves snapshots and session state to the renamed session", () => {
+            useMCPStore.getState().setSnapshots("sess1", [snapshot("a")]);
+            useMCPStore.getState().setSessionError("sess1", "connection failed");
+
+            useMCPStore.getState().migrateSession("sess1", "sess-renamed");
+
+            expect(useMCPStore.getState().snapshots["sess1"]).toBeUndefined();
+            expect(useMCPStore.getState().sessionStates["sess1"]).toBeUndefined();
+            expect(useMCPStore.getState().snapshots["sess-renamed"]?.[0].id).toBe("a");
+            expect(useMCPStore.getState().sessionStates["sess-renamed"]?.error).toBe("connection failed");
+        });
+
+        it("keeps other sessions untouched", () => {
+            useMCPStore.getState().setSnapshots("sess1", [snapshot("a")]);
+            useMCPStore.getState().setSnapshots("sess2", [snapshot("b")]);
+
+            useMCPStore.getState().migrateSession("sess1", "sess-renamed");
+
+            expect(useMCPStore.getState().snapshots["sess2"]?.[0].id).toBe("b");
+        });
+    });
+
     // ── clearAllSessions ──
 
     describe("clearAllSessions", () => {

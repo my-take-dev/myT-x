@@ -1,3 +1,5 @@
+import {getEffectiveViewerShortcut, normalizeShortcut} from "./viewerShortcutUtils";
+
 export interface ViewerShortcutDef {
     viewId: string;
     label: string;
@@ -89,6 +91,28 @@ export function normalizeViewerShortcutConfig(
 
 export function getViewerShortcutDef(viewID: string): ViewerShortcutDef | undefined {
     return viewerShortcutByID.get(viewID);
+}
+
+export function findViewerViewForShortcut(
+    shortcuts: Readonly<Record<string, string>> | null | undefined,
+    rawShortcut: string,
+): string | null {
+    const normalizedShortcut = normalizeShortcut(rawShortcut);
+    if (normalizedShortcut === "") {
+        return null;
+    }
+
+    for (const {viewId, defaultShortcut} of VIEWER_SHORTCUTS) {
+        const effectiveShortcut = getEffectiveViewerShortcut(
+            getViewerShortcutValue(shortcuts, viewId),
+            defaultShortcut,
+        );
+        if (effectiveShortcut === normalizedShortcut) {
+            return viewId;
+        }
+    }
+
+    return null;
 }
 
 export function mustGetViewerShortcutDef(viewID: string): ViewerShortcutDef {

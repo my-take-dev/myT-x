@@ -9,12 +9,14 @@ import (
 	"sync"
 
 	"myT-x/internal/singletaskrunner"
+	"myT-x/internal/tmux"
 )
 
 // ManagerConfig holds configuration for creating a Manager.
 type ManagerConfig struct {
 	Registry *Registry
 	EmitFn   func(string, any)
+	Router   *tmux.CommandRouter
 	// ResolveWorkDir returns the working directory for the given session.
 	// Used by session-scoped runtimes that need a filesystem root.
 	ResolveWorkDir func(sessionName string) (string, error)
@@ -49,6 +51,7 @@ type Manager struct {
 	// (SetEnabled, CleanupSession) wait for the rename to finish before
 	// proceeding so they don't race with the pipe-restart / rollback window.
 	renaming                map[string]chan struct{}
+	router                  *tmux.CommandRouter
 	resolveWorkDir          func(string) (string, error)
 	newPipeServer           func(MCPPipeConfig) managedPipeServer
 	singleTaskRunnerManager *singletaskrunner.ServiceManager
@@ -110,6 +113,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		sessions:                make(map[string]map[string]*instance),
 		emitFn:                  emitFn,
 		renaming:                make(map[string]chan struct{}),
+		router:                  cfg.Router,
 		resolveWorkDir:          resolveWorkDir,
 		newPipeServer:           newPipeServer,
 		singleTaskRunnerManager: cfg.SingleTaskRunnerManager,
@@ -336,6 +340,8 @@ func (m *Manager) startInstanceSync(sessionName, mcpID string, inst *instance, d
 	pipeCfg, err := buildPipeConfig(pipeName, def, pipeConfigContext{
 		rootDir:                 rootDir,
 		sessionName:             sessionName,
+		router:                  m.router,
+		emitFn:                  m.emitFn,
 		singleTaskRunnerManager: m.singleTaskRunnerManager,
 	})
 	if err != nil {

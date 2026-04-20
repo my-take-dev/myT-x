@@ -53,14 +53,26 @@ func createOrchestratorTaskTestDB(t *testing.T) (*sql.DB, string) {
 			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE TABLE send_messages (
-			id         TEXT PRIMARY KEY,
-			content    TEXT NOT NULL,
-			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+			id                  TEXT PRIMARY KEY,
+			content             TEXT NOT NULL,
+			created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+			storage_mode        TEXT NOT NULL DEFAULT 'inline',
+			content_preview     TEXT NOT NULL DEFAULT '',
+			artifact_paths_json TEXT NOT NULL DEFAULT '[]',
+			part_count          INTEGER NOT NULL DEFAULT 0,
+			content_chars       INTEGER NOT NULL DEFAULT 0,
+			sha256              TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE send_responses (
-			id         TEXT PRIMARY KEY,
-			content    TEXT NOT NULL,
-			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+			id                  TEXT PRIMARY KEY,
+			content             TEXT NOT NULL,
+			created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+			storage_mode        TEXT NOT NULL DEFAULT 'inline',
+			content_preview     TEXT NOT NULL DEFAULT '',
+			artifact_paths_json TEXT NOT NULL DEFAULT '[]',
+			part_count          INTEGER NOT NULL DEFAULT 0,
+			content_chars       INTEGER NOT NULL DEFAULT 0,
+			sha256              TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE tasks (
 			task_id           TEXT PRIMARY KEY,
@@ -145,8 +157,8 @@ func TestOrchestratorTaskFieldCount(t *testing.T) {
 }
 
 func TestOrchestratorTaskDetailFieldCount(t *testing.T) {
-	if got := reflect.TypeFor[OrchestratorTaskDetail]().NumField(); got != 8 {
-		t.Fatalf("OrchestratorTaskDetail has %d fields (expected 8). Update GetOrchestratorTaskDetail scan logic and this constant.", got)
+	if got := reflect.TypeFor[OrchestratorTaskDetail]().NumField(); got != 20 {
+		t.Fatalf("OrchestratorTaskDetail has %d fields (expected 20). Update GetOrchestratorTaskDetail scan logic and this constant.", got)
 	}
 }
 
@@ -800,7 +812,7 @@ func TestListOrchestratorAgents(t *testing.T) {
 				createOrchestratorTestSession(t, app, tt.sessionName, tmpDir)
 			}
 
-			// Insert test data with mcp_instance_id to satisfy the IS NOT NULL filter.
+			// Insert test data with mcp_instance_id populated so the row matches production-like registrations.
 			for _, agentData := range tt.setupData {
 				_, err := db.Exec(
 					"INSERT INTO agents (name, pane_id, role, mcp_instance_id) VALUES (?, ?, ?, ?)",
@@ -1038,6 +1050,137 @@ func TestGetOrchestratorTaskDetail(t *testing.T) {
 			},
 		},
 		{
+			name:   "returns stored payload metadata when full content is externalized",
+			taskID: "task-detail-file-message",
+			setup: func(t *testing.T, db *sql.DB) {
+				_, err := db.Exec(
+					"INSERT INTO agents (name, pane_id, role) VALUES (?, ?, ?)",
+					"detail-agent", "%pane-detail", "developer",
+				)
+				if err != nil {
+					t.Fatalf("insert agent error: %v", err)
+				}
+				_, err = db.Exec(
+					`INSERT INTO send_messages (
+						id, content, storage_mode, content_preview, artifact_paths_json, part_count, content_chars, sha256
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					"msg-detail-file",
+					"",
+					"multipart_file",
+					"stored request preview",
+					`[".myT-x/orchestrator/payloads/task-detail-file/message.manifest.json",".myT-x/orchestrator/payloads/task-detail-file/message.part1.txt"]`,
+					2,
+					32001,
+					"abc123",
+				)
+				if err != nil {
+					t.Fatalf("insert send_messages error: %v", err)
+				}
+				_, err = db.Exec(
+					`INSERT INTO tasks (
+						task_id, agent_name, send_message_id, send_response_id,
+						assignee_pane_id, sender_pane_id, sender_name,
+						status, sent_at, completed_at, is_now_session
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					"task-detail-file-message", "detail-agent", "msg-detail-file", nil,
+					"%1", "%2", "sender-detail", "pending", "2024-01-01T12:30:00Z", "", 1,
+				)
+				if err != nil {
+					t.Fatalf("insert task error: %v", err)
+				}
+			},
+			checkDetail: func(t *testing.T, detail *OrchestratorTaskDetail) {
+				if detail.MessageContent != "" {
+					t.Fatalf("MessageContent = %q, want empty", detail.MessageContent)
+				}
+				if detail.MessagePreview != "stored request preview" {
+					t.Fatalf("MessagePreview = %q, want stored request preview", detail.MessagePreview)
+				}
+				if detail.MessageStorageMode != "multipart_file" {
+					t.Fatalf("MessageStorageMode = %q, want multipart_file", detail.MessageStorageMode)
+				}
+				if detail.MessagePartCount != 2 {
+					t.Fatalf("MessagePartCount = %d, want 2", detail.MessagePartCount)
+				}
+				if detail.MessageContentChars != 32001 {
+					t.Fatalf("MessageContentChars = %d, want 32001", detail.MessageContentChars)
+				}
+				if detail.MessageSHA256 != "abc123" {
+					t.Fatalf("MessageSHA256 = %q, want abc123", detail.MessageSHA256)
+				}
+				if len(detail.MessageArtifactPaths) != 2 {
+					t.Fatalf("MessageArtifactPaths len = %d, want 2", len(detail.MessageArtifactPaths))
+				}
+				if !filepath.IsAbs(detail.MessageArtifactPaths[0]) {
+					t.Fatalf("MessageArtifactPaths[0] = %q, want absolute path", detail.MessageArtifactPaths[0])
+				}
+				if !strings.HasSuffix(detail.MessageArtifactPaths[0], filepath.Join(".myT-x", "orchestrator", "payloads", "task-detail-file", "message.manifest.json")) {
+					t.Fatalf("MessageArtifactPaths[0] = %q, want message manifest suffix", detail.MessageArtifactPaths[0])
+				}
+			},
+		},
+		{
+			name:   "returns stored response metadata with absolute artifact paths",
+			taskID: "task-detail-file-response",
+			setup: func(t *testing.T, db *sql.DB) {
+				_, err := db.Exec(
+					"INSERT INTO agents (name, pane_id, role) VALUES (?, ?, ?)",
+					"detail-agent", "%pane-detail", "developer",
+				)
+				if err != nil {
+					t.Fatalf("insert agent error: %v", err)
+				}
+				_, err = db.Exec(
+					`INSERT INTO send_responses (
+						id, content, storage_mode, content_preview, artifact_paths_json, part_count, content_chars, sha256
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					"resp-detail-file",
+					"",
+					"file",
+					"stored response preview",
+					`[".myT-x/orchestrator/payloads/task-detail-file/response.md"]`,
+					1,
+					16001,
+					"resp-sha",
+				)
+				if err != nil {
+					t.Fatalf("insert send_responses error: %v", err)
+				}
+				_, err = db.Exec(
+					`INSERT INTO tasks (
+						task_id, agent_name, send_message_id, send_response_id,
+						assignee_pane_id, sender_pane_id, sender_name,
+						status, sent_at, completed_at, is_now_session
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					"task-detail-file-response", "detail-agent", nil, "resp-detail-file",
+					"%1", "%2", "sender-detail", "completed", "2024-01-01T12:45:00Z", "2024-01-01T13:00:00Z", 1,
+				)
+				if err != nil {
+					t.Fatalf("insert task error: %v", err)
+				}
+			},
+			checkDetail: func(t *testing.T, detail *OrchestratorTaskDetail) {
+				if detail.ResponseContent != "" {
+					t.Fatalf("ResponseContent = %q, want empty", detail.ResponseContent)
+				}
+				if detail.ResponsePreview != "stored response preview" {
+					t.Fatalf("ResponsePreview = %q, want stored response preview", detail.ResponsePreview)
+				}
+				if detail.ResponseStorageMode != "file" {
+					t.Fatalf("ResponseStorageMode = %q, want file", detail.ResponseStorageMode)
+				}
+				if len(detail.ResponseArtifactPaths) != 1 {
+					t.Fatalf("ResponseArtifactPaths len = %d, want 1", len(detail.ResponseArtifactPaths))
+				}
+				if !filepath.IsAbs(detail.ResponseArtifactPaths[0]) {
+					t.Fatalf("ResponseArtifactPaths[0] = %q, want absolute path", detail.ResponseArtifactPaths[0])
+				}
+				if !strings.HasSuffix(detail.ResponseArtifactPaths[0], filepath.Join(".myT-x", "orchestrator", "payloads", "task-detail-file", "response.md")) {
+					t.Fatalf("ResponseArtifactPaths[0] = %q, want response payload suffix", detail.ResponseArtifactPaths[0])
+				}
+			},
+		},
+		{
 			name:         "returns error for empty task id",
 			taskID:       "   ",
 			wantErr:      true,
@@ -1091,7 +1234,7 @@ func TestListOrchestratorAgentsColumnsCorrect(t *testing.T) {
 
 	createOrchestratorTestSession(t, app, "agent-column-test", tmpDir)
 
-	// Insert agent with all fields (mcp_instance_id required for IS NOT NULL filter)
+	// Insert agent with all fields so the row matches production-like registrations.
 	_, err := db.Exec(
 		"INSERT INTO agents (name, pane_id, role, mcp_instance_id) VALUES (?, ?, ?, ?)",
 		"full-agent", "%pane-full", "senior-developer", "test-instance-1",

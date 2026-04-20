@@ -12,6 +12,28 @@ vi.mock("../src/api", () => ({
     },
 }));
 
+vi.mock("../src/components/viewer/views/file-tree/renderers/MermaidRenderer", () => ({
+    MermaidRenderer: ({code}: { code: string }) => <div data-testid="mermaid-diagram">{code}</div>,
+}));
+
+vi.mock("../src/components/viewer/views/file-tree/renderers/GraphvizRenderer", () => ({
+    GraphvizRenderer: ({code}: { code: string }) => <div data-testid="graphviz-diagram">{code}</div>,
+}));
+
+vi.mock("../src/components/viewer/views/file-tree/renderers/MarkmapRenderer", () => ({
+    MarkmapRenderer: ({code}: { code: string }) => <div data-testid="markmap-diagram">{code}</div>,
+}));
+
+vi.mock("../src/components/viewer/views/file-tree/renderers/WavedromRenderer", () => ({
+    WavedromRenderer: ({code}: { code: string }) => <div data-testid="wavedrom-diagram">{code}</div>,
+}));
+
+vi.mock("../src/components/viewer/views/file-tree/renderers/VegaLiteRenderer", () => ({
+    VegaLiteRenderer: ({code, kind}: { code: string; kind: string }) => (
+        <div data-testid={`${kind}-diagram`}>{code}</div>
+    ),
+}));
+
 import {MarkdownRenderer} from "../src/components/viewer/views/file-tree/renderers/MarkdownRenderer";
 
 async function flushAsyncRender(): Promise<void> {
@@ -55,6 +77,48 @@ describe("MarkdownRenderer", () => {
         const heading = container.querySelector("h1");
         expect(heading?.textContent).toBe("Title");
         expect(container.querySelector(".md-preview-body")?.textContent).toContain("Body");
+    });
+
+    it.each([
+        ["mermaid", "mermaid-diagram"],
+        ["graphviz", "graphviz-diagram"],
+        ["dot", "graphviz-diagram"],
+        ["markmap", "markmap-diagram"],
+        ["wavedrom", "wavedrom-diagram"],
+        ["vega-lite", "vega-lite-diagram"],
+        ["vegalite", "vega-lite-diagram"],
+        ["vega", "vega-diagram"],
+    ])("routes fenced %s blocks to the diagram renderer", async (language, testId) => {
+        act(() => {
+            root.render(
+                <MarkdownRenderer
+                    content={`\`\`\`${language}\nexample\n\`\`\``}
+                    filePath="docs/readme.md"
+                    sessionKey="session-a:1"
+                    sessionName="session-a"
+                />,
+            );
+        });
+        await flushAsyncRender();
+
+        expect(container.querySelector(`[data-testid="${testId}"]`)?.textContent).toContain("example");
+    });
+
+    it("keeps unknown fenced languages as plain code blocks", async () => {
+        act(() => {
+            root.render(
+                <MarkdownRenderer
+                    content={"```customlang\nplain block\n```"}
+                    filePath="docs/readme.md"
+                    sessionKey="session-a:1"
+                    sessionName="session-a"
+                />,
+            );
+        });
+        await flushAsyncRender();
+
+        expect(container.querySelector("code")?.textContent).toContain("plain block");
+        expect(container.querySelector("[data-testid$='-diagram']")).toBeNull();
     });
 
     it("resolves relative markdown images through DevPanelReadBinary", async () => {

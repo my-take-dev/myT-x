@@ -53,6 +53,58 @@ function emptySession(name = "demo"): SessionSnapshot {
     };
 }
 
+function sessionWithPanes(name = "demo", paneIds: string[] = ["%0"]): SessionSnapshot {
+    return {
+        id: 1,
+        name,
+        created_at: "2026-03-29T00:00:00Z",
+        is_idle: false,
+        active_window_id: 10,
+        windows: [
+            {
+                id: 10,
+                name: "win-0",
+                active_pane: 0,
+                panes: paneIds.map((paneId, index) => ({
+                    id: paneId,
+                    index,
+                    title: `pane-${index}`,
+                    active: index === 0,
+                    width: 100,
+                    height: 40,
+                })),
+            },
+        ],
+    };
+}
+
+function sessionWithWindows(
+    name: string,
+    activeWindowId: number,
+    windows: Array<{id: number; paneIds: string[]}>,
+): SessionSnapshot {
+    return {
+        id: 1,
+        name,
+        created_at: "2026-03-29T00:00:00Z",
+        is_idle: false,
+        active_window_id: activeWindowId,
+        windows: windows.map((window) => ({
+            id: window.id,
+            name: `win-${window.id}`,
+            active_pane: 0,
+            panes: window.paneIds.map((paneId, index) => ({
+                id: paneId,
+                index,
+                title: `pane-${paneId}`,
+                active: index === 0,
+                width: 100,
+                height: 40,
+            })),
+        })),
+    };
+}
+
 describe("SessionView", () => {
     let container: HTMLDivElement;
     let root: Root;
@@ -84,6 +136,7 @@ describe("SessionView", () => {
             taskEdgeMap: {},
             agentMap: {},
             processStatusMap: {},
+            rootPaneId: null,
             sessionDataMap: {},
         });
     });
@@ -124,5 +177,67 @@ describe("SessionView", () => {
         expect(createPaneInSessionMock).toHaveBeenCalledTimes(1);
         expect(createPaneInSessionMock).toHaveBeenCalledWith("alpha");
         expect(container.textContent).not.toContain("作成中...");
+    });
+
+    it("clears the stored root when the active session loses that pane", async () => {
+        useCanvasStore.setState({
+            activeSessionName: "alpha",
+            rootPaneId: "%1",
+        });
+
+        await act(async () => {
+            root.render(<SessionView session={sessionWithPanes("alpha", ["%1", "%2"])} />);
+        });
+        expect(useCanvasStore.getState().rootPaneId).toBe("%1");
+
+        await act(async () => {
+            root.render(<SessionView session={sessionWithPanes("alpha", ["%2"])} />);
+        });
+        expect(useCanvasStore.getState().rootPaneId).toBeNull();
+    });
+
+    it("does not clear the stored root for a different canvas session", async () => {
+        useCanvasStore.setState({
+            activeSessionName: "alpha",
+            rootPaneId: "%1",
+        });
+
+        await act(async () => {
+            root.render(<SessionView session={sessionWithPanes("beta", ["%2"])} />);
+        });
+
+        expect(useCanvasStore.getState().rootPaneId).toBe("%1");
+    });
+
+    it("keeps the stored root when switching to another window in the same session", async () => {
+        useCanvasStore.setState({
+            activeSessionName: "alpha",
+            rootPaneId: "%9",
+        });
+
+        await act(async () => {
+            root.render(
+                <SessionView
+                    session={sessionWithWindows("alpha", 11, [
+                        {id: 10, paneIds: ["%1", "%2"]},
+                        {id: 11, paneIds: ["%9", "%10"]},
+                    ])}
+                />,
+            );
+        });
+        expect(useCanvasStore.getState().rootPaneId).toBe("%9");
+
+        await act(async () => {
+            root.render(
+                <SessionView
+                    session={sessionWithWindows("alpha", 10, [
+                        {id: 10, paneIds: ["%1", "%2"]},
+                        {id: 11, paneIds: ["%9", "%10"]},
+                    ])}
+                />,
+            );
+        });
+
+        expect(useCanvasStore.getState().rootPaneId).toBe("%9");
     });
 });

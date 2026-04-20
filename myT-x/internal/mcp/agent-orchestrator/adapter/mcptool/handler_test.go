@@ -360,6 +360,14 @@ func (m *mockMessageRepo) DeleteMessage(_ context.Context, id string) error {
 	return nil
 }
 
+func (m *mockMessageRepo) DeleteResponse(_ context.Context, id string) error {
+	if _, ok := m.responses[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(m.responses, id)
+	return nil
+}
+
 func (m *mockMessageRepo) GetMessage(_ context.Context, id string) (domain.TaskMessage, error) {
 	msg, ok := m.messages[id]
 	if !ok {
@@ -715,7 +723,7 @@ func TestSendTaskPersistsBeforeDeliveryAndMarksFailure(t *testing.T) {
 	mr.agents["codex"] = domain.Agent{Name: "codex", PaneID: "%1"}
 	mp := newMockPaneOps()
 	mp.selfPane = "%0"
-	mp.sendErr = fmt.Errorf("tmux failed")
+	mp.pasteErr = fmt.Errorf("tmux failed")
 
 	h := buildTestHandler(mr, mp)
 	registry, _ := h.BuildRegistry()
@@ -746,7 +754,7 @@ func TestSendTaskWarnsWhenFailureStatusUpdateFails(t *testing.T) {
 	mr.markTaskFailedErr = fmt.Errorf("sqlite busy")
 	mp := newMockPaneOps()
 	mp.selfPane = "%0"
-	mp.sendErr = fmt.Errorf("tmux failed")
+	mp.pasteErr = fmt.Errorf("tmux failed")
 
 	h := buildTestHandler(mr, mp)
 	registry, _ := h.BuildRegistry()
@@ -866,6 +874,51 @@ func TestGetTaskDetailReturnsGroupMetadata(t *testing.T) {
 	m := result.(map[string]any)
 	if m["group_id"] != "g-1" || m["group_label"] != "phase3" {
 		t.Fatalf("unexpected group metadata: %+v", m)
+	}
+}
+
+func TestGetTaskDetailKeepsEmptyContentFieldForStoredPayloadMetadata(t *testing.T) {
+	mr := newMockRepo()
+	mr.agents["sender"] = domain.Agent{Name: "sender", PaneID: "%0"}
+	mr.agents["worker"] = domain.Agent{Name: "worker", PaneID: "%1"}
+	mr.tasks["t-1"] = domain.Task{
+		ID:             "t-1",
+		AgentName:      "worker",
+		AssigneePaneID: "%1",
+		SenderPaneID:   "%0",
+		SenderName:     "sender",
+		Status:         domain.TaskStatusPending,
+		SendMessageID:  "m-1",
+	}
+	msgRepo := newMockMessageRepo()
+	msgRepo.messages["m-1"] = domain.TaskMessage{
+		ID:             "m-1",
+		CreatedAt:      "2026-04-18T01:02:03Z",
+		StorageMode:    domain.MessageStorageFile,
+		ContentPreview: "stored preview",
+		ArtifactPaths:  []string{"C:/project/.myT-x/orchestrator/payloads/t-1__m-1.md"},
+		PartCount:      1,
+		ContentChars:   16001,
+		SHA256:         "abc123",
+	}
+	mp := newMockPaneOps()
+	mp.selfPane = "%0"
+
+	h := buildTestHandlerWithMessageRepo(mr, mp, msgRepo)
+	registry, _ := h.BuildRegistry()
+	tool, _ := registry.Get("get_task_detail")
+
+	result, err := tool.Handler(context.Background(), map[string]any{"task_id": "t-1"})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	m := result.(map[string]any)
+	message := m["message"].(map[string]any)
+	if _, ok := message["content"]; !ok {
+		t.Fatalf("message map should keep empty content field: %+v", message)
+	}
+	if message["content"] != "" {
+		t.Fatalf("message content = %#v, want empty string", message["content"])
 	}
 }
 
@@ -1061,8 +1114,8 @@ func TestSendResponseUsesSenderInstanceIDAfterSenderRename(t *testing.T) {
 	if m["sent_to_name"] != "sender-renamed" || m["sent_to"] != "%9" {
 		t.Fatalf("unexpected result: %+v", m)
 	}
-	if len(mp.sentKeys) != 1 || mp.sentKeys[0].paneID != "%9" {
-		t.Fatalf("unexpected sent keys: %+v", mp.sentKeys)
+	if len(mp.pastedKeys) != 1 || mp.pastedKeys[0].paneID != "%9" {
+		t.Fatalf("unexpected pasted keys: %+v", mp.pastedKeys)
 	}
 }
 
@@ -1088,11 +1141,11 @@ func TestSendResponseReturnsWarningWhenTaskCompletionUpdateFails(t *testing.T) {
 	}
 
 	m := result.(map[string]any)
-	if m["warning"] != "message delivered but task completion update failed" {
+	if m["warning"] != "message delivered but task completion update failed; response persistence was rolled back" {
 		t.Fatalf("unexpected result: %+v", m)
 	}
-	if len(mp.sentKeys) != 1 || mp.sentKeys[0].paneID != "%0" {
-		t.Fatalf("unexpected sent keys: %+v", mp.sentKeys)
+	if len(mp.pastedKeys) != 1 || mp.pastedKeys[0].paneID != "%0" {
+		t.Fatalf("unexpected pasted keys: %+v", mp.pastedKeys)
 	}
 	if mr.tasks["t-001"].Status != "pending" {
 		t.Fatalf("task status = %s, want pending", mr.tasks["t-001"].Status)

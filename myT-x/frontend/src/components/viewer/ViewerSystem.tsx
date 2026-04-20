@@ -1,21 +1,18 @@
-import {useEffect, useMemo, useRef, useState} from "react";
+import {useEffect, useMemo, useRef} from "react";
+import {useI18n} from "../../i18n";
+import {useNotificationStore} from "../../stores/notificationStore";
+import {useTmuxStore} from "../../stores/tmuxStore";
+import {isImeTransitionalEvent} from "../../utils/ime";
 import {ActivityStrip} from "./ActivityStrip";
+import {DockedDivider} from "./DockedDivider";
 import {ViewOverlay} from "./ViewOverlay";
 import {getViewerShortcutValue} from "./viewerShortcutDefinitions";
-import {useViewerStore} from "./viewerStore";
-import {getRegisteredViews, subscribeRegistry} from "./viewerRegistry";
-import {
-    buildShortcutFromKeyboardEvent,
-    getEffectiveViewerShortcut,
-    hasShortcutModifier,
-    normalizeShortcut,
-} from "./viewerShortcutUtils";
-import {useI18n} from "../../i18n";
-import {useTmuxStore} from "../../stores/tmuxStore";
-import {useNotificationStore} from "../../stores/notificationStore";
-import {isImeTransitionalEvent} from "../../utils/ime";
-import {DockedDivider} from "./DockedDivider";
+import {getReservedViewerShortcutLabel} from "./viewerReservedShortcuts";
+import {analyzeViewerShortcuts} from "./viewerShortcutAnalysis";
 import {useIsViewerDocked} from "./useIsViewerDocked";
+import {useRegisteredViews} from "./useRegisteredViews";
+import {useViewerStore} from "./viewerStore";
+import {buildShortcutFromKeyboardEvent, formatShortcutForDisplay} from "./viewerShortcutUtils";
 
 // Side-effect imports: each view self-registers into the registry.
 //
@@ -49,64 +46,73 @@ export function ViewerSystem() {
     const activeViewId = useViewerStore((s) => s.activeViewId);
     const toggleView = useViewerStore((s) => s.toggleView);
     const closeView = useViewerStore((s) => s.closeView);
-    const [registryVersion, setRegistryVersion] = useState(0);
-
-    // HMR/runtime-safe registry updates: rebuild memoized view/shortcut state when
-    // view modules re-register.
-    useEffect(() => {
-        return subscribeRegistry(() => {
-            setRegistryVersion((version) => version + 1);
-        });
-    }, []);
-
-    const views = useMemo(() => getRegisteredViews(), [registryVersion]);
+    const views = useRegisteredViews();
     const viewerShortcutsConfig = useTmuxStore((s) => s.config?.viewer_shortcuts ?? null);
 
     const addNotification = useNotificationStore((s) => s.addNotification);
     const isDocked = useIsViewerDocked();
 
     // Shortcut map: config overrides take priority over registry defaults.
-    const {shortcutMap, duplicateWarnings} = useMemo(() => {
+    const {shortcutMap, shortcutWarnings} = useMemo(() => {
         const map = new Map<string, string>();
-        const duplicates: string[] = [];
+        const warnings: string[] = [];
+        const analyses = analyzeViewerShortcuts(
+            views.map((view) => ({
+                id: view.id,
+                configuredShortcut: getViewerShortcutValue(viewerShortcutsConfig, view.id),
+                defaultShortcut: view.shortcut,
+            })),
+        );
+        const warnedDuplicateGroups = new Set<string>();
+
         for (const view of views) {
-            const effectiveShortcut = getEffectiveViewerShortcut(
-                getViewerShortcutValue(viewerShortcutsConfig, view.id),
-                view.shortcut,
-            );
-            if (!effectiveShortcut) {
+            const analysis = analyses.get(view.id);
+            if (!analysis || !analysis.effectiveShortcut) {
                 continue;
             }
-            if (!hasShortcutModifier(effectiveShortcut)) {
+            if (analysis.issue?.kind === "modifier-required") {
                 if (import.meta.env.DEV) {
-                    console.warn(`[viewer-shortcut] ignored non-modifier shortcut for "${view.id}": "${effectiveShortcut}"`);
+                    console.warn(`[viewer-shortcut] ignored non-modifier shortcut for "${view.id}": "${analysis.effectiveShortcut}"`);
                 }
                 continue;
             }
-            const normalized = normalizeShortcut(effectiveShortcut);
-            if (!normalized) {
-                continue;
-            }
-            const existingOwner = map.get(normalized);
-            if (existingOwner) {
-                if (import.meta.env.DEV) {
-                    console.warn(
-                        `[viewer-shortcut] duplicate shortcut "${normalized}" for "${existingOwner}" and "${view.id}"; keeping first`,
-                    );
-                }
-                duplicates.push(
+            if (analysis.issue?.kind === "reserved") {
+                const reservedShortcutLabel = getReservedViewerShortcutLabel(analysis.issue.reservedShortcut, language);
+                warnings.push(
                     t(
-                        "viewer.shortcuts.duplicate",
-                        language === "ja"
-                            ? `ショートカット "${effectiveShortcut}" が "${existingOwner}" と "${view.id}" で重複しています`
-                            : `Shortcut "${effectiveShortcut}" is duplicated between "${existingOwner}" and "${view.id}"`,
+                        "viewer.shortcuts.reserved",
+                        `ショートカット "{shortcut}" は "{label}" で予約済みです`,
+                        {shortcut: formatShortcutForDisplay(analysis.effectiveShortcut), label: reservedShortcutLabel},
                     ),
                 );
                 continue;
             }
-            map.set(normalized, view.id);
+            if (analysis.issue?.kind === "duplicate-view") {
+                const duplicateKey = analysis.issue.conflictingViewIds.join("|");
+                if (!warnedDuplicateGroups.has(duplicateKey)) {
+                    warnedDuplicateGroups.add(duplicateKey);
+                    if (import.meta.env.DEV) {
+                        console.warn(
+                            `[viewer-shortcut] duplicate shortcut "${analysis.normalizedShortcut}" for ${analysis.issue.conflictingViewIds.join(", ")}; disabling all`,
+                        );
+                    }
+                    const [ownerA = view.id, ownerB = view.id] = analysis.issue.conflictingViewIds;
+                    warnings.push(
+                        t(
+                            "viewer.shortcuts.duplicate",
+                            `ショートカット "{shortcut}" が "{ownerA}" と "{ownerB}" で重複しています`,
+                            {shortcut: formatShortcutForDisplay(analysis.effectiveShortcut), ownerA, ownerB},
+                        ),
+                    );
+                }
+                continue;
+            }
+            if (!analysis.bindingShortcut) {
+                continue;
+            }
+            map.set(analysis.normalizedShortcut, view.id);
         }
-        return {shortcutMap: map, duplicateWarnings: duplicates};
+        return {shortcutMap: map, shortcutWarnings: warnings};
     }, [views, viewerShortcutsConfig, language, t]);
 
     // Track previously notified duplicates to avoid re-firing the same
@@ -114,16 +120,16 @@ export function ViewerSystem() {
     // identical content (e.g. on unrelated registry/config updates).
     const prevDuplicateKeyRef = useRef("");
     useEffect(() => {
-        const key = duplicateWarnings.join("\n");
+        const key = shortcutWarnings.join("\n");
         const prevKey = prevDuplicateKeyRef.current;
         prevDuplicateKeyRef.current = key;
         if (key === "" || key === prevKey) {
             return;
         }
-        for (const warning of duplicateWarnings) {
+        for (const warning of shortcutWarnings) {
             addNotification(warning, "warn");
         }
-    }, [duplicateWarnings, addNotification]);
+    }, [shortcutWarnings, addNotification]);
 
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {

@@ -30,7 +30,7 @@ interface UseUsageDashboardResult {
  */
 export function useUsageDashboard(mode: UsageMode): UseUsageDashboardResult {
     const activeSession = useTmuxStore((s) => s.activeSession);
-    const sessions = useTmuxStore((s) => s.sessions ?? []);
+    const sessions = useTmuxStore((s) => s.sessions);
     const activeSessionSnapshot = useMemo(
         () => (activeSession ? sessions.find((s) => s.name === activeSession) ?? null : null),
         [sessions, activeSession],

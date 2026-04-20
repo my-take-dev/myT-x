@@ -76,6 +76,10 @@ Optimized for documentation authoring and spec review — only files with target
 | `.drawio` / `.drawio.svg` / `.drawio.xml` | draw.io diagrams |
 | `.yaml` / `.yml` / `.json` | Swagger / OpenAPI auto-detection (Swagger UI launched only when `openapi:` / `swagger:` is detected in the first 1KB; otherwise raw text) |
 | `.db` / `.sqlite` / `.sqlite3` | SQLite Viewer (table list + row data + CSV export) |
+| `.vg.json` / `.vl.json` | Vega / Vega-Lite charts (SVG rendering, export & source view) |
+| `.wavedrom.json` | WaveDrom digital waveform diagrams |
+
+Markmap (mind map) notation within Markdown is also supported.
 
 Folders that contain no matching descendants are hidden recursively.
 
@@ -92,9 +96,12 @@ Folders that contain no matching descendants are hidden recursively.
 | Kind | Display |
 |------|---------|
 | Markdown | `react-markdown` + GFM. Relative `<img>` resolved via `DevPanelReadBinary` to a blob URL |
+| Markmap | Mind map notation in Markdown rendered interactively via `markmap-view` |
 | Mermaid | `mermaid@11` (lazy load) |
 | Swagger / OpenAPI | `swagger-ui-react@5` (YAML/JSON, lazy load) |
 | draw.io | `.drawio.svg` shown as `<img>`; `.drawio` / `.drawio.xml` shown as XML preview |
+| Vega / Vega-Lite | Charts & graphs via `vega-embed` (SVG export & source view) |
+| WaveDrom | Digital waveform diagram rendering |
 | SQLite | Table list + column info + virtualized row data + paging + CSV export |
 | Other | Raw text (line selection / copy supported) |
 

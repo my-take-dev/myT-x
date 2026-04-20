@@ -6,6 +6,26 @@ const mocked = vi.hoisted(() => ({
     t: vi.fn((_: string, fallback: string) => fallback),
 }));
 
+const apiMock = vi.hoisted(() => ({
+    GetValidationRules: vi.fn<() => Promise<unknown>>(),
+}));
+
+const defaultValidationRules = {
+    min_override_name_len: 1,
+    min_pre_exec_reset_delay: 0,
+    max_pre_exec_reset_delay: 60,
+    min_pre_exec_idle_timeout: 0,
+    max_pre_exec_idle_timeout: 600,
+    max_message_templates: 50,
+    max_template_name_len: 80,
+    max_template_message_len: 4000,
+    min_single_task_runner_clear_delay: 0,
+    max_single_task_runner_clear_delay: 300,
+    min_chat_overlay_percentage: 20,
+    max_chat_overlay_percentage: 80,
+    default_chat_overlay_percentage: 50,
+};
+
 vi.mock("../src/i18n", () => ({
     useI18n: () => ({
         language: "en",
@@ -13,10 +33,22 @@ vi.mock("../src/i18n", () => ({
     }),
 }));
 
+vi.mock("../src/api", () => ({
+    api: {
+        GetValidationRules: () => apiMock.GetValidationRules(),
+    },
+}));
+
 import {SingleTaskRunnerForm} from "../src/components/viewer/views/single-task-runner/SingleTaskRunnerForm";
 import {SingleTaskRunnerList} from "../src/components/viewer/views/single-task-runner/SingleTaskRunnerList";
 import type {QueueItem, QueueStatus} from "../src/components/viewer/views/single-task-runner/useSingleTaskRunner";
 import type {PaneSnapshot} from "../src/types/tmux";
+
+async function flushEffects(): Promise<void> {
+    await act(async () => {
+        await Promise.resolve();
+    });
+}
 
 describe("single task runner components", () => {
     let container: HTMLDivElement;
@@ -27,6 +59,8 @@ describe("single task runner components", () => {
         document.body.appendChild(container);
         root = createRoot(container);
         mocked.t.mockImplementation((_: string, fallback: string) => fallback);
+        apiMock.GetValidationRules.mockReset();
+        apiMock.GetValidationRules.mockResolvedValue(defaultValidationRules);
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     });
 
@@ -39,7 +73,7 @@ describe("single task runner components", () => {
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
     });
 
-    it("SingleTaskRunnerList hides edit controls for malformed item payloads", () => {
+    it("SingleTaskRunnerList hides edit controls for malformed item payloads", async () => {
         const status = {
             items: [{
                 id: "task-1",
@@ -72,6 +106,7 @@ describe("single task runner components", () => {
                 />,
             );
         });
+        await flushEffects();
 
         expect(container.textContent).not.toContain("Edit");
         expect(container.textContent).not.toContain("Remove");
@@ -140,6 +175,7 @@ describe("single task runner components", () => {
                 />,
             );
         });
+        await flushEffects();
 
         const input = container.querySelector("#single-task-runner-clear-delay") as HTMLInputElement | null;
         expect(input).not.toBeNull();

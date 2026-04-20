@@ -47,8 +47,9 @@ type StatusService struct {
 	statuses domain.AgentStatusRepository
 	tasks    domain.TaskRepository
 	messages domain.MessageRepository
-	sender   domain.PaneSender
+	sender   domain.PanePasteSender
 	resolver domain.SelfPaneResolver
+	projectRoot string
 	logger   *log.Logger
 }
 
@@ -58,10 +59,15 @@ func NewStatusService(
 	statuses domain.AgentStatusRepository,
 	tasks domain.TaskRepository,
 	messages domain.MessageRepository,
-	sender domain.PaneSender,
+	sender domain.PanePasteSender,
 	resolver domain.SelfPaneResolver,
 	logger *log.Logger,
+	projectRoots ...string,
 ) *StatusService {
+	projectRoot := ""
+	if len(projectRoots) > 0 {
+		projectRoot = projectRoots[0]
+	}
 	return &StatusService{
 		agents:   agents,
 		statuses: statuses,
@@ -69,6 +75,7 @@ func NewStatusService(
 		messages: messages,
 		sender:   sender,
 		resolver: resolver,
+		projectRoot: projectRoot,
 		logger:   ensureLogger(logger),
 	}
 }
@@ -151,7 +158,7 @@ func (s *StatusService) GetAgentStatus(ctx context.Context, cmd GetAgentStatusCm
 	return result, nil
 }
 
-// redeliverPendingTasks re-sends unacknowledged pending tasks to the agent's pane via SendKeys.
+// redeliverPendingTasks re-sends unacknowledged pending tasks to the agent's pane.
 // Tasks are acknowledged only after pane delivery succeeds so failed writes remain
 // eligible for inline fallback or later retries.
 // Returns the number of tasks successfully re-delivered and acknowledged,
@@ -197,7 +204,7 @@ func (s *StatusService) redeliverPendingTasks(ctx context.Context, agentName str
 			failed++
 			continue
 		}
-		if sendErr := s.sender.SendKeys(ctx, agent.PaneID, msg.Content); sendErr != nil {
+		if sendErr := s.sender.SendKeysPaste(ctx, agent.PaneID, deliveryTextForStoredMessage(s.projectRoot, task.ID, msg)); sendErr != nil {
 			logf(s.logger, "update_status redeliver: send task %s to pane %s: %v", task.ID, agent.PaneID, sendErr)
 			failed++
 			continue

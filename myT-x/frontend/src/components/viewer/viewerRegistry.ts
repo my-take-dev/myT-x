@@ -27,6 +27,7 @@ const REGISTRY_KEY = Symbol.for("mytx.viewer.registry");
 
 type RegistryState = {
     plugins: ViewPlugin[];
+    snapshot: readonly ViewPlugin[];
     listeners: Set<() => void>;
 };
 
@@ -40,6 +41,7 @@ function resolveRegistryState(): RegistryState {
     if (!existing) {
         globalObject[REGISTRY_KEY] = {
             plugins: [],
+            snapshot: [],
             listeners: new Set(),
         };
     }
@@ -47,6 +49,10 @@ function resolveRegistryState(): RegistryState {
 }
 
 const registryState = resolveRegistryState();
+
+function refreshRegistrySnapshot(): void {
+    registryState.snapshot = [...registryState.plugins];
+}
 
 function notifyRegistryListeners(): void {
     for (const listener of registryState.listeners) {
@@ -70,6 +76,7 @@ function normalizePosition(position: unknown): ViewPosition {
 if (import.meta.hot) {
     import.meta.hot.dispose(() => {
         registryState.plugins.length = 0;
+        refreshRegistrySnapshot();
         notifyRegistryListeners();
     });
 }
@@ -105,10 +112,12 @@ export function registerView(plugin: ViewPlugin): void {
     const index = registryState.plugins.findIndex((existing) => existing.id === plugin.id);
     if (index >= 0) {
         registryState.plugins[index] = normalizedPlugin;
+        refreshRegistrySnapshot();
         notifyRegistryListeners();
         return;
     }
     registryState.plugins.push(normalizedPlugin);
+    refreshRegistrySnapshot();
     notifyRegistryListeners();
 }
 
@@ -122,6 +131,5 @@ export function subscribeRegistry(listener: () => void): () => void {
 // NOTE: Registry is still a module-scope singleton, but subscribeRegistry enables
 // reactive consumers (e.g. ViewerSystem) to rebuild derived state after HMR updates.
 export function getRegisteredViews(): readonly ViewPlugin[] {
-    return registryState.plugins;
+    return registryState.snapshot;
 }
-

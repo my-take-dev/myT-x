@@ -539,8 +539,9 @@ func TestCreateSessionWithWorktreeValidation(t *testing.T) {
 		})
 
 		snapshot, err := app.CreateSessionWithWorktree(repoPath, "session-a", WorktreeSessionOptions{
-			BranchName:       "feature/pull-before-create",
-			PullBeforeCreate: true,
+			BranchName:            "feature/pull-before-create",
+			PullBeforeCreate:      true,
+			ContinueOnPullFailure: true,
 		})
 		if err != nil {
 			t.Fatalf("CreateSessionWithWorktree() error = %v", err)

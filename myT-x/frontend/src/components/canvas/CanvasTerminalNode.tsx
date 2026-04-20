@@ -3,11 +3,14 @@ import {Handle, type NodeProps, NodeResizer, Position} from "@xyflow/react";
 import {useShallow} from "zustand/react/shallow";
 import {TerminalPane} from "../TerminalPane";
 import {useCanvasStore} from "../../stores/canvasStore";
+import {useI18n} from "../../i18n";
 
 interface CanvasTerminalNodeData {
     paneId: string;
     paneTitle: string;
     active: boolean;
+    unregistered?: boolean;
+    onEnlist?: (paneId: string) => void;
     onFocus: (paneId: string) => void;
     onSplitVertical: (paneId: string) => void;
     onSplitHorizontal: (paneId: string) => void;
@@ -23,6 +26,7 @@ interface CanvasTerminalNodeData {
 function CanvasTerminalNodeComponent(props: NodeProps) {
     const {selected} = props;
     const data = props.data as CanvasTerminalNodeData;
+    const {t} = useI18n();
 
     const {agentInfo, hasChildProcess, setNodePosition, setNodeSize} = useCanvasStore(useShallow((s) => ({
         agentInfo: s.agentMap[data.paneId],
@@ -39,16 +43,18 @@ function CanvasTerminalNodeComponent(props: NodeProps) {
         [data.paneId, setNodePosition, setNodeSize],
     );
 
-    const borderClass = data.active ? "canvas-node-active"
-        : hasChildProcess ? "canvas-node-running"
-            : "canvas-node-idle";
+    const borderClass = data.unregistered
+        ? "canvas-node-unregistered"
+        : data.active ? "canvas-node-active"
+            : hasChildProcess ? "canvas-node-running"
+                : "canvas-node-idle";
 
     return (
         <div className={`canvas-terminal-node ${borderClass}`}>
             <NodeResizer
                 minWidth={350}
                 minHeight={250}
-                isVisible={selected === true}
+                isVisible={selected}
                 lineClassName="canvas-resize-line"
                 handleClassName="canvas-resize-handle"
                 onResizeEnd={handleResizeEnd}
@@ -56,6 +62,19 @@ function CanvasTerminalNodeComponent(props: NodeProps) {
             <Handle type="target" position={Position.Top} id="input" className="canvas-handle"/>
             {agentInfo && (
                 <div className="canvas-agent-badge">{agentInfo.name}</div>
+            )}
+            {data.unregistered === true && (
+                <>
+                    <div className="canvas-unregistered-badge">{t("canvas.unregisteredBadge", "未登録")}</div>
+                    <button
+                        type="button"
+                        className="canvas-enlist-btn nopan nowheel"
+                        aria-label={t("canvas.registerPaneAria", "ペインを登録")}
+                        onClick={() => data.onEnlist?.(data.paneId)}
+                    >
+                        {t("canvas.registerPaneAction", "+ 登録")}
+                    </button>
+                </>
             )}
             {/* nopan nowheel: ターミナル内のスクロール/パンがキャンバスと競合しないようにする */}
             {/* onDragStart preventDefault: TerminalPaneのHTML5 draggable属性によるD&Dを無効化 */}

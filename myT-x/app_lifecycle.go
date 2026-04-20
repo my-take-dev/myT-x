@@ -404,6 +404,7 @@ func (a *App) startup(ctx context.Context) {
 	a.mcpManager = mcp.NewManager(mcp.ManagerConfig{
 		Registry:                a.mcpRegistry,
 		EmitFn:                  a.emitBackendEvent,
+		Router:                  a.router,
 		ResolveWorkDir:          a.sessionService.ResolveSessionWorkDir,
 		SingleTaskRunnerManager: a.singleTaskRunnerManager,
 	})

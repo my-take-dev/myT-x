@@ -1,9 +1,10 @@
-import {type CSSProperties, useEffect, useMemo, useRef, useState} from "react";
+import {type CSSProperties, useCallback, useEffect, useMemo, useRef, useState} from "react";
 import "@xterm/xterm/css/xterm.css";
 import {api} from "./api";
 import {ConfirmDialog} from "./components/ConfirmDialog";
 import {MenuBar} from "./components/MenuBar";
 import {QuickSearch} from "./components/QuickSearch";
+import {isQuickSearchShortcut, type QuickSearchTriggerMode} from "./components/quickSearchShared";
 import {SessionView} from "./components/SessionView";
 import {SettingsModal} from "./components/SettingsModal";
 import {Sidebar} from "./components/Sidebar";
@@ -32,7 +33,6 @@ import {notifyAndLog} from "./utils/notifyUtils";
 import {resolveActivePane, resolveActivePaneID, resolveActiveWindow} from "./utils/session";
 
 type AppBodyStyle = CSSProperties & Partial<DockedCSSVariables>;
-
 function readWindowWidth(): number {
     return normalizeDockedViewportWidth(window.innerWidth);
 }
@@ -41,10 +41,13 @@ function App() {
     useBackendSync();
     const {t} = useI18n();
     const [quickSearchOpen, setQuickSearchOpen] = useState(false);
+    const [quickSearchTriggerMode, setQuickSearchTriggerMode] = useState<QuickSearchTriggerMode>("palette");
+    const [newSessionSignal, setNewSessionSignal] = useState(0);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [validationRules, setValidationRules] = useState<ValidationRules | null>(null);
     const [windowWidth, setWindowWidth] = useState(readWindowWidth);
     const lastSyncedSessionRef = useRef<string | null>(null);
+    const quickSearchTriggerRef = useRef<HTMLButtonElement>(null);
 
     const sessions = useTmuxStore((s) => s.sessions);
     const activeSession = useTmuxStore((s) => s.activeSession);
@@ -86,6 +89,22 @@ function App() {
     usePrefixKeyMode({activePaneId});
     useFileDrop(activePaneId);
     const imeRecoverySurfaceRef = useAppImeRecovery({activePaneId});
+    const handleOpenSettings = useCallback(() => {
+        setSettingsOpen(true);
+    }, []);
+    const handleCloseSettings = useCallback(() => {
+        setSettingsOpen(false);
+    }, []);
+    const handleCloseQuickSearch = useCallback(() => {
+        setQuickSearchOpen(false);
+    }, []);
+    const handleOpenQuickSearchFromMenuBar = useCallback(() => {
+        setQuickSearchTriggerMode("dropdown");
+        setQuickSearchOpen(true);
+    }, []);
+    const handleOpenNewSession = useCallback(() => {
+        setNewSessionSignal((currentSignal) => currentSignal + 1);
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -148,18 +167,31 @@ function App() {
             if (isImeTransitionalEvent(e)) {
                 return;
             }
-            if (e.ctrlKey && (e.key === "p" || e.key === "P")) {
+            if (e.defaultPrevented) {
+                return;
+            }
+            if (isQuickSearchShortcut(e)) {
                 e.preventDefault();
-                setQuickSearchOpen((prev) => !prev);
+                if (quickSearchOpen && quickSearchTriggerMode === "palette") {
+                    setQuickSearchOpen(false);
+                    return;
+                }
+                setQuickSearchTriggerMode("palette");
+                setQuickSearchOpen(true);
             }
         };
         window.addEventListener("keydown", handler);
         return () => window.removeEventListener("keydown", handler);
-    }, []);
+    }, [quickSearchOpen, quickSearchTriggerMode]);
 
     return (
         <div className="app-root">
-            <MenuBar onOpenSettings={() => setSettingsOpen(true)}/>
+            <MenuBar
+                onOpenSettings={handleOpenSettings}
+                onOpenQuickSearch={handleOpenQuickSearchFromMenuBar}
+                isQuickSearchOpen={quickSearchOpen}
+                quickSearchTriggerRef={quickSearchTriggerRef}
+            />
             <textarea
                 ref={imeRecoverySurfaceRef}
                 className="ime-recovery-surface"
@@ -171,7 +203,11 @@ function App() {
             />
             <div className={appBodyClassName} style={appBodyStyle}>
                 <div className="app-body__inner">
-                    <Sidebar sessions={sessions} activeSession={current?.name ?? null}/>
+                    <Sidebar
+                        sessions={sessions}
+                        activeSession={current?.name ?? null}
+                        newSessionSignal={newSessionSignal}
+                    />
                     <main className="main-content">
                         <ChatLayout
                             activePaneId={activePaneId}
@@ -187,9 +223,16 @@ function App() {
                     <ViewerSystem/>
                 </div>
             </div>
-            <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)}/>
+            <SettingsModal open={settingsOpen} onClose={handleCloseSettings}/>
             <ToastContainer/>
-            <QuickSearch open={quickSearchOpen} onClose={() => setQuickSearchOpen(false)}/>
+            <QuickSearch
+                open={quickSearchOpen}
+                onClose={handleCloseQuickSearch}
+                onOpenNewSession={handleOpenNewSession}
+                onOpenSettings={handleOpenSettings}
+                triggerMode={quickSearchTriggerMode}
+                dropdownAnchorRef={quickSearchTriggerRef}
+            />
             <ConfirmDialog
                 open={pendingPrefixKillPaneId !== null}
                 title={t("app.closePane.title", "Close pane")}

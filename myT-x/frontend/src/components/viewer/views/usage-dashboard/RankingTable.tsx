@@ -1,3 +1,4 @@
+import type React from "react";
 import type {usagedashboard} from "../../../../../wailsjs/go/models";
 import {useUsageDashboardI18n} from "./i18n";
 
@@ -7,9 +8,15 @@ interface RankingTableProps {
     readonly ariaLabel?: string;
 }
 
+type CSSPropertiesWithVars = React.CSSProperties & Record<`--${string}`, string>;
+
 export function RankingTable({entries, emptyLabel, ariaLabel}: RankingTableProps) {
     const tr = useUsageDashboardI18n();
     const resolvedAriaLabel = ariaLabel ?? tr("viewer.usageDashboard.ranking", "利用ランキング", "Usage ranking");
+
+    const maxCount = entries.length > 0
+        ? Math.max(1, ...entries.map((entry) => Math.max(0, entry.count)))
+        : 1;
 
     if (entries.length === 0) {
         return <div className="usage-dashboard-ranking-empty">{emptyLabel}</div>;
@@ -17,27 +24,47 @@ export function RankingTable({entries, emptyLabel, ariaLabel}: RankingTableProps
     return (
         <div className="usage-dashboard-ranking" role="table" aria-label={resolvedAriaLabel}>
             <div role="rowgroup">
-                {entries.map((entry, idx) => (
-                    <div key={entry.name} className="usage-dashboard-ranking-row" role="row">
-                        <span
-                            className="usage-dashboard-ranking-rank"
-                            role="cell"
-                            aria-label={tr("viewer.usageDashboard.rank", `順位 ${idx + 1}`, `rank ${idx + 1}`)}
+                {entries.map((entry, idx) => {
+                    const normalizedCount = Math.max(0, entry.count);
+                    const rowStyle: CSSPropertiesWithVars = {
+                        "--entry-pct": `${toEntryPercent(normalizedCount, maxCount)}%`,
+                    };
+
+                    return (
+                        <div
+                            key={entry.name}
+                            className="usage-dashboard-ranking-row"
+                            role="row"
+                            style={rowStyle}
                         >
-                            {idx + 1}.
-                        </span>
-                        <span className="usage-dashboard-ranking-name" role="cell" title={entry.name}>
-                            {entry.name}
-                        </span>
-                        <span className="usage-dashboard-ranking-count" role="cell">{entry.count}</span>
-                        <span className="usage-dashboard-ranking-last" role="cell" title={formatTimestamp(entry.last_used_at)}>
-                            {formatRelative(entry.last_used_at, tr)}
-                        </span>
-                    </div>
-                ))}
+                            <span
+                                className={`usage-dashboard-ranking-rank${idx < 3 ? ` rank-top-${idx + 1}` : ""}`}
+                                role="cell"
+                                aria-label={tr("viewer.usageDashboard.rank", `順位 ${idx + 1}`, `rank ${idx + 1}`)}
+                            >
+                                {idx + 1}.
+                            </span>
+                            <span className="usage-dashboard-ranking-name" role="cell" title={entry.name}>
+                                {entry.name}
+                            </span>
+                            <span className="usage-dashboard-ranking-count" role="cell">{entry.count}</span>
+                            <span className="usage-dashboard-ranking-last" role="cell" title={formatTimestamp(entry.last_used_at)}>
+                                {formatRelative(entry.last_used_at, tr)}
+                            </span>
+                        </div>
+                    );
+                })}
             </div>
         </div>
     );
+}
+
+function toEntryPercent(count: number, maxCount: number): number {
+    if (!Number.isFinite(count) || !Number.isFinite(maxCount) || count <= 0 || maxCount <= 0) {
+        return 0;
+    }
+    const rounded = Math.round((count / maxCount) * 100);
+    return Math.min(100, Math.max(1, rounded));
 }
 
 function formatTimestamp(raw: string | null | undefined): string {

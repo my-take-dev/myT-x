@@ -54,7 +54,11 @@ describe("MermaidRenderer", () => {
         });
         await flushMermaidRender();
 
-        expect(initializeMock).toHaveBeenCalled();
+        expect(initializeMock).toHaveBeenCalledWith(expect.objectContaining({
+            htmlLabels: true,
+            markdownAutoWrap: true,
+            startOnLoad: false,
+        }));
         expect(renderMock).toHaveBeenCalledTimes(1);
         expect(renderMock.mock.calls[0]?.[1]).toBe("graph TD; A-->B;");
         expect(container.querySelector("svg")?.textContent).toContain("diagram");

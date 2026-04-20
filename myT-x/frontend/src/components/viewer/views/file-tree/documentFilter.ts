@@ -11,9 +11,19 @@ export const DOCUMENT_EXTENSIONS = new Set<string>([
     "yaml",
     "yml",
     "json",
+    "dot",
+    "gv",
+    "mm",
+    "wavedrom",
+    "vega",
 ]);
 
-export const COMPOUND_SUFFIXES: readonly string[] = [".drawio.svg", ".drawio.xml"];
+export const COMPOUND_SUFFIXES: readonly string[] = [
+    ".drawio.svg",
+    ".drawio.xml",
+    ".vl.json",
+    ".vg.json",
+];
 
 const DOCUMENT_KEY_SCAN_BYTES = 1024;
 const YAML_OPENAPI_KEY_PATTERN = /(?:^|[\r\n])\s*(openapi|swagger)\s*:/m;
@@ -51,6 +61,12 @@ function detectDocumentKindByName(name: string): DocumentKind | null {
     if (normalizedName.endsWith(".drawio.xml") || normalizedName.endsWith(".drawio")) {
         return "drawio-xml";
     }
+    if (normalizedName.endsWith(".vl.json")) {
+        return "vega-lite";
+    }
+    if (normalizedName.endsWith(".vg.json")) {
+        return "vega";
+    }
     if (
         normalizedName.endsWith(".db")
         || normalizedName.endsWith(".sqlite")
@@ -63,6 +79,18 @@ function detectDocumentKindByName(name: string): DocumentKind | null {
     }
     if (normalizedName.endsWith(".md")) {
         return "markdown";
+    }
+    if (normalizedName.endsWith(".dot") || normalizedName.endsWith(".gv")) {
+        return "graphviz";
+    }
+    if (normalizedName.endsWith(".mm")) {
+        return "markmap";
+    }
+    if (normalizedName.endsWith(".wavedrom")) {
+        return "wavedrom";
+    }
+    if (normalizedName.endsWith(".vega")) {
+        return "vega";
     }
     if (
         normalizedName.endsWith(".yaml")

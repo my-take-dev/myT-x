@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@hpcc-js/wasm": "^2.22.4",
     "@monaco-editor/react": "^4.7.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
@@ -18,6 +19,9 @@
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.10.1",
     "js-yaml": "^4.1.1",
+    "json5": "^2.2.3",
+    "markmap-lib": "^0.18.11",
+    "markmap-view": "^0.18.10",
     "mermaid": "^11.14.0",
     "monaco-editor": "^0.55.1",
     "react": "^18.2.0",
@@ -28,6 +32,10 @@
     "remark-gfm": "^4.0.1",
     "shiki": "^4.0.0",
     "swagger-ui-react": "^5.32.4",
+    "vega": "^6.2.0",
+    "vega-embed": "^7.0.2",
+    "vega-lite": "^6.3.0",
+    "wavedrom": "^3.5.0",
     "zustand": "^5.0.3"
   },
   "devDependencies": {

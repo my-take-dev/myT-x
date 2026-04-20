@@ -109,6 +109,27 @@ export default defineConfig({
                     if (normalizedId.includes("/node_modules/react-window/")) {
                         return "react-window";
                     }
+                    if (normalizedId.includes("/node_modules/@hpcc-js/wasm/")) {
+                        return "graphviz";
+                    }
+                    if (
+                        normalizedId.includes("/node_modules/markmap-lib/")
+                        || normalizedId.includes("/node_modules/markmap-view/")
+                        || normalizedId.includes("/node_modules/markmap-common/")
+                    ) {
+                        return "markmap";
+                    }
+                    if (normalizedId.includes("/node_modules/wavedrom/")) {
+                        return "wavedrom";
+                    }
+                    if (
+                        normalizedId.includes("/node_modules/vega/")
+                        || normalizedId.includes("/node_modules/vega-lite/")
+                        || normalizedId.includes("/node_modules/vega-embed/")
+                        || normalizedId.includes("/node_modules/vega-")
+                    ) {
+                        return "vega";
+                    }
                     return undefined;
                 },
             },

@@ -48,6 +48,39 @@
     font-size: 0.76rem;
 }
 
+.orchestrator-teams-unregistered-banner {
+    flex-direction: column;
+}
+
+.orchestrator-teams-unregistered-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.orchestrator-teams-unregistered-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.orchestrator-teams-unregistered-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.orchestrator-teams-unregistered-item button {
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(150, 182, 219, 0.22);
+    background: rgba(18, 29, 43, 0.88);
+    color: rgba(239, 245, 255, 0.94);
+    cursor: pointer;
+}
+
 .orchestrator-teams-toolbar {
     display: flex;
     gap: 10px;
@@ -165,6 +198,11 @@
     box-shadow: 0 0 0 1px rgba(100, 164, 223, 0.16), 0 2px 8px rgba(0, 0, 0, 0.24);
 }
 
+.orchestrator-team-card-btn.active {
+    background: rgba(67, 128, 184, 0.28);
+    border-color: rgba(100, 164, 223, 0.42);
+}
+
 .orchestrator-team-card-info {
     display: flex;
     flex-direction: column;
@@ -234,6 +272,73 @@
 .orchestrator-team-card-tag.project {
     background: rgba(100, 200, 130, 0.22);
     color: rgba(180, 240, 200, 0.94);
+}
+
+.orchestrator-enlist-modal {
+    width: min(980px, calc(100vw - 48px));
+    max-height: calc(100vh - 48px);
+}
+
+.orchestrator-enlist-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow-y: auto;
+}
+
+.orchestrator-enlist-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.orchestrator-enlist-target-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 16px;
+}
+
+.orchestrator-enlist-target-grid div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.orchestrator-enlist-target-grid strong {
+    font-size: 0.72rem;
+    color: rgba(198, 212, 232, 0.72);
+}
+
+.orchestrator-enlist-mode-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.orchestrator-enlist-source-list {
+    max-height: 180px;
+}
+
+.orchestrator-team-suggestion-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.orchestrator-team-suggestion-chip {
+    border: 1px solid rgba(100, 164, 223, 0.24);
+    border-radius: 999px;
+    background: rgba(100, 164, 223, 0.12);
+    color: rgba(223, 235, 251, 0.94);
+    padding: 4px 10px;
+    cursor: pointer;
+}
+
+@media (max-width: 800px) {
+    .orchestrator-enlist-target-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 .orchestrator-team-card-tag.global {

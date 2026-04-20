@@ -15,3 +15,6 @@ type StartOrchestratorTeamRequest = orchestrator.StartTeamRequest
 type StartOrchestratorTeamResult = orchestrator.StartTeamResult
 type BootstrapMemberToPaneRequest = orchestrator.BootstrapMemberToPaneRequest
 type BootstrapMemberToPaneResult = orchestrator.BootstrapMemberToPaneResult
+type OrchestratorSessionEnlistmentContext = orchestrator.SessionEnlistmentContext
+type EnlistPaneRequest = orchestrator.EnlistPaneRequest
+type EnlistPaneResult = orchestrator.EnlistPaneResult

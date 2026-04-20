@@ -21,6 +21,10 @@ export function computeTreeLayout(
     paneIds: string[],
     tasks: OrchestratorTask[],
     nodeSizes?: Record<string, CanvasNodeSize>,
+    options?: {
+        rootPaneId?: string | null;
+        orchestratorPaneIds?: string[];
+    },
 ): Record<string, CanvasNodePosition> {
     if (paneIds.length === 0) return {};
 
@@ -63,20 +67,38 @@ export function computeTreeLayout(
     }
 
     // === Phase 2 + 3: ルート選出 + BFS spanning tree ===
-    const rootScore = (id: string): number =>
-        (degree.get(id) ?? 0) * 100
-        + (outDeg.get(id) ?? 0) * 10
-        - (inDeg.get(id) ?? 0) * 5;
-
     const roots: string[] = [];
     const placed = new Set<string>();
     const childrenOf = new Map<string, string[]>();
     const nodeLevel = new Map<string, number>();
 
-    // Step 1: 自然ルート (outDeg > 0 && inDeg == 0) → 有向BFS
+    // Step 0: 手動指定ルート
+    const manualRoot = options?.rootPaneId;
+    if (manualRoot && paneSet.has(manualRoot) && !placed.has(manualRoot)) {
+        roots.push(manualRoot);
+        if ((degree.get(manualRoot) ?? 0) > 0) {
+            undirectedBFS(manualRoot, neighbors, placed, childrenOf, nodeLevel, degree);
+        } else {
+            placed.add(manualRoot);
+            nodeLevel.set(manualRoot, 0);
+        }
+    }
+
+    // Step 1: Orchestrator 役割ルート
+    const orchestratorCandidates = (options?.orchestratorPaneIds ?? [])
+        .filter(id => paneSet.has(id) && !placed.has(id) && (degree.get(id) ?? 0) > 0)
+        .sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || paneIndexCompare(a, b));
+
+    for (const root of orchestratorCandidates) {
+        if (placed.has(root)) continue;
+        roots.push(root);
+        undirectedBFS(root, neighbors, placed, childrenOf, nodeLevel, degree);
+    }
+
+    // Step 2: 自然ルート (outDeg > 0 && inDeg == 0) → 有向BFS
     const naturalRoots = paneIds
-        .filter(id => (outDeg.get(id) ?? 0) > 0 && (inDeg.get(id) ?? 0) === 0)
-        .sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || a.localeCompare(b));
+        .filter(id => !placed.has(id) && (outDeg.get(id) ?? 0) > 0 && (inDeg.get(id) ?? 0) === 0)
+        .sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || paneIndexCompare(a, b));
 
     for (const root of naturalRoots) {
         if (placed.has(root)) continue;
@@ -84,10 +106,14 @@ export function computeTreeLayout(
         directedBFS(root, dirChildren, placed, childrenOf, nodeLevel, degree);
     }
 
-    // Step 2: 残りの連結成分 → 接続加重スコアリング + 無方向BFS
+    // Step 3: 残りの連結成分 → 接続加重スコアリング + 無方向BFS
+    const improvedRootScore = (id: string): number =>
+        (degree.get(id) ?? 0) * 100
+        + ((outDeg.get(id) ?? 0) - (inDeg.get(id) ?? 0)) * 20;
+
     const remainingConnected = paneIds
         .filter(id => !placed.has(id) && (degree.get(id) ?? 0) > 0)
-        .sort((a, b) => rootScore(b) - rootScore(a) || a.localeCompare(b));
+        .sort((a, b) => improvedRootScore(b) - improvedRootScore(a) || paneIndexCompare(a, b));
 
     for (const candidate of remainingConnected) {
         if (placed.has(candidate)) continue;
@@ -230,6 +256,17 @@ export function computeTreeLayout(
     return positions;
 }
 
+function paneIndexCompare(a: string, b: string): number {
+    const aMatch = /^%(\d+)$/.exec(a);
+    const bMatch = /^%(\d+)$/.exec(b);
+    if (!aMatch || !bMatch) {
+        return a.localeCompare(b);
+    }
+    const aIndex = Number.parseInt(aMatch[1], 10);
+    const bIndex = Number.parseInt(bMatch[1], 10);
+    return aIndex - bIndex;
+}
+
 /** 有向BFS: sender→assignee エッジのみ辿る */
 function directedBFS(
     root: string,
@@ -247,7 +284,7 @@ function directedBFS(
         const {id, depth} = queue[qi++];
         const kids = (dirChildren.get(id) ?? [])
             .filter(kid => !placed.has(kid))
-            .sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || a.localeCompare(b));
+            .sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || paneIndexCompare(a, b));
         for (const kid of kids) {
             if (placed.has(kid)) continue;
             placed.add(kid);
@@ -276,7 +313,7 @@ function undirectedBFS(
         const {id, depth} = queue[qi++];
         const nbs = [...(neighbors.get(id) ?? [])]
             .filter(nb => !placed.has(nb))
-            .sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || a.localeCompare(b));
+            .sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || paneIndexCompare(a, b));
         for (const nb of nbs) {
             if (placed.has(nb)) continue;
             placed.add(nb);

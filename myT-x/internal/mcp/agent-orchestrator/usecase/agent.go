@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"time"
@@ -59,6 +60,8 @@ type AgentService struct {
 	resolver    domain.SelfPaneResolver
 	lister      domain.PaneLister
 	titleSetter domain.PaneTitleSetter
+	sessionName string
+	emitFn      func(string, any)
 	logger      *log.Logger
 }
 
@@ -81,17 +84,45 @@ func NewAgentService(
 	}
 }
 
+func (s *AgentService) SetAgentsUpdatedEmitter(sessionName string, emitFn func(string, any)) {
+	s.sessionName = sessionName
+	s.emitFn = emitFn
+}
+
+func (s *AgentService) emitAgentsUpdated() {
+	if s.emitFn == nil {
+		return
+	}
+	s.emitFn("orchestrator:agents-updated", map[string]any{
+		"sessionName": s.sessionName,
+	})
+}
+
 // Register はエージェントを登録する。
 func (s *AgentService) Register(ctx context.Context, cmd RegisterAgentCmd) (RegisterAgentResult, error) {
 	if err := domain.ValidatePaneID(cmd.PaneID); err != nil {
 		return RegisterAgentResult{}, validationError(err.Error())
 	}
 
+	if len(cmd.Skills) == 0 {
+		existing, err := s.agents.GetAgent(ctx, cmd.Name)
+		switch {
+		case err == nil:
+			// Keep provisional skills until the real agent supplies a finalized list.
+			cmd.Skills = append([]domain.Skill(nil), existing.Skills...)
+		case errors.Is(err, domain.ErrNotFound):
+			// No provisional registration exists yet.
+		default:
+			return RegisterAgentResult{}, operationError(s.logger, "failed to preserve provisional skills", err)
+		}
+	}
+	skills := append([]domain.Skill(nil), cmd.Skills...)
+
 	agent := domain.Agent{
 		Name:          cmd.Name,
 		PaneID:        cmd.PaneID,
 		Role:          cmd.Role,
-		Skills:        cmd.Skills,
+		Skills:        skills,
 		MCPInstanceID: cmd.MCPInstanceID,
 	}
 	var defaultStatus *domain.AgentStatus
@@ -105,6 +136,7 @@ func (s *AgentService) Register(ctx context.Context, cmd RegisterAgentCmd) (Regi
 	if err := s.agents.ReplaceAgentRegistration(ctx, agent, defaultStatus); err != nil {
 		return RegisterAgentResult{}, operationError(s.logger, "failed to register agent", err)
 	}
+	s.emitAgentsUpdated()
 
 	title := cmd.Name
 	if cmd.Role != "" {
@@ -118,7 +150,7 @@ func (s *AgentService) Register(ctx context.Context, cmd RegisterAgentCmd) (Regi
 		Name:      cmd.Name,
 		PaneID:    cmd.PaneID,
 		Role:      cmd.Role,
-		Skills:    cmd.Skills,
+		Skills:    append([]domain.Skill(nil), skills...),
 		PaneTitle: title,
 	}
 	if err := s.titleSetter.SetPaneTitle(ctx, cmd.PaneID, title); err != nil {

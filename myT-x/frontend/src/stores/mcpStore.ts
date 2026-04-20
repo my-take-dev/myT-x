@@ -24,6 +24,8 @@ interface MCPState {
     setSessionError: (sessionName: string, error: string | null) => void;
     /** Remove all MCP state for a destroyed session. */
     clearSession: (sessionName: string) => void;
+    /** Move MCP state when a session is renamed. */
+    migrateSession: (oldName: string, newName: string) => void;
     /** Remove all MCP state across all sessions. */
     clearAllSessions: () => void;
 }
@@ -89,6 +91,30 @@ export const useMCPStore = create<MCPState>((set) => ({
             delete nextSnapshots[sessionName];
             const nextSessionStates = {...state.sessionStates};
             delete nextSessionStates[sessionName];
+
+            return {
+                snapshots: nextSnapshots,
+                sessionStates: nextSessionStates,
+            };
+        }),
+
+    migrateSession: (oldName, newName) =>
+        set((state) => {
+            if (oldName === newName) {
+                return {};
+            }
+
+            const nextSnapshots = {...state.snapshots};
+            if (Object.prototype.hasOwnProperty.call(nextSnapshots, oldName)) {
+                nextSnapshots[newName] = nextSnapshots[oldName];
+                delete nextSnapshots[oldName];
+            }
+
+            const nextSessionStates = {...state.sessionStates};
+            if (Object.prototype.hasOwnProperty.call(nextSessionStates, oldName)) {
+                nextSessionStates[newName] = nextSessionStates[oldName];
+                delete nextSessionStates[oldName];
+            }
 
             return {
                 snapshots: nextSnapshots,

@@ -65,6 +65,7 @@ type MessageRepository interface {
 	SaveMessage(ctx context.Context, msg TaskMessage) error
 	SaveResponse(ctx context.Context, msg TaskMessage) error
 	DeleteMessage(ctx context.Context, id string) error
+	DeleteResponse(ctx context.Context, id string) error
 	GetMessage(ctx context.Context, id string) (TaskMessage, error)
 	GetResponse(ctx context.Context, id string) (TaskMessage, error)
 }

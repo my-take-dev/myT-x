@@ -27,7 +27,7 @@ import {TaskSchedulerConfig} from "../src/components/viewer/views/task-scheduler
 import {TaskSchedulerForm} from "../src/components/viewer/views/task-scheduler/TaskSchedulerForm";
 import {TaskSchedulerList} from "../src/components/viewer/views/task-scheduler/TaskSchedulerList";
 import {TaskSchedulerSettingsPanel} from "../src/components/viewer/views/task-scheduler/TaskSchedulerSettings";
-import type {QueueItem, QueueStatus, TaskSchedulerSettings} from "../src/components/viewer/views/task-scheduler/useTaskScheduler";
+import type {QueueConfig, QueueItem, QueueStatus, TaskSchedulerSettings} from "../src/components/viewer/views/task-scheduler/useTaskScheduler";
 import type {PaneSnapshot} from "../src/types/tmux";
 
 async function flushEffects(): Promise<void> {
@@ -407,6 +407,7 @@ describe("task scheduler components", () => {
                     availablePanes={[availablePane]}
                     messageTemplates={[]}
                     editingItem={editingItem}
+                    initialDraft={null}
                     onSave={onSave}
                     onBack={() => undefined}
                 />,
@@ -421,5 +422,71 @@ describe("task scheduler components", () => {
             submitButton?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
         });
         expect(onSave).not.toHaveBeenCalled();
+    });
+
+    it("TaskSchedulerForm reports dirty state after the draft changes", () => {
+        const onDirtyChange = vi.fn();
+        const availablePane: PaneSnapshot = {id: "%1", index: 0, active: true, width: 80, height: 24};
+
+        act(() => {
+            root.render(
+                <TaskSchedulerForm
+                    availablePanes={[availablePane]}
+                    messageTemplates={[]}
+                    editingItem={null}
+                    initialDraft={{
+                        title: "Review",
+                        message: "Inspect the changes.",
+                        targetPaneID: "%1",
+                        clearBefore: false,
+                        clearCommand: "",
+                    }}
+                    onSave={async () => undefined}
+                    onBack={() => undefined}
+                    onDirtyChange={onDirtyChange}
+                />,
+            );
+        });
+
+        const titleInput = container.querySelector("input[type=\"text\"]") as HTMLInputElement | null;
+        expect(titleInput).not.toBeNull();
+        expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+        setFieldValue(titleInput!, "Review updated");
+
+        expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("TaskSchedulerConfig reports dirty state when pre-exec changes", () => {
+        const onDirtyChange = vi.fn();
+
+        act(() => {
+            root.render(
+                <TaskSchedulerConfig
+                    items={[{id: "task-1", status: "pending"} as QueueItem]}
+                    initialConfig={{pre_exec_enabled: false} as QueueConfig}
+                    savedSettings={{
+                        pre_exec_reset_delay_s: 0,
+                        pre_exec_idle_timeout_s: 30,
+                        pre_exec_target_mode: "task_panes",
+                        message_templates: [],
+                    } as TaskSchedulerSettings}
+                    onStart={async () => undefined}
+                    onBack={() => undefined}
+                    onOpenSettings={() => undefined}
+                    onDirtyChange={onDirtyChange}
+                />,
+            );
+        });
+
+        const checkbox = container.querySelector("input[type=\"checkbox\"]") as HTMLInputElement | null;
+        expect(checkbox).not.toBeNull();
+        expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+        act(() => {
+            checkbox?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+        });
+
+        expect(onDirtyChange).toHaveBeenLastCalledWith(true);
     });
 });

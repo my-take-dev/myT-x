@@ -38,6 +38,13 @@ describe("isDocumentFile", () => {
         ["openapi.yaml", true],
         ["openapi.yml", true],
         ["openapi.json", true],
+        ["graph.dot", true],
+        ["graph.gv", true],
+        ["mindmap.mm", true],
+        ["timing.wavedrom", true],
+        ["chart.vega", true],
+        ["chart.vl.json", true],
+        ["chart.vg.json", true],
         ["notes.txt", false],
         ["Makefile", false],
         ["archive.tar.gz", false],
@@ -139,6 +146,13 @@ describe("classifyDocument", () => {
         ["config.json", "{\"name\":\"contains openapi: 3.1.0 in a value\"}", "yaml-json-raw"],
         ["config.yaml", "# comment\ninfo:\n  title: demo", "yaml-json-raw"],
         ["config.json", `${" ".repeat(1025)}{"openapi":"3.1.0"}`, "yaml-json-raw"],
+        ["graph.dot", "digraph { a -> b }", "graphviz"],
+        ["graph.gv", "graph { a -- b }", "graphviz"],
+        ["mindmap.mm", "# root\n## child", "markmap"],
+        ["timing.wavedrom", "{signal:[]}", "wavedrom"],
+        ["chart.vega", "{\"$schema\":\"\"}", "vega"],
+        ["chart.vl.json", "{\"$schema\":\"vl\"}", "vega-lite"],
+        ["chart.vg.json", "{\"$schema\":\"vega\"}", "vega"],
     ])("classifies %s as %s", (name, content, expected) => {
         expect(classifyDocument(name, content)).toBe(expected);
     });

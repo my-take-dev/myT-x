@@ -39,6 +39,16 @@ func isBlockedEnvironmentKey(key string) bool {
 	return blocked
 }
 
+// BlockedEnvironmentKeyNames returns a copy of the blocked key set for guard
+// tests that verify config/frontend consistency without mutating router state.
+func BlockedEnvironmentKeyNames() map[string]struct{} {
+	keys := make(map[string]struct{}, len(blockedEnvironmentKeys))
+	for key := range blockedEnvironmentKeys {
+		keys[key] = struct{}{}
+	}
+	return keys
+}
+
 func (r *CommandRouter) attachPaneTerminal(pane *TmuxPane, workDir string, env map[string]string, source *TmuxPane) error {
 	if r.attachTerminalFn == nil {
 		return fmt.Errorf("attach terminal function is not configured")

@@ -50,6 +50,12 @@
     border-color: var(--border-color, #333);
 }
 
+.canvas-terminal-node.canvas-node-unregistered {
+    border-color: rgba(241, 196, 15, 0.92);
+    border-style: dashed;
+    box-shadow: 0 0 12px rgba(241, 196, 15, 0.18);
+}
+
 .canvas-terminal-body {
     flex: 1;
     min-height: 0;
@@ -98,6 +104,38 @@
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 120px;
+}
+
+.canvas-unregistered-badge {
+    position: absolute;
+    top: 4px;
+    left: 8px;
+    z-index: 10;
+    background: rgba(241, 196, 15, 0.16);
+    color: #f1c40f;
+    border: 1px solid rgba(241, 196, 15, 0.34);
+    border-radius: 999px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    pointer-events: none;
+}
+
+.canvas-enlist-btn {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    z-index: 11;
+    border: 1px solid rgba(241, 196, 15, 0.28);
+    border-radius: 6px;
+    background: rgba(30, 32, 36, 0.94);
+    color: #f7d96c;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 18px;
+    padding: 0 8px;
+    cursor: pointer;
 }
 
 /* ===== Handles (connection points) ===== */

@@ -2,6 +2,25 @@ const MODIFIER_ORDER = ["ctrl", "shift", "alt", "meta"] as const;
 
 type ShortcutModifier = (typeof MODIFIER_ORDER)[number];
 const FUNCTION_KEY_PATTERN = /^f(?:[1-9]|1[0-9]|2[0-4])$/i;
+const ARIA_MODIFIER_LABELS: Readonly<Record<ShortcutModifier, string>> = {
+    ctrl: "Control",
+    shift: "Shift",
+    alt: "Alt",
+    meta: "Meta",
+};
+const ARIA_KEY_LABELS: Readonly<Record<string, string>> = {
+    space: "Space",
+    tab: "Tab",
+    enter: "Enter",
+    escape: "Escape",
+    esc: "Escape",
+    pageup: "PageUp",
+    pagedown: "PageDown",
+    arrowup: "ArrowUp",
+    arrowdown: "ArrowDown",
+    arrowleft: "ArrowLeft",
+    arrowright: "ArrowRight",
+};
 
 const modifierAliases: Record<string, ShortcutModifier> = {
     ctrl: "ctrl",
@@ -69,6 +88,61 @@ export function normalizeShortcut(rawShortcut: string): string {
 
     const orderedModifiers = MODIFIER_ORDER.filter((modifier) => modifiers.has(modifier));
     return [...orderedModifiers, key].join("+");
+}
+
+function toAriaKeyToken(token: string): string {
+    if (isFunctionKeyToken(token)) {
+        return token.toUpperCase();
+    }
+    const mappedLabel = ARIA_KEY_LABELS[token];
+    if (mappedLabel) {
+        return mappedLabel;
+    }
+    return token.length === 1 ? token.toUpperCase() : token;
+}
+
+export function formatShortcutForDisplay(rawShortcut: string): string {
+    const normalizedShortcut = normalizeShortcut(rawShortcut);
+    if (normalizedShortcut === "") {
+        return "";
+    }
+    return normalizedShortcut
+        .split("+")
+        .map((token) => {
+            if (token === "ctrl") {
+                return "Ctrl";
+            }
+            if (token === "shift") {
+                return "Shift";
+            }
+            if (token === "alt") {
+                return "Alt";
+            }
+            if (token === "meta") {
+                return "Meta";
+            }
+            if (isFunctionKeyToken(token)) {
+                return token.toUpperCase();
+            }
+            return token.length === 1 ? token.toUpperCase() : token;
+        })
+        .join("+");
+}
+
+export function toAriaKeyshortcuts(rawShortcut: string): string {
+    const normalizedShortcut = normalizeShortcut(rawShortcut);
+    if (normalizedShortcut === "") {
+        return "";
+    }
+    const tokens = normalizedShortcut.split("+");
+    const keyToken = tokens[tokens.length - 1];
+    if (!keyToken) {
+        return "";
+    }
+    const modifiers = tokens
+        .slice(0, -1)
+        .map((token) => ARIA_MODIFIER_LABELS[token as ShortcutModifier] ?? token);
+    return [...modifiers, toAriaKeyToken(keyToken)].join("+");
 }
 
 export function buildShortcutFromKeyboardEvent(event: KeyboardEvent): string {

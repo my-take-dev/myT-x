@@ -6,7 +6,7 @@ export function OverviewCards({items}: OverviewCardsProps) {
     return (
         <div className="usage-dashboard-overview">
             {items.map((item) => (
-                <div key={item.id} className="usage-dashboard-card">
+                <div key={item.id} className="usage-dashboard-card" data-card-id={item.id}>
                     <div className="usage-dashboard-card-label">{item.label}</div>
                     <div className="usage-dashboard-card-value" title={item.value}>{item.value}</div>
                     {item.sub ? <div className="usage-dashboard-card-sub">{item.sub}</div> : null}

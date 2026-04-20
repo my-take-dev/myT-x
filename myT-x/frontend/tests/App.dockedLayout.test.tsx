@@ -1,6 +1,7 @@
 import {act, type ReactNode} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
+import type {MenuBarProps} from "../src/components/MenuBar";
 
 const mocked = vi.hoisted(() => ({
     dockRatio: 0.5,
@@ -24,7 +25,7 @@ vi.mock("../src/components/ConfirmDialog", () => ({
 }));
 
 vi.mock("../src/components/MenuBar", () => ({
-    MenuBar: () => <div className="menu-bar"/>,
+    MenuBar: (_props: MenuBarProps) => <div className="menu-bar"/>,
 }));
 
 vi.mock("../src/components/QuickSearch", () => ({

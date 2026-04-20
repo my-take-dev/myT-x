@@ -24,6 +24,9 @@ export function SessionView(props: SessionViewProps) {
     const syncInputMode = useTmuxStore((s) => s.syncInputMode);
     const toggleSyncInputMode = useTmuxStore((s) => s.toggleSyncInputMode);
     const canvasMode = useCanvasStore((s) => s.mode);
+    const canvasSessionName = useCanvasStore((s) => s.activeSessionName);
+    const rootPaneId = useCanvasStore((s) => s.rootPaneId);
+    const setRootPaneId = useCanvasStore((s) => s.setRootPaneId);
 
     const activeWindow = useMemo(() => resolveActiveWindow(props.session), [props.session]);
 
@@ -37,9 +40,25 @@ export function SessionView(props: SessionViewProps) {
         [activeWindow],
     );
 
+    const sessionPaneIdSet = useMemo(
+        () => new Set((props.session?.windows ?? []).flatMap((window) => window.panes.map((pane) => pane.id))),
+        [props.session],
+    );
+
     useEffect(() => {
         setZoomPaneId(null);
     }, [activeWindow?.id, setZoomPaneId]);
+
+    useEffect(() => {
+        const sessionName = props.session?.name ?? null;
+        if (sessionName === null || canvasSessionName !== sessionName || rootPaneId === null) {
+            return;
+        }
+        if (sessionPaneIdSet.has(rootPaneId)) {
+            return;
+        }
+        setRootPaneId(null);
+    }, [canvasSessionName, props.session?.name, rootPaneId, sessionPaneIdSet, setRootPaneId]);
 
     const onFocusPane = useCallback((paneId: string) => {
         void api.FocusPane(paneId).catch((err) => {

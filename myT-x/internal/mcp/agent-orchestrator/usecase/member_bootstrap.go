@@ -64,6 +64,8 @@ type MemberBootstrapService struct {
 	sender      domain.PaneSender
 	pasteSender domain.PanePasteSender
 	projectRoot string
+	sessionName string
+	emitFn      func(string, any)
 	sleepFn     func(context.Context, time.Duration) error
 	logger      *log.Logger
 	reserveMu   sync.Mutex
@@ -98,6 +100,20 @@ func NewMemberBootstrapService(
 // SetSleepFn はテスト用に sleep 関数を差し替える。
 func (s *MemberBootstrapService) SetSleepFn(fn func(context.Context, time.Duration) error) {
 	s.sleepFn = fn
+}
+
+func (s *MemberBootstrapService) SetAgentsUpdatedEmitter(sessionName string, emitFn func(string, any)) {
+	s.sessionName = sessionName
+	s.emitFn = emitFn
+}
+
+func (s *MemberBootstrapService) emitAgentsUpdated() {
+	if s.emitFn == nil {
+		return
+	}
+	s.emitFn("orchestrator:agents-updated", map[string]any{
+		"sessionName": s.sessionName,
+	})
 }
 
 func resolveMemberBootstrapCaller(
@@ -161,6 +177,15 @@ func (s *MemberBootstrapService) AddMember(ctx context.Context, cmd AddMemberCmd
 	}
 	logf(s.logger, "[DEBUG:add-member] split pane from %s → %s", splitFrom, newPaneID)
 
+	provisionalRegistered := false
+	if err := s.registerProvisionalAgent(ctx, newPaneID, agentName, cmd.Role, cmd.Skills); err != nil {
+		logf(s.logger, "[DEBUG:add-member] provisional agent registration warning: %v", err)
+		warnings = append(warnings, fmt.Sprintf("failed to pre-register agent: %v", err))
+	} else {
+		provisionalRegistered = true
+		s.emitAgentsUpdated()
+	}
+
 	// 2. ペインタイトル設定（失敗=warning）
 	if err := s.titleSetter.SetPaneTitle(ctx, newPaneID, cmd.PaneTitle); err != nil {
 		logf(s.logger, "[DEBUG:add-member] set pane title warning: %v", err)
@@ -169,6 +194,9 @@ func (s *MemberBootstrapService) AddMember(ctx context.Context, cmd AddMemberCmd
 
 	// 3. Shell初期化待ち
 	if err := s.sleepFn(ctx, shellInitDelay); err != nil {
+		if provisionalRegistered {
+			err = s.rollbackProvisionalAgent(ctx, newPaneID, err)
+		}
 		return AddMemberResult{}, operationError(s.logger, fmt.Sprintf("context cancelled during shell init wait for pane %s", newPaneID), err)
 	}
 
@@ -176,9 +204,15 @@ func (s *MemberBootstrapService) AddMember(ctx context.Context, cmd AddMemberCmd
 	if s.projectRoot != "" {
 		cdCommand := fmt.Sprintf(`cd "%s"`, strings.ReplaceAll(s.projectRoot, `"`, `\"`))
 		if err := s.sender.SendKeys(ctx, newPaneID, cdCommand); err != nil {
+			if provisionalRegistered {
+				err = s.rollbackProvisionalAgent(ctx, newPaneID, err)
+			}
 			return AddMemberResult{}, operationError(s.logger, fmt.Sprintf("failed to send cd command for pane %s", newPaneID), err)
 		}
 		if err := s.sleepFn(ctx, cdDelay); err != nil {
+			if provisionalRegistered {
+				err = s.rollbackProvisionalAgent(ctx, newPaneID, err)
+			}
 			return AddMemberResult{}, operationError(s.logger, fmt.Sprintf("context cancelled during cd wait for pane %s", newPaneID), err)
 		}
 	}
@@ -186,11 +220,17 @@ func (s *MemberBootstrapService) AddMember(ctx context.Context, cmd AddMemberCmd
 	// 5. 起動コマンド送信
 	launchCmd := buildMemberLaunchCommand(cmd.Command, cmd.Args)
 	if err := s.sender.SendKeys(ctx, newPaneID, launchCmd); err != nil {
+		if provisionalRegistered {
+			err = s.rollbackProvisionalAgent(ctx, newPaneID, err)
+		}
 		return AddMemberResult{}, operationError(s.logger, fmt.Sprintf("failed to send launch command for pane %s", newPaneID), err)
 	}
 
 	// 6. ブートストラップ遅延
 	if err := s.sleepFn(ctx, time.Duration(delayMs)*time.Millisecond); err != nil {
+		if provisionalRegistered {
+			err = s.rollbackProvisionalAgent(ctx, newPaneID, err)
+		}
 		return AddMemberResult{}, operationError(s.logger, fmt.Sprintf("context cancelled during bootstrap wait for pane %s", newPaneID), err)
 	}
 
@@ -424,6 +464,15 @@ func (s *MemberBootstrapService) AddMembers(ctx context.Context, cmd AddMembersC
 		logf(s.logger, "[DEBUG-ADD-MEMBERS] split pane from %s → %s for member[%d] %s", currentSplitFrom, newPaneID, i, member.PaneTitle)
 		results[i].PaneID = newPaneID
 
+		provisionalRegistered := false
+		if regErr := s.registerProvisionalAgent(ctx, newPaneID, agentNames[i], member.Role, member.Skills); regErr != nil {
+			logf(s.logger, "[DEBUG-ADD-MEMBERS] provisional agent registration warning for member[%d]: %v", i, regErr)
+			results[i].Warnings = append(results[i].Warnings, fmt.Sprintf("failed to pre-register agent: %v", regErr))
+		} else {
+			provisionalRegistered = true
+			s.emitAgentsUpdated()
+		}
+
 		// 2. ペインタイトル設定（失敗=warning）
 		if titleErr := s.titleSetter.SetPaneTitle(ctx, newPaneID, member.PaneTitle); titleErr != nil {
 			logf(s.logger, "[DEBUG-ADD-MEMBERS] set pane title warning for member[%d]: %v", i, titleErr)
@@ -434,6 +483,9 @@ func (s *MemberBootstrapService) AddMembers(ctx context.Context, cmd AddMembersC
 		if sleepErr := s.sleepFn(ctx, shellInitDelay); sleepErr != nil {
 			// Context cancellation makes the remaining pane-setup steps fail as
 			// well, so abort the batch instead of continuing item-by-item.
+			if provisionalRegistered {
+				sleepErr = s.rollbackProvisionalAgent(ctx, newPaneID, sleepErr)
+			}
 			markAddMembersFailure(results, i, newPaneID, "context cancelled during shell init wait", sleepErr)
 			return addMembersPartialResult(results, operationError(s.logger, "context cancelled during shell init wait", sleepErr))
 		}
@@ -443,10 +495,16 @@ func (s *MemberBootstrapService) AddMembers(ctx context.Context, cmd AddMembersC
 			cdCommand := fmt.Sprintf(`cd "%s"`, strings.ReplaceAll(s.projectRoot, `"`, `\"`))
 			if cdErr := s.sender.SendKeys(ctx, newPaneID, cdCommand); cdErr != nil {
 				logf(s.logger, "[DEBUG-ADD-MEMBERS] cd command failed for member[%d]: %v", i, cdErr)
+				if provisionalRegistered {
+					cdErr = s.rollbackProvisionalAgent(ctx, newPaneID, cdErr)
+				}
 				markAddMembersFailure(results, i, newPaneID, "failed to send cd command", cdErr)
 				continue
 			}
 			if sleepErr := s.sleepFn(ctx, cdDelay); sleepErr != nil {
+				if provisionalRegistered {
+					sleepErr = s.rollbackProvisionalAgent(ctx, newPaneID, sleepErr)
+				}
 				markAddMembersFailure(results, i, newPaneID, "context cancelled during cd wait", sleepErr)
 				return addMembersPartialResult(results, operationError(s.logger, "context cancelled during cd wait", sleepErr))
 			}
@@ -456,6 +514,9 @@ func (s *MemberBootstrapService) AddMembers(ctx context.Context, cmd AddMembersC
 		launchCmd := buildMemberLaunchCommand(member.Command, member.Args)
 		if launchErr := s.sender.SendKeys(ctx, newPaneID, launchCmd); launchErr != nil {
 			logf(s.logger, "[DEBUG-ADD-MEMBERS] launch command failed for member[%d]: %v", i, launchErr)
+			if provisionalRegistered {
+				launchErr = s.rollbackProvisionalAgent(ctx, newPaneID, launchErr)
+			}
 			markAddMembersFailure(results, i, newPaneID, "failed to send launch command", launchErr)
 			continue
 		}
@@ -472,6 +533,7 @@ func (s *MemberBootstrapService) AddMembers(ctx context.Context, cmd AddMembersC
 	// Phase 2: ブートストラップメッセージ送信（ONE WAIT）
 	if len(launched) > 0 {
 		if sleepErr := s.sleepFn(ctx, time.Duration(delayMs)*time.Millisecond); sleepErr != nil {
+			sleepErr = s.rollbackProvisionalAgents(ctx, launched, sleepErr)
 			appendBootstrapSkippedWarning(results, launched, 0, "bootstrap was skipped because context was cancelled during bootstrap wait")
 			return addMembersPartialResult(results, operationError(s.logger, "context cancelled during bootstrap wait", sleepErr))
 		}
@@ -479,6 +541,7 @@ func (s *MemberBootstrapService) AddMembers(ctx context.Context, cmd AddMembersC
 		for j, lm := range launched {
 			if j > 0 {
 				if sleepErr := s.sleepFn(ctx, bootstrapInterMessageDelay); sleepErr != nil {
+					sleepErr = s.rollbackProvisionalAgents(ctx, launched[j:], sleepErr)
 					appendBootstrapSkippedWarning(results, launched, j, "bootstrap was skipped because context was cancelled during inter-message wait")
 					return addMembersPartialResult(results, operationError(s.logger, "context cancelled during inter-message wait", sleepErr))
 				}
@@ -616,11 +679,53 @@ func (s *MemberBootstrapService) releaseMemberAgentNames(names []string) {
 	}
 }
 
+func (s *MemberBootstrapService) registerProvisionalAgent(
+	ctx context.Context,
+	paneID string,
+	agentName string,
+	role string,
+	skills []domain.Skill,
+) error {
+	skillsCopy := append([]domain.Skill(nil), skills...)
+	defaultStatus := &domain.AgentStatus{
+		AgentName: agentName,
+		Status:    domain.AgentWorkStatusIdle,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	return s.agents.ReplaceAgentRegistration(ctx, domain.Agent{
+		Name:   agentName,
+		PaneID: paneID,
+		Role:   role,
+		Skills: skillsCopy,
+	}, defaultStatus)
+}
+
+func (s *MemberBootstrapService) rollbackProvisionalAgent(ctx context.Context, paneID string, cause error) error {
+	if err := s.agents.DeleteAgentsByPaneID(ctx, paneID); err != nil {
+		logf(s.logger, "[DEBUG:add-member] failed to rollback provisional agent registration for pane %s: %v", paneID, err)
+		return errors.Join(cause, fmt.Errorf("cleanup provisional registration for pane %s: %w", paneID, err))
+	}
+	s.emitAgentsUpdated()
+	return cause
+}
+
+func (s *MemberBootstrapService) rollbackProvisionalAgents(
+	ctx context.Context,
+	launched []launchedBatchMember,
+	cause error,
+) error {
+	rollbackErr := cause
+	for _, member := range launched {
+		rollbackErr = s.rollbackProvisionalAgent(ctx, member.paneID, rollbackErr)
+	}
+	return rollbackErr
+}
+
 // buildMemberBootstrapMessage はブートストラップメッセージを構築する。
 func buildMemberBootstrapMessage(teamName string, cmd AddMemberCmd, paneID, agentName string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "あなたは「%s」チームのメンバーです。\n", strings.TrimSpace(teamName))
-	fmt.Fprintf(&b, "役割名: %s\n", cmd.Role)
+	_, _ = fmt.Fprintf(&b, "あなたは「%s」チームのメンバーです。\n", strings.TrimSpace(teamName))
+	_, _ = fmt.Fprintf(&b, "役割名: %s\n", cmd.Role)
 	if cmd.CustomMessage != "" {
 		b.WriteString("\n")
 		b.WriteString(cmd.CustomMessage)
@@ -630,15 +735,15 @@ func buildMemberBootstrapMessage(teamName string, cmd AddMemberCmd, paneID, agen
 		b.WriteString("\n得意分野:\n")
 		for _, skill := range cmd.Skills {
 			if skill.Description != "" {
-				fmt.Fprintf(&b, "- %s: %s\n", skill.Name, skill.Description)
+				_, _ = fmt.Fprintf(&b, "- %s: %s\n", skill.Name, skill.Description)
 			} else {
-				fmt.Fprintf(&b, "- %s\n", skill.Name)
+				_, _ = fmt.Fprintf(&b, "- %s\n", skill.Name)
 			}
 		}
 	}
 	b.WriteString("\n--- エージェント登録 ---\n")
 	b.WriteString("自身のペインIDは環境変数 $TMUX_PANE で確認できます。\n")
-	fmt.Fprintf(&b, "現在のペインID: %s\n", paneID)
+	_, _ = fmt.Fprintf(&b, "現在のペインID: %s\n", paneID)
 	b.WriteString("まず以下を実行して自身をオーケストレーターに登録してください:\n")
 	escapedRole := strings.NewReplacer(`"`, `\"`, "\n", " ").Replace(cmd.Role)
 	if len(cmd.Skills) > 0 {
@@ -646,9 +751,14 @@ func buildMemberBootstrapMessage(teamName string, cmd AddMemberCmd, paneID, agen
 		if err != nil {
 			skillsJSON = []byte("[]")
 		}
-		fmt.Fprintf(&b, "register_agent(name=\"%s\", pane_id=\"%s\", role=\"%s\", skills=%s)\n", agentName, paneID, escapedRole, string(skillsJSON))
+		_, _ = fmt.Fprintf(&b, "register_agent(name=\"%s\", pane_id=\"%s\", role=\"%s\", skills=%s)\n", agentName, paneID, escapedRole, string(skillsJSON))
 	} else {
-		fmt.Fprintf(&b, "register_agent(name=\"%s\", pane_id=\"%s\", role=\"%s\")\n", agentName, paneID, escapedRole)
+		_, _ = fmt.Fprintf(&b, "register_agent(name=\"%s\", pane_id=\"%s\", role=\"%s\")\n", agentName, paneID, escapedRole)
+	}
+
+	if hints := buildMCPSkillCompletionHints(cmd.Role, cmd.Skills); hints != "" {
+		b.WriteString("\n--- 得意分野の補完 ---\n")
+		b.WriteString(hints)
 	}
 
 	b.WriteString("\n--- ワークフロー ---\n")
@@ -659,6 +769,7 @@ func buildMemberBootstrapMessage(teamName string, cmd AddMemberCmd, paneID, agen
 	b.WriteString("5. send_response → タスクに返信し completed に更新（task_id 必須）\n")
 	b.WriteString("\nタスク状態: pending / blocked → completed / failed / abandoned / cancelled / expired\n")
 	b.WriteString("確認: list_all_tasks で全タスク一覧、capture_pane で相手の画面を取得\n")
+	b.WriteString("注意: send_task は応答テンプレートを自動付与（include_response_instructions=false で無効化可）\n")
 
 	b.WriteString("\n--- アイドル時の行動（重要） ---\n")
 	b.WriteString("- タスク完了後、またはアイドル中は30-60秒ごとに: get_my_tasks を呼んで自分宛タスクを確認\n")
@@ -667,4 +778,37 @@ func buildMemberBootstrapMessage(teamName string, cmd AddMemberCmd, paneID, agen
 	b.WriteString("- send_task のメッセージ配信はベストエフォートです。確実に受信するには get_my_tasks を定期確認してください\n")
 
 	return b.String()
+}
+
+func buildMCPSkillCompletionHints(role string, skills []domain.Skill) string {
+	var hints []string
+
+	if len(skills) == 0 {
+		hints = append(hints, fmt.Sprintf(
+			"得意分野（skills）が未設定です。あなたの役割「%s」に基づき、register_agent 実行時に適切な得意分野を3〜5件、name と description 付きで追加してください。",
+			role,
+		))
+	} else {
+		hasEmptyDesc := false
+		for _, skill := range skills {
+			if strings.TrimSpace(skill.Description) == "" {
+				hasEmptyDesc = true
+				break
+			}
+		}
+		if hasEmptyDesc {
+			hints = append(hints, fmt.Sprintf(
+				"得意分野の一部に説明（description）がありません。あなたの役割「%s」に基づき、register_agent 実行時に不足している description を推測して補完してください。",
+				role,
+			))
+		}
+		if len(skills) < 3 {
+			hints = append(hints, fmt.Sprintf(
+				"得意分野が少ない可能性があります。あなたの役割「%s」に応じて、register_agent 実行時に関連する得意分野を追加してください（合計3〜5件を目安）。",
+				role,
+			))
+		}
+	}
+
+	return strings.Join(hints, "\n")
 }

@@ -37,10 +37,6 @@ vi.mock("./FileContentRow", () => ({
     FileContentRow: () => null,
 }));
 
-vi.mock("./FileContentHeader", () => ({
-    FileContentHeader: () => <div>header</div>,
-}));
-
 vi.mock("./useRowHeight", () => ({
     useRowHeight: () => 20,
 }));
@@ -79,6 +75,33 @@ describe("FileContentViewer", () => {
             await Promise.resolve();
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
+    }
+
+    async function renderViewer(
+        documentKind: Parameters<typeof FileContentViewer>[0]["documentKind"],
+        overrides?: Partial<Parameters<typeof FileContentViewer>[0]>,
+    ): Promise<void> {
+        await act(async () => {
+            root.render(
+                <FileContentViewer
+                    content={{
+                        path: overrides?.content?.path ?? "docs/sample.txt",
+                        content: overrides?.content?.content ?? "# preview",
+                        line_count: overrides?.content?.line_count ?? 1,
+                        size: overrides?.content?.size ?? 128,
+                        truncated: overrides?.content?.truncated ?? false,
+                        binary: overrides?.content?.binary ?? false,
+                    }}
+                    isLoading={overrides?.isLoading ?? false}
+                    documentKind={documentKind}
+                    renderMode={overrides?.renderMode}
+                    canPreview={overrides?.canPreview}
+                    onRenderModeChange={overrides?.onRenderModeChange}
+                    previewRenderer={overrides?.previewRenderer ?? (() => <div>custom preview</div>)}
+                />,
+            );
+        });
+        await flushRenderer();
     }
 
     it("routes binary sqlite files to the preview renderer", async () => {
@@ -127,5 +150,91 @@ describe("FileContentViewer", () => {
 
         expect(container.textContent).toContain("Binary file");
         expect(container.textContent).not.toContain("should not render");
+    });
+
+    it("defaults sqlite documents to preview mode in uncontrolled mode", async () => {
+        await renderViewer("sqlite", {
+            content: {
+                path: "docs/sample.db",
+                content: "",
+                line_count: 1,
+                size: 128,
+                truncated: false,
+                binary: false,
+            },
+        });
+
+        const toggleButton = container.querySelector<HTMLButtonElement>(".file-content-toggle-preview");
+        expect(toggleButton?.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it.each([
+        "markdown",
+        "mermaid",
+        "drawio-svg",
+        "drawio-xml",
+        "swagger",
+        "graphviz",
+        "markmap",
+        "wavedrom",
+        "vega-lite",
+        "vega",
+    ] as const)("keeps %s documents on raw mode in uncontrolled mode", async (documentKind) => {
+        await renderViewer(documentKind, {
+            content: {
+                path: `docs/${documentKind}.txt`,
+                content: "# preview",
+                line_count: 1,
+                size: 128,
+                truncated: false,
+                binary: false,
+            },
+        });
+
+        const toggleButton = container.querySelector<HTMLButtonElement>(".file-content-toggle-preview");
+        expect(toggleButton?.getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("keeps yaml-json-raw documents on the raw view without a toggle button", async () => {
+        await renderViewer("yaml-json-raw", {
+            content: {
+                path: "docs/config.txt",
+                content: "plain text",
+                line_count: 1,
+                size: 10,
+                truncated: false,
+                binary: false,
+            },
+        });
+
+        expect(container.querySelector(".file-content-toggle-preview")).toBeNull();
+        expect(container.textContent).not.toContain("custom preview");
+    });
+
+    it("updates the toggle button title and aria attributes with the preview shortcut", async () => {
+        await renderViewer("sqlite", {
+            content: {
+                path: "docs/sample.db",
+                content: "",
+                line_count: 1,
+                size: 10,
+                truncated: false,
+                binary: true,
+            },
+        });
+
+        const toggleButton = container.querySelector<HTMLButtonElement>(".file-content-toggle-preview");
+        expect(toggleButton).not.toBeNull();
+        expect(toggleButton?.title).toBe("ソース表示 (Ctrl+Shift+V)");
+        expect(toggleButton?.getAttribute("aria-label")).toBe("ソース表示 (Ctrl+Shift+V)");
+        expect(toggleButton?.getAttribute("aria-keyshortcuts")).toBe("Control+Shift+V");
+
+        act(() => {
+            toggleButton?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+        });
+
+        expect(toggleButton?.title).toBe("ソース表示 (Ctrl+Shift+V)");
+        expect(toggleButton?.getAttribute("aria-label")).toBe("ソース表示 (Ctrl+Shift+V)");
+        expect(toggleButton?.getAttribute("aria-pressed")).toBe("true");
     });
 });

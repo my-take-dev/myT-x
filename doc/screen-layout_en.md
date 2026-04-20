@@ -31,6 +31,7 @@ The myT-x screen consists of 5 areas:
 | Button | Description |
 |--------|-------------|
 | **Settings** | Opens the settings screen for shell, key bindings, model configuration, etc. |
+| **🔍 Search... (Ctrl+P)** | Opens the command palette as a dropdown (added in v1.0.8) |
 | **A↻** (IME Reset) | Restores Japanese input conversion when broken. Grayed out when not needed |
 | **Japanese / English** | Switches the display language |
 

@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"log"
 	"time"
 
@@ -30,8 +31,9 @@ type ResponseService struct {
 	agents   domain.AgentRepository
 	tasks    domain.TaskRepository
 	messages domain.MessageRepository
-	sender   domain.PaneSender
+	sender   domain.PanePasteSender
 	resolver domain.SelfPaneResolver
+	payloads *payloadWriter
 	logger   *log.Logger
 	// randRead is the random byte source for ID generation.
 	// Defaults to crypto/rand.Read. Tests inject deterministic sources.
@@ -43,16 +45,22 @@ func NewResponseService(
 	agents domain.AgentRepository,
 	tasks domain.TaskRepository,
 	messages domain.MessageRepository,
-	sender domain.PaneSender,
+	sender domain.PanePasteSender,
 	resolver domain.SelfPaneResolver,
 	logger *log.Logger,
+	projectRoots ...string,
 ) *ResponseService {
+	projectRoot := ""
+	if len(projectRoots) > 0 {
+		projectRoot = projectRoots[0]
+	}
 	return &ResponseService{
 		agents:   agents,
 		tasks:    tasks,
 		messages: messages,
 		sender:   sender,
 		resolver: resolver,
+		payloads: newPayloadWriter(projectRoot),
 		logger:   ensureLogger(logger),
 		randRead: rand.Read,
 	}
@@ -114,46 +122,63 @@ func (s *ResponseService) Send(ctx context.Context, cmd SendResponseCmd) (SendRe
 		resolvedBy,
 	)
 
-	if domain.IsVirtualPaneID(target.PaneID) {
-		logf(s.logger, "send_response skip SendKeys for virtual pane task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
-	} else {
-		if err := s.sender.SendKeys(ctx, target.PaneID, cmd.Message); err != nil {
-			return SendResponseResult{}, operationError(s.logger, "response delivery failed", err)
-		}
-		logf(s.logger, "send_response delivered task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
-	}
-
 	result := SendResponseResult{
 		SentTo:     target.PaneID,
 		SentToName: target.Name,
 	}
 
-	// レスポンスを保存
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// TaskID is always set: the caller needs it regardless of downstream failures.
 	result.TaskID = cmd.TaskID
 
-	respID, err := generateIDWith(s.randRead, "r-", "generate response id")
-	if err != nil {
-		result.Warning = "message delivered but response id generation failed"
-		logf(s.logger, "generate response id for task %s: %v", cmd.TaskID, err)
-		completeTaskBestEffort(s, ctx, cmd.TaskID, "", now, task.Status, &result, "response id failure")
-		return result, nil
+	respID, idWarning := s.generateResponseID(cmd.TaskID, cmd.Message, now)
+	if idWarning != "" {
+		result.Warning = idWarning
 	}
-	if err := s.messages.SaveResponse(ctx, domain.TaskMessage{
-		ID:        respID,
-		Content:   cmd.Message,
-		CreatedAt: now,
-	}); err != nil {
-		result.Warning = "message delivered but response persistence failed"
-		logf(s.logger, "save response for task %s: %v", cmd.TaskID, err)
-		completeTaskBestEffort(s, ctx, cmd.TaskID, "", now, task.Status, &result, "save response failure")
-		return result, nil
+	preparedResponse, err := s.payloads.PrepareResponse(cmd.TaskID, respID, cmd.Message, now)
+	if err != nil {
+		return SendResponseResult{}, operationError(s.logger, "failed to prepare response payload", err)
+	}
+
+	if domain.IsVirtualPaneID(target.PaneID) {
+		logf(s.logger, "send_response skip SendKeys for virtual pane task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
+	} else {
+		if err := s.sender.SendKeysPaste(ctx, target.PaneID, preparedResponse.deliveryText); err != nil {
+			if cleanupErr := preparedResponse.Cleanup(); cleanupErr != nil {
+				return SendResponseResult{}, operationError(s.logger, "response delivery failed", fmt.Errorf("%w (cleanup payload artifacts: %v)", err, cleanupErr))
+			}
+			return SendResponseResult{}, operationError(s.logger, "response delivery failed", err)
+		}
+		logf(s.logger, "send_response delivered task_id=%s target=%s pane_id=%s", task.ID, target.Name, target.PaneID)
+	}
+
+	if err := s.messages.SaveResponse(ctx, preparedResponse.message); err != nil {
+		if cleanupErr := preparedResponse.Cleanup(); cleanupErr != nil {
+			return SendResponseResult{}, operationError(
+				s.logger,
+				"response was delivered but could not be persisted; task remains pending",
+				fmt.Errorf("%w (cleanup payload artifacts: %v)", err, cleanupErr),
+			)
+		}
+		return SendResponseResult{}, operationError(
+			s.logger,
+			"response was delivered but could not be persisted; task remains pending",
+			err,
+		)
 	}
 
 	if err := s.tasks.CompleteTask(ctx, cmd.TaskID, respID, now); err != nil {
-		result.Warning = "message delivered but task completion update failed"
+		rollbackErr := s.messages.DeleteResponse(ctx, respID)
+		cleanupErr := preparedResponse.Cleanup()
+		if rollbackErr != nil || cleanupErr != nil {
+			return SendResponseResult{}, operationError(
+				s.logger,
+				"response was delivered but task completion update failed",
+				fmt.Errorf("%w (rollback response %s: %v, cleanup payload artifacts: %v)", err, respID, rollbackErr, cleanupErr),
+			)
+		}
+		result.Warning = appendWarning(result.Warning, "message delivered but task completion update failed; response persistence was rolled back")
 		result.TaskStatus = task.Status
 		logf(s.logger, "complete task %s after response: %v", cmd.TaskID, err)
 	} else {
@@ -192,29 +217,29 @@ func (s *ResponseService) resolveResponseTarget(ctx context.Context, task domain
 	return target, "name", nil
 }
 
-// completeTaskBestEffort attempts to mark a task as completed after a non-fatal
-// error (e.g. response ID generation or persistence failure). On double-fault
-// (CompleteTask also fails), the caller receives the last known persisted task
-// status and a warning describing the failed completion path.
-func completeTaskBestEffort(
-	s *ResponseService,
-	ctx context.Context,
-	taskID, respID, now string,
-	fallbackStatus domain.TaskStatus,
-	result *SendResponseResult,
-	context string,
-) {
-	if completeErr := s.tasks.CompleteTask(ctx, taskID, respID, now); completeErr != nil {
-		logf(s.logger, "double-fault: complete task %s after %s also failed: %v", taskID, context, completeErr)
-		result.TaskStatus = fallbackStatus
-	} else {
-		result.TaskStatus = domain.TaskStatusCompleted
-		result.CompletedAt = now
+func (s *ResponseService) generateResponseID(taskID string, message string, now string) (string, string) {
+	respID, err := generateIDWith(s.randRead, "r-", "generate response id")
+	if err == nil {
+		return respID, ""
 	}
+	logf(s.logger, "generate response id for task %s: %v", taskID, err)
+	fallbackSeed := fmt.Sprintf("%s\n%s\n%d\n%s", taskID, now, time.Now().UTC().UnixNano(), message)
+	fallback := sha256Hex(fallbackSeed)
+	return "r-" + fallback[:12], "response id generation failed; using best-effort fallback"
 }
 
 func authorizeResponseCaller(task domain.Task, caller domain.Agent) (string, bool) {
 	return authorizeAssigneeCaller(task, caller)
+}
+
+func appendWarning(base string, extra string) string {
+	if base == "" {
+		return extra
+	}
+	if extra == "" {
+		return base
+	}
+	return base + "; " + extra
 }
 
 // authorizeAssigneeCaller authorizes a caller against a task's assignee.

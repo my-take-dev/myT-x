@@ -18,6 +18,7 @@ import "@xyflow/react/dist/style.css";
 import type {PaneSnapshot} from "../../types/tmux";
 import {useCanvasStore} from "../../stores/canvasStore";
 import {useCanvasTaskSync} from "../../hooks/useCanvasTaskSync";
+import {useUnregisteredPanes} from "../../hooks/useUnregisteredPanes";
 import {computeTreeLayout} from "../../utils/canvasLayout";
 import {aggregateTaskEdges} from "../../utils/aggregateTaskEdges";
 import {determineEdgeDirection} from "../../utils/edgeRouting";
@@ -25,7 +26,10 @@ import {CanvasTerminalNode} from "./CanvasTerminalNode";
 import {TaskEdge} from "./TaskEdge";
 import type {TaskEdgeData} from "./TaskEdge";
 import {TaskTimelinePanel} from "./TaskTimelinePanel";
+import {EnlistPaneModal} from "./EnlistPaneModal";
 import {useI18n} from "../../i18n";
+import {EnlistPane} from "../../../wailsjs/go/main/App";
+import {orchestrator} from "../../../wailsjs/go/models";
 import "../../styles/canvas.css";
 
 const nodeTypes = {terminal: CanvasTerminalNode} as const;
@@ -50,10 +54,18 @@ export function CanvasView(props: CanvasViewProps) {
     const {fitView} = useReactFlow();
     const setNodePosition = useCanvasStore((s) => s.setNodePosition);
     const taskEdgeMap = useCanvasStore((s) => s.taskEdgeMap);
+    const agentMap = useCanvasStore((s) => s.agentMap);
+    const rootPaneId = useCanvasStore((s) => s.rootPaneId);
     const [timelinePanelOpen, setTimelinePanelOpen] = useState(false);
+    const [enlistPaneId, setEnlistPaneId] = useState<string | null>(null);
+    const {context: enlistmentContext, unregisteredPanes} = useUnregisteredPanes(props.sessionName, props.panes);
 
     // 3秒ポーリング
     useCanvasTaskSync(props.sessionName);
+
+    const unregisteredPaneMap = useMemo(() => {
+        return new Map(unregisteredPanes.map((entry) => [entry.pane.id, entry]));
+    }, [unregisteredPanes]);
 
     // ペインからReact Flowノードを生成
     // nodePositions は命令的に読み取り（getState）、依存配列に含めない。
@@ -77,6 +89,8 @@ export function CanvasView(props: CanvasViewProps) {
                     paneId: pane.id,
                     paneTitle: pane.title ?? "",
                     active: pane.id === props.activePaneId,
+                    unregistered: unregisteredPaneMap.has(pane.id),
+                    onEnlist: setEnlistPaneId,
                     onFocus: props.onFocusPane,
                     onSplitVertical: props.onSplitVertical,
                     onSplitHorizontal: props.onSplitHorizontal,
@@ -89,10 +103,15 @@ export function CanvasView(props: CanvasViewProps) {
                 style: {width: size.width, height: size.height},
             };
         });
-    }, [props.panes, props.activePaneId,
+    }, [props.panes, props.activePaneId, unregisteredPaneMap,
         props.onFocusPane, props.onSplitVertical, props.onSplitHorizontal,
         props.onToggleZoom, props.onKillPane, props.onRenamePane,
         props.onSwapPane, props.onDetachSession]);
+
+    const selectedUnregisteredPane = useMemo(
+        () => unregisteredPanes.find((entry) => entry.pane.id === enlistPaneId) ?? null,
+        [enlistPaneId, unregisteredPanes],
+    );
 
     // タスクをペアごとに集約し、1ペア=1エッジで React Flow エッジを生成
     // Y座標に基づいて source/target を決定（ツリーの上→下フロー）
@@ -181,7 +200,13 @@ export function CanvasView(props: CanvasViewProps) {
         const paneIds = props.panes.map((p) => p.id);
         const tasks = Object.values(taskEdgeMap);
         const currentSizes = useCanvasStore.getState().nodeSizes;
-        const positions = computeTreeLayout(paneIds, tasks, currentSizes);
+        const orchestratorPaneIds = Object.values(agentMap)
+            .filter((agent) => agent.role === "orchestrator")
+            .map((agent) => agent.pane_id);
+        const positions = computeTreeLayout(paneIds, tasks, currentSizes, {
+            rootPaneId,
+            orchestratorPaneIds,
+        });
         for (const [paneId, pos] of Object.entries(positions)) {
             setNodePosition(paneId, pos);
         }
@@ -198,9 +223,9 @@ export function CanvasView(props: CanvasViewProps) {
         );
         // レイアウト完了後、ビューポートをアニメーション付きでフィット
         requestAnimationFrame(() => {
-            fitView({padding: 0.15, duration: 400});
+            void fitView({padding: 0.15, duration: 400});
         });
-    }, [props.panes, taskEdgeMap, setNodePosition, setRfNodes, fitView]);
+    }, [agentMap, fitView, props.panes, rootPaneId, setNodePosition, setRfNodes, taskEdgeMap]);
 
     const getNodeColor = useCallback((node: Node) => {
         const data = node.data as { active?: boolean } | undefined;
@@ -266,6 +291,8 @@ export function CanvasView(props: CanvasViewProps) {
                     <MiniMap
                         nodeColor={getNodeColor}
                         maskColor="rgba(0, 0, 0, 0.7)"
+                        pannable
+                        zoomable
                     />
                 </ReactFlow>
                 {timelinePanelOpen && (
@@ -274,6 +301,20 @@ export function CanvasView(props: CanvasViewProps) {
                         onClose={() => setTimelinePanelOpen(false)}
                     />
                 )}
+                <EnlistPaneModal
+                    open={selectedUnregisteredPane !== null}
+                    sessionName={props.sessionName}
+                    pane={selectedUnregisteredPane?.pane ?? null}
+                    parentPane={selectedUnregisteredPane?.parentPaneId != null
+                        ? props.panes.find((pane) => pane.id === selectedUnregisteredPane.parentPaneId) ?? null
+                        : null}
+                    context={enlistmentContext}
+                    suggestedTeamID={selectedUnregisteredPane?.suggestedTeamID ?? null}
+                    suggestedStorageLocation={selectedUnregisteredPane?.suggestedStorageLocation ?? "global"}
+                    suggestedRole={selectedUnregisteredPane?.suggestedRole ?? ""}
+                    onClose={() => setEnlistPaneId(null)}
+                    onEnlist={(request) => EnlistPane(orchestrator.EnlistPaneRequest.createFrom(request))}
+                />
             </div>
         </div>
     );

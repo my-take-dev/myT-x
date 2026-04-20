@@ -1,4 +1,4 @@
-import {useMemo} from "react";
+import {useLayoutEffect, useMemo, useRef} from "react";
 import {GeneralSettings} from "./GeneralSettings";
 import {KeybindSettings} from "./KeybindSettings";
 import {WorktreeSettings} from "./WorktreeSettings";
@@ -33,6 +33,13 @@ interface SettingsTabsProps {
 
 export function SettingsTabs({s, dispatch, validationRules}: SettingsTabsProps) {
     const {t} = useSettingsI18n();
+    const bodyRef = useRef<HTMLDivElement | null>(null);
+
+    useLayoutEffect(() => {
+        if (bodyRef.current) {
+            bodyRef.current.scrollTop = 0;
+        }
+    }, [s.activeCategory]);
 
     const handleCategoryKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, category: SettingsCategory) => {
         const currentIndex = SETTINGS_CATEGORIES.findIndex((item) => item.id === category);
@@ -110,7 +117,7 @@ export function SettingsTabs({s, dispatch, validationRules}: SettingsTabsProps) 
                 })}
             </nav>
 
-            <div className="settings-body">
+            <div ref={bodyRef} className="settings-body">
                 {SETTINGS_CATEGORIES.map((cat) => {
                     const isActive = s.activeCategory === cat.id;
                     return (

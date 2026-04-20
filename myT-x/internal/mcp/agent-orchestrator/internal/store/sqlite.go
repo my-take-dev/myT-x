@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
 
@@ -67,6 +69,8 @@ type execContexter interface {
 type scanner interface {
 	Scan(dest ...any) error
 }
+
+const messagePreviewChars = 240
 
 const taskSelectColumns = `task_id, agent_name, assignee_pane_id, sender_pane_id,
 sender_name, sender_instance_id, send_message_id, send_response_id,
@@ -198,6 +202,107 @@ func scanAgentStatus(sc scanner) (domain.AgentStatus, error) {
 	return status, nil
 }
 
+func normalizeTaskMessage(msg domain.TaskMessage) domain.TaskMessage {
+	msg.StorageMode = domain.NormalizeMessageStorageMode(msg.StorageMode)
+	if msg.ContentPreview == "" && msg.Content != "" {
+		msg.ContentPreview = buildMessagePreview(msg.Content)
+	}
+	if msg.ContentChars == 0 && msg.Content != "" {
+		msg.ContentChars = utf8.RuneCountInString(msg.Content)
+	}
+	if msg.SHA256 == "" && msg.Content != "" {
+		sum := sha256.Sum256([]byte(msg.Content))
+		msg.SHA256 = hex.EncodeToString(sum[:])
+	}
+	if msg.ArtifactPaths == nil {
+		msg.ArtifactPaths = []string{}
+	}
+	if msg.PartCount == 0 {
+		switch msg.StorageMode {
+		case domain.MessageStorageFile:
+			if len(msg.ArtifactPaths) > 0 {
+				msg.PartCount = 1
+			}
+		case domain.MessageStorageMultipartFile:
+			if len(msg.ArtifactPaths) > 1 {
+				msg.PartCount = len(msg.ArtifactPaths) - 1
+			}
+		}
+	}
+	return msg
+}
+
+func validateTaskMessage(msg domain.TaskMessage) error {
+	if !msg.StorageMode.IsValid() {
+		return fmt.Errorf("invalid storage_mode %q", msg.StorageMode)
+	}
+	return nil
+}
+
+func buildMessagePreview(content string) string {
+	runes := []rune(content)
+	if len(runes) <= messagePreviewChars {
+		return content
+	}
+	return string(runes[:messagePreviewChars])
+}
+
+func marshalArtifactPaths(paths []string) (string, error) {
+	if len(paths) == 0 {
+		return "[]", nil
+	}
+	raw, err := json.Marshal(paths)
+	if err != nil {
+		return "", fmt.Errorf("marshal artifact paths: %w", err)
+	}
+	return string(raw), nil
+}
+
+func unmarshalArtifactPaths(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}, nil
+	}
+	var paths []string
+	if err := json.Unmarshal([]byte(raw), &paths); err != nil {
+		return nil, fmt.Errorf("unmarshal artifact paths: %w", err)
+	}
+	if paths == nil {
+		return []string{}, nil
+	}
+	return paths, nil
+}
+
+func scanTaskMessage(sc scanner) (domain.TaskMessage, error) {
+	var msg domain.TaskMessage
+	var storageMode, preview, artifactPathsJSON, sha256Value string
+	if err := sc.Scan(
+		&msg.ID,
+		&msg.Content,
+		&msg.CreatedAt,
+		&storageMode,
+		&preview,
+		&artifactPathsJSON,
+		&msg.PartCount,
+		&msg.ContentChars,
+		&sha256Value,
+	); err != nil {
+		return domain.TaskMessage{}, err
+	}
+	msg.StorageMode = domain.MessageStorageMode(storageMode)
+	msg.ContentPreview = preview
+	msg.SHA256 = sha256Value
+	paths, err := unmarshalArtifactPaths(artifactPathsJSON)
+	if err != nil {
+		return domain.TaskMessage{}, err
+	}
+	msg.ArtifactPaths = paths
+	msg = normalizeTaskMessage(msg)
+	if err := validateTaskMessage(msg); err != nil {
+		return domain.TaskMessage{}, fmt.Errorf("scan task message %q: %w", msg.ID, err)
+	}
+	return msg, nil
+}
+
 // generateID generates a random hex ID with the given prefix.
 func generateID(prefix string) (string, error) {
 	b := make([]byte, 6)
@@ -308,12 +413,24 @@ func createTables(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS send_messages (
 			id         TEXT PRIMARY KEY,
 			content    TEXT NOT NULL,
-			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			storage_mode TEXT NOT NULL DEFAULT 'inline' CHECK (storage_mode IN ('inline', 'file', 'multipart_file')),
+			content_preview TEXT NOT NULL DEFAULT '',
+			artifact_paths_json TEXT NOT NULL DEFAULT '[]',
+			part_count INTEGER NOT NULL DEFAULT 0,
+			content_chars INTEGER NOT NULL DEFAULT 0,
+			sha256 TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS send_responses (
 			id         TEXT PRIMARY KEY,
 			content    TEXT NOT NULL,
-			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			storage_mode TEXT NOT NULL DEFAULT 'inline' CHECK (storage_mode IN ('inline', 'file', 'multipart_file')),
+			content_preview TEXT NOT NULL DEFAULT '',
+			artifact_paths_json TEXT NOT NULL DEFAULT '[]',
+			part_count INTEGER NOT NULL DEFAULT 0,
+			content_chars INTEGER NOT NULL DEFAULT 0,
+			sha256 TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS config (
 			key   TEXT PRIMARY KEY,
@@ -438,6 +555,66 @@ func createTables(db *sql.DB) error {
 			column: "group_id",
 			stmt:   `ALTER TABLE tasks ADD COLUMN group_id TEXT`,
 		},
+		{
+			table:  "send_messages",
+			column: "storage_mode",
+			stmt:   `ALTER TABLE send_messages ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'inline'`,
+		},
+		{
+			table:  "send_messages",
+			column: "content_preview",
+			stmt:   `ALTER TABLE send_messages ADD COLUMN content_preview TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			table:  "send_messages",
+			column: "artifact_paths_json",
+			stmt:   `ALTER TABLE send_messages ADD COLUMN artifact_paths_json TEXT NOT NULL DEFAULT '[]'`,
+		},
+		{
+			table:  "send_messages",
+			column: "part_count",
+			stmt:   `ALTER TABLE send_messages ADD COLUMN part_count INTEGER NOT NULL DEFAULT 0`,
+		},
+		{
+			table:  "send_messages",
+			column: "content_chars",
+			stmt:   `ALTER TABLE send_messages ADD COLUMN content_chars INTEGER NOT NULL DEFAULT 0`,
+		},
+		{
+			table:  "send_messages",
+			column: "sha256",
+			stmt:   `ALTER TABLE send_messages ADD COLUMN sha256 TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			table:  "send_responses",
+			column: "storage_mode",
+			stmt:   `ALTER TABLE send_responses ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'inline'`,
+		},
+		{
+			table:  "send_responses",
+			column: "content_preview",
+			stmt:   `ALTER TABLE send_responses ADD COLUMN content_preview TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			table:  "send_responses",
+			column: "artifact_paths_json",
+			stmt:   `ALTER TABLE send_responses ADD COLUMN artifact_paths_json TEXT NOT NULL DEFAULT '[]'`,
+		},
+		{
+			table:  "send_responses",
+			column: "part_count",
+			stmt:   `ALTER TABLE send_responses ADD COLUMN part_count INTEGER NOT NULL DEFAULT 0`,
+		},
+		{
+			table:  "send_responses",
+			column: "content_chars",
+			stmt:   `ALTER TABLE send_responses ADD COLUMN content_chars INTEGER NOT NULL DEFAULT 0`,
+		},
+		{
+			table:  "send_responses",
+			column: "sha256",
+			stmt:   `ALTER TABLE send_responses ADD COLUMN sha256 TEXT NOT NULL DEFAULT ''`,
+		},
 	}
 	for _, m := range migrations {
 		hasColumn, err := tableHasColumn(db, m.table, m.column)
@@ -454,8 +631,77 @@ func createTables(db *sql.DB) error {
 	if err := migrateTasksAgentForeignKey(db); err != nil {
 		return fmt.Errorf("migrate tasks agent foreign key: %w", err)
 	}
+	if err := migrateMessageStorageConstraints(db, "send_messages"); err != nil {
+		return fmt.Errorf("migrate send_messages storage constraint: %w", err)
+	}
+	if err := migrateMessageStorageConstraints(db, "send_responses"); err != nil {
+		return fmt.Errorf("migrate send_responses storage constraint: %w", err)
+	}
 
 	return nil
+}
+
+func migrateMessageStorageConstraints(db *sql.DB, tableName string) error {
+	createSQL, err := tableCreateSQL(db, tableName)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(createSQL, "CHECK (storage_mode IN ('inline', 'file', 'multipart_file'))") {
+		return nil
+	}
+
+	tempTableName := tableName + "__storage_mode_migration"
+	createStmt := fmt.Sprintf(`CREATE TABLE %s (
+		id         TEXT PRIMARY KEY,
+		content    TEXT NOT NULL,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		storage_mode TEXT NOT NULL DEFAULT 'inline' CHECK (storage_mode IN ('inline', 'file', 'multipart_file')),
+		content_preview TEXT NOT NULL DEFAULT '',
+		artifact_paths_json TEXT NOT NULL DEFAULT '[]',
+		part_count INTEGER NOT NULL DEFAULT 0,
+		content_chars INTEGER NOT NULL DEFAULT 0,
+		sha256 TEXT NOT NULL DEFAULT ''
+	)`, tempTableName)
+	copyStmt := fmt.Sprintf(`INSERT INTO %s (
+		id, content, created_at, storage_mode, content_preview, artifact_paths_json, part_count, content_chars, sha256
+	) SELECT
+		id, content, created_at, storage_mode, content_preview, artifact_paths_json, part_count, content_chars, sha256
+	FROM %s`, tempTableName, tableName)
+	dropStmt := fmt.Sprintf(`DROP TABLE %s`, tableName)
+	renameStmt := fmt.Sprintf(`ALTER TABLE %s RENAME TO %s`, tempTableName, tableName)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration for %s: %w", tableName, err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	for _, stmt := range []string{fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tempTableName), createStmt, copyStmt, dropStmt, renameStmt} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("apply %s migration %q: %w", tableName, stmt, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration for %s: %w", tableName, err)
+	}
+	tx = nil
+	return nil
+}
+
+func tableCreateSQL(db *sql.DB, tableName string) (string, error) {
+	var createSQL string
+	err := db.QueryRow(`SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = ?`, tableName).Scan(&createSQL)
+	if err != nil {
+		return "", fmt.Errorf("lookup sqlite_master for %s: %w", tableName, err)
+	}
+	if strings.TrimSpace(createSQL) == "" {
+		return "", fmt.Errorf("lookup sqlite_master for %s: %w", tableName, domain.ErrNotFound)
+	}
+	return createSQL, nil
 }
 
 func migrateTasksAgentForeignKey(db *sql.DB) (retErr error) {
@@ -1543,10 +1789,22 @@ func (s *Store) EndSessionByInstanceID(ctx context.Context, instanceID string) e
 
 // SaveMessage は送信メッセージを保存する。
 func (s *Store) SaveMessage(ctx context.Context, msg domain.TaskMessage) error {
-	_, err := s.db.ExecContext(
+	msg = normalizeTaskMessage(msg)
+	if err := validateTaskMessage(msg); err != nil {
+		return fmt.Errorf("save message %q: %w", msg.ID, err)
+	}
+	artifactPathsJSON, err := marshalArtifactPaths(msg.ArtifactPaths)
+	if err != nil {
+		return fmt.Errorf("save message %q: %w", msg.ID, err)
+	}
+	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO send_messages (id, content, created_at) VALUES (?, ?, ?)`,
-		msg.ID, msg.Content, msg.CreatedAt,
+		`INSERT INTO send_messages (
+			id, content, created_at, storage_mode, content_preview,
+			artifact_paths_json, part_count, content_chars, sha256
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		msg.ID, msg.Content, msg.CreatedAt, msg.StorageMode, msg.ContentPreview,
+		artifactPathsJSON, msg.PartCount, msg.ContentChars, msg.SHA256,
 	)
 	if err != nil {
 		return fmt.Errorf("save message %q: %w", msg.ID, err)
@@ -1556,27 +1814,43 @@ func (s *Store) SaveMessage(ctx context.Context, msg domain.TaskMessage) error {
 
 // DeleteMessage removes a persisted send message.
 func (s *Store) DeleteMessage(ctx context.Context, id string) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM send_messages WHERE id = ?`, id)
+	return s.deletePayloadRow(ctx, "send_messages", "message", id)
+}
+
+// DeleteResponse removes a persisted send response.
+func (s *Store) DeleteResponse(ctx context.Context, id string) error {
+	return s.deletePayloadRow(ctx, "send_responses", "response", id)
+}
+
+func (s *Store) deletePayloadRow(ctx context.Context, tableName string, noun string, id string) error {
+	result, err := s.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE id = ?`, tableName), id)
 	if err != nil {
-		return fmt.Errorf("delete message %q: %w", id, err)
+		return fmt.Errorf("delete %s %q: %w", noun, id, err)
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("delete message %q rows affected: %w", id, err)
+		return fmt.Errorf("delete %s %q rows affected: %w", noun, id, err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("delete message %q: %w", id, domain.ErrNotFound)
+		return fmt.Errorf("delete %s %q: %w", noun, id, domain.ErrNotFound)
 	}
 	return nil
 }
 
 // GetMessage は送信メッセージを取得する。
 func (s *Store) GetMessage(ctx context.Context, id string) (domain.TaskMessage, error) {
-	var msg domain.TaskMessage
-	err := s.db.QueryRowContext(
+	msg, err := scanTaskMessage(s.db.QueryRowContext(
 		ctx,
-		`SELECT id, content, created_at FROM send_messages WHERE id = ?`, id,
-	).Scan(&msg.ID, &msg.Content, &msg.CreatedAt)
+		`SELECT id, content, created_at,
+		        COALESCE(storage_mode, ''),
+		        COALESCE(content_preview, ''),
+		        COALESCE(artifact_paths_json, '[]'),
+		        COALESCE(part_count, 0),
+		        COALESCE(content_chars, 0),
+		        COALESCE(sha256, '')
+		   FROM send_messages WHERE id = ?`,
+		id,
+	))
 	if err != nil {
 		return domain.TaskMessage{}, wrapNotFound(err, fmt.Sprintf("get message %q", id))
 	}
@@ -1599,10 +1873,22 @@ func (s *Store) GetTaskBySendMessageID(ctx context.Context, sendMessageID string
 
 // SaveResponse は応答メッセージを保存する。
 func (s *Store) SaveResponse(ctx context.Context, msg domain.TaskMessage) error {
-	_, err := s.db.ExecContext(
+	msg = normalizeTaskMessage(msg)
+	if err := validateTaskMessage(msg); err != nil {
+		return fmt.Errorf("save response %q: %w", msg.ID, err)
+	}
+	artifactPathsJSON, err := marshalArtifactPaths(msg.ArtifactPaths)
+	if err != nil {
+		return fmt.Errorf("save response %q: %w", msg.ID, err)
+	}
+	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO send_responses (id, content, created_at) VALUES (?, ?, ?)`,
-		msg.ID, msg.Content, msg.CreatedAt,
+		`INSERT INTO send_responses (
+			id, content, created_at, storage_mode, content_preview,
+			artifact_paths_json, part_count, content_chars, sha256
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		msg.ID, msg.Content, msg.CreatedAt, msg.StorageMode, msg.ContentPreview,
+		artifactPathsJSON, msg.PartCount, msg.ContentChars, msg.SHA256,
 	)
 	if err != nil {
 		return fmt.Errorf("save response %q: %w", msg.ID, err)
@@ -1611,11 +1897,18 @@ func (s *Store) SaveResponse(ctx context.Context, msg domain.TaskMessage) error 
 }
 
 func (s *Store) GetResponse(ctx context.Context, id string) (domain.TaskMessage, error) {
-	var msg domain.TaskMessage
-	err := s.db.QueryRowContext(
+	msg, err := scanTaskMessage(s.db.QueryRowContext(
 		ctx,
-		`SELECT id, content, created_at FROM send_responses WHERE id = ?`, id,
-	).Scan(&msg.ID, &msg.Content, &msg.CreatedAt)
+		`SELECT id, content, created_at,
+		        COALESCE(storage_mode, ''),
+		        COALESCE(content_preview, ''),
+		        COALESCE(artifact_paths_json, '[]'),
+		        COALESCE(part_count, 0),
+		        COALESCE(content_chars, 0),
+		        COALESCE(sha256, '')
+		   FROM send_responses WHERE id = ?`,
+		id,
+	))
 	if err != nil {
 		return domain.TaskMessage{}, wrapNotFound(err, fmt.Sprintf("get response %q", id))
 	}
