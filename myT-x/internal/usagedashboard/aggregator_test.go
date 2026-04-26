@@ -5,90 +5,6 @@ import (
 	"time"
 )
 
-func TestUsageCounterTopN(t *testing.T) {
-	c := NewUsageCounter()
-	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
-	c.Add("alpha", now.Add(-time.Hour))
-	c.Add("alpha", now)
-	c.Add("beta", now.Add(-2*time.Hour))
-	c.Add("gamma", now)
-	c.Add("gamma", now)
-	c.Add("gamma", now.Add(time.Hour))
-	c.Add("", now) // empty name is ignored
-
-	top := c.TopN(10)
-	if len(top) != 3 {
-		t.Fatalf("expected 3 entries, got %d: %+v", len(top), top)
-	}
-	if top[0].Name != "gamma" || top[0].Count != 3 {
-		t.Errorf("rank 1 = %+v, want gamma×3", top[0])
-	}
-	if top[1].Name != "alpha" || top[1].Count != 2 {
-		t.Errorf("rank 2 = %+v, want alpha×2", top[1])
-	}
-	if top[2].Name != "beta" || top[2].Count != 1 {
-		t.Errorf("rank 3 = %+v, want beta×1", top[2])
-	}
-	if !top[0].LastUsedAt.Equal(now.Add(time.Hour)) {
-		t.Errorf("gamma.LastUsedAt = %v, want %v", top[0].LastUsedAt, now.Add(time.Hour))
-	}
-}
-
-func TestUsageCounterTopNLimit(t *testing.T) {
-	c := NewUsageCounter()
-	for range 5 {
-		c.Add("same-count", time.Time{})
-	}
-	c.Add("other", time.Time{})
-
-	top := c.TopN(1)
-	if len(top) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(top))
-	}
-	if top[0].Name != "same-count" {
-		t.Errorf("rank 1 = %q, want same-count", top[0].Name)
-	}
-}
-
-func TestUsageCounterTopNZeroLimitFallsBackToDefault(t *testing.T) {
-	c := NewUsageCounter()
-	for i := range TopRankingLimit + 3 {
-		c.Add(string(rune('a'+i)), time.Time{})
-	}
-
-	top := c.TopN(0)
-	if len(top) != TopRankingLimit {
-		t.Fatalf("len(top) = %d, want %d", len(top), TopRankingLimit)
-	}
-}
-
-func TestUsageCounterTopNTieBreakByName(t *testing.T) {
-	c := NewUsageCounter()
-	ts := time.Now()
-	c.Add("banana", ts)
-	c.Add("apple", ts)
-	c.Add("cherry", ts)
-
-	top := c.TopN(10)
-	if len(top) != 3 {
-		t.Fatalf("got %d entries", len(top))
-	}
-	if top[0].Name != "apple" || top[1].Name != "banana" || top[2].Name != "cherry" {
-		t.Errorf("alphabetic tie break failed: %+v", top)
-	}
-}
-
-func TestUsageCounterEmpty(t *testing.T) {
-	c := NewUsageCounter()
-	got := c.TopN(5)
-	if got == nil {
-		t.Error("TopN on empty counter returned nil; want non-nil slice")
-	}
-	if len(got) != 0 {
-		t.Errorf("len = %d, want 0", len(got))
-	}
-}
-
 func TestDailyAggregatorBuckets(t *testing.T) {
 	ref := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
 	agg := NewDailyAggregator(ref, 7)
@@ -152,6 +68,30 @@ func TestDailyAggregatorUTCBoundary(t *testing.T) {
 	}
 }
 
+func TestDailyAggregatorUTCWindowEdgesAndOffsets(t *testing.T) {
+	ref := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
+	agg := NewDailyAggregator(ref, DefaultDailyWindow)
+
+	oldestIncluded := time.Date(2026, 3, 17, 0, 0, 0, 0, time.UTC)
+	justOutside := oldestIncluded.Add(-time.Nanosecond)
+	jst := time.FixedZone("JST", 9*60*60)
+	pdt := time.FixedZone("PDT", -7*60*60)
+
+	agg.AddSession(oldestIncluded)
+	agg.AddSession(justOutside)
+	agg.AddSession(time.Date(2026, 4, 16, 0, 30, 0, 0, jst))
+	agg.AddSession(time.Date(2026, 4, 14, 17, 30, 0, 0, pdt))
+
+	buckets := agg.Buckets()
+	if buckets[0].Date != "2026-03-17" || buckets[0].Sessions != 1 {
+		t.Fatalf("oldest bucket = %+v, want 2026-03-17 sessions=1", buckets[0])
+	}
+	last := buckets[len(buckets)-1]
+	if last.Date != "2026-04-15" || last.Sessions != 2 {
+		t.Fatalf("newest bucket = %+v, want 2026-04-15 sessions=2", last)
+	}
+}
+
 func TestDailyAggregatorEmptyIsZero(t *testing.T) {
 	ref := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
 	agg := NewDailyAggregator(ref, 3)
@@ -162,5 +102,124 @@ func TestDailyAggregatorEmptyIsZero(t *testing.T) {
 	}
 	if agg.ActiveDays() != 0 {
 		t.Errorf("ActiveDays on empty = %d, want 0", agg.ActiveDays())
+	}
+}
+
+func TestNamedDailyAggregatorSeries(t *testing.T) {
+	ref := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	agg := NewNamedDailyAggregator(ref, 3)
+	agg.Add("alpha", ref.AddDate(0, 0, -2))
+	agg.Add("alpha", ref.AddDate(0, 0, -1))
+	agg.Add("beta", ref)
+	agg.Add("outside", ref.AddDate(0, 0, -3))
+	agg.Add("", ref)
+
+	series := agg.Series()
+	if len(series) != 2 {
+		t.Fatalf("len(series) = %d, want 2: %+v", len(series), series)
+	}
+	if series[0].Name != "alpha" || series[0].TotalCount != 2 {
+		t.Fatalf("series[0] = %+v, want alpha total=2", series[0])
+	}
+	if len(series[0].Buckets) != 3 {
+		t.Fatalf("len(alpha buckets) = %d, want 3", len(series[0].Buckets))
+	}
+	assertDailyUsageBucket(t, series[0].Buckets[0], "2026-04-13", 1)
+	assertDailyUsageBucket(t, series[0].Buckets[1], "2026-04-14", 1)
+	assertDailyUsageBucket(t, series[0].Buckets[2], "2026-04-15", 0)
+	if series[1].Name != "beta" || series[1].TotalCount != 1 {
+		t.Fatalf("series[1] = %+v, want beta total=1", series[1])
+	}
+}
+
+func TestNamedDailyAggregatorTopNSortsLikeRanking(t *testing.T) {
+	ref := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	agg := NewNamedDailyAggregator(ref, 3)
+	agg.Add("bravo", ref.Add(-3*time.Hour))
+	agg.Add("alpha", ref.Add(-3*time.Hour))
+	agg.Add("charlie", ref.Add(-4*time.Hour))
+	agg.Add("delta", ref.Add(-2*time.Hour))
+	agg.Add("delta", ref.Add(-1*time.Hour))
+
+	top := agg.TopN(4)
+	if len(top) != 4 {
+		t.Fatalf("len(top) = %d, want 4: %+v", len(top), top)
+	}
+	wantNames := []string{"delta", "alpha", "bravo", "charlie"}
+	for i, want := range wantNames {
+		if top[i].Name != want {
+			t.Fatalf("top[%d].Name = %q, want %q: %+v", i, top[i].Name, want, top)
+		}
+	}
+	if top[0].Count != 2 {
+		t.Fatalf("delta count = %d, want 2", top[0].Count)
+	}
+}
+
+func TestNamedDailyAggregatorTopNMatchesSeriesTotals(t *testing.T) {
+	ref := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	agg := NewNamedDailyAggregator(ref, 3)
+	agg.Add("alpha", ref)
+	agg.Add("alpha", ref)
+	agg.Add("beta", ref.AddDate(0, 0, -1))
+
+	top := agg.TopN(10)
+	series := agg.Series()
+	if len(top) != len(series) {
+		t.Fatalf("len(top) = %d, len(series) = %d", len(top), len(series))
+	}
+	for i := range top {
+		if top[i].Name != series[i].Name {
+			t.Fatalf("name mismatch at %d: top=%+v series=%+v", i, top[i], series[i])
+		}
+		if top[i].Count != series[i].TotalCount {
+			t.Fatalf("count mismatch for %s: ranking=%d series=%d", top[i].Name, top[i].Count, series[i].TotalCount)
+		}
+		if !top[i].LastUsedAt.Equal(series[i].LastUsedAt) {
+			t.Fatalf("last-used mismatch for %s: ranking=%v series=%v", top[i].Name, top[i].LastUsedAt, series[i].LastUsedAt)
+		}
+	}
+}
+
+func TestNamedDailyAggregatorTopSeriesMatchesTopNUniverse(t *testing.T) {
+	ref := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	agg := NewNamedDailyAggregator(ref, 3)
+	agg.Add("alpha", ref.Add(-3*time.Hour))
+	agg.Add("bravo", ref.Add(-2*time.Hour))
+	agg.Add("charlie", ref.Add(-1*time.Hour))
+
+	top := agg.TopN(2)
+	series := agg.TopSeries(2)
+	if len(top) != 2 || len(series) != 2 {
+		t.Fatalf("len(top)=%d len(series)=%d, want both 2", len(top), len(series))
+	}
+	for i := range top {
+		if top[i].Name != series[i].Name {
+			t.Fatalf("series[%d].Name = %q, want ranked item %q", i, series[i].Name, top[i].Name)
+		}
+	}
+	for _, item := range series {
+		if item.Name == "alpha" {
+			t.Fatalf("TopSeries included item outside the top 2: %+v", series)
+		}
+	}
+}
+
+func TestNamedDailyAggregatorEmptyIsNonNil(t *testing.T) {
+	ref := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	agg := NewNamedDailyAggregator(ref, DefaultDailyWindow)
+
+	if got := agg.TopN(10); got == nil || len(got) != 0 {
+		t.Fatalf("TopN() = %+v, want non-nil empty slice", got)
+	}
+	if got := agg.Series(); got == nil || len(got) != 0 {
+		t.Fatalf("Series() = %+v, want non-nil empty slice", got)
+	}
+}
+
+func assertDailyUsageBucket(t *testing.T, got DailyUsageBucket, wantDate string, wantCount int) {
+	t.Helper()
+	if got.Date != wantDate || got.Count != wantCount {
+		t.Fatalf("bucket = %+v, want date=%s count=%d", got, wantDate, wantCount)
 	}
 }

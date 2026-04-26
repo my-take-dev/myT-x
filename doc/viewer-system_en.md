@@ -95,7 +95,7 @@ Folders that contain no matching descendants are hidden recursively.
 
 | Kind | Display |
 |------|---------|
-| Markdown | `react-markdown` + GFM. Relative `<img>` resolved via `DevPanelReadBinary` to a blob URL |
+| Markdown | `react-markdown` + GFM. Relative `<img>` resolved via `DevPanelReadBinary` to a blob URL. Outline panel included (v1.0.9) |
 | Markmap | Mind map notation in Markdown rendered interactively via `markmap-view` |
 | Mermaid | `mermaid@11` (lazy load) |
 | Swagger / OpenAPI | `swagger-ui-react@5` (YAML/JSON, lazy load) |
@@ -104,6 +104,19 @@ Folders that contain no matching descendants are hidden recursively.
 | WaveDrom | Digital waveform diagram rendering |
 | SQLite | Table list + column info + virtualized row data + paging + CSV export |
 | Other | Raw text (line selection / copy supported) |
+
+### Markdown Outline (v1.0.9)
+
+When a `.md` file is open, an outline panel appears at the top of the right panel.
+
+| Action | How |
+|--------|-----|
+| Toggle outline | Click the collapse button on the panel header |
+| Jump to heading | Click a heading name in the outline |
+
+- Anchor IDs are auto-generated for headings (duplicates get a numeric suffix)
+- Clicking in-page links (`#heading-anchor`) smoothly scrolls to the target
+- The outline resets automatically when the file content changes
 
 ### Header Buttons
 
@@ -221,6 +234,40 @@ All changed files in a flat list with staging controls:
 | Red background | Deleted lines |
 | Gray background | Unchanged context lines |
 | "Expand hidden lines" | Expand collapsed sections |
+
+### Diff Review (Inline Comments)
+
+Inline comment feature exclusive to the Working Diff view (added in v1.0.9). Does not affect the git-graph Diff viewer.
+
+#### Adding Comments
+
+1. Hover over a diff line — a `+` button appears on the far left
+2. Click `+` to expand an inline comment textarea for that line
+3. Type a comment and click **Add** (or `Ctrl+Enter`) to save, or **Cancel** (`Escape`) to dismiss
+
+#### Sending from the Action Bar
+
+After adding comments, the action bar shows a badge with the comment count.
+
+| Element | Description |
+|---------|-------------|
+| 💬 Comments (N) | Number of saved comments |
+| Pane selector | Choose the destination pane |
+| **Send** button | Send all comments to the selected pane as Markdown via Bracketed Paste |
+
+#### Markdown Format
+
+```markdown
+# Code Review Comments
+
+## `src/utils/auth.ts` (L42)
+\`\`\`
+const token = getToken();
+\`\`\`
+> Missing null check for token. Please add logging.
+```
+
+Comments are cleared after sending.
 
 ---
 
@@ -458,6 +505,18 @@ Aggregates and visualizes Claude Code CLI and Codex CLI usage statistics scoped 
 | Top Slash Commands | Most-executed slash commands |
 | Daily Activity | Past 30-day activity (recharts BarChart, added in v1.0.5) |
 | Source Health Banner | Warns about read errors or missing data sources |
+
+### Category Section (v1.0.9)
+
+Category tabs have been added for Agents, Skills, and Slash Commands.
+
+| Element | Description |
+|---------|-------------|
+| Category tabs | Switch between Agent / Skill / SlashCommand |
+| Ranking view | Top-N list |
+| Daily chart view | Per-item daily bar chart (`ItemDailyUsageChart`) |
+| Single / Stacked toggle | Switch bar chart display mode |
+| Overflow grouping | Items outside Top N are grouped as "Others" |
 
 ### Cache and Refresh
 

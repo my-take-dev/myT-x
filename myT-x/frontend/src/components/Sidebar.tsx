@@ -1,11 +1,14 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import type {MouseEvent as ReactMouseEvent} from "react";
 import {FixedSizeList} from "react-window";
 import {api} from "../api";
 import {makeScrollStableOuter} from "./viewer/views/shared/TreeOuter";
 import {useContainerHeight} from "../hooks/useContainerHeight";
 import {useNotificationStore} from "../stores/notificationStore";
 import {useTmuxStore} from "../stores/tmuxStore";
+import {useDiffReviewStore} from "../stores/diffReviewStore";
 import type {SessionSnapshot} from "../types/tmux";
+import {buildDiffReviewSessionKey} from "./viewer/views/diff-view/diffReviewKeys";
 import {useI18n} from "../i18n";
 import {logFrontendEventSafe} from "../utils/logFrontendEventSafe";
 
@@ -24,6 +27,7 @@ interface SidebarProps {
 export function Sidebar(props: SidebarProps) {
     const {language, t} = useI18n();
     const setActiveSession = useTmuxStore((s) => s.setActiveSession);
+    const clearDiffReviewSessionState = useDiffReviewStore((state) => state.clearSessionState);
     const reorderSession = useTmuxStore((s) => s.reorderSession);
     const addNotification = useNotificationStore((s) => s.addNotification);
     const [editingSession, setEditingSession] = useState<string | null>(null);
@@ -58,8 +62,7 @@ export function Sidebar(props: SidebarProps) {
                 case "running":
                     return language === "en" ? "Running" : t("sidebar.sessionState.running", "Running");
             }
-            const _exhaustive: never = state;
-            return _exhaustive;
+            throw new Error(`Unhandled session visual state: ${state}`);
         },
         [language, t],
     );
@@ -114,6 +117,15 @@ export function Sidebar(props: SidebarProps) {
             renameInFlightRef.current.add(oldName);
             try {
                 await api.RenameSession(oldName, newName);
+                useTmuxStore.setState((state) => ({
+                    ...state,
+                    sessions: state.sessions.map((session) =>
+                        session.name === oldName ? {...session, name: newName} : session,
+                    ),
+                    sessionOrder: state.sessionOrder.map((sessionName) =>
+                        sessionName === oldName ? newName : sessionName,
+                    ),
+                }));
                 if (activeSessionRef.current === oldName) {
                     setActiveSession(newName);
                 }
@@ -134,7 +146,7 @@ export function Sidebar(props: SidebarProps) {
     );
 
     const handleKillClick = useCallback(
-        (e: React.MouseEvent, sessionName: string) => {
+        (e: ReactMouseEvent, sessionName: string) => {
             e.stopPropagation();
             setKillTarget(sessionName);
         },
@@ -168,6 +180,12 @@ export function Sidebar(props: SidebarProps) {
     const handleKillDone = useCallback(() => {
         const killed = killTarget;
         setKillTarget(null);
+        if (killed) {
+            const killedSession = props.sessions.find((session) => session.name === killed) ?? null;
+            if (killedSession != null) {
+                clearDiffReviewSessionState(buildDiffReviewSessionKey(killedSession.id));
+            }
+        }
         if (killed && props.activeSession === killed) {
             const remaining = props.sessions.filter((s) => s.name !== killed);
             const next = remaining[0];
@@ -177,7 +195,7 @@ export function Sidebar(props: SidebarProps) {
                 setActiveSession(null);
             }
         }
-    }, [activateSession, killTarget, props.activeSession, props.sessions, setActiveSession]);
+    }, [activateSession, clearDiffReviewSessionState, killTarget, props.activeSession, props.sessions, setActiveSession]);
 
     const rowData = useMemo<SessionRowData>(
         () => ({

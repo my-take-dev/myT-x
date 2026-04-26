@@ -4,8 +4,12 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {useAppImeRecovery} from "../src/hooks/useAppImeRecovery";
 import {useTmuxStore} from "../src/stores/tmuxStore";
 import {
+    IME_RECOVERY_AUTO_COOLDOWN_MS,
+    __resetTerminalFocusSuppressionsForTest,
+    isActiveTerminalTextEntryElement,
     isTerminalTextEntryElement,
     isTerminalImeRecoveryEvent,
+    suppressNextTerminalFocusImeRecovery,
     TERMINAL_IME_RECOVERY_EVENT,
     type TerminalImeRecoveryDetail,
 } from "../src/utils/imeRecovery";
@@ -46,12 +50,18 @@ async function flushRecoveryTimers(): Promise<void> {
     });
 }
 
-function appendTerminalInput(): HTMLTextAreaElement {
+function appendTerminalInput(paneId?: string): HTMLTextAreaElement {
+    const terminalPane = document.createElement("div");
+    terminalPane.className = "terminal-pane";
+    if (paneId !== undefined) {
+        terminalPane.setAttribute("data-terminal-pane-id", paneId);
+    }
     const terminalElement = document.createElement("div");
     terminalElement.className = "xterm";
     const terminalInput = document.createElement("textarea");
     terminalElement.appendChild(terminalInput);
-    document.body.appendChild(terminalElement);
+    terminalPane.appendChild(terminalElement);
+    document.body.appendChild(terminalPane);
     return terminalInput;
 }
 
@@ -94,6 +104,7 @@ describe("useAppImeRecovery", () => {
         document.body.innerHTML = "";
         vi.useRealTimers();
         vi.restoreAllMocks();
+        __resetTerminalFocusSuppressionsForTest();
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
     });
 
@@ -139,6 +150,193 @@ describe("useAppImeRecovery", () => {
         expect(recoveryEvents).toEqual([{paneId: "pane-1", reason: "window-focus"}]);
     });
 
+    it("runs soft recovery on active terminal focus without calling the backend", async () => {
+        const terminalInput = appendTerminalInput("pane-1");
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        act(() => {
+            terminalInput.focus();
+        });
+        await flushRecoveryTimers();
+
+        expect(apiMock.RecoverIMEWindowFocus).not.toHaveBeenCalled();
+        expect(recoveryEvents).toEqual([{paneId: "pane-1", reason: "terminal-focus"}]);
+    });
+
+    it("does not repeat terminal focus recovery during cooldown", async () => {
+        const terminalInput = appendTerminalInput("pane-1");
+        const otherInput = document.createElement("input");
+        document.body.appendChild(otherInput);
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        act(() => {
+            terminalInput.focus();
+        });
+        await flushRecoveryTimers();
+
+        act(() => {
+            otherInput.focus();
+            terminalInput.focus();
+        });
+        await flushRecoveryTimers();
+
+        expect(apiMock.RecoverIMEWindowFocus).not.toHaveBeenCalled();
+        expect(recoveryEvents).toEqual([{paneId: "pane-1", reason: "terminal-focus"}]);
+    });
+
+    it("uses the focused terminal pane id even before active pane state catches up", async () => {
+        const terminalInput = appendTerminalInput("pane-2");
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        act(() => {
+            terminalInput.focus();
+        });
+        await flushRecoveryTimers();
+
+        expect(apiMock.RecoverIMEWindowFocus).not.toHaveBeenCalled();
+        expect(recoveryEvents).toEqual([{paneId: "pane-2", reason: "terminal-focus"}]);
+    });
+
+    it("dispatches terminal focus recovery to the pane captured before the surface cycle", async () => {
+        const terminalInput = appendTerminalInput("pane-1");
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        act(() => {
+            terminalInput.focus();
+        });
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-2"/>);
+        });
+        await flushRecoveryTimers();
+
+        expect(recoveryEvents).toEqual([{paneId: "pane-1", reason: "terminal-focus"}]);
+    });
+
+    it("dispatches manual recovery to the focused terminal captured before the async cycle", async () => {
+        const terminalInput = appendTerminalInput("pane-1");
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        act(() => {
+            terminalInput.focus();
+        });
+        await flushRecoveryTimers();
+        recoveryEvents = [];
+
+        act(() => {
+            useTmuxStore.getState().triggerImeReset();
+        });
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-2"/>);
+        });
+        await flushRecoveryTimers();
+
+        expect(apiMock.RecoverIMEWindowFocus).toHaveBeenCalledTimes(1);
+        expect(recoveryEvents).toEqual([{paneId: "pane-1", reason: "manual"}]);
+    });
+
+    it("dispatches window focus recovery to the terminal captured before active pane changes", async () => {
+        const terminalInput = appendTerminalInput("pane-1");
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        act(() => {
+            terminalInput.focus();
+        });
+        await flushRecoveryTimers();
+        recoveryEvents = [];
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(IME_RECOVERY_AUTO_COOLDOWN_MS);
+        });
+        act(() => {
+            terminalInput.dispatchEvent(new FocusEvent("focusout", {bubbles: true, relatedTarget: null}));
+            window.dispatchEvent(new Event("blur"));
+            window.dispatchEvent(new Event("focus"));
+        });
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-2"/>);
+        });
+        await flushRecoveryTimers();
+
+        expect(recoveryEvents).toEqual([{paneId: "pane-1", reason: "window-focus"}]);
+    });
+
+    it("keeps terminal focus cooldown scoped to each pane", async () => {
+        const firstTerminalInput = appendTerminalInput("pane-1");
+        const secondTerminalInput = appendTerminalInput("pane-2");
+        const otherInput = document.createElement("input");
+        document.body.appendChild(otherInput);
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        act(() => {
+            firstTerminalInput.focus();
+        });
+        await flushRecoveryTimers();
+
+        act(() => {
+            otherInput.focus();
+            secondTerminalInput.focus();
+        });
+        await flushRecoveryTimers();
+
+        expect(recoveryEvents).toEqual([
+            {paneId: "pane-1", reason: "terminal-focus"},
+            {paneId: "pane-2", reason: "terminal-focus"},
+        ]);
+    });
+
+    it("skips the suppressed initial terminal focus recovery", async () => {
+        const terminalInput = appendTerminalInput("pane-1");
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        suppressNextTerminalFocusImeRecovery("pane-1");
+        act(() => {
+            terminalInput.focus();
+        });
+        await flushRecoveryTimers();
+
+        expect(recoveryEvents).toEqual([]);
+    });
+
+    it("does not dispatch terminal focus recovery during IME composition", async () => {
+        const terminalInput = appendTerminalInput("pane-1");
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        act(() => {
+            terminalInput.dispatchEvent(new Event("compositionstart", {bubbles: true}));
+            terminalInput.focus();
+        });
+        await flushRecoveryTimers();
+
+        expect(recoveryEvents).toEqual([]);
+    });
+
     it("restores a generic text input without dispatching terminal recovery", async () => {
         const input = document.createElement("input");
         document.body.appendChild(input);
@@ -159,6 +357,44 @@ describe("useAppImeRecovery", () => {
         expect(apiMock.RecoverIMEWindowFocus).toHaveBeenCalledTimes(1);
         expect(document.activeElement).toBe(input);
         expect(recoveryEvents).toEqual([]);
+    });
+
+    it("does not steal focus from non-terminal text inputs during automatic recovery", async () => {
+        const terminalInput = appendTerminalInput("pane-1");
+        const chatInput = document.createElement("textarea");
+        document.body.appendChild(chatInput);
+
+        act(() => {
+            root.render(<AppImeRecoveryProbe activePaneId="pane-1"/>);
+        });
+
+        act(() => {
+            terminalInput.focus();
+        });
+        await flushRecoveryTimers();
+        recoveryEvents = [];
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(IME_RECOVERY_AUTO_COOLDOWN_MS);
+        });
+        // The first terminal focus consumes the terminal-focus cooldown; this
+        // re-entry path verifies generic text inputs are still preserved after it.
+        act(() => {
+            terminalInput.dispatchEvent(new FocusEvent("focusout", {bubbles: true, relatedTarget: chatInput}));
+            chatInput.focus();
+        });
+        await flushRecoveryTimers();
+
+        expect(document.activeElement).toBe(chatInput);
+        expect(recoveryEvents).toEqual([]);
+    });
+
+    it("accepts terminal focus recovery events", () => {
+        const validEvent = new CustomEvent(TERMINAL_IME_RECOVERY_EVENT, {
+            detail: {paneId: "pane-1", reason: "terminal-focus"},
+        });
+
+        expect(isTerminalImeRecoveryEvent(validEvent)).toBe(true);
     });
 
     it("continues manual recovery when native focus recovery rejects", async () => {
@@ -185,6 +421,20 @@ describe("useAppImeRecovery", () => {
 
     it("treats a null element as a non-terminal text entry target", () => {
         expect(isTerminalTextEntryElement(null)).toBe(false);
+    });
+
+    it("identifies terminal text entry elements inside the active pane", () => {
+        const activeTerminalInput = appendTerminalInput("pane-1");
+        const inactiveTerminalInput = appendTerminalInput("pane-2");
+        const untaggedTerminalInput = appendTerminalInput();
+        const genericInput = document.createElement("input");
+        document.body.appendChild(genericInput);
+
+        expect(isActiveTerminalTextEntryElement(activeTerminalInput, "pane-1")).toBe(true);
+        expect(isActiveTerminalTextEntryElement(inactiveTerminalInput, "pane-1")).toBe(false);
+        expect(isActiveTerminalTextEntryElement(untaggedTerminalInput, "pane-1")).toBe(false);
+        expect(isActiveTerminalTextEntryElement(genericInput, "pane-1")).toBe(false);
+        expect(isActiveTerminalTextEntryElement(activeTerminalInput, null)).toBe(false);
     });
 
     it("rejects malformed terminal IME recovery events", () => {

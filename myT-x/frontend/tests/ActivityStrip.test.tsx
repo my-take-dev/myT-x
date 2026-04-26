@@ -45,8 +45,8 @@ vi.mock("../src/components/viewer/viewerStore", () => ({
         }),
 }));
 
-vi.mock("../src/components/viewer/viewerRegistry", () => ({
-    getRegisteredViews: () => mocked.views,
+vi.mock("../src/components/viewer/useRegisteredViews", () => ({
+    useRegisteredViews: () => mocked.views,
 }));
 
 import {ActivityStrip} from "../src/components/viewer/ActivityStrip";

@@ -189,8 +189,8 @@ describe("useEditor", () => {
         });
     });
 
-    it("treats a missing sessions array as an empty snapshot", () => {
-        mockSessions = undefined;
+    it("treats an empty sessions array as an empty snapshot", () => {
+        mockSessions = [];
 
         act(() => {
             root.render(<Probe/>);

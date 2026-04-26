@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,6 +34,56 @@ func TestMessageTemplateFieldCountGuard(t *testing.T) {
 	const expectedFieldCount = 2
 	if got := reflect.TypeFor[MessageTemplate]().NumField(); got != expectedFieldCount {
 		t.Fatalf("MessageTemplate field count = %d, want %d; update sanitization, payload builders, and this assertion", got, expectedFieldCount)
+	}
+}
+
+func TestApplyDefaultsAndValidate_AutoStartSanitization(t *testing.T) {
+	cfg := newValidConfigWithTaskScheduler()
+	cfg.AutoStart = []AutoStartCommand{
+		{Name: "  Mini Codex  ", Command: "  codex  ", Args: " --model gpt-5.4-mini "},
+		{Name: "Duplicate", Command: "CODEX", Args: "--model gpt-5.4-mini"},
+		{Name: "Empty", Command: "   ", Args: "--ignored"},
+		{Name: "Control", Command: "pwsh\x00.exe", Args: "-NoLogo\n"},
+	}
+
+	if err := applyDefaultsAndValidate(&cfg); err != nil {
+		t.Fatalf("applyDefaultsAndValidate: %v", err)
+	}
+	want := []AutoStartCommand{
+		{Name: "Mini Codex", Command: "codex", Args: "--model gpt-5.4-mini"},
+		{Name: "Control", Command: "pwsh.exe", Args: "-NoLogo"},
+	}
+	if !reflect.DeepEqual(cfg.AutoStart, want) {
+		t.Fatalf("AutoStart = %#v, want %#v", cfg.AutoStart, want)
+	}
+}
+
+func TestApplyDefaultsAndValidate_AutoStartLimitAndLengthSanitization(t *testing.T) {
+	cfg := newValidConfigWithTaskScheduler()
+	cfg.AutoStart = make([]AutoStartCommand, 0, MaxAutoStartCommands+1)
+	for i := range MaxAutoStartCommands + 1 {
+		cfg.AutoStart = append(cfg.AutoStart, AutoStartCommand{
+			Name:    strings.Repeat("n", MaxAutoStartNameLen+1),
+			Command: fmt.Sprintf("cmd-%02d-", i) + strings.Repeat("c", MaxAutoStartCommandLen),
+			Args:    strings.Repeat("a", MaxAutoStartArgsLen+1),
+		})
+	}
+
+	if err := applyDefaultsAndValidate(&cfg); err != nil {
+		t.Fatalf("applyDefaultsAndValidate: %v", err)
+	}
+	if len(cfg.AutoStart) != MaxAutoStartCommands {
+		t.Fatalf("len(AutoStart) = %d, want %d", len(cfg.AutoStart), MaxAutoStartCommands)
+	}
+	first := cfg.AutoStart[0]
+	if got := len([]rune(first.Name)); got != MaxAutoStartNameLen {
+		t.Fatalf("Name rune length = %d, want %d", got, MaxAutoStartNameLen)
+	}
+	if got := len([]rune(first.Command)); got != MaxAutoStartCommandLen {
+		t.Fatalf("Command rune length = %d, want %d", got, MaxAutoStartCommandLen)
+	}
+	if got := len([]rune(first.Args)); got != MaxAutoStartArgsLen {
+		t.Fatalf("Args rune length = %d, want %d", got, MaxAutoStartArgsLen)
 	}
 }
 

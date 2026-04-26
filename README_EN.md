@@ -43,13 +43,14 @@ md,openAPI(swagger),drawio...
 | Feature | Description |
 |---------|-------------|
 | Terminal Splitting | Left/right and top/bottom pane splits, 5 layout presets |
+| AutoStart | Launch commands into a new pane directly from the pane toolbar (up to 50 entries) |
 | Agent Teams | Team coordination with Claude Code / Codex CLI / Gemini CLI |
 | Auto Model Switch | Bulk or per-agent automatic model replacement for child agents |
 | Git Worktree | Independent working directories per branch (setup scripts + progress indicator) |
 | File View | Unified preview for Markdown / Mermaid / Swagger(OpenAPI) / draw.io / SQLite / Markmap / Vega / Vega-Lite / WaveDrom (`Ctrl+Shift+E`) |
 | SQLite Viewer | Read-only table list + row data + CSV export for `.db` / `.sqlite` / `.sqlite3` |
 | Prompt Presets | Register reusable prompt templates and append to chat input (global / project scopes, up to 200, `Ctrl+Shift+P`) |
-| Usage Dashboard | Visualize Claude Code / Codex usage stats (agents / skills / slash commands aggregation, 30-day daily activity, `Ctrl+Shift+U`) |
+| Usage Dashboard | Visualize Claude Code / Codex usage stats (agents / skills / slash commands, category tabs + daily bar charts, 30-day activity, `Ctrl+Shift+U`) |
 | 13 Viewers | Editor / File View / Git Graph / Diff / Input History / MCP Manager / Scheduler / Task Queue / Single Task Runner / Team Management / Usage Dashboard / Prompt Presets / Error Log |
 | Built-in MCP | Orchestration MCP + Single Task Runner MCP + 200+ LSP-MCP integrations |
 | Task Automation | Pane Scheduler (recurring) + Task Scheduler (sequential) + Single Task Runner (lightweight, `Ctrl+Shift+J`) |
@@ -58,7 +59,9 @@ md,openAPI(swagger),drawio...
 | Canvas Mode | Visualize task flows between agents (with manual root pane selection) |
 | Terminal Search | Incremental search, result counter, match highlighting (`Ctrl+F`) |
 | Quake Mode | Instantly summon the window with a hotkey |
-| Japanese IME | WebView2 process isolation + IME reset |
+| Diff Inline Comments | Hover a diff line → `+` button → inline textarea → send as Markdown to an AI pane in bulk (`Ctrl+Shift+D`) |
+| Markdown Outline | Collapsible outline panel in Markdown Preview (heading list + in-page jump) |
+| Japanese IME | WebView2 process isolation + IME reset + auto-recovery on terminal focus |
 
 ---
 

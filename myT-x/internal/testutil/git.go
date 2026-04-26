@@ -1,11 +1,18 @@
 package testutil
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
+)
+
+var (
+	localGitTransportOnce sync.Once
+	localGitTransportErr  error
 )
 
 // SkipIfNoGit skips the test if git is not available.
@@ -14,6 +21,77 @@ func SkipIfNoGit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found in PATH, skipping")
 	}
+}
+
+// SkipIfNoLocalGitTransport skips tests that require local clone/push transport.
+func SkipIfNoLocalGitTransport(t *testing.T) {
+	t.Helper()
+	SkipIfNoGit(t)
+
+	localGitTransportOnce.Do(func() {
+		localGitTransportErr = checkLocalGitTransport()
+	})
+	if localGitTransportErr != nil {
+		t.Skipf("local git transport unavailable: %v", localGitTransportErr)
+	}
+}
+
+func checkLocalGitTransport() error {
+	root, err := os.MkdirTemp("", "mytx-git-transport-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(root)
+
+	bareDir := filepath.Join(root, "origin.git")
+	workDir := filepath.Join(root, "work")
+	cloneDir := filepath.Join(root, "clone")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return fmt.Errorf("create work dir: %w", err)
+	}
+	if err := os.MkdirAll(cloneDir, 0o755); err != nil {
+		return fmt.Errorf("create clone dir: %w", err)
+	}
+
+	if out, err := runGitForTransportCheck(root, "init", "--bare", bareDir); err != nil {
+		return fmt.Errorf("git init --bare: %w: %s", err, out)
+	}
+	if out, err := runGitForTransportCheck(workDir, "init"); err != nil {
+		return fmt.Errorf("git init work tree: %w: %s", err, out)
+	}
+	if out, err := runGitForTransportCheck(workDir, "config", "user.email", "test@test.com"); err != nil {
+		return fmt.Errorf("git config user.email: %w: %s", err, out)
+	}
+	if out, err := runGitForTransportCheck(workDir, "config", "user.name", "Test"); err != nil {
+		return fmt.Errorf("git config user.name: %w: %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("# test"), 0o644); err != nil {
+		return fmt.Errorf("write seed file: %w", err)
+	}
+	if out, err := runGitForTransportCheck(workDir, "add", "."); err != nil {
+		return fmt.Errorf("git add: %w: %s", err, out)
+	}
+	if out, err := runGitForTransportCheck(workDir, "commit", "-m", "initial"); err != nil {
+		return fmt.Errorf("git commit: %w: %s", err, out)
+	}
+	if out, err := runGitForTransportCheck(workDir, "remote", "add", "origin", bareDir); err != nil {
+		return fmt.Errorf("git remote add: %w: %s", err, out)
+	}
+	if out, err := runGitForTransportCheck(workDir, "push", "-u", "origin", "HEAD"); err != nil {
+		return fmt.Errorf("git push local remote: %w: %s", err, out)
+	}
+	if out, err := runGitForTransportCheck(cloneDir, "clone", bareDir, "."); err != nil {
+		return fmt.Errorf("git clone local remote: %w: %s", err, out)
+	}
+	return nil
+}
+
+func runGitForTransportCheck(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(append([]string{}, os.Environ()...), "LC_ALL=C", "LC_MESSAGES=C", "LANG=C")
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 // ResolvePath resolves Windows 8.3 short paths (e.g., MYTAKE~1 -> mytakedev)

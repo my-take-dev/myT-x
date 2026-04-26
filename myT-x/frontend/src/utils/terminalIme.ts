@@ -63,6 +63,9 @@ export interface TerminalImeInputGate {
      *   onData payload arrives.
      *   **Required for RC-1/RC-2 to function.** Pass `""` if compositionend.data
      *   is unavailable — the gate falls back to first-payload dedup.
+     *   If `eventData` is stale and does not match the first printable payload,
+     *   the stale value is still deduped briefly but never promoted as the
+     *   prefix-rewrite base.
      */
     markCompositionEnd(eventData: string): void;
     /** Cancels an interrupted composition session without arming dedupe. */
@@ -137,6 +140,12 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
         /** performance.now() when the payload was accepted. Used as fallback when
          *  WebView2 timer coalescing causes the setTimeout to fire earlier than requested. */
         acceptedAt: number;
+        /**
+         * When true, this entry becomes the base for cumulative-input prefix rewriting.
+         * Use false for dedupe-only entries that were never forwarded to the backend
+         * (for example, stale compositionend predictions after pending mismatch).
+         */
+        tracksAsLastAccepted: boolean;
     }
     let composing = false;
     let commitWindowActive = false;
@@ -168,8 +177,16 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
      * @param preserveAcceptedAt - When rescheduling due to early timer fire,
      *   pass the original acceptedAt so elapsed time always converges and the
      *   timer is guaranteed to terminate. Omit for normal calls (new timestamp).
+     * @param tracksAsLastAccepted - When true, `input` becomes the base string
+     *   for cumulative committed-payload prefix rewriting.
+     *   Set to false for dedupe-only entries that should never become
+     *   `lastAcceptedInput`.
      */
-    const rememberRecentAccepted = (input: string, preserveAcceptedAt?: number): void => {
+    const rememberRecentAccepted = (
+        input: string,
+        preserveAcceptedAt?: number,
+        tracksAsLastAccepted: boolean = true,
+    ): void => {
         const existing = recentAccepted.get(input);
         if (existing !== undefined) {
             window.clearTimeout(existing.timer);
@@ -183,7 +200,7 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
             // so elapsed time always converges and the timer terminates.
             const elapsed = performance.now() - entry.acceptedAt;
             if (elapsed < COMMIT_DEDUPE_WINDOW_MS) {
-                rememberRecentAccepted(input, entry.acceptedAt);
+                rememberRecentAccepted(input, entry.acceptedAt, entry.tracksAsLastAccepted);
                 return;
             }
             recentAccepted.delete(input);
@@ -191,8 +208,18 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
                 lastAcceptedInput = null;
             }
         }, COMMIT_DEDUPE_WINDOW_MS);
-        recentAccepted.set(input, {timer: nextTimer, acceptedAt});
-        lastAcceptedInput = input;
+        recentAccepted.set(input, {timer: nextTimer, acceptedAt, tracksAsLastAccepted});
+        if (tracksAsLastAccepted) {
+            lastAcceptedInput = input;
+        }
+    };
+
+    const rememberRecentAcceptedPreservingFlag = (
+        input: string,
+        preserveAcceptedAt?: number,
+    ): void => {
+        const existing = recentAccepted.get(input);
+        rememberRecentAccepted(input, preserveAcceptedAt, existing?.tracksAsLastAccepted ?? true);
     };
 
     const isRecentAccepted = (input: string): boolean => {
@@ -212,12 +239,12 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
     };
 
     const refreshRecentAccepted = (): void => {
-        for (const input of Array.from(recentAccepted.keys())) {
+        for (const [input, entry] of Array.from(recentAccepted.entries())) {
             // Only refresh entries still within the dedupe window.
             // isRecentAccepted proactively cleans up expired entries,
             // so this avoids reviving entries that have already expired.
             if (isRecentAccepted(input)) {
-                rememberRecentAccepted(input);
+                rememberRecentAccepted(input, undefined, entry.tracksAsLastAccepted);
             }
         }
     };
@@ -229,7 +256,7 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
         if (input.length <= lastAcceptedInput.length || !input.startsWith(lastAcceptedInput)) {
             return null;
         }
-        rememberRecentAccepted(lastAcceptedInput);
+        rememberRecentAcceptedPreservingFlag(lastAcceptedInput);
         return input.slice(lastAcceptedInput.length);
     };
 
@@ -271,9 +298,8 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
         return rewritten === null ? input : rewritten;
     };
 
-    const suppressRecentDuplicate = (input: string): boolean => {
-        rememberRecentAccepted(input);
-        return false;
+    const suppressRecentDuplicate = (input: string): void => {
+        rememberRecentAcceptedPreservingFlag(input);
     };
 
     // Layer 4: Diagnostic logging for IME gate decisions. DEV-only to avoid
@@ -355,8 +381,24 @@ export function createTerminalImeInputGate(): TerminalImeInputGate {
                 }
                 // Accept the first printable payload after compositionend and keep
                 // duplicate suppression separate from future composition cycles.
-                logFilterDecision("accepted(commitWindow:firstPrintable)", input);
-                return filterCommittedPayload(input);
+                // The earlier pendingMatch branch already returned when
+                // pendingCommit === input, so any non-null value here is stale.
+                const stalePendingCommit = pendingCommit;
+                logFilterDecision(
+                    stalePendingCommit === null
+                        ? "accepted(commitWindow:firstPrintable)"
+                        : "accepted(commitWindow:firstPrintable:staleDrop)",
+                    input,
+                );
+                const filtered = filterCommittedPayload(input);
+                if (stalePendingCommit !== null) {
+                    // Chromium/WebView2 can report a stale compositionend.data that differs
+                    // from the first committed onData payload. Once the actual payload is
+                    // accepted, suppress the abandoned prediction briefly so it cannot leak
+                    // through as a second committed write.
+                    rememberRecentAccepted(stalePendingCommit, undefined, false);
+                }
+                return filtered;
             }
             // State: idle — no IME transition is active, so pass the payload through.
             if (isRecentAccepted(input)) {

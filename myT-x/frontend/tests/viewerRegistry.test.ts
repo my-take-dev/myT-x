@@ -3,6 +3,7 @@ import {getRegisteredViews, registerView, subscribeRegistry, type ViewPlugin} fr
 
 const DummyIcon = () => null;
 const DummyComponent = () => null;
+const REGISTRY_KEY = Symbol.for("mytx.viewer.registry");
 
 function plugin(id: string, overrides: Partial<ViewPlugin> = {}): ViewPlugin {
     return {
@@ -14,10 +15,26 @@ function plugin(id: string, overrides: Partial<ViewPlugin> = {}): ViewPlugin {
     };
 }
 
+function resetRegistry(): void {
+    const globalObject = globalThis as typeof globalThis & {
+        [key: symbol]: {
+            plugins: ViewPlugin[];
+            snapshot: readonly ViewPlugin[];
+            listeners: Set<() => void>;
+        } | undefined;
+    };
+    const state = globalObject[REGISTRY_KEY];
+    if (!state) {
+        return;
+    }
+    state.plugins.length = 0;
+    state.snapshot = [];
+    state.listeners.clear();
+}
+
 describe("viewerRegistry", () => {
     beforeEach(() => {
-        const mutable = getRegisteredViews() as ViewPlugin[];
-        mutable.splice(0, mutable.length);
+        resetRegistry();
     });
 
     it("defaults position to top", () => {

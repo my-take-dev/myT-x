@@ -1,6 +1,6 @@
 # Settings
 
-Open the settings screen from the **Settings** button in the top-left corner. It has 6 tabs.
+Open the settings screen from the **Settings** button in the top-left corner. It has 7 tabs.
 
 > Some settings require an application restart to take effect.
 
@@ -45,7 +45,40 @@ Click "Select folder..." or enter a path directly.
 
 ---
 
-## Tab 2: Key Bindings
+## Tab 2: AutoStart
+
+Register up to 50 commands to launch into a new pane directly from the pane toolbar.
+
+### Command Registration
+
+| Field | Description |
+|-------|-------------|
+| Display name | Name shown in the popover |
+| Command | The command to run (e.g. `codex`) |
+| Arguments | Arguments appended to the command as a raw suffix (e.g. `--model gpt-5.4-mini`) |
+
+Add entries with the "+" button; remove them with the × button.
+
+### How to Use
+
+1. Click the "AutoStart" button in the pane toolbar
+2. Select a command from the popover
+3. The current pane splits and the command launches immediately in the new pane
+
+### Config File Example
+
+```yaml
+auto_start:
+  - name: "Mini Codex"
+    command: "codex"
+    args: "--model gpt-5.4-mini"
+```
+
+> `args` is a raw suffix string appended after `command` (not an array).
+
+---
+
+## Tab 4: Key Bindings
 
 Customize the action keys pressed after the prefix key.
 
@@ -79,7 +112,7 @@ Customize keyboard shortcuts for each viewer:
 
 ---
 
-## Tab 3: Worktree (Git Integration)
+## Tab 4: Worktree (Git Integration)
 
 Available when creating sessions inside Git repositories.
 
@@ -116,7 +149,7 @@ Directories to copy recursively.
 
 ---
 
-## Tab 4: Agent Model
+## Tab 5: Agent Model
 
 Automatically switch child agent models in Claude Code Agent Teams.
 
@@ -156,7 +189,7 @@ Assign specific models to specific agents.
 
 ---
 
-## Tab 5: Claude Code Environment Variables
+## Tab 6: Claude Code Environment Variables
 
 Environment variables applied automatically when creating Claude Code sessions.
 
@@ -190,7 +223,7 @@ Add variables with "+ Add Environment Variable"; remove with the ✕ button.
 
 ---
 
-## Tab 6: Pane Environment Variables
+## Tab 7: Pane Environment Variables
 
 Additional environment variables applied to all panes.
 

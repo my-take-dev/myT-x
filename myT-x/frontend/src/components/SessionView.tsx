@@ -61,21 +61,21 @@ export function SessionView(props: SessionViewProps) {
     }, [canvasSessionName, props.session?.name, rootPaneId, sessionPaneIdSet, setRootPaneId]);
 
     const onFocusPane = useCallback((paneId: string) => {
-        void api.FocusPane(paneId).catch((err) => {
+        void api.FocusPane(paneId).catch((err: unknown) => {
             console.warn("[session-view] FocusPane failed", err);
             notifyAndLog("Focus pane", "warn", err, "SessionView");
         });
     }, []);
 
     const onSplitVertical = useCallback((paneId: string) => {
-        void api.SplitPane(paneId, true).catch((err) => {
+        void api.SplitPane(paneId, true).catch((err: unknown) => {
             console.warn("[session-view] SplitPane(vertical) failed", err);
             notifyAndLog("Split pane", "warn", err, "SessionView");
         });
     }, []);
 
     const onSplitHorizontal = useCallback((paneId: string) => {
-        void api.SplitPane(paneId, false).catch((err) => {
+        void api.SplitPane(paneId, false).catch((err: unknown) => {
             console.warn("[session-view] SplitPane(horizontal) failed", err);
             notifyAndLog("Split pane", "warn", err, "SessionView");
         });
@@ -90,21 +90,21 @@ export function SessionView(props: SessionViewProps) {
     );
 
     const onKillPane = useCallback((paneId: string) => {
-        void api.KillPane(paneId).catch((err) => {
+        void api.KillPane(paneId).catch((err: unknown) => {
             console.warn("[session-view] KillPane failed", err);
             notifyAndLog("Close pane", "warn", err, "SessionView");
         });
     }, []);
 
     const onRenamePane = useCallback((paneId: string, title: string) => {
-        void api.RenamePane(paneId, title).catch((err) => {
+        void api.RenamePane(paneId, title).catch((err: unknown) => {
             console.warn("[session-view] RenamePane failed", err);
             notifyAndLog("Rename pane", "warn", err, "SessionView");
         });
     }, []);
 
     const onSwapPane = useCallback((sourcePaneId: string, targetPaneId: string) => {
-        void api.SwapPanes(sourcePaneId, targetPaneId).catch((err) => {
+        void api.SwapPanes(sourcePaneId, targetPaneId).catch((err: unknown) => {
             console.warn("[session-view] SwapPanes failed", err);
             notifyAndLog("Swap panes", "warn", err, "SessionView");
         });
@@ -130,7 +130,7 @@ export function SessionView(props: SessionViewProps) {
             const snapshot = await api.QuickStartSession();
             if (!mountedRef.current) return;
             setActiveSession(snapshot.name);
-        } catch (err) {
+        } catch (err: unknown) {
             if (!mountedRef.current) return;
             const message = err instanceof Error
                 ? err.message
@@ -152,7 +152,7 @@ export function SessionView(props: SessionViewProps) {
         setCreatePaneError("");
         try {
             await api.CreatePaneInSession(sessionName);
-        } catch (err) {
+        } catch (err: unknown) {
             if (!mountedRef.current) return;
             const message = err instanceof Error
                 ? err.message
@@ -170,7 +170,7 @@ export function SessionView(props: SessionViewProps) {
         if (!sessionName) {
             return;
         }
-        void api.DetachSession(sessionName).catch((err) => {
+        void api.DetachSession(sessionName).catch((err: unknown) => {
             console.warn("[session-view] DetachSession failed", err);
             notifyAndLog("Detach session", "error", err, "SessionView");
         });

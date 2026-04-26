@@ -5,8 +5,10 @@ import type {Terminal} from "@xterm/xterm";
 import {SearchBar} from "./SearchBar";
 import {ConfirmDialog} from "./ConfirmDialog";
 import {AutoEnterPopover} from "./AutoEnterPopover";
+import {AutoStartPopover} from "./AutoStartPopover";
 import {PaneChatBar} from "./PaneChatBar";
 import {TerminalToolbar} from "./TerminalToolbar";
+import {api} from "../api";
 import {useTmuxStore} from "../stores/tmuxStore";
 import {useAutoEnterStore, startAutoEnter, stopAutoEnter} from "../stores/autoEnterStore";
 import {useCanvasStore} from "../stores/canvasStore";
@@ -17,6 +19,7 @@ import {useTerminalEvents} from "../hooks/useTerminalEvents";
 import {useTerminalResize} from "../hooks/useTerminalResize";
 import {useTerminalFontSize} from "../hooks/useTerminalFontSize";
 import {useI18n} from "../i18n";
+import type {AppConfigAutoStartCommand} from "../types/tmux";
 
 interface TerminalPaneProps {
     paneId: string;
@@ -32,6 +35,8 @@ interface TerminalPaneProps {
     onDetach: () => void;
 }
 
+const EMPTY_AUTO_START_ENTRIES: AppConfigAutoStartCommand[] = [];
+
 function TerminalPaneComponent(props: TerminalPaneProps) {
     const {language, t} = useI18n();
     const syncInputModeRef = useRef(false);
@@ -44,9 +49,11 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
     const fontSizeRef = useRef(fontSize);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const terminalRef = useRef<Terminal | null>(null);
+    const mountedRef = useRef(true);
     const searchAddonRef = useRef<SearchAddon | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const skipTitleCommitRef = useRef(false);
+    const autoStartCommandInFlightRef = useRef(false);
     const [titleDraft, setTitleDraft] = useState("");
     const [titleEditing, setTitleEditing] = useState(false);
     const [renameBusy, setRenameBusy] = useState(false);
@@ -54,8 +61,13 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
     const [searchOpen, setSearchOpen] = useState(false);
     const [scrollAtBottom, setScrollAtBottom] = useState(true);
     const [autoPopoverOpen, setAutoPopoverOpen] = useState(false);
+    const [autoStartPopoverOpen, setAutoStartPopoverOpen] = useState(false);
+    const [autoStartCommandInFlight, setAutoStartCommandInFlight] = useState(false);
 
     const paneTitle = (props.paneTitle || "").trim();
+    const activeSession = useTmuxStore((s) => s.activeSession);
+    const autoStartEntries = useTmuxStore((s) => s.config?.auto_start ?? EMPTY_AUTO_START_ENTRIES);
+    const hasAutoStartEntries = autoStartEntries.some((entry) => entry.command.trim());
     const canvasMode = useCanvasStore((s) => s.mode);
     const rootPaneId = useCanvasStore((s) => s.rootPaneId);
     const setRootPaneId = useCanvasStore((s) => s.setRootPaneId);
@@ -78,6 +90,13 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
     useEffect(() => {
         syncInputModeRef.current = syncInputMode;
     }, [syncInputMode]);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
 
     useEffect(() => {
         if (titleEditing) {
@@ -120,17 +139,17 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
     // 3. useTerminalResize and useTerminalFontSize are independent of each
     //    other but both depend on (1) and (2).
     //
-    // Each hook uses a local `disposed` flag set in its cleanup function.
-    // React calls cleanup in reverse hook-call order, so useTerminalFontSize
-    // and useTerminalResize cleanups run before useTerminalSetup's cleanup
-    // calls term.dispose(). The `disposed` flag guards against writes to an
-    // already-disposed terminal in async callbacks (RAF, setTimeout, Promise)
-    // that may fire between cleanup and disposal.
+    // Each async-scheduling hook owns its own cleanup guard. useTerminalSetup
+    // keeps a local disposed flag, while event/data/key handlers share
+    // TerminalEventShared.disposed. React calls cleanup in reverse hook-call
+    // order, so useTerminalFontSize and useTerminalResize cleanups run before
+    // useTerminalSetup disposes the terminal instance.
     // -----------------------------------------------------------------------
 
     // --- Terminal セットアップ（インスタンス生成・addon・WebGL・リプレイ） ---
     useTerminalSetup({
         paneId: props.paneId,
+        focusOnOpen: props.active,
         containerRef,
         terminalRef,
         searchAddonRef,
@@ -172,7 +191,7 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
 
     const handleAutoClick = useCallback(() => {
         if (autoRunning) {
-            void stopAutoEnter(props.paneId).catch((err) => {
+            void stopAutoEnter(props.paneId).catch((err: unknown) => {
                 console.warn("[DEBUG-auto-enter] stop failed", err);
                 notifyAndLog("Auto Enter stop", "warn", err, "TerminalPane");
             });
@@ -183,7 +202,7 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
 
     const handleAutoStart = useCallback((intervalSeconds: number) => {
         setAutoPopoverOpen(false);
-        void startAutoEnter(props.paneId, intervalSeconds).catch((err) => {
+        void startAutoEnter(props.paneId, intervalSeconds).catch((err: unknown) => {
             console.warn("[DEBUG-auto-enter] start failed", err);
             notifyAndLog("Auto Enter start", "warn", err, "TerminalPane");
         });
@@ -194,6 +213,42 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
         setAutoPopoverOpen(false);
         terminalRef.current?.focus();
     }, []);
+
+    const handleAutoStartPopoverClose = useCallback(() => {
+        setAutoStartPopoverOpen(false);
+        terminalRef.current?.focus();
+    }, []);
+
+    const handleAutoStartCommand = useCallback((entry: typeof autoStartEntries[number]) => {
+        if (autoStartCommandInFlightRef.current) {
+            return;
+        }
+        autoStartCommandInFlightRef.current = true;
+        setAutoStartCommandInFlight(true);
+        const capturedActiveSession = activeSession;
+        void api.StartAutoStartCommand(props.paneId, entry)
+            .then(() => {
+                if (!mountedRef.current || useTmuxStore.getState().activeSession !== capturedActiveSession) {
+                    return;
+                }
+                setAutoStartPopoverOpen(false);
+                terminalRef.current?.focus();
+            })
+            .catch((err: unknown) => {
+                console.warn("[DEBUG-auto-start] start failed", err);
+                notifyAndLog("AutoStart", "warn", err, "TerminalPane");
+                if (!mountedRef.current || useTmuxStore.getState().activeSession !== capturedActiveSession) {
+                    return;
+                }
+                terminalRef.current?.focus();
+            })
+            .finally(() => {
+                autoStartCommandInFlightRef.current = false;
+                if (mountedRef.current) {
+                    setAutoStartCommandInFlight(false);
+                }
+            });
+    }, [activeSession, props.paneId]);
 
     const handleAddMember = useCallback(() => {
         useViewerStore.getState().openViewWithContext("orchestrator-teams", {
@@ -206,9 +261,18 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
         setRootPaneId(isRootPane ? null : props.paneId);
     }, [isRootPane, props.paneId, setRootPaneId]);
 
+    const focusPaneAndTerminal = useCallback(() => {
+        props.onFocus(props.paneId);
+        terminalRef.current?.focus();
+    }, [props.onFocus, props.paneId]);
+    const focusTerminalOnly = useCallback(() => {
+        terminalRef.current?.focus();
+    }, []);
+
     return (
         <div
             className={`terminal-pane ${props.active ? "active" : ""}`}
+            data-terminal-pane-id={props.paneId}
             draggable
             onDragStart={(event) => {
                 event.dataTransfer.setData("text/plain", props.paneId);
@@ -222,14 +286,14 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                 if (event.dataTransfer.files.length > 0) return;
                 const sourcePaneId = event.dataTransfer.getData("text/plain");
                 if (sourcePaneId && sourcePaneId !== props.paneId) {
-                    void Promise.resolve(props.onSwapPane(sourcePaneId, props.paneId)).catch((err) => {
+                    void Promise.resolve(props.onSwapPane(sourcePaneId, props.paneId)).catch((err: unknown) => {
                         console.warn("[pane] swap failed", err);
                         notifyAndLog("Swap panes", "warn", err, "TerminalPane");
                     });
                 }
             }}
-            onClick={() => props.onFocus(props.paneId)}
-            onMouseDown={() => terminalRef.current?.focus()}
+            onMouseDown={focusTerminalOnly}
+            onClick={focusPaneAndTerminal}
         >
             <TerminalToolbar
                 paneId={props.paneId}
@@ -246,7 +310,7 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                         return;
                     }
                     // I-22: fire-and-forget async needs .catch() per defensive-coding #95
-                    void commitPaneTitle().catch((err) => {
+                    void commitPaneTitle().catch((err: unknown) => {
                         console.warn("[DEBUG-pane] commitPaneTitle failed", err);
                         notifyAndLog("Rename pane", "warn", err, "TerminalPane");
                     });
@@ -257,16 +321,16 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                     setTitleEditing(false);
                 }}
                 onAutoClick={handleAutoClick}
+                onAutoStartClick={() => setAutoStartPopoverOpen(true)}
+                autoStartDisabled={!hasAutoStartEntries || autoStartCommandInFlight}
                 onRootToggle={handleRootToggle}
                 onSplitVertical={() => {
-                    props.onFocus(props.paneId);
+                    focusPaneAndTerminal();
                     props.onSplitVertical(props.paneId);
-                    terminalRef.current?.focus();
                 }}
                 onSplitHorizontal={() => {
-                    props.onFocus(props.paneId);
+                    focusPaneAndTerminal();
                     props.onSplitHorizontal(props.paneId);
-                    terminalRef.current?.focus();
                 }}
                 onAddMember={handleAddMember}
                 onClose={() => setPendingPaneCloseConfirm(true)}
@@ -285,6 +349,15 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
                     <AutoEnterPopover
                         onStart={handleAutoStart}
                         onClose={handleAutoPopoverClose}
+                        preventTerminalFocusSteal={preventTerminalFocusSteal}
+                    />
+                )}
+                {autoStartPopoverOpen && hasAutoStartEntries && (
+                    <AutoStartPopover
+                        entries={autoStartEntries}
+                        onStart={handleAutoStartCommand}
+                        onClose={handleAutoStartPopoverClose}
+                        startDisabled={autoStartCommandInFlight}
                         preventTerminalFocusSteal={preventTerminalFocusSteal}
                     />
                 )}

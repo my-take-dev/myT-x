@@ -152,6 +152,20 @@ Useful for repetitive CI/CD tasks or automated AI agent instructions.
 
 ---
 
+## Japanese IME Recovery
+
+### Auto-Recovery (v1.0.9)
+
+When you return focus to a terminal pane, the IME input surface is automatically re-established.
+This does not steal focus from non-terminal inputs such as chat bars, search fields, or dialog inputs.
+
+### Manual Recovery
+
+If auto-recovery does not help, press the **↻ (IME Reset)** button in the top-right toolbar.
+This forces a WebView2 window focus re-acquisition and resets the IME context.
+
+---
+
 ## Editing Pane Names
 
 Click the pane name in the toolbar to enter edit mode.

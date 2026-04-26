@@ -543,6 +543,149 @@
     word-break: break-word;
 }
 
+.md-preview-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 24px;
+    min-height: 100%;
+}
+
+.md-preview-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.md-preview-outline {
+    position: sticky;
+    top: 8px;
+    flex: 0 0 240px;
+    align-self: flex-start;
+}
+
+.md-preview-outline.is-collapsed {
+    flex-basis: 32px;
+}
+
+.md-preview-outline-panel {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+    backdrop-filter: blur(8px);
+    overflow: hidden;
+}
+
+.md-preview-outline-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+}
+
+.md-preview-outline-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+}
+
+.md-preview-outline-toggle,
+.md-preview-outline-collapsed-toggle {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg-dim);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.md-preview-outline-collapsed-toggle {
+    border: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+    backdrop-filter: blur(8px);
+}
+
+.md-preview-outline-toggle:hover,
+.md-preview-outline-collapsed-toggle:hover,
+.md-preview-outline-toggle:focus-visible,
+.md-preview-outline-collapsed-toggle:focus-visible {
+    color: var(--fg-main);
+    background: var(--accent-06);
+    outline: none;
+}
+
+.md-preview-outline-chevron {
+    display: inline-flex;
+    transition: transform 0.15s ease;
+    transform: rotate(180deg);
+}
+
+.md-preview-outline-chevron.is-collapsed {
+    transform: rotate(0deg);
+}
+
+.md-preview-outline-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: min(60vh, 640px);
+    padding: 8px;
+    overflow: auto;
+}
+
+.md-preview-outline-item {
+    width: 100%;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg-dim);
+    text-align: left;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.md-preview-outline-item.depth-1 {
+    /* Top-level heading keeps the base padding. */
+}
+
+.md-preview-outline-item.depth-2 {
+    padding-left: 18px;
+}
+
+.md-preview-outline-item.depth-3 {
+    padding-left: 28px;
+}
+
+.md-preview-outline-item.depth-4 {
+    padding-left: 38px;
+}
+
+.md-preview-outline-item.depth-5 {
+    padding-left: 48px;
+}
+
+.md-preview-outline-item.depth-6 {
+    padding-left: 58px;
+}
+
+.md-preview-outline-item:hover,
+.md-preview-outline-item:focus-visible {
+    color: var(--fg-main);
+    background: var(--accent-06);
+    outline: none;
+}
+
 /* Headings */
 .md-preview-body h1,
 .md-preview-body h2,
@@ -554,6 +697,7 @@
     margin: 1.2em 0 0.6em;
     line-height: 1.3;
     font-weight: 600;
+    scroll-margin-top: 12px;
 }
 
 .md-preview-body h1 {

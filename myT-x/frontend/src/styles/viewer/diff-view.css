@@ -697,3 +697,214 @@
     opacity: 0.5;
     pointer-events: none;
 }
+
+/* ── Diff Review Comments ── */
+.diff-review-line-wrapper {
+    position: relative;
+}
+
+.diff-review-line-wrapper--range-selected {
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.diff-review-add-btn-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    flex-shrink: 0;
+}
+
+.diff-review-line-wrapper--range-selected .diff-review-add-btn-cell {
+    background: var(--accent-10);
+}
+
+.diff-review-add-btn {
+    width: 16px;
+    height: 1.5em;
+    border: none;
+    background: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 700;
+    opacity: 0;
+    transition: opacity 0.1s;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    line-height: 1;
+}
+
+.diff-review-line-wrapper:hover .diff-review-add-btn {
+    opacity: 1;
+}
+
+.diff-review-line-wrapper--range-selected .diff-review-add-btn,
+.diff-review-line-wrapper--range-anchor .diff-review-add-btn {
+    opacity: 1;
+}
+
+.diff-review-clear-btn {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.diff-review-clear-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.diff-review-add-btn:hover {
+    opacity: 1;
+    transform: scale(1.2);
+}
+
+.diff-comment-form {
+    padding: 8px 12px 8px 28px;
+    border-left: 2px solid var(--accent);
+    background: var(--bg-elev, rgba(255, 255, 255, 0.02));
+}
+
+.diff-comment-range-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.diff-comment-range-label {
+    color: var(--fg-dim);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.diff-comment-range-select {
+    min-width: 160px;
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--bg-input, var(--bg-panel));
+    color: var(--fg-main);
+}
+
+.diff-comment-range-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.diff-comment-textarea {
+    width: 100%;
+    min-height: 60px;
+    max-height: 160px;
+    resize: vertical;
+    background: var(--bg-input, var(--bg-panel));
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--fg-main);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    padding: 6px 8px;
+    box-sizing: border-box;
+}
+
+.diff-comment-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.diff-comment-form-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    justify-content: flex-end;
+}
+
+.diff-comment-btn {
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 3px 12px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-family: inherit;
+    background: transparent;
+    color: var(--fg-main);
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.diff-comment-btn:hover:not(:disabled) {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+.diff-comment-btn--primary {
+    background: var(--accent);
+    color: var(--bg-panel);
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+.diff-comment-btn--primary:hover:not(:disabled) {
+    filter: brightness(1.15);
+}
+
+.diff-comment-btn--primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Action bar review elements */
+.diff-review-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: var(--bg-panel);
+    font-size: 0.7rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    line-height: 1;
+}
+
+.diff-review-pane-select {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    color: var(--fg-main);
+    max-width: 140px;
+}
+
+.diff-review-pane-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.diff-review-send-btn:not(:disabled) {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.diff-review-send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.diff-review-error {
+    font-size: 0.72rem;
+    color: var(--danger);
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

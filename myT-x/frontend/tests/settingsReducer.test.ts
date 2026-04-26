@@ -9,6 +9,7 @@ describe("settingsReducer INITIAL_FORM guard", () => {
             "agentFrom",
             "agentTo",
             "allowedShells",
+            "autoStart",
             "chatOverlayPercentage",
             "claudeEnvDefaultEnabled",
             "claudeEnvEntries",
@@ -99,6 +100,13 @@ describe("settingsReducer INITIAL_FORM guard", () => {
                 keys: {},
                 quake_mode: true,
                 global_hotkey: "Ctrl+Shift+F12",
+                auto_start: [
+                    {
+                        name: "Mini Codex",
+                        command: "codex",
+                        args: "--model gpt-5.4-mini",
+                    },
+                ],
                 worktree: {
                     enabled: true,
                     force_cleanup: false,
@@ -132,6 +140,12 @@ describe("settingsReducer INITIAL_FORM guard", () => {
                     message: "Run daily checks",
                 },
             ],
+        });
+        expect(loaded.autoStart).toHaveLength(1);
+        expect(loaded.autoStart[0]).toMatchObject({
+            name: "Mini Codex",
+            command: "codex",
+            args: "--model gpt-5.4-mini",
         });
     });
 

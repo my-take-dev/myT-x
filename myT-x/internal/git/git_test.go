@@ -423,7 +423,7 @@ func TestDeleteLocalBranch(t *testing.T) {
 // createBareAndClone creates a bare repo and a clone for push/pull testing.
 func createBareAndClone(t *testing.T) (bareDir, cloneDir string) {
 	t.Helper()
-	testutil.SkipIfNoGit(t)
+	testutil.SkipIfNoLocalGitTransport(t)
 
 	bareDir = testutil.ResolvePath(t.TempDir())
 	cmd := exec.Command("git", "init", "--bare")

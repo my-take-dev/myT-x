@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sampleJSONL keeps "Task" intentionally to verify backward compatibility with
@@ -306,6 +307,146 @@ func TestParseFileWithRealPatterns(t *testing.T) {
 	}
 	if len(partial) != 0 {
 		t.Errorf("partial errors = %+v, want none", partial)
+	}
+}
+
+func TestParseHistoryFileCommandClassification(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.jsonl")
+	const project = `C:\Users\mytakedev\dev-myT-x\myT-x`
+	content := `{"display":"/Clear,","timestamp":1776218400000,"project":"C:\\Users\\mytakedev\\dev-myT-x\\myT-x","sessionId":"s1"}
+{"display":"/plugin install foo","timestamp":1776218401000,"project":"C:\\Users\\mytakedev\\dev-myT-x\\myT-x","sessionId":"s1"}
+{"display":"/simplify please","timestamp":1776218402000,"project":"C:\\Users\\mytakedev\\dev-myT-x\\myT-x","sessionId":"s1"}
+{"display":"/Feature-Dev:Feature-Dev D:\\repo","timestamp":1776218403000,"project":"C:\\Users\\mytakedev\\dev-myT-x\\myT-x","sessionId":"s1"}
+{"display":"plain prompt","timestamp":1776218404000,"project":"C:\\Users\\mytakedev\\dev-myT-x\\myT-x","sessionId":"s1"}
+{"display":"/zero-time","timestamp":0,"project":"C:\\Users\\mytakedev\\dev-myT-x\\myT-x","sessionId":"s1"}
+{"display":"/other-project","timestamp":1776218405000,"project":"D:\\elsewhere","sessionId":"s2"}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write history: %v", err)
+	}
+
+	var partial []string
+	records, err := ParseHistoryFile(path, func(p string) bool {
+		return strings.EqualFold(filepath.Clean(p), filepath.Clean(project))
+	}, &partial)
+	if err != nil {
+		t.Fatalf("ParseHistoryFile: %v", err)
+	}
+	if len(partial) != 0 {
+		t.Fatalf("partial errors = %+v, want none", partial)
+	}
+
+	skills := map[string]int{}
+	slash := map[string]int{}
+	for _, rec := range records {
+		switch rec.Type {
+		case RecordSkill:
+			skills[rec.Name]++
+		case RecordSlash:
+			slash[rec.Name]++
+		}
+	}
+	if slash["clear"] != 1 {
+		t.Errorf("built-in /clear slash count = %d, want 1", slash["clear"])
+	}
+	for _, name := range []string{"plugin", "simplify"} {
+		if slash[name] != 1 {
+			t.Errorf("%s slash count = %d, want 1; records=%+v", name, slash[name], records)
+		}
+	}
+	if skills["feature-dev:feature-dev"] != 1 {
+		t.Errorf("feature-dev:feature-dev skill count = %d, want 1; records=%+v", skills["feature-dev:feature-dev"], records)
+	}
+	if _, ok := slash["zero-time"]; ok {
+		t.Errorf("zero timestamp command was included: %+v", records)
+	}
+	if _, ok := skills["other-project"]; ok {
+		t.Errorf("other project command was included: %+v", records)
+	}
+	wantTime := time.UnixMilli(1776218401000).UTC()
+	for _, rec := range records {
+		if rec.Name == "plugin" && !rec.Timestamp.Equal(wantTime) {
+			t.Errorf("plugin timestamp = %v, want %v", rec.Timestamp, wantTime)
+		}
+	}
+}
+
+func TestParseHistoryFileMalformedJSONPartialError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.jsonl")
+	content := `{"display":"/simplify","timestamp":1776218400000,"project":"D:\\myT-x\\dev-myT-x","sessionId":"s1"}
+not-json
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write history: %v", err)
+	}
+
+	var partial []string
+	records, err := ParseHistoryFile(path, func(project string) bool {
+		return strings.EqualFold(filepath.Clean(project), filepath.Clean(`d:\MYT-X\DEV-MYT-X`))
+	}, &partial)
+	if err != nil {
+		t.Fatalf("ParseHistoryFile: %v", err)
+	}
+	if len(records) != 1 || records[0].Name != "simplify" || records[0].Type != RecordSlash {
+		t.Fatalf("records = %+v, want one simplify slash", records)
+	}
+	if len(partial) != 1 {
+		t.Fatalf("partial errors = %d, want 1: %+v", len(partial), partial)
+	}
+	if !strings.Contains(partial[0], "unmarshal history envelope") {
+		t.Fatalf("partial error = %q, want malformed history parse detail", partial[0])
+	}
+}
+
+func TestExtractDisplayCommandBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		display string
+		want    string
+	}{
+		{"empty", "", ""},
+		{"slash_only", "/  ", ""},
+		{"plain_prompt", "plain prompt", ""},
+		{"trims_punctuation", "/clear, next", "clear"},
+		{"trims_closing_paren", "/model) done", "model"},
+		{"normalizes_case", "/Feature-Dev:Feature-Dev D:\\repo", "feature-dev:feature-dev"},
+		{"keeps_allowed_dot", "/plugin.name?", "plugin.name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := extractDisplayCommand(tt.display); got != tt.want {
+				t.Fatalf("extractDisplayCommand(%q) = %q, want %q", tt.display, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseHistoryFileCapsMalformedJSONPartialErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.jsonl")
+	var content strings.Builder
+	for range maxHistoryPartialErrors + 3 {
+		content.WriteString("not-json\n")
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0o644); err != nil {
+		t.Fatalf("write history: %v", err)
+	}
+
+	var partial []string
+	records, err := ParseHistoryFile(path, func(string) bool { return true }, &partial)
+	if err != nil {
+		t.Fatalf("ParseHistoryFile: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %+v, want none", records)
+	}
+	if len(partial) != maxHistoryPartialErrors+1 {
+		t.Fatalf("partial errors = %d, want %d: %+v", len(partial), maxHistoryPartialErrors+1, partial)
+	}
+	if !strings.Contains(partial[len(partial)-1], "omitted 3 additional history parse errors") {
+		t.Fatalf("summary partial error = %q, want omitted-count summary", partial[len(partial)-1])
 	}
 }
 

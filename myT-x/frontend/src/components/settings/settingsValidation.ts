@@ -1,5 +1,5 @@
 import {getLanguage} from "../../i18n";
-import type {ClaudeEnvEntry, OverrideEntry, PaneEnvEntry} from "./types";
+import type {AutoStartEntry, ClaudeEnvEntry, OverrideEntry, PaneEnvEntry} from "./types";
 import {EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK, VALID_EFFORT_LEVELS} from "./constants";
 import {getViewerShortcutValue, VIEWER_SHORTCUTS} from "../viewer/viewerShortcutDefinitions";
 import {normalizeShortcut} from "../viewer/viewerShortcutUtils";
@@ -126,6 +126,90 @@ const BLOCKED_ENV_KEYS = new Set([
 
 /** POSIX準拠の環境変数名パターン: 英字またはアンダースコアで始まり、英数字とアンダースコアのみ */
 const ENV_VAR_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export const MAX_AUTO_START_COMMANDS = 50;
+export const MAX_AUTO_START_NAME_LENGTH = 100;
+export const MAX_AUTO_START_COMMAND_LENGTH = 200;
+export const MAX_AUTO_START_ARGS_LENGTH = 1000;
+
+function containsControlCharacter(value: string): boolean {
+    return /[\u0000-\u001f\u007f]/.test(value);
+}
+
+export function validateAutoStartSettings(entries: AutoStartEntry[]): Record<string, string> {
+    const errors: Record<string, string> = {};
+    const seenCommands = new Set<string>();
+    let runnableCount = 0;
+
+    entries.forEach((entry, i) => {
+        const rawName = entry.name;
+        const rawCommand = entry.command;
+        const rawArgs = entry.args ?? "";
+        const name = rawName.trim();
+        const command = rawCommand.trim();
+        const args = rawArgs.trim();
+        if (!name && !command && !args) {
+            return;
+        }
+        if (!command) {
+            errors[`auto_start_command_${i}`] = translateSettings(
+                "settings.validation.autoStart.commandRequired",
+                "コマンドは必須です",
+                "Command is required.",
+            );
+            return;
+        }
+        runnableCount++;
+        if ([rawName, rawCommand, rawArgs].some(containsControlCharacter)) {
+            errors[`auto_start_command_${i}`] = translateSettings(
+                "settings.validation.autoStart.controlChars",
+                "制御文字は使用できません",
+                "Control characters are not allowed.",
+            );
+            return;
+        }
+        if ([...name].length > MAX_AUTO_START_NAME_LENGTH) {
+            errors[`auto_start_name_${i}`] = translateSettings(
+                "settings.validation.autoStart.nameTooLong",
+                "表示名が長すぎます",
+                "Display name is too long.",
+            );
+        }
+        if ([...command].length > MAX_AUTO_START_COMMAND_LENGTH) {
+            errors[`auto_start_command_${i}`] = translateSettings(
+                "settings.validation.autoStart.commandTooLong",
+                "コマンドが長すぎます",
+                "Command is too long.",
+            );
+        }
+        if ([...args].length > MAX_AUTO_START_ARGS_LENGTH) {
+            errors[`auto_start_args_${i}`] = translateSettings(
+                "settings.validation.autoStart.argsTooLong",
+                "引数が長すぎます",
+                "Arguments are too long.",
+            );
+        }
+        const key = `${command.toLowerCase()}\u0000${args}`;
+        if (seenCommands.has(key)) {
+            errors[`auto_start_command_${i}`] = translateSettings(
+                "settings.validation.autoStart.duplicate",
+                "同じコマンドと引数が重複しています",
+                "Command and arguments are duplicated.",
+            );
+        }
+        seenCommands.add(key);
+    });
+
+    if (runnableCount > MAX_AUTO_START_COMMANDS) {
+        errors.auto_start = translateSettings(
+            "settings.validation.autoStart.tooMany",
+            "AutoStart は最大 {max} 件までです",
+            "AutoStart supports up to {max} entries.",
+            {max: MAX_AUTO_START_COMMANDS},
+        );
+    }
+    return errors;
+}
 
 export function validateAgentModelSettings(
     agentFrom: string,

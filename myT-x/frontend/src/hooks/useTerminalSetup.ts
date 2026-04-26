@@ -6,6 +6,7 @@ import {Terminal} from "@xterm/xterm";
 import {BrowserOpenURL} from "../../wailsjs/runtime/runtime";
 import {api} from "../api";
 import {useTmuxStore} from "../stores/tmuxStore";
+import {suppressNextTerminalFocusImeRecovery} from "../utils/imeRecovery";
 
 // ---------------------------------------------------------------------------
 // webglUnavailable: モジュールスコープのフラグ
@@ -23,6 +24,7 @@ import {useTmuxStore} from "../stores/tmuxStore";
 // allow recovery from transient GPU resource exhaustion.
 let webglUnavailable = false;
 let webglUnavailableSince: number | null = null;
+let webglSupportProbe: boolean | null = null;
 
 // 30 seconds: allows GPU driver recovery from transient context loss
 // while preventing immediate retry storms. Only applies to newly opened
@@ -43,8 +45,36 @@ function shouldAttemptWebgl(): boolean {
     return false;
 }
 
+function hasWebglSupport(): boolean {
+    if (webglSupportProbe !== null) {
+        return webglSupportProbe;
+    }
+    if (typeof document === "undefined") {
+        webglSupportProbe = false;
+        return false;
+    }
+    if (typeof WebGL2RenderingContext === "undefined" && typeof WebGLRenderingContext === "undefined") {
+        webglSupportProbe = false;
+        return false;
+    }
+    try {
+        const canvas = document.createElement("canvas");
+        webglSupportProbe = Boolean(canvas.getContext("webgl2") ?? canvas.getContext("webgl"));
+    } catch {
+        webglSupportProbe = false;
+    }
+    return webglSupportProbe;
+}
+
+export function __resetTerminalWebglProbeForTest(): void {
+    webglSupportProbe = null;
+    webglUnavailable = false;
+    webglUnavailableSince = null;
+}
+
 interface UseTerminalSetupOptions {
     paneId: string;
+    focusOnOpen: boolean;
     containerRef: MutableRefObject<HTMLDivElement | null>;
     terminalRef: MutableRefObject<Terminal | null>;
     searchAddonRef: MutableRefObject<SearchAddon | null>;
@@ -65,19 +95,20 @@ interface UseTerminalSetupOptions {
  * There is no lint rule to enforce this; the contract is purely by convention.
  *
  * 依存配列: [paneId] — paneId が変わるたびに Terminal を再生成する。
- * fontSize はエフェクト実行時にストアから直接取得する。以後の変更は useTerminalFontSize が担う。
+ * focusOnOpen is sampled only when a pane opens. Pane creation in the backend
+ * marks the new pane active; later pane switches are handled by explicit focus paths.
+ * fontSize is read from the store when the terminal opens. Later changes are handled by useTerminalFontSize.
  */
 export function useTerminalSetup({
-                                     paneId,
-                                     containerRef,
-                                     terminalRef,
-                                     searchAddonRef,
-                                     fitAddonRef,
-                                 }: UseTerminalSetupOptions): void {
+    paneId,
+    focusOnOpen,
+    containerRef,
+    terminalRef,
+    searchAddonRef,
+    fitAddonRef,
+}: UseTerminalSetupOptions): void {
     useEffect(() => {
-        // fontSize はエフェクト実行時の最新値をストアから直接取得する。
-        // 依存配列が [paneId] のみのため、パラメータの fontSize はクロージャに
-        // キャプチャされた時点の値が陳腐化する可能性がある。
+        // Read font size at open time because this effect only recreates the terminal when paneId changes.
         const currentFontSize = useTmuxStore.getState().fontSize;
 
         const term = new Terminal({
@@ -126,20 +157,21 @@ export function useTerminalSetup({
         if (containerRef.current) {
             term.open(containerRef.current);
             fitAddon.fit();
-            term.focus();
+            if (focusOnOpen) {
+                suppressNextTerminalFocusImeRecovery(paneId);
+                term.focus();
+            }
             // I-27: Notify backend of the initial terminal size after first fit.
             // Without this call, the backend uses the default 120x40 size.
-            void api.ResizePane(paneId, term.cols, term.rows).catch((err) => {
-                if (import.meta.env.DEV) {
-                    console.warn(`[DEBUG-terminal] initial ResizePane failed for pane=${paneId}`, err);
-                }
+            void api.ResizePane(paneId, term.cols, term.rows).catch((err: unknown) => {
+                console.warn(`[terminal] initial ResizePane failed for pane=${paneId}`, err);
             });
         }
 
         // WebGL addon を非同期ロード。
         // disposed チェックと loadAddon の間に微小な競合窓があるため
         // try-catch で disposed 後の操作エラーを安全に吸収する。
-        if (shouldAttemptWebgl()) {
+        if (shouldAttemptWebgl() && hasWebglSupport()) {
             void import("@xterm/addon-webgl")
                 .then(({WebglAddon}) => {
                     // 二重チェック: import 完了前に disposed になったケースを弾く
@@ -161,18 +193,14 @@ export function useTerminalSetup({
                             setRendererMode("dom");
                             term.refresh(0, term.rows - 1);
                         });
-                    } catch (err) {
-                        if (import.meta.env.DEV) {
-                            console.warn(`[DEBUG-terminal-renderer] WebGL loadAddon failed for pane=${paneId}`, err);
-                        }
+                    } catch (err: unknown) {
+                        console.warn(`[terminal-renderer] WebGL loadAddon failed for pane=${paneId}`, err);
                         webglUnavailable = true;
                         webglUnavailableSince = Date.now();
                     }
                 })
-                .catch((err) => {
-                    if (import.meta.env.DEV) {
-                        console.warn(`[DEBUG-terminal-renderer] WebGL addon import failed for pane=${paneId}`, err);
-                    }
+                .catch((err: unknown) => {
+                    console.warn(`[terminal-renderer] WebGL addon import failed for pane=${paneId}`, err);
                     webglUnavailable = true;
                     webglUnavailableSince = Date.now();
                 });
@@ -186,16 +214,12 @@ export function useTerminalSetup({
                 // 非同期のため微小な競合窓が残る。try-catch で安全に吸収する。
                 try {
                     term.write(replay);
-                } catch (err) {
-                    if (import.meta.env.DEV) {
-                        console.warn(`[DEBUG-terminal] replay write failed (terminal may be disposed) for pane=${paneId}`, err);
-                    }
+                } catch (err: unknown) {
+                    console.warn(`[terminal] replay write failed for pane=${paneId}`, err);
                 }
             })
-            .catch((err) => {
-                if (import.meta.env.DEV) {
-                    console.warn(`[DEBUG-terminal] replay load failed for pane=${paneId}`, err);
-                }
+            .catch((err: unknown) => {
+                console.warn(`[terminal] replay load failed for pane=${paneId}`, err);
             });
 
         return () => {
@@ -206,6 +230,9 @@ export function useTerminalSetup({
             searchAddonRef.current = null;
             fitAddonRef.current = null;
         };
+        // focusOnOpen is intentionally sampled only when a pane opens. Backend pane
+        // creation marks the new pane active; later focus changes are driven
+        // by explicit user/window focus paths.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [paneId]);
 }

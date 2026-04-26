@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {GetUsageDashboard} from "../../../../../wailsjs/go/main/App";
-import type {usagedashboard} from "../../../../../wailsjs/go/models";
+import {usagedashboard} from "../../../../../wailsjs/go/models";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
 
 export type UsageMode = "claude" | "codex" | "both";
@@ -75,7 +75,7 @@ export function useUsageDashboard(mode: UsageMode): UseUsageDashboardResult {
             .then((result) => {
                 if (!isMountedRef.current) return;
                 if (capturedSessionKey !== latestSessionKeyRef.current) return;
-                setSnapshot(result);
+                setSnapshot(usagedashboard.UsageDashboardSnapshot.createFrom(result));
                 setError(null);
             })
             .catch((err: unknown) => {

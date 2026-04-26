@@ -2,6 +2,7 @@ shell: powershell.exe
 prefix: Ctrl+b
 quake_mode: true
 global_hotkey: Ctrl+Shift+F12
+auto_start: []
 keys:
   split-vertical: "%"
   split-horizontal: "\""
@@ -34,6 +35,12 @@ websocket_port: 0
 # default_session_dir: クイックスタートで使用するデフォルト作業ディレクトリ
 # 未設定の場合はアプリ起動時のカレントディレクトリが使用されます
 # default_session_dir: "C:\\Users\\username\\projects"
+# auto_start: ペインツールバーの AutoStart から新規ペインで即時起動するコマンド
+# args は配列ではなく command の後ろへそのまま連結される文字列です
+# auto_start:
+#   - name: "Mini Codex"
+#     command: "codex"
+#     args: "--model gpt-5.4-mini"
 # claude_env: Claude Code専用の環境変数設定
 # default_enabled: 新規セッション作成時のチェックボックスのデフォルト値
 # vars: Claude Codeプロセスに設定する環境変数のキー・バリューペア

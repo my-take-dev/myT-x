@@ -4,6 +4,10 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {ClaudePanel} from "../src/components/viewer/views/usage-dashboard/ClaudePanel";
 import {CodexPanel} from "../src/components/viewer/views/usage-dashboard/CodexPanel";
 import {DailyActivityChart} from "../src/components/viewer/views/usage-dashboard/DailyActivityChart";
+import {
+    buildStackedItemDailyUsageData,
+    buildStackedTooltipRows,
+} from "../src/components/viewer/views/usage-dashboard/ItemDailyUsageChart";
 import {OverviewCards} from "../src/components/viewer/views/usage-dashboard/OverviewCards";
 import {RankingTable} from "../src/components/viewer/views/usage-dashboard/RankingTable";
 import {SourceHealthBanner} from "../src/components/viewer/views/usage-dashboard/SourceHealthBanner";
@@ -22,12 +26,19 @@ vi.mock("recharts", () => ({
     CartesianGrid: () => <g data-testid="cartesian-grid"/>,
     XAxis: () => <g data-testid="x-axis"/>,
     YAxis: () => <g data-testid="y-axis"/>,
-    Tooltip: () => <g data-testid="tooltip"/>,
-    Bar: ({fill, dataKey}: {fill?: string; dataKey?: string}) => (
+    Tooltip: ({wrapperStyle}: {wrapperStyle?: React.CSSProperties}) => (
+        <g
+            data-testid="tooltip"
+            data-pointer-events={String(wrapperStyle?.pointerEvents ?? "")}
+        />
+    ),
+    Bar: ({fill, dataKey, name, stackId}: {fill?: string; dataKey?: string; name?: string; stackId?: string}) => (
         <rect
             data-testid="chart-bar"
             data-fill={fill}
             data-key={String(dataKey ?? "")}
+            data-name={String(name ?? "")}
+            data-stack-id={String(stackId ?? "")}
         />
     ),
 }));
@@ -286,6 +297,9 @@ describe("usage dashboard components", () => {
             skills: [],
             agents: [],
             slash_commands: [],
+            skills_daily: [],
+            agents_daily: [],
+            slash_commands_daily: [],
             daily_activity: [],
             health: {
                 jsonl_available: true,
@@ -302,6 +316,8 @@ describe("usage dashboard components", () => {
             total_spawned_agents: 3,
             skills: [],
             agents: [],
+            skills_daily: [],
+            agents_daily: [],
             daily_activity: [],
             health: {
                 jsonl_available: true,
@@ -326,13 +342,308 @@ describe("usage dashboard components", () => {
         expect(container.textContent).toContain("このフォルダではまだspawn_agent呼び出しが確認されていません。");
     });
 
-    it("hydrates generated usage models with non-null health defaults", () => {
-        const claude = new usageDashboardModels.ClaudeUsageStats({});
-        const codex = new usageDashboardModels.CodexUsageStats({});
+    it("defaults a category daily graph to all stacked items", () => {
+        const claudeStats = {
+            total_sessions: 1,
+            active_days: 2,
+            total_messages: 2,
+            total_tool_uses: 3,
+            skills: [
+                {name: "alpha", count: 2, last_used_at: "2026-04-15T20:00:00Z"},
+                {name: "beta", count: 1, last_used_at: "2026-04-14T20:00:00Z"},
+            ],
+            agents: [
+                {name: "agent-one", count: 1, last_used_at: "2026-04-15T20:00:00Z"},
+            ],
+            slash_commands: [],
+            skills_daily: [
+                {
+                    name: "alpha",
+                    total_count: 2,
+                    last_used_at: "2026-04-15T20:00:00Z",
+                    buckets: [
+                        {date: "2026-04-14", count: 1},
+                        {date: "2026-04-15", count: 1},
+                    ],
+                },
+                {
+                    name: "beta",
+                    total_count: 1,
+                    last_used_at: "2026-04-14T20:00:00Z",
+                    buckets: [
+                        {date: "2026-04-14", count: 1},
+                        {date: "2026-04-15", count: 0},
+                    ],
+                },
+            ],
+            agents_daily: [
+                {
+                    name: "agent-one",
+                    total_count: 1,
+                    last_used_at: "2026-04-15T20:00:00Z",
+                    buckets: [
+                        {date: "2026-04-14", count: 0},
+                        {date: "2026-04-15", count: 1},
+                    ],
+                },
+            ],
+            slash_commands_daily: [],
+            daily_activity: [],
+            health: {
+                jsonl_available: true,
+                history_available: true,
+                sqlite_available: false,
+                project_dir: "D:/myT-x/dev-myT-x",
+                partial_errors: [],
+            },
+        } satisfies usagedashboard.ClaudeUsageStats;
 
+        act(() => {
+            root.render(<ClaudePanel stats={claudeStats}/>);
+        });
+
+        expect(container.querySelector(".usage-dashboard-ranking-row")?.textContent).toContain("alpha");
+
+        const dailyTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".usage-dashboard-view-toggle-btn"))
+            .find((button) => button.textContent === "Daily");
+        expect(dailyTab).toBeTruthy();
+
+        act(() => {
+            dailyTab?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+        });
+
+        const selector = container.querySelector<HTMLSelectElement>(".usage-dashboard-item-select");
+        expect(selector).toBeTruthy();
+        expect(selector?.value).toBe("all");
+
+        const bars = container.querySelectorAll('.usage-dashboard-item-chart [data-testid="chart-bar"]');
+        expect(bars).toHaveLength(2);
+        expect(bars[0]?.getAttribute("data-stack-id")).toBe("usage-items");
+        expect(bars[0]?.getAttribute("data-name")).toBe("alpha");
+        expect(bars[1]?.getAttribute("data-stack-id")).toBe("usage-items");
+        expect(bars[1]?.getAttribute("data-name")).toBe("beta");
+        expect(container.querySelector('.usage-dashboard-item-chart [data-testid="tooltip"]')?.getAttribute("data-pointer-events"))
+            .toBe("auto");
+
+        act(() => {
+            if (!selector) return;
+            selector.value = "item:beta";
+            selector.dispatchEvent(new Event("change", {bubbles: true}));
+        });
+
+        expect(container.querySelector<HTMLSelectElement>(".usage-dashboard-item-select")?.value).toBe("item:beta");
+        const singleBar = container.querySelector('.usage-dashboard-item-chart [data-testid="chart-bar"]');
+        expect(singleBar?.getAttribute("data-key")).toBe("count");
+        expect(singleBar?.getAttribute("data-stack-id")).toBe("");
+
+        const agentsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".usage-dashboard-subtab"))
+            .find((button) => button.textContent === "Agents (1)");
+        act(() => {
+            agentsTab?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+        });
+
+        expect(container.querySelector<HTMLSelectElement>(".usage-dashboard-item-select")?.value).toBe("all");
+        const agentBar = container.querySelector('.usage-dashboard-item-chart [data-testid="chart-bar"]');
+        expect(agentBar?.getAttribute("data-stack-id")).toBe("usage-items");
+        expect(agentBar?.getAttribute("data-name")).toBe("agent-one");
+    });
+
+    it("builds all-item daily tooltip totals and sorted non-zero rows", () => {
+        const dailySeries = [
+            {
+                name: "alpha",
+                total_count: 4,
+                last_used_at: "2026-04-15T20:00:00Z",
+                buckets: [
+                    {date: "2026-04-14", count: 1},
+                    {date: "2026-04-15", count: 3},
+                    {date: "2026-04-16", count: 0},
+                ],
+            },
+            {
+                name: "beta",
+                total_count: 2,
+                last_used_at: "2026-04-15T20:00:00Z",
+                buckets: [
+                    {date: "2026-04-14", count: 2},
+                    {date: "2026-04-15", count: 0},
+                    {date: "2026-04-16", count: 0},
+                ],
+            },
+        ] satisfies usagedashboard.DailyUsageSeries[];
+
+        const chartData = buildStackedItemDailyUsageData(dailySeries);
+
+        expect(chartData.series.map((series) => series.key)).toEqual(["item_0", "item_1"]);
+        expect(chartData.data).toHaveLength(3);
+        expect(chartData.data[0]?.date).toBe("2026-04-14");
+        expect(chartData.data[0]?.total).toBe(3);
+        const firstDay = chartData.data[0];
+        const zeroDay = chartData.data[2];
+        if (!firstDay || !zeroDay) {
+            throw new Error("missing chart day");
+        }
+        expect(buildStackedTooltipRows(firstDay).map((row) => `${row.name}:${row.count}`))
+            .toEqual(["beta:2", "alpha:1"]);
+        expect(zeroDay.total).toBe(0);
+        expect(buildStackedTooltipRows(zeroDay)).toEqual([]);
+    });
+
+    it("uses dedicated stack colors and collapses overflow series into Other", () => {
+        const dailySeries = Array.from({length: 10}, (_, index) => ({
+            name: `item-${index + 1}`,
+            total_count: index + 1,
+            last_used_at: `2026-04-${String(index + 1).padStart(2, "0")}T20:00:00Z`,
+            buckets: [
+                {date: "2026-04-15", count: index + 1},
+            ],
+        })) satisfies usagedashboard.DailyUsageSeries[];
+
+        const chartData = buildStackedItemDailyUsageData(dailySeries);
+
+        expect(chartData.series).toHaveLength(8);
+        expect(chartData.series.map((series) => series.color)).toEqual([
+            "var(--udash-stack-color-1)",
+            "var(--udash-stack-color-2)",
+            "var(--udash-stack-color-3)",
+            "var(--udash-stack-color-4)",
+            "var(--udash-stack-color-5)",
+            "var(--udash-stack-color-6)",
+            "var(--udash-stack-color-7)",
+            "var(--udash-stack-color-8)",
+        ]);
+        expect(chartData.series[7]?.name).toBe("Other");
+        expect(chartData.data[0]?.item_7).toBe(27);
+    });
+
+    it("uses ranking item counts and hides unranked daily series", () => {
+        const codexStats = {
+            total_sessions: 1,
+            active_days: 1,
+            total_prompts: 0,
+            total_spawned_agents: 12,
+            skills: [],
+            agents: Array.from({length: 10}, (_, index) => ({
+                name: `agent-${index + 1}`,
+                count: 1,
+                last_used_at: "2026-04-15T20:00:00Z",
+            })),
+            skills_daily: [],
+            agents_daily: Array.from({length: 12}, (_, index) => ({
+                name: `agent-${index + 1}`,
+                total_count: 1,
+                last_used_at: "2026-04-15T20:00:00Z",
+                buckets: [{date: "2026-04-15", count: 1}],
+            })),
+            daily_activity: [],
+            health: {
+                jsonl_available: true,
+                history_available: true,
+                sqlite_available: true,
+                project_dir: "D:/myT-x/dev-myT-x",
+                partial_errors: [],
+            },
+        } satisfies usagedashboard.CodexUsageStats;
+
+        act(() => {
+            root.render(<CodexPanel stats={codexStats}/>);
+        });
+
+        expect(container.querySelector(".usage-dashboard-subtab")?.textContent).toBe("Agents (10)");
+
+        const dailyTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".usage-dashboard-view-toggle-btn"))
+            .find((button) => button.textContent === "Daily");
+        act(() => {
+            dailyTab?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+        });
+
+        const options = Array.from(container.querySelectorAll<HTMLOptionElement>(".usage-dashboard-item-select option"))
+            .map((option) => option.textContent);
+        expect(options).toHaveLength(11);
+        expect(options).toContain("agent-10 (1)");
+        expect(options).not.toContain("agent-11 (1)");
+        expect(options).not.toContain("agent-12 (1)");
+    });
+
+    it("shows the existing empty style when a daily category has no items", () => {
+        const codexStats = {
+            total_sessions: 1,
+            active_days: 0,
+            total_prompts: 0,
+            total_spawned_agents: 0,
+            skills: [],
+            agents: [],
+            skills_daily: [],
+            agents_daily: [],
+            daily_activity: [],
+            health: {
+                jsonl_available: true,
+                history_available: true,
+                sqlite_available: true,
+                project_dir: "D:/myT-x/dev-myT-x",
+                partial_errors: [],
+            },
+        } satisfies usagedashboard.CodexUsageStats;
+
+        act(() => {
+            root.render(<CodexPanel stats={codexStats}/>);
+        });
+
+        const dailyTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".usage-dashboard-view-toggle-btn"))
+            .find((button) => button.textContent === "Daily");
+        act(() => {
+            dailyTab?.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+        });
+
+        expect(container.querySelector(".usage-dashboard-ranking-empty")?.textContent)
+            .toContain("No spawn_agent calls observed in this folder yet.");
+    });
+
+    it("hydrates generated usage models when nested source data is provided", () => {
+        const claude = usageDashboardModels.ClaudeUsageStats.createFrom({
+            skills: [{name: "skill-a", count: 1, last_used_at: "2026-04-15T20:00:00Z"}],
+            skills_daily: [
+                {
+                    name: "skill-a",
+                    total_count: 1,
+                    last_used_at: "2026-04-15T20:00:00Z",
+                    buckets: [{date: "2026-04-15", count: 1}],
+                },
+            ],
+            health: {
+                jsonl_available: true,
+                history_available: true,
+                sqlite_available: false,
+                project_dir: "D:/myT-x/dev-myT-x",
+                partial_errors: [],
+            },
+        });
+        const codex = usageDashboardModels.CodexUsageStats.createFrom({
+            daily_activity: [{date: "2026-04-15", sessions: 1, secondary: 0, tool_calls: 2}],
+            agents_daily: [
+                {
+                    name: "agent-a",
+                    total_count: 1,
+                    last_used_at: "2026-04-15T20:00:00Z",
+                    buckets: [{date: "2026-04-15", count: 1}],
+                },
+            ],
+            health: {
+                jsonl_available: true,
+                history_available: true,
+                sqlite_available: true,
+                project_dir: "D:/myT-x/dev-myT-x",
+                partial_errors: [],
+            },
+        });
+
+        expect(claude.health).toBeInstanceOf(usageDashboardModels.SourceHealth);
         expect(claude.health.partial_errors).toEqual([]);
-        expect(codex.health.partial_errors).toEqual([]);
-        expect(claude.skills).toEqual([]);
-        expect(codex.daily_activity).toEqual([]);
+        expect(claude.skills[0]).toBeInstanceOf(usageDashboardModels.UsageEntry);
+        expect(claude.skills_daily[0]).toBeInstanceOf(usageDashboardModels.DailyUsageSeries);
+        expect(claude.skills_daily[0]?.buckets[0]).toBeInstanceOf(usageDashboardModels.DailyUsageBucket);
+        expect(codex.health).toBeInstanceOf(usageDashboardModels.SourceHealth);
+        expect(codex.daily_activity[0]).toBeInstanceOf(usageDashboardModels.DailyBucket);
+        expect(codex.agents_daily[0]).toBeInstanceOf(usageDashboardModels.DailyUsageSeries);
     });
 });

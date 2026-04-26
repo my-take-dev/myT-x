@@ -1,9 +1,11 @@
 package usagedashboard
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -45,16 +47,11 @@ func setupFakeHome(t *testing.T) (homeDir, workDir string) {
 }
 
 func escapePath(p string) string {
-	out := make([]byte, 0, len(p)*2)
-	for i := 0; i < len(p); i++ {
-		c := p[i]
-		if c == '\\' {
-			out = append(out, '\\', '\\')
-			continue
-		}
-		out = append(out, c)
+	encoded, err := json.Marshal(p)
+	if err != nil {
+		panic(err)
 	}
-	return string(out)
+	return string(encoded[1 : len(encoded)-1])
 }
 
 func setupSlowAggregationHome(t *testing.T, repeats int) (homeDir, workDir string) {
@@ -264,6 +261,41 @@ func TestGetUsageDashboardPartialClaudeMiss(t *testing.T) {
 	}
 }
 
+func TestGetUsageDashboardClaudeHistoryOnlyPopulatesSlashCommands(t *testing.T) {
+	home := t.TempDir()
+	workDir := filepath.Join(home, "myT-x", "dev-myT-x")
+	claudeHome := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeHome, 0o755); err != nil {
+		t.Fatalf("mkdir claude home: %v", err)
+	}
+	history := `{"display":"/simplify please","timestamp":1776247200000,"project":"` + escapePath(workDir) + `","sessionId":"history-s1"}
+{"display":"/clear","timestamp":1776247201000,"project":"` + escapePath(workDir) + `","sessionId":"history-s1"}
+`
+	if err := os.WriteFile(filepath.Join(claudeHome, "history.jsonl"), []byte(history), 0o644); err != nil {
+		t.Fatalf("write history: %v", err)
+	}
+
+	svc := newTestService(t, home, workDir)
+	snapshot, err := svc.GetUsageDashboard("sess", "claude", false)
+	if err != nil {
+		t.Fatalf("GetUsageDashboard: %v", err)
+	}
+	c := snapshot.Claude
+	if c == nil {
+		t.Fatal("Claude stats nil")
+	}
+	if !c.Health.HistoryAvailable {
+		t.Error("history.jsonl should be reported as available")
+	}
+	if c.Health.JsonlAvailable {
+		t.Error("project JSONL should be unavailable in history-only fixture")
+	}
+	assertUsageEntryCount(t, c.SlashCommands, "simplify", 1)
+	assertUsageEntryCount(t, c.SlashCommands, "clear", 1)
+	assertDailySeriesCount(t, c.SlashCommandsDaily, "simplify", 1)
+	assertDailySeriesBucket(t, c.SlashCommandsDaily, "simplify", "2026-04-15", 1)
+}
+
 func TestNewServicePanicsOnMissingDeps(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -362,6 +394,40 @@ func TestGetUsageDashboardClaudeQualifiedSlashToSkills(t *testing.T) {
 	}
 }
 
+func TestGetUsageDashboardClaudeHistoryDeduplicatesMainSlashMarkers(t *testing.T) {
+	const fixture = `{"type":"user","timestamp":"2026-04-15T10:00:00Z","sessionId":"history-s1","message":{"role":"user","content":"<command-name>/simplify</command-name>"}}
+{"type":"user","timestamp":"2026-04-15T10:00:01Z","sessionId":"history-s1","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"user","timestamp":"2026-04-15T10:00:02Z","sessionId":"history-s1","message":{"role":"user","content":"<command-name>/feature-dev:feature-dev</command-name>"}}
+{"type":"assistant","timestamp":"2026-04-15T10:00:02Z","sessionId":"history-s1","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"go-test-patterns"}}]}}
+`
+	home, workDir, _ := writeClaudeFixture(t, fixture)
+	history := `{"display":"/simplify please","timestamp":1776247200000,"project":"` + escapePath(workDir) + `","sessionId":"history-s1"}
+{"display":"/clear","timestamp":1776247201000,"project":"` + escapePath(workDir) + `","sessionId":"history-s1"}
+{"display":"/Feature-Dev:Feature-Dev please","timestamp":1776247202000,"project":"` + escapePath(workDir) + `","sessionId":"history-s1"}
+`
+	if err := os.WriteFile(filepath.Join(home, ".claude", "history.jsonl"), []byte(history), 0o644); err != nil {
+		t.Fatalf("write history: %v", err)
+	}
+
+	svc := newTestService(t, home, workDir)
+	snapshot, err := svc.GetUsageDashboard("sess", "claude", false)
+	if err != nil {
+		t.Fatalf("GetUsageDashboard: %v", err)
+	}
+	c := snapshot.Claude
+	if c == nil {
+		t.Fatal("Claude stats nil")
+	}
+	assertUsageEntryCount(t, c.SlashCommands, "simplify", 1)
+	assertUsageEntryCount(t, c.Skills, "go-test-patterns", 1)
+	assertUsageEntryCount(t, c.Skills, "feature-dev:feature-dev", 1)
+	assertUsageEntryCount(t, c.SlashCommands, "clear", 1)
+	if c.TotalToolUses != 2 {
+		t.Fatalf("TotalToolUses = %d, want 2 (history qualified slash + direct Skill)", c.TotalToolUses)
+	}
+	assertDailyActivityBucket(t, c.DailyActivity, "2026-04-15", 2)
+}
+
 // TestGetUsageDashboardClaudeSubagentAggregation verifies that subagent
 // subdirectory jsonl files contribute to Skills/Agents/ToolCalls but do NOT
 // inflate TotalSessions or TotalMessages.
@@ -369,9 +435,11 @@ func TestGetUsageDashboardClaudeSubagentAggregation(t *testing.T) {
 	const mainFixture = `{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","sessionId":"main-s1","message":{"role":"assistant","content":[{"type":"tool_use","name":"Agent","input":{"subagent_type":"Explore"}}]}}
 {"type":"user","timestamp":"2026-04-15T10:00:01Z","sessionId":"main-s1","message":{"role":"user","content":"hello"}}
 `
-	// Subagent file: has isSidechain=true and its own Agent/Skill tool_use.
+	// Subagent file: has isSidechain=true and its own Agent/Skill/tool/slash use.
 	const subFixture = `{"type":"assistant","timestamp":"2026-04-15T10:05:00Z","sessionId":"sub-a","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","name":"Agent","input":{"subagent_type":"golang-expert"}}]}}
 {"type":"assistant","timestamp":"2026-04-15T10:05:01Z","sessionId":"sub-a","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"go-test-patterns"}}]}}
+{"type":"assistant","timestamp":"2026-04-15T10:05:02Z","sessionId":"sub-a","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}
+{"type":"user","timestamp":"2026-04-15T10:05:03Z","sessionId":"sub-a","isSidechain":true,"message":{"role":"user","content":"<command-name>/compact</command-name>"}}
 {"type":"user","timestamp":"2026-04-15T10:05:02Z","sessionId":"sub-a","isSidechain":true,"message":{"role":"user","content":"inner"}}
 `
 	home, workDir, projectDir := writeClaudeFixture(t, mainFixture)
@@ -411,6 +479,7 @@ func TestGetUsageDashboardClaudeSubagentAggregation(t *testing.T) {
 	if skillNames["go-test-patterns"] != 1 {
 		t.Errorf("subagent skill not aggregated: skills=%+v", c.Skills)
 	}
+	assertUsageEntryCount(t, c.SlashCommands, "compact", 1)
 	// TotalSessions: only main counts (subagent must not inflate).
 	if c.TotalSessions != 1 {
 		t.Errorf("TotalSessions = %d, want 1 (subagent must not be counted as new session)", c.TotalSessions)
@@ -419,10 +488,120 @@ func TestGetUsageDashboardClaudeSubagentAggregation(t *testing.T) {
 	if c.TotalMessages != 2 {
 		t.Errorf("TotalMessages = %d, want 2 (subagent messages must be excluded)", c.TotalMessages)
 	}
-	// TotalToolUses: main Agent(1) + sub Agent(1) + sub Skill(1) = 3.
-	if c.TotalToolUses != 3 {
-		t.Errorf("TotalToolUses = %d, want 3 (main 1 + sub 2)", c.TotalToolUses)
+	// TotalToolUses: main Agent(1) + sub Agent(1) + sub Skill(1) + sub Bash(1) = 4.
+	if c.TotalToolUses != 4 {
+		t.Errorf("TotalToolUses = %d, want 4 (main 1 + sub 3)", c.TotalToolUses)
 	}
+}
+
+func TestGetUsageDashboardClaudeDailySeriesMatchRollingRanking(t *testing.T) {
+	const fixture = `{"type":"assistant","timestamp":"2026-03-16T10:00:00Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"old-skill"}}]}}
+{"type":"assistant","timestamp":"2026-04-14T10:00:00Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"alpha"}}]}}
+{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"alpha"}}]}}
+{"type":"assistant","timestamp":"2026-04-13T10:00:00Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"tool_use","name":"Agent","input":{"subagent_type":"Explore"}}]}}
+{"type":"user","timestamp":"2026-04-12T10:00:00Z","sessionId":"s1","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+`
+	home, workDir, _ := writeClaudeFixture(t, fixture)
+	svc := newTestService(t, home, workDir)
+
+	snapshot, err := svc.GetUsageDashboard("sess", "claude", false)
+	if err != nil {
+		t.Fatalf("GetUsageDashboard: %v", err)
+	}
+	c := snapshot.Claude
+	if c == nil {
+		t.Fatal("Claude stats nil")
+	}
+
+	assertUsageEntryCount(t, c.Skills, "alpha", 2)
+	assertUsageEntryAbsent(t, c.Skills, "old-skill")
+	assertDailySeriesCount(t, c.SkillsDaily, "alpha", 2)
+	assertDailySeriesBucket(t, c.SkillsDaily, "alpha", "2026-04-14", 1)
+	assertDailySeriesBucket(t, c.SkillsDaily, "alpha", "2026-04-15", 1)
+	assertDailySeriesAbsent(t, c.SkillsDaily, "old-skill")
+	assertUsageEntryCount(t, c.Agents, "Explore", 1)
+	assertDailySeriesCount(t, c.AgentsDaily, "Explore", 1)
+	assertUsageEntryCount(t, c.SlashCommands, "clear", 1)
+	assertDailySeriesCount(t, c.SlashCommandsDaily, "clear", 1)
+}
+
+func TestGetUsageDashboardClaudeDailySeriesCappedToRanking(t *testing.T) {
+	var fixture strings.Builder
+	for i := range TopRankingLimit + 2 {
+		name := "skill-" + string(rune('a'+i))
+		count := TopRankingLimit + 2 - i
+		for range count {
+			fixture.WriteString(`{"type":"assistant","timestamp":"2026-04-15T10:00:00Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"`)
+			fixture.WriteString(name)
+			fixture.WriteString(`"}}]}}`)
+			fixture.WriteByte('\n')
+		}
+	}
+	home, workDir, _ := writeClaudeFixture(t, fixture.String())
+	svc := newTestService(t, home, workDir)
+
+	snapshot, err := svc.GetUsageDashboard("sess", "claude", false)
+	if err != nil {
+		t.Fatalf("GetUsageDashboard: %v", err)
+	}
+	c := snapshot.Claude
+	if c == nil {
+		t.Fatal("Claude stats nil")
+	}
+	if len(c.Skills) != TopRankingLimit {
+		t.Fatalf("len(Skills) = %d, want %d", len(c.Skills), TopRankingLimit)
+	}
+	if len(c.SkillsDaily) != len(c.Skills) {
+		t.Fatalf("len(SkillsDaily) = %d, len(Skills) = %d", len(c.SkillsDaily), len(c.Skills))
+	}
+	for i := range c.Skills {
+		if c.SkillsDaily[i].Name != c.Skills[i].Name {
+			t.Fatalf("daily series %d = %q, want ranked item %q", i, c.SkillsDaily[i].Name, c.Skills[i].Name)
+		}
+	}
+	assertDailySeriesAbsent(t, c.SkillsDaily, "skill-v")
+}
+
+func TestGetUsageDashboardCodexDailySeriesMatchRollingRanking(t *testing.T) {
+	home := t.TempDir()
+	workDir := filepath.Join(home, "myT-x", "dev-myT-x")
+	codexDay := filepath.Join(home, ".codex", "sessions", "2026", "04", "15")
+	if err := os.MkdirAll(codexDay, 0o755); err != nil {
+		t.Fatalf("mkdir codex: %v", err)
+	}
+	fixture := `{"timestamp":"2026-04-15T09:00:00Z","type":"session_meta","payload":{"id":"codex-s1","timestamp":"2026-04-15T09:00:00Z","cwd":"` + escapePath(workDir) + `"}}
+{"timestamp":"2026-03-16T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"agent_type\":\"old-agent\"}"}}
+{"timestamp":"2026-04-14T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"agent_type\":\"agent-a\"}"}}
+{"timestamp":"2026-04-15T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"agent_type\":\"agent-a\"}"}}
+{"timestamp":"2026-03-16T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"Get-Content old-skill/SKILL.md\"}"}}
+{"timestamp":"2026-04-13T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"Get-Content go-test-patterns/SKILL.md\"}"}}
+{"timestamp":"2026-04-15T10:00:00Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"Get-Content go-test-patterns/SKILL.md\"}"}}
+`
+	if err := os.WriteFile(filepath.Join(codexDay, "rollout-codex-s1.jsonl"), []byte(fixture), 0o644); err != nil {
+		t.Fatalf("write codex sample: %v", err)
+	}
+	svc := newTestService(t, home, workDir)
+
+	snapshot, err := svc.GetUsageDashboard("sess", "codex", false)
+	if err != nil {
+		t.Fatalf("GetUsageDashboard: %v", err)
+	}
+	c := snapshot.Codex
+	if c == nil {
+		t.Fatal("Codex stats nil")
+	}
+
+	assertUsageEntryCount(t, c.Agents, "agent-a", 2)
+	assertUsageEntryAbsent(t, c.Agents, "old-agent")
+	assertDailySeriesCount(t, c.AgentsDaily, "agent-a", 2)
+	assertDailySeriesBucket(t, c.AgentsDaily, "agent-a", "2026-04-14", 1)
+	assertDailySeriesBucket(t, c.AgentsDaily, "agent-a", "2026-04-15", 1)
+	assertDailySeriesAbsent(t, c.AgentsDaily, "old-agent")
+	assertUsageEntryCount(t, c.Skills, "go-test-patterns", 2)
+	assertUsageEntryAbsent(t, c.Skills, "old-skill")
+	assertDailySeriesCount(t, c.SkillsDaily, "go-test-patterns", 2)
+	assertDailySeriesBucket(t, c.SkillsDaily, "go-test-patterns", "2026-04-13", 1)
+	assertDailySeriesBucket(t, c.SkillsDaily, "go-test-patterns", "2026-04-15", 1)
 }
 
 // fakeSnapshotRepository is a programmable in-memory SnapshotRepository
@@ -509,6 +688,39 @@ func TestGetUsageDashboard_PersistsAfterFirstAggregation(t *testing.T) {
 		t.Errorf("stored snapshot must contain BOTH claude and codex regardless of mode (%v / %v)",
 			repo.stored.Claude, repo.stored.Codex)
 	}
+	if repo.stored.Claude.Skills == nil || repo.stored.Claude.Agents == nil || repo.stored.Claude.SlashCommands == nil {
+		t.Fatalf("stored Claude ranking slices must be normalized: %+v", repo.stored.Claude)
+	}
+	if repo.stored.Codex.Skills == nil || repo.stored.Codex.Agents == nil || repo.stored.Codex.DailyActivity == nil {
+		t.Fatalf("stored Codex slices must be normalized: %+v", repo.stored.Codex)
+	}
+}
+
+func TestGetUsageDashboard_AggregationSamplesNowOnce(t *testing.T) {
+	home, workDir := setupFakeHome(t)
+	repo := &fakeSnapshotRepository{}
+	nowCalls := 0
+	svc := NewService(Deps{
+		ResolveSessionWorkDir: func(sessionName string) (string, error) {
+			if sessionName == "" {
+				return "", errors.New("empty session")
+			}
+			return workDir, nil
+		},
+		HomeDir: func() (string, error) { return home, nil },
+		NowFunc: func() time.Time {
+			nowCalls++
+			return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+		},
+		SnapshotRepo: repo,
+	})
+
+	if _, err := svc.GetUsageDashboard("session-1", "both", false); err != nil {
+		t.Fatalf("GetUsageDashboard: %v", err)
+	}
+	if nowCalls != 1 {
+		t.Fatalf("NowFunc calls = %d, want 1", nowCalls)
+	}
 }
 
 // TestGetUsageDashboard_UsesCachedSnapshotWithinTTL verifies that the
@@ -536,6 +748,42 @@ func TestGetUsageDashboard_UsesCachedSnapshotWithinTTL(t *testing.T) {
 	if snap2.LastUpdatedAt.IsZero() {
 		t.Error("cached snapshot LastUpdatedAt must be set")
 	}
+}
+
+func TestGetUsageDashboard_OldSchemaCacheReaggregates(t *testing.T) {
+	home := t.TempDir()
+	workDir := filepath.Join(home, "myT-x", "dev-myT-x")
+	cacheDir := filepath.Join(workDir, ".myT-x")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	oldVersion := strconv.Itoa(snapshotSchemaVersion - 1)
+	oldCache := `{"schema_version":` + oldVersion + `,"work_dir":"` + escapePath(workDir) + `","saved_at":"2026-04-15T11:00:00Z","claude":{"total_sessions":99,"skills":[],"agents":[],"slash_commands":[],"skills_daily":[],"agents_daily":[],"slash_commands_daily":[],"daily_activity":[],"health":{"partial_errors":[]}},"codex":{"skills":[],"agents":[],"skills_daily":[],"agents_daily":[],"daily_activity":[],"health":{"partial_errors":[]}}}`
+	if err := os.WriteFile(filepath.Join(cacheDir, "usage-dashboard.json"), []byte(oldCache), 0o644); err != nil {
+		t.Fatalf("write old cache: %v", err)
+	}
+	claudeHome := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeHome, 0o755); err != nil {
+		t.Fatalf("mkdir claude home: %v", err)
+	}
+	history := `{"display":"/simplify","timestamp":1776247200000,"project":"` + escapePath(workDir) + `","sessionId":"history-s1"}
+`
+	if err := os.WriteFile(filepath.Join(claudeHome, "history.jsonl"), []byte(history), 0o644); err != nil {
+		t.Fatalf("write history: %v", err)
+	}
+
+	svc := newTestService(t, home, workDir)
+	snapshot, err := svc.GetUsageDashboard("sess", "claude", false)
+	if err != nil {
+		t.Fatalf("GetUsageDashboard: %v", err)
+	}
+	if snapshot.Claude == nil {
+		t.Fatal("Claude stats nil")
+	}
+	if snapshot.Claude.TotalSessions == 99 {
+		t.Fatal("old schema cache was served instead of reaggregating")
+	}
+	assertUsageEntryCount(t, snapshot.Claude.SlashCommands, "simplify", 1)
 }
 
 // TestGetUsageDashboard_ForceBypassesCache verifies force=true triggers
@@ -840,9 +1088,9 @@ func TestGetUsageDashboard_ModeFilterServesCachedBoth(t *testing.T) {
 
 func TestApplyClaudeRecordCountsToolCall(t *testing.T) {
 	stats := &ClaudeUsageStats{}
-	skills := NewUsageCounter()
-	agents := NewUsageCounter()
-	slash := NewUsageCounter()
+	skills := NewNamedDailyAggregator(time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC), 3)
+	agents := NewNamedDailyAggregator(time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC), 3)
+	slash := NewNamedDailyAggregator(time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC), 3)
 	daily := NewDailyAggregator(time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC), 3)
 	ts := time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC)
 
@@ -855,4 +1103,86 @@ func TestApplyClaudeRecordCountsToolCall(t *testing.T) {
 	if buckets[len(buckets)-1].ToolCalls != 1 {
 		t.Fatalf("ToolCalls = %d, want 1", buckets[len(buckets)-1].ToolCalls)
 	}
+}
+
+func assertUsageEntryCount(t *testing.T, entries []UsageEntry, name string, want int) {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.Name == name {
+			if entry.Count != want {
+				t.Fatalf("%s count = %d, want %d in %+v", name, entry.Count, want, entries)
+			}
+			return
+		}
+	}
+	t.Fatalf("%s not found in %+v", name, entries)
+}
+
+func assertUsageEntryAbsent(t *testing.T, entries []UsageEntry, name string) {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.Name == name {
+			t.Fatalf("%s unexpectedly found in %+v", name, entries)
+		}
+	}
+}
+
+func assertDailySeriesCount(t *testing.T, series []DailyUsageSeries, name string, want int) {
+	t.Helper()
+	found := findDailySeries(series, name)
+	if found == nil {
+		t.Fatalf("%s not found in %+v", name, series)
+	}
+	if found.TotalCount != want {
+		t.Fatalf("%s total = %d, want %d", name, found.TotalCount, want)
+	}
+	if len(found.Buckets) != DefaultDailyWindow {
+		t.Fatalf("%s buckets = %d, want %d", name, len(found.Buckets), DefaultDailyWindow)
+	}
+}
+
+func assertDailySeriesBucket(t *testing.T, series []DailyUsageSeries, name, date string, want int) {
+	t.Helper()
+	found := findDailySeries(series, name)
+	if found == nil {
+		t.Fatalf("%s not found in %+v", name, series)
+	}
+	for _, bucket := range found.Buckets {
+		if bucket.Date == date {
+			if bucket.Count != want {
+				t.Fatalf("%s %s count = %d, want %d", name, date, bucket.Count, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("%s bucket %s not found in %+v", name, date, found.Buckets)
+}
+
+func assertDailySeriesAbsent(t *testing.T, series []DailyUsageSeries, name string) {
+	t.Helper()
+	if found := findDailySeries(series, name); found != nil {
+		t.Fatalf("%s unexpectedly found in %+v", name, series)
+	}
+}
+
+func assertDailyActivityBucket(t *testing.T, buckets []DailyBucket, date string, wantToolCalls int) {
+	t.Helper()
+	for _, bucket := range buckets {
+		if bucket.Date == date {
+			if bucket.ToolCalls != wantToolCalls {
+				t.Fatalf("DailyActivity[%s].ToolCalls = %d, want %d in %+v", date, bucket.ToolCalls, wantToolCalls, buckets)
+			}
+			return
+		}
+	}
+	t.Fatalf("DailyActivity bucket %s not found in %+v", date, buckets)
+}
+
+func findDailySeries(series []DailyUsageSeries, name string) *DailyUsageSeries {
+	for i := range series {
+		if series[i].Name == name {
+			return &series[i]
+		}
+	}
+	return nil
 }

@@ -380,6 +380,53 @@
   margin-top: 2px;
 }
 
+.settings-row-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.auto-start-settings {
+  margin-top: 12px;
+}
+
+.auto-start-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.auto-start-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 8px;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(27, 42, 67, 0.35);
+}
+
+.auto-start-fields {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.8fr) minmax(120px, 0.8fr) minmax(160px, 1.4fr);
+  gap: 6px;
+  min-width: 0;
+}
+
+.auto-start-preview {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 0.72rem;
+}
+
 /* ── Override Row ── */
 .override-row {
   display: flex;

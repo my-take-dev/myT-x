@@ -133,6 +133,16 @@
     background: rgba(246, 211, 101, 0.17);
 }
 
+.terminal-toolbar-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.terminal-toolbar-btn:disabled:hover {
+    border-color: rgba(150, 182, 219, 0.42);
+    background: rgba(150, 182, 219, 0.09);
+}
+
 .terminal-toolbar-btn:active {
     transform: translateY(1px);
 }
@@ -177,6 +187,77 @@
     gap: 8px;
     min-width: 160px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.auto-start-popover {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    z-index: 10;
+    background: rgba(15, 29, 47, 0.98);
+    border: 1px solid rgba(150, 182, 219, 0.42);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 240px;
+    max-width: 360px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.auto-start-command-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.auto-start-command-btn {
+    width: 100%;
+    border: 1px solid rgba(150, 182, 219, 0.3);
+    border-radius: 6px;
+    background: rgba(150, 182, 219, 0.08);
+    color: var(--fg-main);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 8px;
+    text-align: left;
+}
+
+.auto-start-command-btn:hover {
+    border-color: var(--accent);
+    background: rgba(246, 211, 101, 0.16);
+}
+
+.auto-start-command-btn:disabled {
+    cursor: wait;
+    opacity: 0.62;
+}
+
+.auto-start-command-btn:disabled:hover {
+    border-color: rgba(150, 182, 219, 0.3);
+    background: rgba(150, 182, 219, 0.08);
+}
+
+.auto-start-command-name,
+.auto-start-command-preview {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.auto-start-command-name {
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.auto-start-command-preview {
+    color: var(--fg-dim);
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 0.72rem;
 }
 
 .auto-enter-popover-title {

@@ -42,13 +42,14 @@ md,openAPI(swagger),drawio...
 | 機能 | 説明 |
 |------|------|
 | ターミナル分割 | ペインの左右・上下分割、5種のレイアウトプリセット |
+| AutoStart（自動起動） | ペインツールバーから新規ペインへコマンドを即時起動（最大 50 件登録） |
 | Agent Teams | Claude Code / Codex CLI / Gemini CLI のチーム連携 |
 | モデル自動切替 | 子エージェントのモデルを一括/個別に自動置換 |
 | Git Worktree | ブランチごとの独立作業フォルダ管理（セットアップスクリプト + 進捗表示対応） |
 | ファイルビュー (File View) | Markdown / Mermaid / Swagger(OpenAPI) / draw.io / SQLite / Markmap / Vega / Vega-Lite / WaveDrom の統合プレビュー（`Ctrl+Shift+E`） |
 | SQLite Viewer | `.db` / `.sqlite` / `.sqlite3` のテーブル一覧 + 行データ表示 + CSV エクスポート（読み取り専用） |
 | Prompt Presets | 固定プロンプトテンプレートを登録してチャット入力に追記（グローバル / プロジェクトの 2 スコープ、最大 200 件、`Ctrl+Shift+P`） |
-| Usage Dashboard | Claude Code / Codex の利用統計を可視化（エージェント / スキル / スラッシュコマンドの集計、30 日間日次アクティビティ、`Ctrl+Shift+U`） |
+| Usage Dashboard | Claude Code / Codex の利用統計を可視化（エージェント / スキル / スラッシュコマンドの集計、カテゴリタブ + 日次棒グラフ、30 日間日次アクティビティ、`Ctrl+Shift+U`） |
 | 13種のビューア | Editor / File View / Git Graph / Diff / Input History / MCP Manager / スケジューラ / タスクキュー / Single Task Runner / チーム管理 / Usage Dashboard / Prompt Presets / Error Log |
 | MCP内蔵 | オーケストレーションMCP + Single Task Runner MCP + LSP-MCP 200種以上 |
 | タスク自動化 | ペインスケジューラ（定期実行）+ タスクスケジューラ（順次実行）+ Single Task Runner（軽量版、`Ctrl+Shift+J`） |
@@ -57,7 +58,9 @@ md,openAPI(swagger),drawio...
 | キャンバスモード | エージェント間のタスクフローを視覚化（ルートペイン手動指定対応） |
 | ターミナル検索 | インクリメンタル検索・検索結果カウンタ・一致箇所ハイライト表示（`Ctrl+F`） |
 | Quake Mode | ホットキーでウィンドウ即呼び出し |
-| 日本語IME対応 | WebView2プロセス分離 + IMEリセット機能 |
+| Diff インラインコメント | Diff行ホバーで `+` ボタン → インラインtextarea展開 → Markdown形式でAIペインに一括送信（`Ctrl+Shift+D`） |
+| Markdown アウトライン | MarkdownPreviewに折りたたみ可能なアウトラインパネル（見出し一覧 + ページ内ジャンプ） |
+| 日本語IME対応 | WebView2プロセス分離 + IMEリセット機能 + ターミナルフォーカス復帰時の自動復旧 |
 
 ---
 

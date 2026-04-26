@@ -23,8 +23,7 @@
 // User messages may carry a `<command-name>/xxx</command-name>` marker inside
 // their string content when a slash command was invoked. Qualified command
 // names in "namespace:name" form (e.g. "feature-dev:feature-dev") are treated
-// as Skill invocations; built-in commands (/clear, /model, ...) stay in the
-// SlashCommand category.
+// as Skill invocations; all other commands stay in the SlashCommand category.
 //
 // Parse failures are classified per defensive-coding-checklist #170:
 //   - Expected (missing field, wrong type) → silently skipped
@@ -42,6 +41,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Record is the normalized tool-use or slash-command observation emitted by the parser.
@@ -79,8 +79,8 @@ var slashCommandRE = regexp.MustCompile(`<command-name>\s*/([A-Za-z0-9_\-:.]+)`)
 // qualifiedSlashRE matches slash command names in "namespace:name" form
 // (e.g., "feature-dev:feature-dev", "pr-review-toolkit:review-pr"). These
 // are user-installed skills invoked via slash-command syntax and are routed
-// to the Skill ranking. Built-in commands (/clear, /model, /help, ...) do
-// not contain ":" and remain in the SlashCommand category.
+// to the Skill ranking. Commands without ":" remain in SlashCommand so
+// history.jsonl and session JSONL classify the same marker identically.
 var qualifiedSlashRE = regexp.MustCompile(`^[A-Za-z0-9_\-]+:[A-Za-z0-9_\-]+$`)
 
 // lineEnvelope captures only the fields needed for aggregation.
@@ -106,6 +106,15 @@ type textBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
+
+type historyEnvelope struct {
+	Display   string `json:"display"`
+	Timestamp int64  `json:"timestamp"`
+	Project   string `json:"project"`
+	SessionID string `json:"sessionId"`
+}
+
+const maxHistoryPartialErrors = 10
 
 // ParseFile reads one JSONL file and returns its Session. Malformed lines are
 // appended to partialErrors (prefixed with path:line) and skipped.
@@ -152,6 +161,128 @@ func ParseFile(path string, partialErrors *[]string) (Session, error) {
 		}
 	}
 	return session, nil
+}
+
+// ParseHistoryFile reads Claude's history.jsonl and returns slash command
+// records matching the active project. History and session JSONL must share
+// classifySlashCommand so deduplication cannot drift when rules change.
+func ParseHistoryFile(path string, projectMatcher func(string) bool, partialErrors *[]string) ([]Record, error) {
+	if projectMatcher == nil {
+		return nil, fmt.Errorf("project matcher is nil")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			slog.Warn("[usage-dashboard] close claude history file", "path", path, "error", closeErr)
+		}
+	}()
+
+	records := make([]Record, 0)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	lineNo := 0
+	historyErrors := make([]string, 0, maxHistoryPartialErrors)
+	historyErrorCount := 0
+	for scanner.Scan() {
+		lineNo++
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		if lineNo == 1 && len(line) >= 3 && line[0] == 0xEF && line[1] == 0xBB && line[2] == 0xBF {
+			line = line[3:]
+			if len(line) == 0 {
+				continue
+			}
+		}
+		rec, ok, err := parseHistoryLine(line, projectMatcher)
+		if err != nil {
+			historyErrorCount++
+			if len(historyErrors) < maxHistoryPartialErrors {
+				historyErrors = append(historyErrors, fmt.Sprintf("%s:%d: %s", filepath.Base(path), lineNo, err.Error()))
+			}
+			continue
+		}
+		if ok {
+			records = append(records, rec)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		if partialErrors != nil {
+			*partialErrors = append(*partialErrors, fmt.Sprintf("%s: scanner: %s", filepath.Base(path), err.Error()))
+		}
+	}
+	appendHistoryPartialErrors(partialErrors, filepath.Base(path), historyErrors, historyErrorCount)
+	return records, nil
+}
+
+func parseHistoryLine(line []byte, projectMatcher func(string) bool) (Record, bool, error) {
+	var env historyEnvelope
+	if err := json.Unmarshal(line, &env); err != nil {
+		return Record{}, false, fmt.Errorf("unmarshal history envelope: %w", err)
+	}
+	if !projectMatcher(env.Project) {
+		return Record{}, false, nil
+	}
+	if env.Timestamp <= 0 {
+		return Record{}, false, nil
+	}
+	name := extractDisplayCommand(env.Display)
+	if name == "" {
+		return Record{}, false, nil
+	}
+	return Record{
+		Type:      classifySlashCommand(name),
+		Name:      name,
+		Timestamp: time.UnixMilli(env.Timestamp).UTC(),
+		SessionID: env.SessionID,
+	}, true, nil
+}
+
+func extractDisplayCommand(display string) string {
+	fields := strings.Fields(strings.TrimSpace(display))
+	if len(fields) == 0 {
+		return ""
+	}
+	first := fields[0]
+	if !strings.HasPrefix(first, "/") {
+		return ""
+	}
+	name := strings.TrimPrefix(first, "/")
+	return normalizeSlashCommandName(name)
+}
+
+func normalizeSlashCommandName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.TrimRightFunc(name, func(r rune) bool {
+		return !isSlashCommandNameRune(r)
+	})
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func isSlashCommandNameRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == ':' || r == '.'
+}
+
+func classifySlashCommand(name string) RecordType {
+	name = normalizeSlashCommandName(name)
+	if qualifiedSlashRE.MatchString(name) {
+		return RecordSkill
+	}
+	return RecordSlash
+}
+
+func appendHistoryPartialErrors(partialErrors *[]string, base string, errors []string, total int) {
+	if partialErrors == nil || total == 0 {
+		return
+	}
+	*partialErrors = append(*partialErrors, errors...)
+	if total > len(errors) {
+		*partialErrors = append(*partialErrors, fmt.Sprintf("%s: omitted %d additional history parse errors", base, total-len(errors)))
+	}
 }
 
 func appendLine(session *Session, line []byte) error {
@@ -216,16 +347,12 @@ func extractSlashCommands(session *Session, content json.RawMessage, ts time.Tim
 		if len(m) < 2 {
 			continue
 		}
-		name := strings.TrimSpace(m[1])
+		name := normalizeSlashCommandName(m[1])
 		if name == "" {
 			continue
 		}
-		recType := RecordSlash
-		if qualifiedSlashRE.MatchString(name) {
-			recType = RecordSkill
-		}
 		session.Records = append(session.Records, Record{
-			Type:      recType,
+			Type:      classifySlashCommand(name),
 			Name:      name,
 			Timestamp: ts,
 			SessionID: sessionID,

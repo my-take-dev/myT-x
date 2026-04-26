@@ -13,16 +13,17 @@ const (
 
 // Config is myT-x runtime configuration.
 type Config struct {
-	Shell                 string            `yaml:"shell" json:"shell"`
-	Prefix                string            `yaml:"prefix" json:"prefix"`
-	Keys                  map[string]string `yaml:"keys" json:"keys"`
-	QuakeMode             bool              `yaml:"quake_mode" json:"quake_mode"`
-	GlobalHotkey          string            `yaml:"global_hotkey" json:"global_hotkey"`
-	Worktree              WorktreeConfig    `yaml:"worktree" json:"worktree"`
-	AgentModel            *AgentModel       `yaml:"agent_model,omitempty" json:"agent_model,omitempty"`
-	PaneEnv               map[string]string `yaml:"pane_env,omitempty" json:"pane_env,omitempty"`
-	PaneEnvDefaultEnabled bool              `yaml:"pane_env_default_enabled" json:"pane_env_default_enabled"`
-	ClaudeEnv             *ClaudeEnvConfig  `yaml:"claude_env,omitempty" json:"claude_env,omitempty"`
+	Shell                 string             `yaml:"shell" json:"shell"`
+	Prefix                string             `yaml:"prefix" json:"prefix"`
+	Keys                  map[string]string  `yaml:"keys" json:"keys"`
+	QuakeMode             bool               `yaml:"quake_mode" json:"quake_mode"`
+	GlobalHotkey          string             `yaml:"global_hotkey" json:"global_hotkey"`
+	AutoStart             []AutoStartCommand `yaml:"auto_start" json:"auto_start"`
+	Worktree              WorktreeConfig     `yaml:"worktree" json:"worktree"`
+	AgentModel            *AgentModel        `yaml:"agent_model,omitempty" json:"agent_model,omitempty"`
+	PaneEnv               map[string]string  `yaml:"pane_env,omitempty" json:"pane_env,omitempty"`
+	PaneEnvDefaultEnabled bool               `yaml:"pane_env_default_enabled" json:"pane_env_default_enabled"`
+	ClaudeEnv             *ClaudeEnvConfig   `yaml:"claude_env,omitempty" json:"claude_env,omitempty"`
 	// WebSocketPort is the port for the local WebSocket server used for
 	// high-throughput pane data streaming. 0 (default) lets the OS assign
 	// an available port, which is recommended to avoid port conflicts.
@@ -58,6 +59,7 @@ func DefaultConfig() Config {
 		Prefix:       "Ctrl+b",
 		QuakeMode:    true,
 		GlobalHotkey: "Ctrl+Shift+F12",
+		AutoStart:    []AutoStartCommand{},
 		Keys: map[string]string{
 			"split-vertical":   "%",
 			"split-horizontal": "\"",

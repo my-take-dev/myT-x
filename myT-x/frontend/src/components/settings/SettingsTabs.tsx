@@ -1,4 +1,5 @@
 import {useLayoutEffect, useMemo, useRef} from "react";
+import {AutoStartSettings} from "./AutoStartSettings";
 import {GeneralSettings} from "./GeneralSettings";
 import {KeybindSettings} from "./KeybindSettings";
 import {WorktreeSettings} from "./WorktreeSettings";
@@ -18,6 +19,7 @@ interface SettingsCategoryDefinition {
 
 const SETTINGS_CATEGORIES: SettingsCategoryDefinition[] = [
     {id: "general", labelKey: "settings.modal.categories.general", labelJa: "基本設定", labelEn: "General"},
+    {id: "auto-start", labelKey: "settings.modal.categories.autoStart", labelJa: "自動起動", labelEn: "AutoStart"},
     {id: "keybinds", labelKey: "settings.modal.categories.keybinds", labelJa: "キーバインド", labelEn: "Keybinds"},
     {id: "worktree", labelKey: "settings.modal.categories.worktree", labelJa: "Worktree", labelEn: "Worktree"},
     {id: "agent-model", labelKey: "settings.modal.categories.agentModel", labelJa: "Agent Model", labelEn: "Agent Model"},
@@ -78,6 +80,7 @@ export function SettingsTabs({s, dispatch, validationRules}: SettingsTabsProps) 
 
     const categoryPanels = useMemo<Record<SettingsCategory, () => JSX.Element>>(() => ({
         general: () => <GeneralSettings s={s} dispatch={dispatch} validationRules={validationRules}/>,
+        "auto-start": () => <AutoStartSettings s={s} dispatch={dispatch}/>,
         keybinds: () => <KeybindSettings s={s} dispatch={dispatch}/>,
         worktree: () => <WorktreeSettings s={s} dispatch={dispatch}/>,
         "agent-model": () => <AgentModelSettings s={s} dispatch={dispatch}/>,

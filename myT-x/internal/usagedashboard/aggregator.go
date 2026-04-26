@@ -2,59 +2,153 @@ package usagedashboard
 
 import (
 	"sort"
+	"strings"
 	"time"
 )
 
-// UsageCounter accumulates counts and last-used timestamps for a single key
-// dimension (e.g., skill name, agent type).
-type UsageCounter struct {
-	counts map[string]*UsageEntry
+type dailyUsageAccumulator struct {
+	name       string
+	totalCount int
+	lastUsedAt time.Time
+	buckets    map[string]*DailyUsageBucket
 }
 
-// NewUsageCounter returns an empty counter.
-func NewUsageCounter() *UsageCounter {
-	return &UsageCounter{counts: make(map[string]*UsageEntry)}
+// NamedDailyAggregator builds per-name usage series for the same rolling
+// UTC window used by DailyAggregator.
+type NamedDailyAggregator struct {
+	buckets map[string]struct{}
+	order   []string
+	series  map[string]*dailyUsageAccumulator
 }
 
-// Add increments the count for name and updates LastUsedAt if ts is newer.
-// Empty names are ignored.
-func (c *UsageCounter) Add(name string, ts time.Time) {
+// NewNamedDailyAggregator pre-allocates a rolling date window anchored at
+// referenceDay (UTC). Days are listed from oldest to newest.
+func NewNamedDailyAggregator(referenceDay time.Time, windowDays int) *NamedDailyAggregator {
+	if windowDays <= 0 {
+		windowDays = DefaultDailyWindow
+	}
+	ref := referenceDay.UTC()
+	ref = time.Date(ref.Year(), ref.Month(), ref.Day(), 0, 0, 0, 0, time.UTC)
+	agg := &NamedDailyAggregator{
+		buckets: make(map[string]struct{}, windowDays),
+		order:   make([]string, 0, windowDays),
+		series:  make(map[string]*dailyUsageAccumulator),
+	}
+	for i := windowDays - 1; i >= 0; i-- {
+		day := ref.AddDate(0, 0, -i)
+		key := day.Format("2006-01-02")
+		agg.order = append(agg.order, key)
+		agg.buckets[key] = struct{}{}
+	}
+	return agg
+}
+
+// Add increments name for the UTC day of ts. Both the rolling window and
+// event timestamps are normalized to UTC date keys so local-time records land
+// in the same boundary buckets. Empty names and timestamps outside the rolling
+// window are ignored.
+func (a *NamedDailyAggregator) Add(name string, ts time.Time) {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return
 	}
-	entry, ok := c.counts[name]
+	key := ts.UTC().Format("2006-01-02")
+	if _, ok := a.buckets[key]; !ok {
+		return
+	}
+	acc, ok := a.series[name]
 	if !ok {
-		entry = &UsageEntry{Name: name}
-		c.counts[name] = entry
+		acc = &dailyUsageAccumulator{
+			name:    name,
+			buckets: make(map[string]*DailyUsageBucket, len(a.order)),
+		}
+		for _, day := range a.order {
+			acc.buckets[day] = &DailyUsageBucket{Date: day}
+		}
+		a.series[name] = acc
 	}
-	entry.Count++
-	if ts.After(entry.LastUsedAt) {
-		entry.LastUsedAt = ts
+	acc.totalCount++
+	if ts.After(acc.lastUsedAt) {
+		acc.lastUsedAt = ts
 	}
+	bucket := acc.buckets[key]
+	if bucket == nil {
+		return
+	}
+	bucket.Count++
 }
 
-// TopN returns up to limit entries sorted by Count desc, LastUsedAt desc,
-// then Name asc. Returns a non-nil empty slice when the counter is empty.
-func (c *UsageCounter) TopN(limit int) []UsageEntry {
+// TopN returns ranking rows sorted by total count, last-used timestamp, then
+// name. Counts are limited to events inside the rolling window.
+func (a *NamedDailyAggregator) TopN(limit int) []UsageEntry {
+	series := a.sortedSeries()
 	if limit <= 0 {
 		limit = TopRankingLimit
 	}
-	out := make([]UsageEntry, 0, len(c.counts))
-	for _, entry := range c.counts {
-		out = append(out, *entry)
+	if len(series) > limit {
+		series = series[:limit]
+	}
+	out := make([]UsageEntry, 0, len(series))
+	for _, acc := range series {
+		out = append(out, UsageEntry{
+			Name:       acc.name,
+			Count:      acc.totalCount,
+			LastUsedAt: acc.lastUsedAt,
+		})
+	}
+	return out
+}
+
+// Series returns all named daily series in ranking order.
+func (a *NamedDailyAggregator) Series() []DailyUsageSeries {
+	return a.seriesFromAccumulators(a.sortedSeries())
+}
+
+// TopSeries returns daily series capped to the same ranked item universe as
+// TopN. Use this for API payloads where the ranking table and daily chart must
+// describe the same set of items.
+func (a *NamedDailyAggregator) TopSeries(limit int) []DailyUsageSeries {
+	series := a.sortedSeries()
+	if limit <= 0 {
+		limit = TopRankingLimit
+	}
+	if len(series) > limit {
+		series = series[:limit]
+	}
+	return a.seriesFromAccumulators(series)
+}
+
+func (a *NamedDailyAggregator) seriesFromAccumulators(series []*dailyUsageAccumulator) []DailyUsageSeries {
+	out := make([]DailyUsageSeries, 0, len(series))
+	for _, acc := range series {
+		buckets := make([]DailyUsageBucket, 0, len(a.order))
+		for _, key := range a.order {
+			buckets = append(buckets, *acc.buckets[key])
+		}
+		out = append(out, DailyUsageSeries{
+			Name:       acc.name,
+			TotalCount: acc.totalCount,
+			LastUsedAt: acc.lastUsedAt,
+			Buckets:    buckets,
+		})
+	}
+	return out
+}
+
+func (a *NamedDailyAggregator) sortedSeries() []*dailyUsageAccumulator {
+	out := make([]*dailyUsageAccumulator, 0, len(a.series))
+	for _, acc := range a.series {
+		out = append(out, acc)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count != out[j].Count {
-			return out[i].Count > out[j].Count
+		if out[i].totalCount != out[j].totalCount {
+			return out[i].totalCount > out[j].totalCount
 		}
-		if !out[i].LastUsedAt.Equal(out[j].LastUsedAt) {
-			return out[i].LastUsedAt.After(out[j].LastUsedAt)
+		if !out[i].lastUsedAt.Equal(out[j].lastUsedAt) {
+			return out[i].lastUsedAt.After(out[j].lastUsedAt)
 		}
-		return out[i].Name < out[j].Name
+		return out[i].name < out[j].name
 	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
 	return out
 }
 

@@ -10,6 +10,10 @@ vi.mock("./GeneralSettings", () => ({
     GeneralSettings: () => <div>General panel</div>,
 }));
 
+vi.mock("./AutoStartSettings", () => ({
+    AutoStartSettings: () => <div>AutoStart panel</div>,
+}));
+
 vi.mock("./KeybindSettings", () => ({
     KeybindSettings: () => <div>Keybind panel</div>,
 }));
@@ -102,5 +106,15 @@ describe("SettingsTabs", () => {
         });
 
         expect(getSettingsBody(container).scrollTop).toBe(0);
+    });
+
+    it("places AutoStart between General and Keybinds", async () => {
+        await act(async () => {
+            renderTabs(root, INITIAL_FORM);
+        });
+
+        const labels = Array.from(container.querySelectorAll('[role="tab"]')).map((item) => item.textContent);
+
+        expect(labels.slice(0, 3)).toEqual(["General", "AutoStart", "Keybinds"]);
     });
 });

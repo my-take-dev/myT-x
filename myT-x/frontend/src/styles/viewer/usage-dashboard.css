@@ -18,6 +18,14 @@
     --udash-color-codex: #61afef;
     --udash-color-codex-08: rgba(97, 175, 239, 0.08);
     --udash-color-tool-calls: #a78bfa;
+    --udash-stack-color-1: #7aa2f7;
+    --udash-stack-color-2: #f7768e;
+    --udash-stack-color-3: #9ece6a;
+    --udash-stack-color-4: #56b6c2;
+    --udash-stack-color-5: #98c379;
+    --udash-stack-color-6: #e5c07b;
+    --udash-stack-color-7: #c678dd;
+    --udash-stack-color-8: #e06c75;
     --udash-medal-silver: #b0b8c8;
     --udash-medal-bronze: #c87c4a;
     --udash-scrollbar-thumb: rgba(246, 211, 101, 0.3);
@@ -208,11 +216,18 @@
     border-radius: 1px;
 }
 
+.usage-dashboard-category-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
 /* ── Sub-tabs (pill container) ── */
 .usage-dashboard-subtabs {
     display: inline-flex;
     gap: 3px;
-    margin-bottom: 6px;
     padding: 3px;
     background: rgba(150, 182, 219, 0.06);
     border: 1px solid var(--udash-border);
@@ -240,6 +255,127 @@
     background: var(--udash-active-bg);
     border-color: var(--udash-active-border);
     color: var(--accent);
+}
+
+.usage-dashboard-view-toggle {
+    display: inline-flex;
+    gap: 3px;
+    padding: 3px;
+    background: rgba(150, 182, 219, 0.04);
+    border: 1px solid var(--udash-border);
+    border-radius: 6px;
+    flex: 0 0 auto;
+}
+
+.usage-dashboard-view-toggle-btn {
+    padding: 3px 8px;
+    font-size: 11px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--udash-muted-fg);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.usage-dashboard-view-toggle-btn:hover {
+    color: var(--udash-panel-fg);
+    background: var(--udash-hover-bg);
+}
+
+.usage-dashboard-view-toggle-btn[aria-selected="true"] {
+    background: var(--udash-active-bg);
+    border-color: var(--udash-active-border);
+    color: var(--accent);
+}
+
+.usage-dashboard-daily-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.usage-dashboard-item-select-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--udash-muted-fg);
+}
+
+.usage-dashboard-item-select {
+    min-width: 180px;
+    max-width: min(360px, 100%);
+    height: 26px;
+    padding: 2px 8px;
+    border: 1px solid var(--udash-border);
+    border-radius: 4px;
+    background: var(--udash-card-bg);
+    color: var(--udash-panel-fg);
+    font-size: 12px;
+}
+
+.usage-dashboard-item-chart {
+    padding-top: 8px;
+}
+
+.usage-dashboard-stacked-tooltip {
+    min-width: 180px;
+    max-width: 280px;
+    padding: 8px;
+    border: 1px solid var(--udash-chart-tooltip-border);
+    border-radius: 6px;
+    background: var(--udash-chart-tooltip-bg);
+    color: var(--udash-chart-tooltip-fg);
+    box-shadow: var(--udash-chart-tooltip-shadow);
+    backdrop-filter: blur(8px);
+    font-size: 11px;
+}
+
+.usage-dashboard-stacked-tooltip-date {
+    margin-bottom: 5px;
+    color: var(--udash-muted-fg);
+    font-variant-numeric: tabular-nums;
+}
+
+.usage-dashboard-stacked-tooltip-total,
+.usage-dashboard-stacked-tooltip-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 6px;
+    align-items: center;
+}
+
+.usage-dashboard-stacked-tooltip-total {
+    grid-template-columns: 1fr auto;
+    margin-bottom: 6px;
+}
+
+.usage-dashboard-stacked-tooltip-total strong,
+.usage-dashboard-stacked-tooltip-count {
+    font-variant-numeric: tabular-nums;
+}
+
+.usage-dashboard-stacked-tooltip-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 136px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.usage-dashboard-stacked-tooltip-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+}
+
+.usage-dashboard-stacked-tooltip-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ── Ranking table ── */
@@ -569,5 +705,29 @@
     /* Skeleton overview also collapses to 2 columns at narrow width */
     .usage-dashboard-skeleton-overview {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .usage-dashboard-category-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .usage-dashboard-subtabs,
+    .usage-dashboard-view-toggle {
+        width: 100%;
+    }
+
+    .usage-dashboard-subtab,
+    .usage-dashboard-view-toggle-btn {
+        flex: 1;
+    }
+
+    .usage-dashboard-item-select-label {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .usage-dashboard-item-select {
+        width: 100%;
     }
 }

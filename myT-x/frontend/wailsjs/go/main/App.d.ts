@@ -256,6 +256,8 @@ export function SaveUnaffiliatedTeamMembers(arg1:Array<orchestrator.TeamMember>,
 
 export function SendChatMessage(arg1:string,arg2:string):Promise<void>;
 
+export function SendDiffReview(arg1:string,arg2:string):Promise<void>;
+
 export function SendInput(arg1:string,arg2:string):Promise<void>;
 
 export function SendSyncInput(arg1:string,arg2:string):Promise<void>;
@@ -265,6 +267,8 @@ export function SetActiveSession(arg1:string):Promise<void>;
 export function SetSingleTaskRunnerClearDelay(arg1:string,arg2:number):Promise<void>;
 
 export function SplitPane(arg1:string,arg2:boolean):Promise<string>;
+
+export function StartAutoStartCommand(arg1:string,arg2:config.AutoStartCommand):Promise<string>;
 
 export function StartOrchestratorTeam(arg1:orchestrator.StartTeamRequest):Promise<orchestrator.StartTeamResult>;
 

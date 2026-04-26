@@ -483,15 +483,16 @@ describe("createTerminalImeInputGate", () => {
 
     // --- IM-5: non-composing CommitPending with eventData mismatch ---
 
-    it("handles non-composing eventData mismatch: different payload resets dedupe", () => {
+    it("suppresses stale eventData after a non-composing mismatch accepts the actual payload", () => {
         const gate = createTerminalImeInputGate();
         gate.markCompositionStart();
         gate.markCompositionEnd("予測");
         // composing=false, commitWindowActive=true, pendingCommit="予測"
         expect(gate.shouldSend("実際")).toBe(true);   // committedInput="実際" (first printable accepted)
-        // "予測" != committedInput "実際" → reset() called, dedupe cleared, returns true
-        expect(gate.shouldSend("予測")).toBe(true);
-        // After reset, no dedupe — repeated "予測" also passes (idle state)
+        // The stale prediction must not leak through as a second committed payload.
+        expect(gate.shouldSend("予測")).toBe(false);
+        vi.advanceTimersByTime(TIMER_PAST_DEDUPE_WINDOW);
+        // After the dedupe window expires, the same text is treated as fresh input again.
         expect(gate.shouldSend("予測")).toBe(true);
     });
 
@@ -731,6 +732,63 @@ describe("createTerminalImeInputGate", () => {
 
         expect(gate.filterInput("東京さ")).toBe("さ");
         expect(gate.filterInput("東京さ")).toBeNull();
+    });
+
+    it("suppresses a stale shorter prediction after accepting a longer actual payload", () => {
+        const gate = createTerminalImeInputGate();
+
+        gate.markCompositionStart();
+        gate.markCompositionEnd("文字");
+
+        expect(gate.filterInput("文字が")).toBe("文字が");
+        expect(gate.filterInput("文字")).toBeNull();
+        vi.advanceTimersByTime(TIMER_PAST_DEDUPE_WINDOW);
+        expect(gate.filterInput("文字")).toBe("文字");
+    });
+
+    it("suppresses a stale longer prediction after accepting a shorter actual payload", () => {
+        const gate = createTerminalImeInputGate();
+
+        gate.markCompositionStart();
+        gate.markCompositionEnd("文字が");
+
+        expect(gate.filterInput("文字")).toBe("文字");
+        expect(gate.filterInput("文字が")).toBeNull();
+        vi.advanceTimersByTime(TIMER_PAST_DEDUPE_WINDOW);
+        expect(gate.filterInput("文字が")).toBe("文字が");
+    });
+
+    it("does not strip the prefix of a cumulative payload that matches a suppressed stale prediction", () => {
+        const gate = createTerminalImeInputGate();
+
+        gate.markCompositionStart();
+        gate.markCompositionEnd("予測");
+        expect(gate.filterInput("実際")).toBe("実際");
+        expect(gate.filterInput("予測")).toBeNull();
+        expect(gate.filterInput("予測X")).toBe("予測X");
+    });
+
+    it("next composition cycle ending with a stale-prefixed payload is not truncated", () => {
+        const gate = createTerminalImeInputGate();
+
+        gate.markCompositionStart();
+        gate.markCompositionEnd("予測");
+        expect(gate.filterInput("実際")).toBe("実際");
+        expect(gate.filterInput("予測")).toBeNull();
+
+        gate.markCompositionStart();
+        gate.markCompositionEnd("予測X");
+        expect(gate.filterInput("予測X")).toBe("予測X");
+    });
+
+    it("preserves surrogate-pair payload when stale prediction shares the same prefix", () => {
+        const gate = createTerminalImeInputGate();
+
+        gate.markCompositionStart();
+        gate.markCompositionEnd("\uD83D\uDE00");
+        expect(gate.filterInput("\uD83D\uDE01")).toBe("\uD83D\uDE01");
+        expect(gate.filterInput("\uD83D\uDE00")).toBeNull();
+        expect(gate.filterInput("\uD83D\uDE00A")).toBe("\uD83D\uDE00A");
     });
 
     // --- Timestamp-based dedup (Layer 2b: performance.now() fallback) ---
