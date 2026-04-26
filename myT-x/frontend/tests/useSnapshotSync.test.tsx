@@ -3,9 +3,11 @@ import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {useSnapshotSync} from "../src/hooks/sync/useSnapshotSync";
 import {useCanvasStore} from "../src/stores/canvasStore";
+import {useDiffReviewStore} from "../src/stores/diffReviewStore";
 import {useMCPStore} from "../src/stores/mcpStore";
 import {useNotificationStore} from "../src/stores/notificationStore";
 import {useTmuxStore} from "../src/stores/tmuxStore";
+import {buildDiffReviewDraftKey, buildDiffReviewSessionKey} from "../src/components/viewer/views/diff-view/diffReviewKeys";
 
 const runtimeMock = vi.hoisted(() => ({
     EventsOn: vi.fn(),
@@ -95,6 +97,12 @@ describe("useSnapshotSync", () => {
             snapshots: {},
             sessionStates: {},
         });
+        useDiffReviewStore.setState((state) => ({
+            ...state,
+            comments: [],
+            drafts: {},
+            activeCommentLineKey: null,
+        }));
         useTmuxStore.setState((state) => ({
             ...state,
             activeSession: null,
@@ -250,5 +258,48 @@ describe("useSnapshotSync", () => {
         expect(useMCPStore.getState().snapshots["old-session"]).toBeUndefined();
         expect(useMCPStore.getState().snapshots["renamed-session"]?.[0]?.id).toBe("mcp-1");
         expect(useMCPStore.getState().sessionStates["renamed-session"]?.error).toBe("stale");
+    });
+
+    it("clears diff review state when tmux:session-destroyed arrives", async () => {
+        apiMock.ListSessions.mockResolvedValueOnce([
+            {id: 7, name: "old-session", created_at: "", is_idle: false, active_window_id: 1, windows: []},
+        ]);
+        useTmuxStore.setState((state) => ({
+            ...state,
+            sessions: [{id: 7, name: "old-session", created_at: "", is_idle: false, active_window_id: 1, windows: []}],
+            sessionOrder: ["old-session"],
+            activeSession: "old-session",
+            activeWindowId: "1",
+        }));
+        useDiffReviewStore.getState().addComment({
+            sessionKey: buildDiffReviewSessionKey(7),
+            filePath: "a.ts",
+            startLineNum: 1,
+            startLineType: "added",
+            endLineNum: 1,
+            endLineType: "added",
+            lineContent: "const a = 1;",
+            commentText: "remove me",
+        });
+        useDiffReviewStore.getState().setDraft(
+            buildDiffReviewDraftKey(buildDiffReviewSessionKey(7), "a.ts", "hunk:1:1:0"),
+            "draft text",
+        );
+
+        act(() => {
+            root.render(<SnapshotSyncProbe/>);
+        });
+        await flushEffects();
+
+        const handler = eventHandlers.get("tmux:session-destroyed");
+        expect(handler).toBeTypeOf("function");
+
+        act(() => {
+            handler?.({name: "old-session"});
+        });
+
+        expect(useDiffReviewStore.getState().comments).toEqual([]);
+        expect(useDiffReviewStore.getState().drafts).toEqual({});
+        expect(useDiffReviewStore.getState().activeCommentLineKey).toBeNull();
     });
 });

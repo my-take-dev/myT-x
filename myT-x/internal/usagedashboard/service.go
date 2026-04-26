@@ -192,6 +192,15 @@ func normalizeClaudeStats(stats *ClaudeUsageStats) {
 	if stats.SlashCommands == nil {
 		stats.SlashCommands = []UsageEntry{}
 	}
+	if stats.SkillsDaily == nil {
+		stats.SkillsDaily = []DailyUsageSeries{}
+	}
+	if stats.AgentsDaily == nil {
+		stats.AgentsDaily = []DailyUsageSeries{}
+	}
+	if stats.SlashCommandsDaily == nil {
+		stats.SlashCommandsDaily = []DailyUsageSeries{}
+	}
 	if stats.DailyActivity == nil {
 		stats.DailyActivity = []DailyBucket{}
 	}
@@ -210,6 +219,12 @@ func normalizeCodexStats(stats *CodexUsageStats) {
 	if stats.Agents == nil {
 		stats.Agents = []UsageEntry{}
 	}
+	if stats.SkillsDaily == nil {
+		stats.SkillsDaily = []DailyUsageSeries{}
+	}
+	if stats.AgentsDaily == nil {
+		stats.AgentsDaily = []DailyUsageSeries{}
+	}
 	if stats.DailyActivity == nil {
 		stats.DailyActivity = []DailyBucket{}
 	}
@@ -225,20 +240,22 @@ func (s *Service) aggregateBoth(homeDir, workDir string, now time.Time) Persiste
 	var claudeStats *ClaudeUsageStats
 	var codexStats *CodexUsageStats
 	wg.Go(func() {
-		claudeStats = s.buildClaudeStats(homeDir, workDir)
+		claudeStats = s.buildClaudeStats(homeDir, workDir, now)
 	})
 	wg.Go(func() {
-		codexStats = s.buildCodexStats(homeDir, workDir)
+		codexStats = s.buildCodexStats(homeDir, workDir, now)
 	})
 	wg.Wait()
 
-	return PersistedSnapshot{
+	persisted := PersistedSnapshot{
 		SchemaVersion: snapshotSchemaVersion,
 		WorkDir:       workDir,
 		SavedAt:       now,
 		Claude:        claudeStats,
 		Codex:         codexStats,
 	}
+	normalizeCachedSnapshot(&persisted)
+	return persisted
 }
 
 // filterByMode converts a fully-populated persisted snapshot into the API
@@ -269,104 +286,137 @@ func normalizeMode(raw string) string {
 }
 
 // buildClaudeStats is always non-nil so the mode contract holds.
-func (s *Service) buildClaudeStats(homeDir, workDir string) *ClaudeUsageStats {
+func (s *Service) buildClaudeStats(homeDir, workDir string, now time.Time) *ClaudeUsageStats {
 	stats := &ClaudeUsageStats{
-		Skills:        []UsageEntry{},
-		Agents:        []UsageEntry{},
-		SlashCommands: []UsageEntry{},
-		DailyActivity: []DailyBucket{},
-		Health:        newSourceHealth(),
+		Skills:             []UsageEntry{},
+		Agents:             []UsageEntry{},
+		SlashCommands:      []UsageEntry{},
+		SkillsDaily:        []DailyUsageSeries{},
+		AgentsDaily:        []DailyUsageSeries{},
+		SlashCommandsDaily: []DailyUsageSeries{},
+		DailyActivity:      []DailyBucket{},
+		Health:             newSourceHealth(),
 	}
 	claudeHome, err := ResolveClaudeHome(homeDir)
 	if err != nil {
 		stats.Health.PartialErrors = append(stats.Health.PartialErrors, err.Error())
-		stats.DailyActivity = NewDailyAggregator(s.deps.NowFunc(), DefaultDailyWindow).Buckets()
+		stats.DailyActivity = NewDailyAggregator(now, DefaultDailyWindow).Buckets()
 		return stats
 	}
+
+	skills := NewNamedDailyAggregator(now, DefaultDailyWindow)
+	agents := NewNamedDailyAggregator(now, DefaultDailyWindow)
+	slash := NewNamedDailyAggregator(now, DefaultDailyWindow)
+	daily := NewDailyAggregator(now, DefaultDailyWindow)
+	sessionsSeen := make(map[string]struct{})
+	historyCommands := make(map[claudeCommandKey]int)
+
+	historyPath := filepath.Join(claudeHome, "history.jsonl")
+	if _, herr := os.Stat(historyPath); herr == nil {
+		stats.Health.HistoryAvailable = true
+		records, parseErr := claude.ParseHistoryFile(historyPath, func(project string) bool {
+			return PathsEqualFold(project, workDir)
+		}, &stats.Health.PartialErrors)
+		if parseErr != nil {
+			stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("history: %s", parseErr.Error()))
+		}
+		for _, rec := range records {
+			applyClaudeHistoryCommand(rec, stats, skills, slash, daily)
+			if canDedupClaudeCommandRecord(rec) {
+				historyCommands[makeClaudeCommandKey(rec)]++
+			}
+		}
+	} else if !errors.Is(herr, os.ErrNotExist) {
+		stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("history stat: %s", herr.Error()))
+	}
+
 	projectDir, err := FindClaudeProjectDir(claudeHome, workDir)
 	if err != nil {
 		stats.Health.PartialErrors = append(stats.Health.PartialErrors, err.Error())
-		stats.DailyActivity = NewDailyAggregator(s.deps.NowFunc(), DefaultDailyWindow).Buckets()
-		return stats
-	}
-	stats.Health.ProjectDir = projectDir
+	} else {
+		stats.Health.ProjectDir = projectDir
 
-	paths, err := claude.ListProjectFiles(projectDir)
-	if err != nil {
-		stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("list project files: %s", err.Error()))
-		stats.DailyActivity = NewDailyAggregator(s.deps.NowFunc(), DefaultDailyWindow).Buckets()
-		return stats
-	}
-	stats.Health.JsonlAvailable = len(paths) > 0
-
-	skills := NewUsageCounter()
-	agents := NewUsageCounter()
-	slash := NewUsageCounter()
-	daily := NewDailyAggregator(s.deps.NowFunc(), DefaultDailyWindow)
-	sessionsSeen := make(map[string]struct{})
-	for _, path := range paths {
-		session, err := claude.ParseFile(path, &stats.Health.PartialErrors)
+		paths, err := claude.ListProjectFiles(projectDir)
 		if err != nil {
-			stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("%s: %s", filepath.Base(path), err.Error()))
-			continue
-		}
-		if session.SessionID != "" {
-			if _, ok := sessionsSeen[session.SessionID]; !ok {
-				sessionsSeen[session.SessionID] = struct{}{}
-				if !session.FirstSeen.IsZero() {
-					daily.AddSession(session.FirstSeen)
+			stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("list project files: %s", err.Error()))
+		} else {
+			stats.Health.JsonlAvailable = len(paths) > 0
+			for _, path := range paths {
+				session, err := claude.ParseFile(path, &stats.Health.PartialErrors)
+				if err != nil {
+					stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("%s: %s", filepath.Base(path), err.Error()))
+					continue
+				}
+				if session.SessionID != "" {
+					if _, ok := sessionsSeen[session.SessionID]; !ok {
+						sessionsSeen[session.SessionID] = struct{}{}
+						if !session.FirstSeen.IsZero() {
+							daily.AddSession(session.FirstSeen)
+						}
+					}
+				}
+				for _, rec := range session.Records {
+					if consumeClaudeHistoryCommand(historyCommands, rec) {
+						continue
+					}
+					applyClaudeRecord(rec, stats, skills, agents, slash, daily, true)
 				}
 			}
 		}
-		for _, rec := range session.Records {
-			applyClaudeRecord(rec, stats, skills, agents, slash, daily, true)
-		}
-	}
 
-	// Walk subagent logs (<session-uuid>/subagents/*.jsonl) to capture Skill
-	// and Agent uses that happened inside spawned subagents. Sessions and
-	// messages are NOT counted here because the parent session's tool_use
-	// already accounts for the subagent invocation; double-counting would
-	// inflate TotalSessions/TotalMessages artificially.
-	subagentPaths, subErr := claude.ListSubagentFiles(projectDir)
-	if subErr != nil {
-		stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("list subagent files: %s", subErr.Error()))
+		// Walk subagent logs (<session-uuid>/subagents/*.jsonl) to capture Skill,
+		// Agent, Slash, and generic tool-call usage inside spawned subagents.
+		// Sessions and messages are NOT counted here because the parent session's
+		// tool_use already accounts for the subagent invocation; double-counting
+		// would inflate TotalSessions/TotalMessages artificially.
+		subagentPaths, subErr := claude.ListSubagentFiles(projectDir)
+		if subErr != nil {
+			stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("list subagent files: %s", subErr.Error()))
+		}
+		for _, path := range subagentPaths {
+			session, err := claude.ParseFile(path, &stats.Health.PartialErrors)
+			if err != nil {
+				stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("%s: %s", filepath.Base(path), err.Error()))
+				continue
+			}
+			for _, rec := range session.Records {
+				if consumeClaudeHistoryCommand(historyCommands, rec) {
+					continue
+				}
+				applyClaudeRecord(rec, stats, skills, agents, slash, daily, false)
+			}
+		}
 	}
-	for _, path := range subagentPaths {
-		session, err := claude.ParseFile(path, &stats.Health.PartialErrors)
-		if err != nil {
-			stats.Health.PartialErrors = append(stats.Health.PartialErrors, fmt.Sprintf("%s: %s", filepath.Base(path), err.Error()))
-			continue
-		}
-		for _, rec := range session.Records {
-			applyClaudeRecord(rec, stats, skills, agents, slash, daily, false)
-		}
+	if remaining := countClaudeHistoryCommands(historyCommands); remaining > 0 {
+		slog.Debug("[USAGE_DASHBOARD_DEBUG] history-only commands remain after session dedup",
+			"count", remaining)
 	}
 
 	stats.TotalSessions = len(sessionsSeen)
 	stats.Skills = skills.TopN(TopRankingLimit)
 	stats.Agents = agents.TopN(TopRankingLimit)
 	stats.SlashCommands = slash.TopN(TopRankingLimit)
+	stats.SkillsDaily = skills.TopSeries(TopRankingLimit)
+	stats.AgentsDaily = agents.TopSeries(TopRankingLimit)
+	stats.SlashCommandsDaily = slash.TopSeries(TopRankingLimit)
 	stats.DailyActivity = daily.Buckets()
 	stats.ActiveDays = daily.ActiveDays()
-	// history.jsonl presence is used as an indicator only.
-	if _, herr := os.Stat(filepath.Join(claudeHome, "history.jsonl")); herr == nil {
-		stats.Health.HistoryAvailable = true
-	}
 	return stats
 }
 
-func (s *Service) buildCodexStats(homeDir, workDir string) *CodexUsageStats {
+func (s *Service) buildCodexStats(homeDir, workDir string, now time.Time) *CodexUsageStats {
 	stats := &CodexUsageStats{
 		Skills:        []UsageEntry{},
 		Agents:        []UsageEntry{},
+		SkillsDaily:   []DailyUsageSeries{},
+		AgentsDaily:   []DailyUsageSeries{},
 		DailyActivity: []DailyBucket{},
 		Health:        newSourceHealth(),
 	}
 	codexHome, err := ResolveCodexHome(homeDir)
 	if err != nil {
 		stats.Health.PartialErrors = append(stats.Health.PartialErrors, err.Error())
-		stats.DailyActivity = NewDailyAggregator(s.deps.NowFunc(), DefaultDailyWindow).Buckets()
+		stats.DailyActivity = NewDailyAggregator(now, DefaultDailyWindow).Buckets()
 		return stats
 	}
 	sessionsRoot := filepath.Join(codexHome, "sessions")
@@ -386,9 +436,9 @@ func (s *Service) buildCodexStats(homeDir, workDir string) *CodexUsageStats {
 		stats.Health.JsonlAvailable = len(paths) > 0
 	}
 
-	agents := NewUsageCounter()
-	skills := NewUsageCounter()
-	daily := NewDailyAggregator(s.deps.NowFunc(), DefaultDailyWindow)
+	agents := NewNamedDailyAggregator(now, DefaultDailyWindow)
+	skills := NewNamedDailyAggregator(now, DefaultDailyWindow)
+	daily := NewDailyAggregator(now, DefaultDailyWindow)
 	sessionsSeen := make(map[string]struct{})
 	matcher := func(cwd string) bool { return PathsEqualFold(cwd, workDir) }
 
@@ -430,6 +480,8 @@ func (s *Service) buildCodexStats(homeDir, workDir string) *CodexUsageStats {
 	stats.TotalSessions = len(sessionsSeen)
 	stats.Skills = skills.TopN(TopRankingLimit)
 	stats.Agents = agents.TopN(TopRankingLimit)
+	stats.SkillsDaily = skills.TopSeries(TopRankingLimit)
+	stats.AgentsDaily = agents.TopSeries(TopRankingLimit)
 	stats.DailyActivity = daily.Buckets()
 	stats.ActiveDays = daily.ActiveDays()
 
@@ -463,6 +515,73 @@ func newSourceHealth() SourceHealth {
 	return SourceHealth{PartialErrors: []string{}}
 }
 
+type claudeCommandKey struct {
+	sessionID string
+	name      string
+	recType   claude.RecordType
+}
+
+// claudeCommandKey is the shared dedup contract between Claude history.jsonl
+// slash records and project/subagent session markers. Keep it aligned with
+// claude.classifySlashCommand and parser-side command normalization.
+func makeClaudeCommandKey(rec claude.Record) claudeCommandKey {
+	return claudeCommandKey{
+		sessionID: rec.SessionID,
+		name:      strings.ToLower(strings.TrimSpace(rec.Name)),
+		recType:   rec.Type,
+	}
+}
+
+func canDedupClaudeCommandRecord(rec claude.Record) bool {
+	if rec.SessionID == "" || rec.Timestamp.IsZero() {
+		return false
+	}
+	return rec.Type == claude.RecordSkill || rec.Type == claude.RecordSlash
+}
+
+func applyClaudeHistoryCommand(
+	rec claude.Record,
+	stats *ClaudeUsageStats,
+	skills, slash *NamedDailyAggregator,
+	daily *DailyAggregator,
+) {
+	switch rec.Type {
+	case claude.RecordSkill:
+		skills.Add(rec.Name, rec.Timestamp)
+		stats.TotalToolUses++
+		daily.AddToolCall(rec.Timestamp)
+	case claude.RecordSlash:
+		slash.Add(rec.Name, rec.Timestamp)
+	}
+}
+
+func consumeClaudeHistoryCommand(historyCommands map[claudeCommandKey]int, rec claude.Record) bool {
+	if rec.IsToolCall || !canDedupClaudeCommandRecord(rec) {
+		return false
+	}
+	key := makeClaudeCommandKey(rec)
+	count := historyCommands[key]
+	if count == 0 {
+		return false
+	}
+	if count == 1 {
+		delete(historyCommands, key)
+	} else {
+		historyCommands[key] = count - 1
+	}
+	return true
+}
+
+func countClaudeHistoryCommands(historyCommands map[claudeCommandKey]int) int {
+	total := 0
+	for _, count := range historyCommands {
+		if count > 0 {
+			total += count
+		}
+	}
+	return total
+}
+
 // applyClaudeRecord aggregates one parsed record into the running Claude
 // counters. Extracted to keep main-session and subagent loops in sync when new
 // RecordType values are added in the future (defensive-coding-checklist #187).
@@ -474,7 +593,7 @@ func newSourceHealth() SourceHealth {
 func applyClaudeRecord(
 	rec claude.Record,
 	stats *ClaudeUsageStats,
-	skills, agents, slash *UsageCounter,
+	skills, agents, slash *NamedDailyAggregator,
 	daily *DailyAggregator,
 	countMessages bool,
 ) {
@@ -489,6 +608,8 @@ func applyClaudeRecord(
 		daily.AddToolCall(rec.Timestamp)
 	case claude.RecordSlash:
 		slash.Add(rec.Name, rec.Timestamp)
+		// Slash commands are surfaced in the slash ranking and series only.
+		// DailyActivity tracks sessions, messages, and tool calls.
 	case claude.RecordUserMessage, claude.RecordAssistantMessage:
 		if countMessages {
 			stats.TotalMessages++

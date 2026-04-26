@@ -1,14 +1,30 @@
+import {useEffect, useMemo, useRef, useState} from "react";
+import {useDiffReviewStore} from "../../../../stores/diffReviewStore";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {CommitPanel} from "./CommitPanel";
 import {DiffContentViewer} from "./DiffContentViewer";
 import {DiffFileSidebar} from "./DiffFileSidebar";
+import {DiffReviewActionBar} from "./DiffReviewActionBar";
+import {buildDiffReviewGenerationKey, shouldResetDiffReviewState} from "./diffReviewGeneration";
+import {buildScopedDiffReviewPrefix} from "./diffReviewKeys";
+import {useDiffReviewSessionKey} from "./diffReviewSession";
 import {DiffViewModeToggle} from "./DiffViewModeToggle";
 import {StagingFlatView} from "./StagingFlatView";
 import {useDiffView} from "./useDiffView";
 
 export function DiffView() {
     const closeView = useViewerStore((s) => s.closeView);
+    const activeSessionKey = useDiffReviewSessionKey();
+    const sessionCommentCount = useDiffReviewStore(
+        (state) => state.comments.filter((comment) => comment.sessionKey === activeSessionKey).length,
+    );
+    const sessionDraftKeyPrefix = buildScopedDiffReviewPrefix(activeSessionKey);
+    const hasSessionDrafts = useDiffReviewStore(
+        (state) =>
+            sessionDraftKeyPrefix !== ""
+            && Object.keys(state.drafts).some((draftKey) => draftKey.startsWith(sessionDraftKeyPrefix)),
+    );
     const {
         flatNodes,
         selectedPath,
@@ -48,6 +64,36 @@ export function DiffView() {
     const fileCount = diffResult?.files?.length ?? 0;
     const totalAdded = diffResult?.total_added ?? 0;
     const totalDeleted = diffResult?.total_deleted ?? 0;
+    const diffReviewGenerationKey = useMemo(
+        () => buildDiffReviewGenerationKey(diffResult),
+        [diffResult],
+    );
+    const previousSessionKeyRef = useRef(activeSessionKey);
+    const previousGenerationKeyRef = useRef(diffReviewGenerationKey);
+    const [diffReviewWarning, setDiffReviewWarning] = useState<string | null>(null);
+
+    useEffect(() => {
+        const generationChanged = shouldResetDiffReviewState(
+            previousSessionKeyRef.current,
+            previousGenerationKeyRef.current,
+            activeSessionKey,
+            diffReviewGenerationKey,
+        );
+        if (previousSessionKeyRef.current !== activeSessionKey) {
+            setDiffReviewWarning(null);
+        } else if (generationChanged && (sessionCommentCount > 0 || hasSessionDrafts)) {
+            if (hasSessionDrafts) {
+                setDiffReviewWarning(
+                    "Diff changed while review comments were being prepared. Draft inputs were preserved. Verify line references before sending.",
+                );
+            } else {
+                setDiffReviewWarning("Diff changed after review comments were added. Verify line references before sending.");
+            }
+        }
+
+        previousSessionKeyRef.current = activeSessionKey;
+        previousGenerationKeyRef.current = diffReviewGenerationKey;
+    }, [activeSessionKey, diffReviewGenerationKey, hasSessionDrafts, sessionCommentCount]);
 
     if (!activeSession) {
         return (
@@ -82,6 +128,7 @@ export function DiffView() {
             <div className="diff-action-bar">
                 <span className="diff-action-bar-title">Diff</span>
                 <DiffViewModeToggle mode={sidebarMode} onModeChange={setSidebarMode} />
+                <DiffReviewActionBar />
                 <span className="diff-action-bar-spacer" />
                 <button type="button" className="viewer-header-btn" onClick={() => loadDiff()}
                         title="Refresh" aria-label="Refresh">{"\u21BB"}</button>
@@ -108,6 +155,11 @@ export function DiffView() {
             <div className="diff-view-body">
                 {branchInfo?.statusFetchFailed && (
                     <div className="diff-status-warning">{"\u26A0"} Git status unavailable — file list may be stale</div>
+                )}
+                {diffReviewWarning && (
+                    <div className="diff-status-warning" role="status">
+                        {"\u26A0"} {diffReviewWarning}
+                    </div>
                 )}
                 {isLoading && !diffResult ? (
                     <div className="viewer-message">Loading diff...</div>

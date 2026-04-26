@@ -1,13 +1,10 @@
-import {useState} from "react";
 import type {usagedashboard} from "../../../../../wailsjs/go/models";
 import {OverviewCards} from "./OverviewCards";
-import {RankingTable} from "./RankingTable";
 import {DailyActivityChart} from "./DailyActivityChart";
 import {SourceHealthBanner} from "./SourceHealthBanner";
+import {UsageCategorySection, type UsageCategory, type UsageCategoryKey} from "./UsageCategorySection";
 import {formatNumber} from "./formatters";
 import {useUsageDashboardI18n} from "./i18n";
-
-type RankingKey = "skills" | "agents" | "slash";
 
 interface ClaudePanelProps {
     readonly stats: usagedashboard.ClaudeUsageStats | null | undefined;
@@ -17,7 +14,6 @@ interface ClaudePanelProps {
 
 export function ClaudePanel({stats, compact = false, titlePrefix}: ClaudePanelProps) {
     const tr = useUsageDashboardI18n();
-    const [ranking, setRanking] = useState<RankingKey>("skills");
 
     if (!stats) {
         return (
@@ -43,10 +39,29 @@ export function ClaudePanel({stats, compact = false, titlePrefix}: ClaudePanelPr
         {id: "tool-calls", label: tr("viewer.usageDashboard.toolCalls", "ツール呼び出し", "Tool Calls"), value: formatNumber(stats.total_tool_uses)},
     ];
 
-    const rankingEntries =
-        ranking === "skills" ? stats.skills
-        : ranking === "agents" ? stats.agents
-        : stats.slash_commands;
+    const categories: ReadonlyArray<UsageCategory<UsageCategoryKey>> = [
+        {
+            key: "skills",
+            label: tr("viewer.usageDashboard.skills", "スキル", "Skills"),
+            ranking: stats.skills,
+            dailySeries: stats.skills_daily ?? [],
+            emptyLabel: rankingEmptyLabel("skills", tr),
+        },
+        {
+            key: "agents",
+            label: tr("viewer.usageDashboard.agents", "エージェント", "Agents"),
+            ranking: stats.agents,
+            dailySeries: stats.agents_daily ?? [],
+            emptyLabel: rankingEmptyLabel("agents", tr),
+        },
+        {
+            key: "slash",
+            label: tr("viewer.usageDashboard.slash", "スラッシュ", "Slash"),
+            ranking: stats.slash_commands,
+            dailySeries: stats.slash_commands_daily ?? [],
+            emptyLabel: rankingEmptyLabel("slash", tr),
+        },
+    ];
 
     return (
         <div className={compact ? "usage-dashboard-claude compact" : "usage-dashboard-claude"}>
@@ -61,22 +76,12 @@ export function ClaudePanel({stats, compact = false, titlePrefix}: ClaudePanelPr
                 includeSqlite={false}
             />
             <OverviewCards items={overview}/>
-            <section className="usage-dashboard-section">
-                <div
-                    className="usage-dashboard-subtabs"
-                    role="tablist"
-                    aria-label={tr("viewer.usageDashboard.claude.ranking", "Claudeランキング", "Claude ranking")}
-                >
-                    <RankingTab current={ranking} target="skills" label={`${tr("viewer.usageDashboard.skills", "スキル", "Skills")} (${stats.skills.length})`} onSelect={setRanking}/>
-                    <RankingTab current={ranking} target="agents" label={`${tr("viewer.usageDashboard.agents", "エージェント", "Agents")} (${stats.agents.length})`} onSelect={setRanking}/>
-                    <RankingTab current={ranking} target="slash" label={`${tr("viewer.usageDashboard.slash", "スラッシュ", "Slash")} (${stats.slash_commands.length})`} onSelect={setRanking}/>
-                </div>
-                <RankingTable
-                    entries={rankingEntries}
-                    emptyLabel={rankingEmptyLabel(ranking, tr)}
-                    ariaLabel={tr("viewer.usageDashboard.claude.ranking", "Claudeランキング", "Claude ranking")}
-                />
-            </section>
+            <UsageCategorySection
+                categories={categories}
+                initialCategory="skills"
+                ariaLabel={tr("viewer.usageDashboard.claude.ranking", "Claudeランキング", "Claude ranking")}
+                colorVar="--udash-color-claude"
+            />
             <section className="usage-dashboard-section">
                 <h4 className="usage-dashboard-section-title">
                     {tr("viewer.usageDashboard.dailyActivity", "日次アクティビティ（30日）", "Daily Activity (30 days)")}
@@ -93,31 +98,7 @@ export function ClaudePanel({stats, compact = false, titlePrefix}: ClaudePanelPr
     );
 }
 
-interface RankingTabProps {
-    readonly current: RankingKey;
-    readonly target: RankingKey;
-    readonly label: string;
-    readonly onSelect: (next: RankingKey) => void;
-}
-
-function RankingTab({current, target, label, onSelect}: RankingTabProps) {
-    const selected = current === target;
-    return (
-        <button
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            className="usage-dashboard-subtab"
-            onClick={() => {
-                if (!selected) onSelect(target);
-            }}
-        >
-            {label}
-        </button>
-    );
-}
-
-function rankingEmptyLabel(key: RankingKey, tr: ReturnType<typeof useUsageDashboardI18n>): string {
+function rankingEmptyLabel(key: UsageCategoryKey, tr: ReturnType<typeof useUsageDashboardI18n>): string {
     switch (key) {
         case "skills":
             return tr(

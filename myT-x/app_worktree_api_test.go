@@ -342,6 +342,8 @@ func TestPromoteWorktreeToBranchSuccess(t *testing.T) {
 }
 
 func TestCommitAndPushWorktreeSuccess(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	repoPath := testutil.CreateTempGitRepo(t)
 	remoteRoot := t.TempDir()
 	remotePath := filepath.Join(remoteRoot, "origin.git")
@@ -386,6 +388,8 @@ func TestCommitAndPushWorktreeSuccess(t *testing.T) {
 }
 
 func TestCommitAndPushWorktreePushOnlyWhenCommitMessageEmpty(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	repoPath := testutil.CreateTempGitRepo(t)
 	remoteRoot := t.TempDir()
 	remotePath := filepath.Join(remoteRoot, "origin.git")
@@ -1084,6 +1088,8 @@ func TestCleanupWorktreeForceRemovesDirtyWorktreeWhenConfigured(t *testing.T) {
 }
 
 func TestCleanupWorktreeKeepsPushedBranch(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	repoPath := testutil.CreateTempGitRepo(t)
 	defaultBranch := runGitInDir(t, repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 
@@ -1439,6 +1445,8 @@ func TestCreateSessionWithExistingWorktreeEnableAgentTeamSetsEnvVars(t *testing.
 }
 
 func TestListBranchesHidesWorktreeOnlyLocalBranches(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	repoPath := testutil.CreateTempGitRepo(t)
 	defaultBranch := runGitInDir(t, repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 

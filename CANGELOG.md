@@ -1,5 +1,77 @@
 # 変更履歴
 
+## v1.1.000
+
+### AutoStart（自動起動）
+
+- **ペインツールバーから新規ペインへコマンドを即時起動する機能を実装**
+  - ペインツールバーの「自動起動」ボタンをクリックでポップオーバーを表示
+  - 登録済みの AutoStart コマンドを選択すると、現在のペインの隣を分割して即時実行
+  - 起動中はボタンを無効化（多重起動防止）、Escape でポップオーバーを閉じる
+  - コマンドプレビュー（`[command args]` 形式）をポップオーバー内に表示
+
+- **設定画面に「自動起動」タブを追加**（2 番目のタブ）
+  - 表示名 / コマンド / 引数（raw suffix）の 3 フィールドで管理
+  - 最大 50 件まで登録可能
+  - `args` は配列ではなく raw suffix 文字列として `command` の後ろへ連結
+
+- **`config.yaml` に `auto_start` キーを追加**
+
+  ```yaml
+  auto_start:
+    - name: "Mini Codex"
+      command: "codex"
+      args: "--model gpt-5.4-mini"
+  ```
+
+---
+
+## v1.0.9
+
+### Diff Review（インラインコメント）
+
+- **GitHub PR風インラインコメント機能を実装**（`diff-github-md-ai-lexical-ocean`）
+  - Diff行ホバーで `+` ボタン表示 → クリックでインラインtextarea展開
+  - コメントをファイルパス・行番号・コードブロック付きのMarkdown形式に整形
+  - アクションバーにバッジ（件数）＋ペイン選択＋送信ボタンを追加
+  - 送信はBracketed Paste方式（`sendKeysLiteralPasteWithEnter`）でAIペインに一括送信
+  - `shared/DiffLineRow` / `DiffHunkSection` は変更せずWorking Diff専用ラッパーで拡張（git-graph非破壊）
+  - ドラッグ範囲選択UI・空白文字保持・クリック抑制制御など細部を整備
+
+### MarkdownPreview
+
+- **アウトライン表示機能を追加**
+  - 見出しから自動でアンカーIDを生成（重複回避付き）
+  - ページ内リンクのクリックでスムーズスクロール
+  - 折りたたみ可能なアウトラインパネルをサイドに追加
+
+### 使用状況ダッシュボード（Usage Dashboard）
+
+- **グラフ表示を拡張**
+  - `ItemDailyUsageChart`：項目ごとの日次棒グラフ（単一・積層切替）
+  - `UsageCategorySection`：カテゴリタブ＋ランキング/日次グラフ切替ビュー
+  - recharts カスタムツールチップ・グラデーション描画・オーバーフロー集約対応
+
+### IME・ターミナルフォーカス改善
+
+- **ターミナルペインへのフォーカス復帰時にIME自動復旧を実装**（`plan-ime-terminal-focus-recovery`）
+  - フォーカス復帰を契機に隠し textarea サイクルとxterm IME recoveryイベントを実行
+  - cooldown制御で連続フォーカス時の復旧連発を防止
+  - active pane内のxterm textarea限定で動作（チャット・検索・rename入力欄からfocusを奪わない）
+  - 自動復旧では backend window focus API を呼ばない（手動リフレッシュのみ呼出）
+
+- **IME入力ゲート強化**
+  - stale予測値dedupeフラグ追加（compositionend.data不一致時の文字漏洩防止）
+  - prefix rewrite対象外制御の追加
+  - サロゲートペア対応テスト追加
+
+### スキル使用統計ダッシュボード（調査完了）
+
+- `history.jsonl` / `stats-cache.json` / `usage-data/facets/` を組み合わせた
+  スキル別呼び出し回数・トレンド・セッション成功率の可視化設計を確立
+
+---
+
 ## v1.0.8
 
 ### MCPオーケストレーター改善

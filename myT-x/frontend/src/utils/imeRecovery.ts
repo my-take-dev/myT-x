@@ -16,8 +16,18 @@ export const IME_RECOVERY_AUTO_COOLDOWN_MS = 1_000;
 export const IME_RECOVERY_SURFACE_DELAY_MS = 30;
 
 const IME_RECOVERY_SURFACE_ATTRIBUTE = "data-ime-recovery-surface";
+export const TERMINAL_PANE_ID_ATTRIBUTE = "data-terminal-pane-id";
+const TERMINAL_PANE_SELECTOR = `[${TERMINAL_PANE_ID_ATTRIBUTE}]`;
+const TERMINAL_FOCUS_SUPPRESSION_MS = 250;
 
-export type TerminalImeRecoveryReason = "manual" | "visibility-change" | "window-focus" | "text-entry-reentry";
+const terminalFocusRecoverySuppressions = new Map<string, number>();
+
+export type TerminalImeRecoveryReason =
+    | "manual"
+    | "visibility-change"
+    | "window-focus"
+    | "text-entry-reentry"
+    | "terminal-focus";
 
 export interface TerminalImeRecoveryDetail {
     paneId: string;
@@ -29,6 +39,7 @@ const terminalImeRecoveryReasons = new Set<TerminalImeRecoveryReason>([
     "visibility-change",
     "window-focus",
     "text-entry-reentry",
+    "terminal-focus",
 ]);
 
 function isRecoverySurface(element: HTMLElement): boolean {
@@ -59,6 +70,92 @@ export function isTerminalTextEntryElement(element: HTMLElement | null): boolean
     return element !== null && element.closest(".xterm") !== null;
 }
 
+function normalizePaneId(paneId: string | null | undefined): string | null {
+    const normalized = paneId?.trim();
+    return normalized ? normalized : null;
+}
+
+function pruneExpiredTerminalFocusSuppressions(now: number): void {
+    for (const [paneId, suppressedUntil] of terminalFocusRecoverySuppressions) {
+        if (suppressedUntil < now) {
+            terminalFocusRecoverySuppressions.delete(paneId);
+        }
+    }
+}
+
+export function getTerminalTextEntryPaneId(element: HTMLElement | null): string | null {
+    if (element === null || !isTerminalTextEntryElement(element)) {
+        return null;
+    }
+    const terminalPane = element.closest<HTMLElement>(TERMINAL_PANE_SELECTOR);
+    return normalizePaneId(terminalPane?.getAttribute(TERMINAL_PANE_ID_ATTRIBUTE));
+}
+
+export function isActiveTerminalTextEntryElement(
+    element: HTMLElement | null,
+    activePaneId: string | null,
+): boolean {
+    const normalizedActivePaneId = normalizePaneId(activePaneId);
+    return normalizedActivePaneId !== null && getTerminalTextEntryPaneId(element) === normalizedActivePaneId;
+}
+
+export function suppressNextTerminalFocusImeRecovery(paneId: string): void {
+    const normalizedPaneId = normalizePaneId(paneId);
+    if (normalizedPaneId === null) {
+        return;
+    }
+    const now = Date.now();
+    pruneExpiredTerminalFocusSuppressions(now);
+    terminalFocusRecoverySuppressions.set(normalizedPaneId, now + TERMINAL_FOCUS_SUPPRESSION_MS);
+}
+
+export function consumeTerminalFocusImeRecoverySuppression(paneId: string): boolean {
+    const normalizedPaneId = normalizePaneId(paneId);
+    if (normalizedPaneId === null) {
+        return false;
+    }
+    const now = Date.now();
+    pruneExpiredTerminalFocusSuppressions(now);
+    const suppressedUntil = terminalFocusRecoverySuppressions.get(normalizedPaneId);
+    if (suppressedUntil === undefined) {
+        return false;
+    }
+    terminalFocusRecoverySuppressions.delete(normalizedPaneId);
+    return now <= suppressedUntil;
+}
+
+export function __resetTerminalFocusSuppressionsForTest(): void {
+    terminalFocusRecoverySuppressions.clear();
+}
+
+export function focusTerminalTextEntryByPaneId(paneId: string): boolean {
+    const normalizedPaneId = normalizePaneId(paneId);
+    if (normalizedPaneId === null) {
+        return false;
+    }
+    const terminalPane = findTerminalPaneById(normalizedPaneId);
+    const target = terminalPane?.querySelector<HTMLElement>(".xterm textarea") ?? null;
+    if (target === null || !isTerminalTextEntryElement(target) || asRecoverableTextEntryTarget(target) === null) {
+        return false;
+    }
+    focusHTMLElement(target);
+    return document.activeElement === target;
+}
+
+function findTerminalPaneById(normalizedPaneId: string): HTMLElement | null {
+    if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+        return document.querySelector<HTMLElement>(
+            `[${TERMINAL_PANE_ID_ATTRIBUTE}="${CSS.escape(normalizedPaneId)}"]`,
+        );
+    }
+    for (const terminalPane of document.querySelectorAll<HTMLElement>(TERMINAL_PANE_SELECTOR)) {
+        if (normalizePaneId(terminalPane.getAttribute(TERMINAL_PANE_ID_ATTRIBUTE)) === normalizedPaneId) {
+            return terminalPane;
+        }
+    }
+    return null;
+}
+
 export function resolveImeRecoveryTarget(
     activeElement: Element | null,
     lastTextEntryTarget: HTMLElement | null,
@@ -79,7 +176,7 @@ export function dispatchTerminalImeRecovery(detail: TerminalImeRecoveryDetail): 
     }
     try {
         window.dispatchEvent(new CustomEvent<TerminalImeRecoveryDetail>(TERMINAL_IME_RECOVERY_EVENT, {detail}));
-    } catch (err) {
+    } catch (err: unknown) {
         console.warn("[IME-RECOVERY] failed to dispatch terminal recovery event", err);
     }
 }

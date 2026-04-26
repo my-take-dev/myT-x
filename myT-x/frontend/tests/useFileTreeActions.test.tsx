@@ -105,18 +105,19 @@ describe("useFileTreeActions", () => {
         });
         await flushEffects();
 
-        expect(apiMock.DevPanelStartWatcher).toHaveBeenCalledWith("session-a");
+        expect(apiMock.DevPanelStartWatcher).toHaveBeenCalledWith("session-a:1");
         expect(probeStore.getState().tree.length).toBe(1);
 
         mockActiveSession = "session-b";
+        mockActiveSessionKey = "session-b:1";
         apiMock.DevPanelListDir.mockResolvedValueOnce([]);
         act(() => {
             root.render(<Probe/>);
         });
         await flushEffects();
 
-        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a");
-        expect(apiMock.DevPanelStartWatcher).toHaveBeenCalledWith("session-b");
+        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a:1");
+        expect(apiMock.DevPanelStartWatcher).toHaveBeenCalledWith("session-b:1");
     });
 
     it("keeps the tree empty when the initial root load fails", async () => {
@@ -163,7 +164,7 @@ describe("useFileTreeActions", () => {
         });
         await flushEffects();
 
-        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a");
+        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a:1");
         expect(apiMock.DevPanelStartWatcher).toHaveBeenCalledTimes(2);
 
         act(() => {
@@ -191,8 +192,8 @@ describe("useFileTreeActions", () => {
         });
         await flushEffects();
 
-        expect(apiMock.DevPanelStartWatcher).toHaveBeenCalledWith("session-renamed");
-        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a");
+        expect(apiMock.DevPanelStartWatcher).toHaveBeenCalledWith("session-renamed:1");
+        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a:1");
     });
 
     it("continues refreshing from invalidation events after a session rename handoff", async () => {
@@ -242,10 +243,10 @@ describe("useFileTreeActions", () => {
         });
         await flushEffects();
 
-        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a");
-        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-renamed");
+        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a:1");
+        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-renamed:1");
         expect(
-            apiMock.DevPanelStopWatcher.mock.calls.filter(([sessionName]) => sessionName === "session-renamed"),
+            apiMock.DevPanelStopWatcher.mock.calls.filter(([sessionKey]) => sessionKey === "session-renamed:1"),
         ).toHaveLength(1);
     });
 
@@ -276,13 +277,13 @@ describe("useFileTreeActions", () => {
         await flushEffects();
         await flushEffects();
 
-        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a");
-        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-renamed");
+        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a:1");
+        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-renamed:1");
         expect(console.warn).toHaveBeenCalledWith("[file-tree] DevPanelStopWatcher failed", expect.objectContaining({
-            session: "session-a",
+            sessionKey: "session-a:1",
         }));
         expect(console.warn).toHaveBeenCalledWith("[file-tree] DevPanelStopWatcher failed", expect.objectContaining({
-            session: "session-renamed",
+            sessionKey: "session-renamed:1",
         }));
     });
 
@@ -300,9 +301,9 @@ describe("useFileTreeActions", () => {
         });
         await flushEffects();
 
-        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a");
-        expect(apiMock.DevPanelStopWatcher).not.toHaveBeenCalledWith("session-renamed");
-        expect(apiMock.DevPanelStartWatcher).toHaveBeenCalledWith("session-renamed");
+        expect(apiMock.DevPanelStopWatcher).toHaveBeenCalledWith("session-a:1");
+        expect(apiMock.DevPanelStopWatcher).not.toHaveBeenCalledWith("session-renamed:1");
+        expect(apiMock.DevPanelStartWatcher).toHaveBeenCalledWith("session-renamed:1");
     });
 
     it("ignores other-session and invalid invalidation events", async () => {

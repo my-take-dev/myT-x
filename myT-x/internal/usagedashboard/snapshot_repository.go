@@ -18,9 +18,10 @@ const (
 	// snapshotFileName is the cached aggregation result file.
 	snapshotFileName = "usage-dashboard.json"
 
-	// snapshotSchemaVersion is the on-disk format version. Bump when
-	// PersistedSnapshot fields change in a way that old readers cannot parse.
-	snapshotSchemaVersion = 1
+	// snapshotSchemaVersion is the on-disk cache contract version. Bump when
+	// persisted fields change, or when existing fields keep parsing but their
+	// semantics change enough that older cached values would mislead readers.
+	snapshotSchemaVersion = 4
 
 	// tempSnapshotPattern is the os.CreateTemp pattern for atomic write.
 	tempSnapshotPattern = "usage-dashboard-*.json.tmp"

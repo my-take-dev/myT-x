@@ -12,6 +12,15 @@ const (
 	SetupScriptCancellationWait = 30 * time.Second
 )
 
+// AutoStartCommand describes a command that can be launched into a new pane.
+// Args is a raw command-line suffix appended after Command without shell-style
+// parsing or model replacement.
+type AutoStartCommand struct {
+	Name    string `yaml:"name" json:"name"`
+	Command string `yaml:"command" json:"command"`
+	Args    string `yaml:"args,omitempty" json:"args,omitempty"`
+}
+
 // ClaudeEnvConfig holds Claude Code environment variable settings.
 // Vars contains key-value pairs applied to terminal panes.
 // DefaultEnabled controls the checkbox default in the new session modal.

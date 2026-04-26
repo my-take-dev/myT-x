@@ -1,6 +1,7 @@
 import {act} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it} from "vitest";
+import {setLanguage} from "../src/i18n";
 import {MarkdownPreview} from "../src/components/viewer/views/file-tree/MarkdownPreview";
 import type {PluggableList} from "unified";
 
@@ -39,6 +40,7 @@ describe("MarkdownPreview image security", () => {
     };
 
     beforeEach(() => {
+        setLanguage("en");
         container = document.createElement("div");
         document.body.appendChild(container);
         root = createRoot(container);
@@ -50,6 +52,7 @@ describe("MarkdownPreview image security", () => {
             root.unmount();
         });
         container.remove();
+        setLanguage("ja");
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
     });
 

@@ -128,7 +128,13 @@ export function QuickSearch({
     const panelRef = useRef<HTMLDivElement>(null);
     const templateLaunchTokenRef = useRef(0);
     const inputRef = useRef<HTMLInputElement>(null);
-    const resultItemRefs = useRef(new Map<string, HTMLDivElement>());
+    const resultItemRefs = useRef<Map<string, HTMLDivElement> | null>(null);
+    const getResultItemRefs = useCallback((): Map<string, HTMLDivElement> => {
+        if (resultItemRefs.current === null) {
+            resultItemRefs.current = new Map<string, HTMLDivElement>();
+        }
+        return resultItemRefs.current;
+    }, []);
     const listboxId = useId();
     const views = useRegisteredViews();
     const [dropdownPanelStyle, setDropdownPanelStyle] = useState<CSSProperties | undefined>(undefined);
@@ -436,11 +442,11 @@ export function QuickSearch({
         if (!selectedResult) {
             return;
         }
-        resultItemRefs.current.get(selectedResult.id)?.scrollIntoView({
+        getResultItemRefs().get(selectedResult.id)?.scrollIntoView({
             block: "nearest",
             inline: "nearest",
         });
-    }, [open, results, selectedIndex]);
+    }, [getResultItemRefs, open, results, selectedIndex]);
 
     const selectResult = useCallback(async (result: SearchResult) => {
         if (executingRef.current) {
@@ -548,10 +554,10 @@ export function QuickSearch({
                             key={result.id}
                             ref={(node) => {
                                 if (node === null) {
-                                    resultItemRefs.current.delete(result.id);
+                                    getResultItemRefs().delete(result.id);
                                     return;
                                 }
-                                resultItemRefs.current.set(result.id, node);
+                                getResultItemRefs().set(result.id, node);
                             }}
                             id={`${listboxId}-option-${index}`}
                             className={`quick-search-item ${index === selectedIndex ? "selected" : ""}`}

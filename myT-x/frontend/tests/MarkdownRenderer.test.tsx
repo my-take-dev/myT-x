@@ -37,10 +37,23 @@ vi.mock("../src/components/viewer/views/file-tree/renderers/VegaLiteRenderer", (
 import {MarkdownRenderer} from "../src/components/viewer/views/file-tree/renderers/MarkdownRenderer";
 
 async function flushAsyncRender(): Promise<void> {
-    await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            await Promise.resolve();
+        });
+    }
+}
+
+async function waitForDiagramText(testId: string): Promise<string | null> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        await flushAsyncRender();
+        const text = document.querySelector(`[data-testid="${testId}"]`)?.textContent ?? null;
+        if (text !== null) {
+            return text;
+        }
+    }
+    return null;
 }
 
 describe("MarkdownRenderer", () => {
@@ -99,9 +112,10 @@ describe("MarkdownRenderer", () => {
                 />,
             );
         });
-        await flushAsyncRender();
+        const diagramText = await waitForDiagramText(testId);
 
-        expect(container.querySelector(`[data-testid="${testId}"]`)?.textContent).toContain("example");
+        expect(diagramText).not.toBeNull();
+        expect(diagramText).toContain("example");
     });
 
     it("keeps unknown fenced languages as plain code blocks", async () => {

@@ -16,6 +16,8 @@ function renderToolbar(root: Root): void {
             onTitleCommit={vi.fn()}
             onTitleCancel={vi.fn()}
             onAutoClick={vi.fn()}
+            onAutoStartClick={vi.fn()}
+            autoStartDisabled={false}
             onSplitVertical={vi.fn()}
             onSplitHorizontal={vi.fn()}
             onAddMember={vi.fn()}
@@ -70,6 +72,8 @@ describe("TerminalToolbar", () => {
                     onTitleCommit={vi.fn()}
                     onTitleCancel={vi.fn()}
                     onAutoClick={vi.fn()}
+                    onAutoStartClick={vi.fn()}
+                    autoStartDisabled={false}
                     onRootToggle={onRootToggle}
                     onSplitVertical={vi.fn()}
                     onSplitHorizontal={vi.fn()}
@@ -108,6 +112,8 @@ describe("TerminalToolbar", () => {
                     onTitleCommit={vi.fn()}
                     onTitleCancel={vi.fn()}
                     onAutoClick={vi.fn()}
+                    onAutoStartClick={vi.fn()}
+                    autoStartDisabled={false}
                     onRootToggle={vi.fn()}
                     onSplitVertical={vi.fn()}
                     onSplitHorizontal={vi.fn()}
@@ -121,5 +127,81 @@ describe("TerminalToolbar", () => {
         const button = container.querySelector('[aria-label="ペイン %1 をツリールートに設定"]');
         expect(button).not.toBeNull();
         expect(button?.getAttribute("title")).toBe("ツリールートに設定");
+    });
+
+    it("places AutoStart between Add Member and Close", () => {
+        const onAutoStartClick = vi.fn();
+
+        act(() => {
+            root.render(
+                <TerminalToolbar
+                    paneId="%1"
+                    titleDraft="Pane"
+                    renameBusy={false}
+                    autoRunning={false}
+                    onTitleEditStart={vi.fn()}
+                    onTitleChange={vi.fn()}
+                    onTitleCommit={vi.fn()}
+                    onTitleCancel={vi.fn()}
+                    onAutoClick={vi.fn()}
+                    onAutoStartClick={onAutoStartClick}
+                    autoStartDisabled={false}
+                    onSplitVertical={vi.fn()}
+                    onSplitHorizontal={vi.fn()}
+                    onAddMember={vi.fn()}
+                    onClose={vi.fn()}
+                    preventTerminalFocusSteal={vi.fn()}
+                />,
+            );
+        });
+
+        const buttons = Array.from(container.querySelectorAll(".terminal-toolbar-actions button"));
+        const labels = buttons.map((button) => button.getAttribute("aria-label"));
+        const addMemberIndex = labels.indexOf("Add member to pane %1");
+        const autoStartIndex = labels.indexOf("Open AutoStart commands for pane %1");
+        const closeIndex = labels.indexOf("Close pane %1");
+        expect(addMemberIndex).toBeGreaterThanOrEqual(0);
+        expect(autoStartIndex).toBe(addMemberIndex + 1);
+        expect(closeIndex).toBe(autoStartIndex + 1);
+
+        act(() => {
+            (buttons[autoStartIndex] as HTMLButtonElement).click();
+        });
+        expect(onAutoStartClick).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps AutoStart visible but disabled without entries", () => {
+        const onAutoStartClick = vi.fn();
+
+        act(() => {
+            root.render(
+                <TerminalToolbar
+                    paneId="%1"
+                    titleDraft="Pane"
+                    renameBusy={false}
+                    autoRunning={false}
+                    onTitleEditStart={vi.fn()}
+                    onTitleChange={vi.fn()}
+                    onTitleCommit={vi.fn()}
+                    onTitleCancel={vi.fn()}
+                    onAutoClick={vi.fn()}
+                    onAutoStartClick={onAutoStartClick}
+                    autoStartDisabled
+                    onSplitVertical={vi.fn()}
+                    onSplitHorizontal={vi.fn()}
+                    onAddMember={vi.fn()}
+                    onClose={vi.fn()}
+                    preventTerminalFocusSteal={vi.fn()}
+                />,
+            );
+        });
+
+        const button = container.querySelector('[aria-label="Open AutoStart commands for pane %1"]') as HTMLButtonElement;
+        expect(button).not.toBeNull();
+        expect(button.disabled).toBe(true);
+        act(() => {
+            button.click();
+        });
+        expect(onAutoStartClick).not.toHaveBeenCalled();
     });
 });

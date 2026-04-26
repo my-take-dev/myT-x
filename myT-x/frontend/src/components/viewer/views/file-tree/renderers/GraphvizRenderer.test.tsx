@@ -13,10 +13,12 @@ vi.mock("@hpcc-js/wasm/graphviz", () => ({
 }));
 
 async function flushRender(): Promise<void> {
-    await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        await Promise.resolve();
-    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            await Promise.resolve();
+        });
+    }
 }
 
 describe("GraphvizRenderer", () => {

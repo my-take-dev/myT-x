@@ -7,10 +7,12 @@
 ### Symptoms
 - Cannot convert Japanese characters; hiragana is sent as-is
 - Confirmed characters are entered twice
+- IME stays in English mode when returning focus to a pane
 
 ### Solution
-1. Click the **A↻** (IME Reset) button in the menu bar
-2. If that doesn't help, restart the application
+1. **v1.0.9 and later**: Returning focus to the terminal pane automatically re-establishes the IME surface
+2. If auto-recovery doesn't help, click the **A↻** (IME Reset) button in the menu bar
+3. If that still doesn't help, restart the application
 
 > myT-x uses WebView2 process isolation, so IME Reset usually resolves the issue.
 

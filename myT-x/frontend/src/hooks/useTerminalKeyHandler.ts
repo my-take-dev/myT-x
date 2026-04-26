@@ -1,5 +1,4 @@
 import type {Dispatch, MutableRefObject, SetStateAction} from "react";
-import type {Terminal} from "@xterm/xterm";
 import {ClipboardGetText} from "../../wailsjs/runtime/runtime";
 import {writeClipboardText} from "../utils/clipboardUtils";
 import {api} from "../api";
@@ -53,8 +52,28 @@ export interface ImeControls {
     readonly finishComposition: (commitEnded: boolean, eventData?: string) => void;
 }
 
+interface Disposable {
+    dispose(): void;
+}
+
+/**
+ * Minimum terminal surface consumed by setupKeyHandler.
+ * Keeping this narrow improves testability while remaining compatible with
+ * the concrete xterm.js Terminal instance used in production.
+ */
+export interface TerminalLike {
+    readonly element: HTMLElement | null | undefined;
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void;
+    clearSelection(): void;
+    focus(): void;
+    getSelection(): string;
+    onData(handler: (input: string) => void): Disposable;
+    onSelectionChange(handler: () => void): Disposable;
+    paste(data: string): void;
+}
+
 export interface KeyHandlerParams {
-    readonly term: Terminal;
+    readonly term: TerminalLike;
     readonly shared: TerminalEventShared;
     readonly ime: ImeControls;
     readonly paneId: string;

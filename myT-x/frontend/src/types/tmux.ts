@@ -41,7 +41,7 @@ import type {config as wailsConfig} from "../../wailsjs/go/models";
 import type {ViewerSidebarMode} from "../utils/viewerSidebarMode";
 
 type NonFunctionPropertyNames<T> = {
-    [K in keyof T]: T[K] extends (...args: any[]) => unknown ? never : K;
+    [K in keyof T]-?: T[K] extends (...args: any[]) => unknown ? never : K;
 }[keyof T];
 type DataShape<T> = Pick<T, NonFunctionPropertyNames<T>>;
 type ExactKeysMatch<Expected extends object, Actual extends object> =
@@ -78,6 +78,14 @@ export type AppConfigTaskScheduler = Pick<
     message_templates?: AppConfigMessageTemplate[];
 };
 
+type AppConfigAutoStartCommandKeyShape = {
+    name: true;
+    command: true;
+    args: true;
+};
+
+export type AppConfigAutoStartCommand = DataShape<wailsConfig.AutoStartCommand>;
+
 type WailsTaskSchedulerConfigShape = Pick<
     DataShape<wailsConfig.TaskSchedulerConfig>,
     "pre_exec_reset_delay_s" | "pre_exec_idle_timeout_s" | "pre_exec_target_mode" | "message_templates"
@@ -85,6 +93,8 @@ type WailsTaskSchedulerConfigShape = Pick<
 
 type _AppConfigMessageTemplateKeyGuard =
     AssertTrue<ExactKeysMatch<DataShape<wailsConfig.MessageTemplate>, AppConfigMessageTemplate>>;
+type _AppConfigAutoStartCommandKeyGuard =
+    AssertTrue<ExactKeysMatch<AppConfigAutoStartCommandKeyShape, Record<keyof AppConfigAutoStartCommand, true>>>;
 type _AppConfigTaskSchedulerKeyGuard =
     AssertTrue<ExactKeysMatch<WailsTaskSchedulerConfigShape, AppConfigTaskScheduler>>;
 
@@ -105,6 +115,7 @@ export type AppConfigClaudeEnv = Pick<wailsConfig.ClaudeEnvConfig, "default_enab
 
 export type AppConfig = AppConfigBase & {
     worktree: AppConfigWorktree;
+    auto_start: AppConfigAutoStartCommand[];
     agent_model?: AppConfigAgentModel;
     pane_env?: Record<string, string>;
     pane_env_default_enabled?: boolean;
@@ -121,6 +132,7 @@ export type WailsConfigInput = {
     quake_mode: AppConfigBase["quake_mode"];
     global_hotkey: AppConfigBase["global_hotkey"];
     worktree: AppConfigWorktree;
+    auto_start: AppConfigAutoStartCommand[];
     agent_model: AppConfigAgentModel | undefined;
     pane_env: Record<string, string> | undefined;
     pane_env_default_enabled: boolean;
@@ -141,6 +153,7 @@ type WailsConfigInputKeyShape = {
     quake_mode: true;
     global_hotkey: true;
     worktree: true;
+    auto_start: true;
     agent_model: true;
     pane_env: true;
     pane_env_default_enabled: true;
@@ -159,6 +172,7 @@ type _WailsConfigInputKeyGuard =
 
 const CONFIG_KEY_GUARDS = [
     true as _AppConfigMessageTemplateKeyGuard,
+    true as _AppConfigAutoStartCommandKeyGuard,
     true as _AppConfigTaskSchedulerKeyGuard,
     true as _WailsConfigInputKeyGuard,
 ] as const;

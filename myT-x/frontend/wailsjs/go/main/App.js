@@ -478,6 +478,10 @@ export function SendChatMessage(arg1, arg2) {
   return window['go']['main']['App']['SendChatMessage'](arg1, arg2);
 }
 
+export function SendDiffReview(arg1, arg2) {
+  return window['go']['main']['App']['SendDiffReview'](arg1, arg2);
+}
+
 export function SendInput(arg1, arg2) {
   return window['go']['main']['App']['SendInput'](arg1, arg2);
 }
@@ -496,6 +500,10 @@ export function SetSingleTaskRunnerClearDelay(arg1, arg2) {
 
 export function SplitPane(arg1, arg2) {
   return window['go']['main']['App']['SplitPane'](arg1, arg2);
+}
+
+export function StartAutoStartCommand(arg1, arg2) {
+  return window['go']['main']['App']['StartAutoStartCommand'](arg1, arg2);
 }
 
 export function StartOrchestratorTeam(arg1) {

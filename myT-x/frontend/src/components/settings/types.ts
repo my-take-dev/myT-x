@@ -1,5 +1,10 @@
 import type {Dispatch} from "react";
-import type {AppConfigAgentModelOverride, AppConfigMCPServerConfig, AppConfigTaskScheduler} from "../../types/tmux";
+import type {
+    AppConfigAgentModelOverride,
+    AppConfigAutoStartCommand,
+    AppConfigMCPServerConfig,
+    AppConfigTaskScheduler,
+} from "../../types/tmux";
 import type {ViewerSidebarMode} from "../../utils/viewerSidebarMode";
 
 export type OverrideEntry = AppConfigAgentModelOverride & { id: string };
@@ -8,13 +13,23 @@ export type PaneEnvEntry = { id: string; key: string; value: string };
 
 export type ClaudeEnvEntry = { id: string; key: string; value: string };
 
-export type SettingsCategory = "general" | "keybinds" | "worktree" | "agent-model" | "claude-env" | "pane-env";
+export type AutoStartEntry = AppConfigAutoStartCommand & { id: string };
+
+export type SettingsCategory =
+    | "general"
+    | "auto-start"
+    | "keybinds"
+    | "worktree"
+    | "agent-model"
+    | "claude-env"
+    | "pane-env";
 
 export interface FormState {
     shell: string;
     prefix: string;
     quakeMode: boolean;
     globalHotkey: string;
+    autoStart: AutoStartEntry[];
     viewerSidebarMode: ViewerSidebarMode;
     keys: Record<string, string>;
     viewerShortcuts: Record<string, string>;
@@ -64,6 +79,8 @@ export type FormAction =
     | { type: "UPDATE_PANE_ENV_ENTRY"; index: number; field: "key" | "value"; value: string }
     | { type: "SET_CLAUDE_ENV_ENTRIES"; entries: ClaudeEnvEntry[] }
     | { type: "UPDATE_CLAUDE_ENV_ENTRY"; index: number; field: "key" | "value"; value: string }
+    | { type: "SET_AUTO_START_ENTRIES"; entries: AutoStartEntry[] }
+    | { type: "UPDATE_AUTO_START_ENTRY"; index: number; field: "name" | "command" | "args"; value: string }
     | { type: "UPDATE_VIEWER_SHORTCUT"; viewId: string; value: string };
 
 export type FormDispatch = Dispatch<FormAction>;

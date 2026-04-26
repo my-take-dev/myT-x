@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"myT-x/internal/apptypes"
+	"myT-x/internal/testutil"
 )
 
 // testIsPathWithinBase is a simple implementation for testing.
@@ -3291,6 +3292,8 @@ func TestGitStatus_StagedAndModifiedClassification(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGitPush_WithUpstream(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	bareDir := t.TempDir()
 	gitRun(t, bareDir, "init", "--bare")
 
@@ -3328,6 +3331,8 @@ func TestGitPush_WithUpstream(t *testing.T) {
 }
 
 func TestGitPush_WithoutUpstream(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	bareDir := t.TempDir()
 	gitRun(t, bareDir, "init", "--bare")
 
@@ -3374,6 +3379,8 @@ func TestGitPush_EmptySession(t *testing.T) {
 }
 
 func TestGitPull_FastForward(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	bareDir := t.TempDir()
 	gitRun(t, bareDir, "init", "--bare")
 
@@ -3413,6 +3420,8 @@ func TestGitPull_FastForward(t *testing.T) {
 }
 
 func TestGitPull_AlreadyUpToDate(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	bareDir := t.TempDir()
 	gitRun(t, bareDir, "init", "--bare")
 
@@ -3439,6 +3448,8 @@ func TestGitPull_AlreadyUpToDate(t *testing.T) {
 }
 
 func TestGitPull_NonFastForward(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	bareDir := t.TempDir()
 	gitRun(t, bareDir, "init", "--bare")
 
@@ -3487,6 +3498,8 @@ func TestGitPull_NonFastForward(t *testing.T) {
 }
 
 func TestGitStatus_UpstreamConfigured(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	bareDir := t.TempDir()
 	gitRun(t, bareDir, "init", "--bare")
 
@@ -3573,6 +3586,8 @@ func TestIsNonFastForwardError(t *testing.T) {
 }
 
 func TestIsNonFastForwardError_FallbackExitCode(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	// The locale-independent fallback path uses exec.ExitError with exit code 1.
 	// This test requires a real git repo with diverged branches to exercise
 	// the merge-base --is-ancestor probe.
@@ -3621,6 +3636,8 @@ func TestIsNonFastForwardError_FallbackExitCode(t *testing.T) {
 }
 
 func TestGitPush_NonOriginRemote(t *testing.T) {
+	testutil.SkipIfNoLocalGitTransport(t)
+
 	// Verify that GitPush uses the configured remote (not hardcoded "origin")
 	// when a branch is configured with a different remote name.
 	bareDir := t.TempDir()

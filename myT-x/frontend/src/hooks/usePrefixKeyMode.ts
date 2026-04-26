@@ -2,6 +2,7 @@ import {useEffect, useRef} from "react";
 import {api} from "../api";
 import {useTmuxStore} from "../stores/tmuxStore";
 import {isImeTransitionalEvent} from "../utils/ime";
+import {dispatchTerminalImeRecovery, focusTerminalTextEntryByPaneId} from "../utils/imeRecovery";
 import {notifyAndLog} from "../utils/notifyUtils";
 import {resolveActiveWindow} from "../utils/session";
 
@@ -65,6 +66,27 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
                 return;
             }
 
+            const focusPane = (targetPaneId: string, operation: string): void => {
+                const hadImmediateTextFocus = focusTerminalTextEntryByPaneId(targetPaneId);
+                const retryTextFocus = () => {
+                    if (focusTerminalTextEntryByPaneId(targetPaneId)) {
+                        return;
+                    }
+                    console.warn(`[prefix] ${operation} text entry focus failed`, {paneId: targetPaneId});
+                    dispatchTerminalImeRecovery({paneId: targetPaneId, reason: "terminal-focus"});
+                };
+                void api.FocusPane(targetPaneId)
+                    .then(() => {
+                        if (!hadImmediateTextFocus) {
+                            window.requestAnimationFrame(retryTextFocus);
+                        }
+                    })
+                    .catch((err: unknown) => {
+                        console.warn(`[prefix] ${operation} failed`, err);
+                        notifyAndLog(operation, "warn", err, "PrefixKey");
+                    });
+            };
+
             // I-35: ストア最新値をハンドラ内で直接取得することで Ref 同期不要にする。
             const {sessions, activeSession, zoomPaneId} = useTmuxStore.getState();
 
@@ -94,23 +116,20 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
                 if (!targetPane) {
                     return;
                 }
-                void api.FocusPane(targetPane.id).catch((err) => {
-                    console.warn("[prefix] focus window failed", err);
-                    notifyAndLog("Focus window", "warn", err, "PrefixKey");
-                });
+                focusPane(targetPane.id, "Focus window");
             };
 
             const key = event.key;
             const lowerKey = key.toLowerCase();
             if (key === "%") {
-                void api.SplitPane(paneId, true).catch((err) => {
+                void api.SplitPane(paneId, true).catch((err: unknown) => {
                     console.warn("[prefix] split vertical failed", err);
                     notifyAndLog("Split pane", "warn", err, "PrefixKey");
                 });
                 return;
             }
             if (key === '"') {
-                void api.SplitPane(paneId, false).catch((err) => {
+                void api.SplitPane(paneId, false).catch((err: unknown) => {
                     console.warn("[prefix] split horizontal failed", err);
                     notifyAndLog("Split pane", "warn", err, "PrefixKey");
                 });
@@ -151,7 +170,7 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
             }
             if (lowerKey === "d") {
                 if (activeSession) {
-                    void api.DetachSession(activeSession).catch((err) => {
+                    void api.DetachSession(activeSession).catch((err: unknown) => {
                         console.warn("[prefix] detach session failed", err);
                         notifyAndLog("Detach session", "error", err, "PrefixKey");
                     });
@@ -162,10 +181,7 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
                 const nextIndex = Math.max(0, currentIndex - 1);
                 const target = panes[nextIndex];
                 if (target) {
-                    void api.FocusPane(target.id).catch((err) => {
-                        console.warn("[prefix] focus pane failed", err);
-                        notifyAndLog("Focus pane", "warn", err, "PrefixKey");
-                    });
+                    focusPane(target.id, "Focus pane");
                 }
                 return;
             }
@@ -173,10 +189,7 @@ export function usePrefixKeyMode(options: UsePrefixKeyModeOptions) {
                 const nextIndex = Math.min(panes.length - 1, currentIndex + 1);
                 const target = panes[nextIndex];
                 if (target) {
-                    void api.FocusPane(target.id).catch((err) => {
-                        console.warn("[prefix] focus pane failed", err);
-                        notifyAndLog("Focus pane", "warn", err, "PrefixKey");
-                    });
+                    focusPane(target.id, "Focus pane");
                 }
                 return;
             }

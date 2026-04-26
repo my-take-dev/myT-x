@@ -48,13 +48,13 @@ interface UseTerminalEventsOptions {
  * 依存配列: [paneId] — paneId が変わるたびに再登録する。
  */
 export function useTerminalEvents({
-                                      paneId,
-                                      terminalRef,
-                                      syncInputModeRef,
-                                      setSearchOpen,
-                                      setScrollAtBottom,
-                                      isComposingRef,
-                                  }: UseTerminalEventsOptions): void {
+    paneId,
+    terminalRef,
+    syncInputModeRef,
+    setSearchOpen,
+    setScrollAtBottom,
+    isComposingRef,
+}: UseTerminalEventsOptions): void {
     const setPrefixMode = useTmuxStore((s) => s.setPrefixMode);
 
     useEffect(() => {
@@ -88,7 +88,7 @@ export function useTerminalEvents({
             // 呼ばれた後にこの関数が到達する競合窓がある。try-catch で安全に吸収する。
             try {
                 term.write(buffered);
-            } catch (err) {
+            } catch (err: unknown) {
                 console.warn("[terminal] flushComposedOutput failed (terminal may be disposed)", err);
             }
         };
@@ -147,6 +147,12 @@ export function useTerminalEvents({
         let imeResetTimer: ReturnType<typeof window.setTimeout> | null = null;
 
         const resetIme = (reason: TerminalImeRecoveryReason): void => {
+            if (reason === "terminal-focus" && shared.isComposing) {
+                if (import.meta.env.DEV) {
+                    console.debug("[IME-RECOVERY] terminal focus recovery skipped during composition", {paneId, reason});
+                }
+                return;
+            }
             if (imeResetTimer !== null) {
                 window.clearTimeout(imeResetTimer);
                 imeResetTimer = null;
@@ -170,7 +176,9 @@ export function useTerminalEvents({
                     // Terminal may already be disposed
                 }
             }, 100);
-            console.warn("[IME-RECOVERY] reset executed", {paneId, reason, wasComposing});
+            if (import.meta.env.DEV) {
+                console.debug("[IME-RECOVERY] reset executed", {paneId, reason, wasComposing});
+            }
         };
 
         const handleTerminalImeRecovery = (event: Event): void => {

@@ -9,6 +9,7 @@ import {EFFORT_LEVEL_KEY} from "./constants";
 import {useSettingsI18n} from "./settingsI18n";
 import {
     validateAgentModelSettings,
+    validateAutoStartSettings,
     validateClaudeEnvSettings,
     validateDefaultSessionDir,
     validateGlobalHotkey,
@@ -17,7 +18,7 @@ import {
     validateViewerShortcuts,
     validateWorktreeCopyPathSettings,
 } from "./settingsValidation";
-import type {FormDispatch, FormState} from "./types";
+import type {FormDispatch, FormState, SettingsCategory} from "./types";
 import type {AppConfigMessageTemplate, AppConfigTaskScheduler, WailsConfigInput} from "../../types/tmux";
 
 type StrictMessageTemplatePayload = {[K in keyof config.MessageTemplate]-?: config.MessageTemplate[K]};
@@ -77,6 +78,13 @@ export function buildSettingsSavePayload(s: FormState): WailsConfigInput {
         keys: s.keys,
         quake_mode: s.quakeMode,
         global_hotkey: s.globalHotkey,
+        auto_start: s.autoStart
+            .map((entry) => ({
+                name: entry.name.trim(),
+                command: entry.command.trim(),
+                args: (entry.args ?? "").trim(),
+            }))
+            .filter((entry) => entry.command),
         websocket_port: s.websocketPort,
         worktree: {
             enabled: s.wtEnabled,
@@ -143,6 +151,32 @@ export function buildSettingsSavePayload(s: FormState): WailsConfigInput {
     };
 }
 
+export function selectSettingsValidationCategory(errors: Record<string, string>): SettingsCategory | null {
+    const keys = Object.keys(errors);
+    if (keys.some((k) => k.startsWith("agent") || k.startsWith("override"))) {
+        return "agent-model";
+    }
+    if (keys.some((k) => k.startsWith("claude_env"))) {
+        return "claude-env";
+    }
+    if (keys.some((k) => k.startsWith("pane_env"))) {
+        return "pane-env";
+    }
+    if (keys.some((k) => k.startsWith("wt_copy_"))) {
+        return "worktree";
+    }
+    if (keys.some((k) => k === "default_session_dir" || k === "prefix" || k === "global_hotkey")) {
+        return "general";
+    }
+    if (keys.some((k) => k.startsWith("auto_start"))) {
+        return "auto-start";
+    }
+    if (keys.some((k) => k.startsWith("viewer_shortcut_"))) {
+        return "keybinds";
+    }
+    return null;
+}
+
 export function useSettingsSave(
     s: FormState,
     dispatch: FormDispatch,
@@ -165,6 +199,7 @@ export function useSettingsSave(
         }
         const errors = {
             ...validateAgentModelSettings(s.agentFrom, s.agentTo, s.overrides, s.minOverrideNameLen),
+            ...validateAutoStartSettings(s.autoStart),
             ...validateClaudeEnvSettings(s.claudeEnvEntries),
             ...validatePaneEnvSettings(s.paneEnvEntries, s.effortLevel),
             ...validateWorktreeCopyPathSettings(s.wtCopyFiles, s.wtCopyDirs),
@@ -175,22 +210,9 @@ export function useSettingsSave(
         };
         if (Object.keys(errors).length > 0) {
             dispatch({type: "SET_FIELD", field: "validationErrors", value: errors});
-            if (Object.keys(errors).some((k) => k.startsWith("agent") || k.startsWith("override"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "agent-model"});
-            } else if (Object.keys(errors).some((k) => k.startsWith("claude_env"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "claude-env"});
-            } else if (Object.keys(errors).some((k) => k.startsWith("pane_env"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "pane-env"});
-            } else if (Object.keys(errors).some((k) => k.startsWith("wt_copy_"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "worktree"});
-            } else if (Object.keys(errors).some((k) => k === "default_session_dir")) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "general"});
-            } else if (Object.keys(errors).some((k) => k === "prefix")) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "general"});
-            } else if (Object.keys(errors).some((k) => k === "global_hotkey")) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "general"});
-            } else if (Object.keys(errors).some((k) => k.startsWith("viewer_shortcut_"))) {
-                dispatch({type: "SET_FIELD", field: "activeCategory", value: "keybinds"});
+            const nextCategory = selectSettingsValidationCategory(errors);
+            if (nextCategory !== null) {
+                dispatch({type: "SET_FIELD", field: "activeCategory", value: nextCategory});
             }
             return;
         }

@@ -2,14 +2,17 @@ import {act} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 
-const mocked = {
+const mocked = vi.hoisted(() => ({
     addNotification: vi.fn(),
     toggleView: vi.fn(),
     closeView: vi.fn(),
     config: {
         viewer_shortcuts: null as Record<string, string> | null,
     },
-};
+    views: [
+        {id: "git-graph", shortcut: "Ctrl+Shift+G"},
+    ],
+}));
 
 vi.mock("../src/components/viewer/ActivityStrip", () => ({
     ActivityStrip: () => <div data-testid="activity-strip"/>,
@@ -27,12 +30,8 @@ vi.mock("../src/components/viewer/useIsViewerDocked", () => ({
     useIsViewerDocked: () => false,
 }));
 
-vi.mock("../src/components/viewer/viewerRegistry", () => ({
-    getRegisteredViews: () => [
-        {id: "git-graph", shortcut: "Ctrl+Shift+G"},
-    ],
-    registerView: vi.fn(),
-    subscribeRegistry: () => () => {},
+vi.mock("../src/components/viewer/useRegisteredViews", () => ({
+    useRegisteredViews: () => mocked.views,
 }));
 
 vi.mock("../src/components/viewer/viewerStore", () => ({
@@ -72,6 +71,7 @@ describe("ViewerSystem", () => {
         mocked.toggleView.mockReset();
         mocked.closeView.mockReset();
         mocked.config.viewer_shortcuts = null;
+        mocked.views = [{id: "git-graph", shortcut: "Ctrl+Shift+G"}];
     });
 
     afterEach(() => {

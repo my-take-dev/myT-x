@@ -49,6 +49,22 @@ export namespace config {
 		}
 	}
 	
+	export class AutoStartCommand {
+	    name: string;
+	    command: string;
+	    args?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoStartCommand(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.command = source["command"];
+	        this.args = source["args"];
+	    }
+	}
 	export class ClaudeEnvConfig {
 	    default_enabled: boolean;
 	    vars?: Record<string, string>;
@@ -207,6 +223,7 @@ export namespace config {
 	    keys: Record<string, string>;
 	    quake_mode: boolean;
 	    global_hotkey: string;
+	    auto_start: AutoStartCommand[];
 	    worktree: WorktreeConfig;
 	    agent_model?: AgentModel;
 	    pane_env?: Record<string, string>;
@@ -231,6 +248,7 @@ export namespace config {
 	        this.keys = source["keys"];
 	        this.quake_mode = source["quake_mode"];
 	        this.global_hotkey = source["global_hotkey"];
+	        this.auto_start = this.convertValues(source["auto_start"], AutoStartCommand);
 	        this.worktree = this.convertValues(source["worktree"], WorktreeConfig);
 	        this.agent_model = this.convertValues(source["agent_model"], AgentModel);
 	        this.pane_env = source["pane_env"];
@@ -1860,6 +1878,57 @@ export namespace usagedashboard {
 	        this.tool_calls = source["tool_calls"];
 	    }
 	}
+	export class DailyUsageBucket {
+	    date: string;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DailyUsageBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.count = source["count"];
+	    }
+	}
+	export class DailyUsageSeries {
+	    name: string;
+	    total_count: number;
+	    // Go type: time
+	    last_used_at: any;
+	    buckets: DailyUsageBucket[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DailyUsageSeries(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.total_count = source["total_count"];
+	        this.last_used_at = this.convertValues(source["last_used_at"], null);
+	        this.buckets = this.convertValues(source["buckets"], DailyUsageBucket);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class UsageEntry {
 	    name: string;
 	    count: number;
@@ -1903,6 +1972,9 @@ export namespace usagedashboard {
 	    skills: UsageEntry[];
 	    agents: UsageEntry[];
 	    slash_commands: UsageEntry[];
+	    skills_daily: DailyUsageSeries[];
+	    agents_daily: DailyUsageSeries[];
+	    slash_commands_daily: DailyUsageSeries[];
 	    daily_activity: DailyBucket[];
 	    health: SourceHealth;
 	
@@ -1919,6 +1991,9 @@ export namespace usagedashboard {
 	        this.skills = this.convertValues(source["skills"], UsageEntry);
 	        this.agents = this.convertValues(source["agents"], UsageEntry);
 	        this.slash_commands = this.convertValues(source["slash_commands"], UsageEntry);
+	        this.skills_daily = this.convertValues(source["skills_daily"], DailyUsageSeries);
+	        this.agents_daily = this.convertValues(source["agents_daily"], DailyUsageSeries);
+	        this.slash_commands_daily = this.convertValues(source["slash_commands_daily"], DailyUsageSeries);
 	        this.daily_activity = this.convertValues(source["daily_activity"], DailyBucket);
 	        this.health = this.convertValues(source["health"], SourceHealth);
 	    }
@@ -1948,6 +2023,8 @@ export namespace usagedashboard {
 	    total_spawned_agents: number;
 	    skills: UsageEntry[];
 	    agents: UsageEntry[];
+	    skills_daily: DailyUsageSeries[];
+	    agents_daily: DailyUsageSeries[];
 	    daily_activity: DailyBucket[];
 	    health: SourceHealth;
 	
@@ -1963,6 +2040,8 @@ export namespace usagedashboard {
 	        this.total_spawned_agents = source["total_spawned_agents"];
 	        this.skills = this.convertValues(source["skills"], UsageEntry);
 	        this.agents = this.convertValues(source["agents"], UsageEntry);
+	        this.skills_daily = this.convertValues(source["skills_daily"], DailyUsageSeries);
+	        this.agents_daily = this.convertValues(source["agents_daily"], DailyUsageSeries);
 	        this.daily_activity = this.convertValues(source["daily_activity"], DailyBucket);
 	        this.health = this.convertValues(source["health"], SourceHealth);
 	    }
@@ -1985,6 +2064,8 @@ export namespace usagedashboard {
 		    return a;
 		}
 	}
+	
+	
 	
 	
 	export class UsageDashboardSnapshot {

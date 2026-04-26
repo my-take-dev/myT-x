@@ -15,6 +15,7 @@ func Clone(src Config) Config {
 	dst.Worktree.SetupScripts = cloneStringSlice(src.Worktree.SetupScripts)
 	dst.Worktree.CopyFiles = cloneStringSlice(src.Worktree.CopyFiles)
 	dst.Worktree.CopyDirs = cloneStringSlice(src.Worktree.CopyDirs)
+	dst.AutoStart = cloneAutoStartCommands(src.AutoStart)
 
 	if src.AgentModel != nil {
 		agentModelCopy := *src.AgentModel
@@ -64,6 +65,15 @@ func Clone(src Config) Config {
 		dst.TaskScheduler = &tsCopy
 	}
 
+	return dst
+}
+
+func cloneAutoStartCommands(src []AutoStartCommand) []AutoStartCommand {
+	if src == nil {
+		return nil
+	}
+	dst := make([]AutoStartCommand, len(src))
+	copy(dst, src)
 	return dst
 }
 

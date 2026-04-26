@@ -141,6 +141,18 @@ func TestIsZeroConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "auto start non-nil empty",
+			mutate: func(cfg *Config) {
+				cfg.AutoStart = []AutoStartCommand{}
+			},
+		},
+		{
+			name: "auto start set",
+			mutate: func(cfg *Config) {
+				cfg.AutoStart = []AutoStartCommand{{Name: "Codex", Command: "codex"}}
+			},
+		},
+		{
 			name: "worktree enabled",
 			mutate: func(cfg *Config) {
 				cfg.Worktree.Enabled = true
@@ -602,6 +614,9 @@ func TestLoadWorktreeEnabledExplicitFalsePreserved(t *testing.T) {
 func TestDefaultConfigWorktreeDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 
+	if cfg.AutoStart == nil || len(cfg.AutoStart) != 0 {
+		t.Errorf("AutoStart: want non-nil empty slice, got %v", cfg.AutoStart)
+	}
 	if !cfg.Worktree.Enabled {
 		t.Error("Worktree.Enabled default should be true")
 	}
@@ -1403,8 +1418,11 @@ func TestAllowedShellListIsSorted(t *testing.T) {
 }
 
 func TestConfigStructFieldCounts(t *testing.T) {
-	if got := reflect.TypeFor[Config]().NumField(); got != 17 {
-		t.Fatalf("Config field count = %d, want 17; update isZeroConfig tests for new fields", got)
+	if got := reflect.TypeFor[Config]().NumField(); got != 18 {
+		t.Fatalf("Config field count = %d, want 18; update isZeroConfig tests for new fields", got)
+	}
+	if got := reflect.TypeFor[AutoStartCommand]().NumField(); got != 3 {
+		t.Fatalf("AutoStartCommand field count = %d, want 3; update Clone, validation, and payload builders", got)
 	}
 	if got := reflect.TypeFor[WorktreeConfig]().NumField(); got != 6 {
 		t.Fatalf("WorktreeConfig field count = %d, want 6 (enabled, force_cleanup, setup_scripts, setup_script_timeout_seconds, copy_files, copy_dirs)", got)
@@ -1417,6 +1435,7 @@ func TestConfigStructFieldCounts(t *testing.T) {
 func TestCloneDeepCopyIndependence(t *testing.T) {
 	src := DefaultConfig()
 	src.Keys["custom-action"] = "a"
+	src.AutoStart = []AutoStartCommand{{Name: "Codex", Command: "codex", Args: "--model gpt-5.4-mini"}}
 	src.Worktree.SetupScripts = []string{"script-a"}
 	src.Worktree.CopyFiles = []string{".env"}
 	src.Worktree.CopyDirs = []string{"vendor"}
@@ -1432,6 +1451,9 @@ func TestCloneDeepCopyIndependence(t *testing.T) {
 	if &cloned.Keys == &src.Keys {
 		t.Fatal("Clone() should deep-copy Keys map")
 	}
+	if &cloned.AutoStart == &src.AutoStart {
+		t.Fatal("Clone() should deep-copy AutoStart slice")
+	}
 	if &cloned.Worktree.SetupScripts == &src.Worktree.SetupScripts {
 		t.Fatal("Clone() should deep-copy SetupScripts slice")
 	}
@@ -1446,6 +1468,7 @@ func TestCloneDeepCopyIndependence(t *testing.T) {
 	}
 
 	cloned.Keys["custom-action"] = "b"
+	cloned.AutoStart[0].Args = "--model gpt-5.4"
 	cloned.Worktree.SetupScripts[0] = "script-b"
 	cloned.Worktree.CopyFiles[0] = ".env.local"
 	cloned.Worktree.CopyDirs[0] = "node_modules"
@@ -1454,6 +1477,9 @@ func TestCloneDeepCopyIndependence(t *testing.T) {
 
 	if src.Keys["custom-action"] != "a" {
 		t.Fatalf("source Keys mutated: %q", src.Keys["custom-action"])
+	}
+	if src.AutoStart[0].Args != "--model gpt-5.4-mini" {
+		t.Fatalf("source AutoStart mutated: %q", src.AutoStart[0].Args)
 	}
 	if src.Worktree.SetupScripts[0] != "script-a" {
 		t.Fatalf("source SetupScripts mutated: %q", src.Worktree.SetupScripts[0])
@@ -1479,6 +1505,9 @@ func TestClonePreservesNilCollections(t *testing.T) {
 	if cloned.Keys != nil {
 		t.Fatalf("Keys = %#v, want nil", cloned.Keys)
 	}
+	if cloned.AutoStart != nil {
+		t.Fatalf("AutoStart = %#v, want nil", cloned.AutoStart)
+	}
 	if cloned.Worktree.SetupScripts != nil {
 		t.Fatalf("SetupScripts = %#v, want nil", cloned.Worktree.SetupScripts)
 	}
@@ -1495,6 +1524,7 @@ func TestClonePreservesNilCollections(t *testing.T) {
 
 func TestClonePreservesNonNilEmptySlices(t *testing.T) {
 	src := Config{}
+	src.AutoStart = make([]AutoStartCommand, 0)
 	src.Worktree.SetupScripts = make([]string, 0)
 	src.Worktree.CopyFiles = make([]string, 0)
 	src.Worktree.CopyDirs = make([]string, 0)
@@ -1503,6 +1533,12 @@ func TestClonePreservesNonNilEmptySlices(t *testing.T) {
 
 	if cloned.Worktree.SetupScripts == nil {
 		t.Fatal("SetupScripts = nil, want non-nil empty slice")
+	}
+	if cloned.AutoStart == nil {
+		t.Fatal("AutoStart = nil, want non-nil empty slice")
+	}
+	if len(cloned.AutoStart) != 0 {
+		t.Fatalf("AutoStart length = %d, want 0", len(cloned.AutoStart))
 	}
 	if cloned.Worktree.CopyFiles == nil {
 		t.Fatal("CopyFiles = nil, want non-nil empty slice")
@@ -2962,6 +2998,48 @@ func TestSaveRoundTripDefaultSessionDir(t *testing.T) {
 	}
 	if loaded.DefaultSessionDir != cfg.DefaultSessionDir {
 		t.Errorf("DefaultSessionDir round-trip: got %q, want %q", loaded.DefaultSessionDir, cfg.DefaultSessionDir)
+	}
+}
+
+func TestSaveRoundTripAutoStart(t *testing.T) {
+	path := newConfigPathForSaveTest(t, "config.yaml")
+	input := DefaultConfig()
+	input.AutoStart = []AutoStartCommand{
+		{Name: "Mini Codex", Command: "codex", Args: "--model gpt-5.4-mini"},
+		{Name: "PowerShell", Command: "pwsh.exe"},
+	}
+
+	if _, err := Save(path, input); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded.AutoStart, input.AutoStart) {
+		t.Fatalf("AutoStart round-trip mismatch\nloaded: %#v\ninput: %#v", loaded.AutoStart, input.AutoStart)
+	}
+}
+
+func TestLoadAutoStartYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := []byte(`
+auto_start:
+  - name: " Mini Codex "
+    command: " codex "
+    args: " --model gpt-5.4-mini "
+`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []AutoStartCommand{{Name: "Mini Codex", Command: "codex", Args: "--model gpt-5.4-mini"}}
+	if !reflect.DeepEqual(cfg.AutoStart, want) {
+		t.Fatalf("AutoStart = %#v, want %#v", cfg.AutoStart, want)
 	}
 }
 

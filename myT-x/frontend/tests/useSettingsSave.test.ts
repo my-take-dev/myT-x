@@ -130,6 +130,7 @@ describe("buildSettingsSavePayload", () => {
 
         expect(Object.keys(payload).sort()).toEqual([
             "agent_model",
+            "auto_start",
             "chat_overlay_percentage",
             "claude_env",
             "default_session_dir",

@@ -1,4 +1,4 @@
-import type {ClaudeEnvEntry, FormAction, FormState, PaneEnvEntry} from "./types";
+import type {AutoStartEntry, ClaudeEnvEntry, FormAction, FormState, PaneEnvEntry} from "./types";
 import {generateId} from "./types";
 import {DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS, EFFORT_LEVEL_KEY, MIN_OVERRIDE_NAME_LEN_FALLBACK} from "./constants";
 import {normalizeViewerShortcutConfig} from "../viewer/viewerShortcutDefinitions";
@@ -9,6 +9,7 @@ export const INITIAL_FORM: FormState = {
     prefix: "Ctrl+b",
     quakeMode: true,
     globalHotkey: "Ctrl+Shift+F12",
+    autoStart: [],
     viewerSidebarMode: "overlay",
     keys: {},
     viewerShortcuts: {},
@@ -60,6 +61,12 @@ export function formReducer(state: FormState, action: FormAction): FormState {
                 .map(([key, value]) => ({id: generateId(), key, value}));
             const effortKey = Object.keys(pe).find(k => k.toUpperCase() === EFFORT_LEVEL_KEY);
             const ce = cfg.claude_env;
+            const autoStart: AutoStartEntry[] = (cfg.auto_start ?? []).map((entry) => ({
+                id: generateId(),
+                name: entry.name,
+                command: entry.command,
+                args: entry.args ?? "",
+            }));
             const claudeEnvEntries: ClaudeEnvEntry[] = ce?.vars
                 ? Object.entries(ce.vars).map(([key, value]) => ({id: generateId(), key, value}))
                 : [];
@@ -80,6 +87,7 @@ export function formReducer(state: FormState, action: FormAction): FormState {
                 prefix: cfg.prefix || "Ctrl+b",
                 quakeMode: cfg.quake_mode ?? true,
                 globalHotkey: cfg.global_hotkey || "Ctrl+Shift+F12",
+                autoStart,
                 viewerSidebarMode: normalizeViewerSidebarMode(cfg.viewer_sidebar_mode),
                 keys: cfg.keys || {},
                 viewerShortcuts: normalizeViewerShortcutConfig(cfg.viewer_shortcuts),
@@ -160,6 +168,15 @@ export function formReducer(state: FormState, action: FormAction): FormState {
                 nextClaude[action.index] = {...nextClaude[action.index], [action.field]: action.value};
             }
             return {...state, claudeEnvEntries: nextClaude};
+        }
+        case "SET_AUTO_START_ENTRIES":
+            return {...state, autoStart: action.entries};
+        case "UPDATE_AUTO_START_ENTRY": {
+            const nextEntries = [...state.autoStart];
+            if (action.index >= 0 && action.index < nextEntries.length) {
+                nextEntries[action.index] = {...nextEntries[action.index], [action.field]: action.value};
+            }
+            return {...state, autoStart: nextEntries};
         }
         case "UPDATE_VIEWER_SHORTCUT":
             return {

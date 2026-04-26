@@ -1,13 +1,12 @@
-import {useState} from "react";
 import type {usagedashboard} from "../../../../../wailsjs/go/models";
 import {OverviewCards} from "./OverviewCards";
-import {RankingTable} from "./RankingTable";
 import {DailyActivityChart} from "./DailyActivityChart";
 import {SourceHealthBanner} from "./SourceHealthBanner";
+import {UsageCategorySection, type UsageCategory, type UsageCategoryKey} from "./UsageCategorySection";
 import {formatNumber} from "./formatters";
 import {useUsageDashboardI18n} from "./i18n";
 
-type RankingKey = "agents" | "skills";
+type CodexCategoryKey = Extract<UsageCategoryKey, "agents" | "skills">;
 
 interface CodexPanelProps {
     readonly stats: usagedashboard.CodexUsageStats | null | undefined;
@@ -17,7 +16,6 @@ interface CodexPanelProps {
 
 export function CodexPanel({stats, compact = false, titlePrefix}: CodexPanelProps) {
     const tr = useUsageDashboardI18n();
-    const [ranking, setRanking] = useState<RankingKey>("agents");
 
     if (!stats) {
         return (
@@ -42,7 +40,22 @@ export function CodexPanel({stats, compact = false, titlePrefix}: CodexPanelProp
         {id: "spawned-agents", label: tr("viewer.usageDashboard.spawnedAgents", "起動エージェント", "Spawned Agents"), value: formatNumber(stats.total_spawned_agents)},
     ];
 
-    const rankingEntries = ranking === "agents" ? stats.agents : stats.skills;
+    const categories: ReadonlyArray<UsageCategory<CodexCategoryKey>> = [
+        {
+            key: "agents",
+            label: tr("viewer.usageDashboard.agents", "エージェント", "Agents"),
+            ranking: stats.agents,
+            dailySeries: stats.agents_daily ?? [],
+            emptyLabel: rankingEmptyLabel("agents", tr),
+        },
+        {
+            key: "skills",
+            label: tr("viewer.usageDashboard.skills", "スキル", "Skills"),
+            ranking: stats.skills,
+            dailySeries: stats.skills_daily ?? [],
+            emptyLabel: rankingEmptyLabel("skills", tr),
+        },
+    ];
 
     return (
         <div className={compact ? "usage-dashboard-codex compact" : "usage-dashboard-codex"}>
@@ -57,21 +70,12 @@ export function CodexPanel({stats, compact = false, titlePrefix}: CodexPanelProp
                 includeSqlite={true}
             />
             <OverviewCards items={overview}/>
-            <section className="usage-dashboard-section">
-                <div
-                    className="usage-dashboard-subtabs"
-                    role="tablist"
-                    aria-label={tr("viewer.usageDashboard.codex.ranking", "Codexランキング", "Codex ranking")}
-                >
-                    <RankingTab current={ranking} target="agents" label={`${tr("viewer.usageDashboard.agents", "エージェント", "Agents")} (${stats.agents.length})`} onSelect={setRanking}/>
-                    <RankingTab current={ranking} target="skills" label={`${tr("viewer.usageDashboard.skills", "スキル", "Skills")} (${stats.skills.length})`} onSelect={setRanking}/>
-                </div>
-                <RankingTable
-                    entries={rankingEntries}
-                    emptyLabel={rankingEmptyLabel(ranking, tr)}
-                    ariaLabel={tr("viewer.usageDashboard.codex.ranking", "Codexランキング", "Codex ranking")}
-                />
-            </section>
+            <UsageCategorySection
+                categories={categories}
+                initialCategory="agents"
+                ariaLabel={tr("viewer.usageDashboard.codex.ranking", "Codexランキング", "Codex ranking")}
+                colorVar="--udash-color-codex"
+            />
             <section className="usage-dashboard-section">
                 <h4 className="usage-dashboard-section-title">
                     {tr("viewer.usageDashboard.dailyActivity", "日次アクティビティ（30日）", "Daily Activity (30 days)")}
@@ -88,31 +92,7 @@ export function CodexPanel({stats, compact = false, titlePrefix}: CodexPanelProp
     );
 }
 
-interface RankingTabProps {
-    readonly current: RankingKey;
-    readonly target: RankingKey;
-    readonly label: string;
-    readonly onSelect: (next: RankingKey) => void;
-}
-
-function RankingTab({current, target, label, onSelect}: RankingTabProps) {
-    const selected = current === target;
-    return (
-        <button
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            className="usage-dashboard-subtab"
-            onClick={() => {
-                if (!selected) onSelect(target);
-            }}
-        >
-            {label}
-        </button>
-    );
-}
-
-function rankingEmptyLabel(key: RankingKey, tr: ReturnType<typeof useUsageDashboardI18n>): string {
+function rankingEmptyLabel(key: CodexCategoryKey, tr: ReturnType<typeof useUsageDashboardI18n>): string {
     switch (key) {
         case "agents":
             return tr(

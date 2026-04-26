@@ -4,11 +4,33 @@ import {
     isUnsafeWorktreeCopyPath,
     normalizeRelativePath,
     validateDefaultSessionDir,
+    validateAutoStartSettings,
     validateGlobalHotkey,
     validatePrefixShortcut,
     validateViewerShortcuts,
     validateWorktreeCopyPathSettings,
 } from "../src/components/settings/settingsValidation";
+
+describe("validateAutoStartSettings", () => {
+    it("accepts a valid raw command and args suffix", () => {
+        expect(validateAutoStartSettings([
+            {id: "a", name: "Mini Codex", command: "codex", args: "--model gpt-5.4-mini"},
+        ])).toEqual({});
+    });
+
+    it("rejects missing command, duplicates, and control characters", () => {
+        const errors = validateAutoStartSettings([
+            {id: "a", name: "No Command", command: "", args: "--model gpt-5.4-mini"},
+            {id: "b", name: "First", command: "codex", args: "--model gpt-5.4-mini"},
+            {id: "c", name: "Duplicate", command: "CODEX", args: "--model gpt-5.4-mini"},
+            {id: "d", name: "Control", command: "pwsh\n", args: ""},
+        ]);
+
+        expect(errors).toHaveProperty("auto_start_command_0");
+        expect(errors).toHaveProperty("auto_start_command_2");
+        expect(errors).toHaveProperty("auto_start_command_3");
+    });
+});
 
 describe("normalizeRelativePath", () => {
     it("collapses nested dot segments", () => {

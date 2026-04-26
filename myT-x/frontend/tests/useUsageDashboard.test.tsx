@@ -4,7 +4,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {useUsageDashboard} from "../src/components/viewer/views/usage-dashboard/useUsageDashboard";
 import {setLanguage} from "../src/i18n";
 import {useTmuxStore} from "../src/stores/tmuxStore";
-import type {usagedashboard} from "../wailsjs/go/models";
+import {usagedashboard} from "../wailsjs/go/models";
 
 const getUsageDashboardMock = vi.hoisted(() => vi.fn());
 
@@ -249,5 +249,55 @@ describe("useUsageDashboard", () => {
         });
 
         expect(latestState?.isLoading).toBe(false);
+    });
+
+    it("hydrates Wails model instances before storing IPC results", async () => {
+        const snapshot = {
+            work_dir: "D:/myT-x/dev-myT-x",
+            last_updated_at: "2026-04-15T20:00:00Z",
+            claude: {
+                total_sessions: 1,
+                active_days: 1,
+                total_messages: 1,
+                total_tool_uses: 1,
+                skills: [{name: "go-test-patterns", count: 1, last_used_at: "2026-04-15T20:00:00Z"}],
+                agents: [],
+                slash_commands: [],
+                skills_daily: [
+                    {
+                        name: "go-test-patterns",
+                        total_count: 1,
+                        last_used_at: "2026-04-15T20:00:00Z",
+                        buckets: [{date: "2026-04-15", count: 1}],
+                    },
+                ],
+                agents_daily: [],
+                slash_commands_daily: [],
+                daily_activity: [],
+                health: {
+                    jsonl_available: true,
+                    sqlite_available: false,
+                    history_available: true,
+                    project_dir: "D:/myT-x/dev-myT-x",
+                    partial_errors: [],
+                },
+            },
+            codex: null,
+        } satisfies usagedashboard.UsageDashboardSnapshot;
+        getUsageDashboardMock.mockResolvedValue(snapshot);
+
+        act(() => {
+            root.render(<UsageDashboardProbe onChange={(state) => {
+                latestState = state;
+            }}/>);
+        });
+        await flushEffects();
+
+        expect(latestState?.snapshot).toBeInstanceOf(usagedashboard.UsageDashboardSnapshot);
+        expect(latestState?.snapshot?.claude).toBeInstanceOf(usagedashboard.ClaudeUsageStats);
+        expect(latestState?.snapshot?.claude?.skills[0]).toBeInstanceOf(usagedashboard.UsageEntry);
+        expect(latestState?.snapshot?.claude?.skills_daily[0]).toBeInstanceOf(usagedashboard.DailyUsageSeries);
+        expect(latestState?.snapshot?.claude?.skills_daily[0]?.buckets[0])
+            .toBeInstanceOf(usagedashboard.DailyUsageBucket);
     });
 });

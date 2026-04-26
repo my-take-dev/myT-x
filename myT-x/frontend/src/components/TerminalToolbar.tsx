@@ -14,6 +14,8 @@ interface TerminalToolbarProps {
     readonly onTitleCommit: () => void;
     readonly onTitleCancel: () => void;
     readonly onAutoClick: () => void;
+    readonly onAutoStartClick: () => void;
+    readonly autoStartDisabled: boolean;
     readonly onRootToggle?: () => void;
     readonly onSplitVertical: () => void;
     readonly onSplitHorizontal: () => void;
@@ -34,6 +36,8 @@ export const TerminalToolbar = memo(function TerminalToolbar({
     onTitleCommit,
     onTitleCancel,
     onAutoClick,
+    onAutoStartClick,
+    autoStartDisabled,
     onRootToggle,
     onSplitVertical,
     onSplitHorizontal,
@@ -255,6 +259,35 @@ export const TerminalToolbar = memo(function TerminalToolbar({
                         <path d="M1 12c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4"/>
                         <line x1="12" y1="5" x2="12" y2="9"/>
                         <line x1="10" y1="7" x2="14" y2="7"/>
+                    </svg>
+                </button>
+                <button
+                    type="button"
+                    className="terminal-toolbar-btn"
+                    draggable={false}
+                    disabled={autoStartDisabled}
+                    title={
+                        isEn
+                            ? "Open AutoStart commands"
+                            : t("terminalPane.action.autoStart.title", "AutoStart コマンドを選択")
+                    }
+                    aria-label={
+                        isEn
+                            ? `Open AutoStart commands for pane ${paneId}`
+                            : t("terminalPane.action.autoStart.aria", "ペイン {paneId} の AutoStart コマンドを選択", {paneId})
+                    }
+                    onMouseDown={preventTerminalFocusSteal}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        if (!autoStartDisabled) {
+                            onAutoStartClick();
+                        }
+                    }}
+                >
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+                         strokeWidth="1.5">
+                        <path d="M2 2.5h4.5l5 4.5-5 4.5H2z"/>
+                        <path d="M5 5l3 2-3 2z" fill="currentColor" stroke="none"/>
                     </svg>
                 </button>
                 <button

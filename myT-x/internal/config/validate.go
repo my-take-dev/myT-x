@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"myT-x/internal/mcp"
@@ -36,6 +37,10 @@ const (
 	MaxMessageTemplates       = 50
 	MaxTemplateNameLen        = 100
 	MaxTemplateMessageLen     = 5000
+	MaxAutoStartCommands      = 50
+	MaxAutoStartNameLen       = 100
+	MaxAutoStartCommandLen    = 200
+	MaxAutoStartArgsLen       = 1000
 	defaultCustomMCPKind      = string(mcp.DefinitionKindCustom)
 )
 
@@ -156,6 +161,9 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	if cfg.Keys == nil {
 		cfg.Keys = defaults.Keys
 	}
+	if cfg.AutoStart == nil {
+		cfg.AutoStart = append([]AutoStartCommand(nil), defaults.AutoStart...)
+	}
 	if strings.TrimSpace(cfg.ViewerSidebarMode) == "" {
 		cfg.ViewerSidebarMode = defaults.ViewerSidebarMode
 	}
@@ -183,12 +191,89 @@ func applyDefaultsAndValidate(cfg *Config) error {
 	validateViewerSidebarMode(cfg)
 	validateChatOverlayPercentage(cfg)
 	sanitizeViewerHotkeys(cfg)
+	sanitizeAutoStart(cfg)
 	sanitizePaneEnv(cfg)
 	sanitizeClaudeEnv(cfg)
 	sanitizeMCPServers(cfg)
 	sanitizeTaskScheduler(cfg)
 	validateDefaultSessionDir(cfg)
 	return nil
+}
+
+// NormalizeAutoStartCommand trims and validates one AutoStart entry.
+// It returns false when the entry is not runnable and should be dropped.
+func NormalizeAutoStartCommand(entry AutoStartCommand) (AutoStartCommand, bool) {
+	entry.Name = sanitizeAutoStartField(entry.Name)
+	entry.Command = sanitizeAutoStartField(entry.Command)
+	entry.Args = sanitizeAutoStartField(entry.Args)
+
+	if entry.Command == "" {
+		return AutoStartCommand{}, false
+	}
+	if utf8.RuneCountInString(entry.Name) > MaxAutoStartNameLen {
+		entry.Name = truncateRunes(entry.Name, MaxAutoStartNameLen)
+	}
+	if utf8.RuneCountInString(entry.Command) > MaxAutoStartCommandLen {
+		entry.Command = truncateRunes(entry.Command, MaxAutoStartCommandLen)
+	}
+	if utf8.RuneCountInString(entry.Args) > MaxAutoStartArgsLen {
+		entry.Args = truncateRunes(entry.Args, MaxAutoStartArgsLen)
+	}
+	return entry, true
+}
+
+func sanitizeAutoStart(cfg *Config) {
+	if len(cfg.AutoStart) == 0 {
+		if cfg.AutoStart == nil {
+			cfg.AutoStart = []AutoStartCommand{}
+		}
+		return
+	}
+
+	seen := make(map[string]struct{}, len(cfg.AutoStart))
+	filtered := make([]AutoStartCommand, 0, min(len(cfg.AutoStart), MaxAutoStartCommands))
+	for i, entry := range cfg.AutoStart {
+		normalized, ok := NormalizeAutoStartCommand(entry)
+		if !ok {
+			slog.Warn("[WARN-CONFIG] auto_start entry has empty command, skipping", "index", i)
+			continue
+		}
+
+		key := strings.ToLower(normalized.Command) + "\x00" + normalized.Args
+		if _, exists := seen[key]; exists {
+			slog.Warn("[WARN-CONFIG] auto_start entry duplicates another command and arguments, skipping",
+				"command", normalized.Command, "index", i)
+			continue
+		}
+		seen[key] = struct{}{}
+		filtered = append(filtered, normalized)
+		if len(filtered) == MaxAutoStartCommands {
+			if i < len(cfg.AutoStart)-1 {
+				slog.Warn("[WARN-CONFIG] auto_start exceeds maximum, truncating",
+					"count", len(cfg.AutoStart), "max", MaxAutoStartCommands)
+			}
+			break
+		}
+	}
+	cfg.AutoStart = filtered
+}
+
+func sanitizeAutoStartField(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, value)
+	return strings.TrimSpace(value)
+}
+
+func truncateRunes(value string, maxRunes int) string {
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes])
 }
 
 // normalizeAndValidateAgentModel validates and normalizes agent model settings.

@@ -1,14 +1,16 @@
-import {useEffect, useRef} from "react";
+import {useCallback, useEffect, useRef} from "react";
 import {api} from "../../api";
 import {connect as connectPaneStream, disconnect as disconnectPaneStream} from "../../services/paneDataStream";
 import {useMCPStore} from "../../stores/mcpStore";
 import {useNotificationStore} from "../../stores/notificationStore";
 import {useCanvasStore} from "../../stores/canvasStore";
+import {useDiffReviewStore} from "../../stores/diffReviewStore";
 import {useTmuxStore} from "../../stores/tmuxStore";
 import type {SessionSnapshot, SessionSnapshotDelta} from "../../types/tmux";
 import {logFrontendEventSafe} from "../../utils/logFrontendEventSafe";
 import {asArray, asObject} from "../../utils/typeGuards";
 import {cleanupEventListeners, createEventSubscriber, notifyWarn, tr} from "./eventHelpers";
+import {buildDiffReviewSessionKey} from "../../components/viewer/views/diff-view/diffReviewKeys";
 
 // Payload types are compile-time documentation only.
 // EventsOn delivers `unknown` at runtime — every handler MUST still
@@ -43,6 +45,13 @@ export function useSnapshotSync(): void {
     const applySessionDelta = useTmuxStore((s) => s.applySessionDelta);
     const setActiveSession = useTmuxStore((s) => s.setActiveSession);
     const isMountedRef = useRef(true);
+    const sessionKeyByNameRef = useRef<Map<string, string> | null>(null);
+    const getSessionKeyByNameMap = useCallback((): Map<string, string> => {
+        if (sessionKeyByNameRef.current === null) {
+            sessionKeyByNameRef.current = new Map<string, string>();
+        }
+        return sessionKeyByNameRef.current;
+    }, []);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -84,6 +93,9 @@ export function useSnapshotSync(): void {
             let normalizedSessions: SessionSnapshot[] = [];
             if (sessionsResult.status === "fulfilled") {
                 normalizedSessions = sessionsResult.value ?? [];
+                sessionKeyByNameRef.current = new Map(
+                    normalizedSessions.map((session) => [session.name, buildDiffReviewSessionKey(session.id)]),
+                );
                 setSessions(normalizedSessions);
             } else {
                 if (import.meta.env.DEV) {
@@ -126,6 +138,9 @@ export function useSnapshotSync(): void {
                 }
                 return;
             }
+            sessionKeyByNameRef.current = new Map(
+                snapshots.map((session) => [session.name, buildDiffReviewSessionKey(session.id)]),
+            );
             setSessions(snapshots);
         });
 
@@ -143,6 +158,9 @@ export function useSnapshotSync(): void {
             const removed = (asArray<unknown>(delta.removed) ?? []).filter((name): name is string => typeof name === "string");
             if (upserts.length === 0 && removed.length === 0) {
                 return;
+            }
+            for (const session of upserts) {
+                getSessionKeyByNameMap().set(session.name, buildDiffReviewSessionKey(session.id));
             }
             applySessionDelta(upserts, removed);
             // 削除されたセッションのキャンバスデータをクリーンアップ
@@ -196,6 +214,11 @@ export function useSnapshotSync(): void {
                 }
                 return;
             }
+            const destroyedSessionKey = getSessionKeyByNameMap().get(name);
+            if (destroyedSessionKey != null) {
+                useDiffReviewStore.getState().clearSessionState(destroyedSessionKey);
+                getSessionKeyByNameMap().delete(name);
+            }
             useMCPStore.getState().clearSession(name);
             useCanvasStore.getState().clearSessionData(name);
         });
@@ -241,6 +264,12 @@ export function useSnapshotSync(): void {
                     console.warn("[SYNC] tmux:session-renamed: empty newName", payload);
                 }
                 return;
+            }
+            const renamedSessionKey = getSessionKeyByNameMap().get(oldName);
+            if (renamedSessionKey != null) {
+                const sessionKeyByName = getSessionKeyByNameMap();
+                sessionKeyByName.delete(oldName);
+                sessionKeyByName.set(newName, renamedSessionKey);
             }
             useMCPStore.getState().migrateSession(oldName, newName);
             useCanvasStore.getState().migrateSessionData(oldName, newName);
@@ -452,5 +481,5 @@ export function useSnapshotSync(): void {
             cleanupEventListeners(cleanupFns);
         };
         // Zustand store actions are stable references.
-    }, [applySessionDelta, setActiveSession, setSessions]);
+    }, [applySessionDelta, getSessionKeyByNameMap, setActiveSession, setSessions]);
 }
