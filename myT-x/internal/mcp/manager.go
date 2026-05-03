@@ -20,7 +20,9 @@ type ManagerConfig struct {
 	// ResolveWorkDir returns the working directory for the given session.
 	// Used by session-scoped runtimes that need a filesystem root.
 	ResolveWorkDir func(sessionName string) (string, error)
-	NewPipeServer  func(MCPPipeConfig) managedPipeServer
+	// ConfigDir returns the application config directory for session-info storage.
+	ConfigDir     func() (string, error)
+	NewPipeServer func(MCPPipeConfig) managedPipeServer
 	// SingleTaskRunnerManager starts and stops session-scoped single-task-runner runtimes.
 	SingleTaskRunnerManager *singletaskrunner.ServiceManager
 }
@@ -53,6 +55,7 @@ type Manager struct {
 	renaming                map[string]chan struct{}
 	router                  *tmux.CommandRouter
 	resolveWorkDir          func(string) (string, error)
+	configDir               func() (string, error)
 	newPipeServer           func(MCPPipeConfig) managedPipeServer
 	singleTaskRunnerManager *singletaskrunner.ServiceManager
 }
@@ -102,6 +105,10 @@ func NewManager(cfg ManagerConfig) *Manager {
 			return ".", nil
 		}
 	}
+	if cfg.ConfigDir == nil && registryHasKind(registry, DefinitionKindOrchestrator) {
+		slog.Warn("[WARN-MCP] NewManager called with orchestrator definition but nil ConfigDir")
+		panic("mcp ManagerConfig.ConfigDir is required when registry contains orchestrator definitions")
+	}
 	newPipeServer := cfg.NewPipeServer
 	if newPipeServer == nil {
 		newPipeServer = func(pipeCfg MCPPipeConfig) managedPipeServer {
@@ -115,9 +122,19 @@ func NewManager(cfg ManagerConfig) *Manager {
 		renaming:                make(map[string]chan struct{}),
 		router:                  cfg.Router,
 		resolveWorkDir:          resolveWorkDir,
+		configDir:               cfg.ConfigDir,
 		newPipeServer:           newPipeServer,
 		singleTaskRunnerManager: cfg.SingleTaskRunnerManager,
 	}
+}
+
+func registryHasKind(registry *Registry, kind DefinitionKind) bool {
+	for _, def := range registry.All() {
+		if def.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // waitForRename blocks until any in-progress rename touching sessionName
@@ -339,6 +356,7 @@ func (m *Manager) startInstanceSync(sessionName, mcpID string, inst *instance, d
 	pipeName := BuildMCPPipeName(sessionName, mcpID)
 	pipeCfg, err := buildPipeConfig(pipeName, def, pipeConfigContext{
 		rootDir:                 rootDir,
+		configDir:               m.configDir,
 		sessionName:             sessionName,
 		router:                  m.router,
 		emitFn:                  m.emitFn,

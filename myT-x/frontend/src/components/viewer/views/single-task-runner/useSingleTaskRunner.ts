@@ -1,15 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
-import {
-    AddSingleTaskRunnerItem,
-    GetSingleTaskRunnerClearDelay,
-    GetSingleTaskRunnerStatus,
-    RemoveSingleTaskRunnerItem,
-    ReorderSingleTaskRunnerItems,
-    SetSingleTaskRunnerClearDelay,
-    StartSingleTaskRunner,
-    StopSingleTaskRunner,
-    UpdateSingleTaskRunnerItem,
-} from "../../../../../wailsjs/go/main/App";
+import {api} from "../../../../api";
 import {singletaskrunner} from "../../../../../wailsjs/go/models";
 import {EventsOn} from "../../../../../wailsjs/runtime";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
@@ -160,7 +150,7 @@ export function useSingleTaskRunner() {
         const capturedSession = sessionRef.current?.trim() ?? null;
         const requestToken = ++refreshRequestTokenRef.current;
         try {
-            const result = await GetSingleTaskRunnerStatus(capturedSessionKey);
+            const result = await api.GetSingleTaskRunnerStatus(capturedSessionKey);
             if (
                 !isMountedRef.current
                 || !matchesCapturedSessionKey(capturedSessionKey, latestSessionKeyRef.current)
@@ -202,7 +192,7 @@ export function useSingleTaskRunner() {
         }
         const requestToken = ++clearDelayRequestTokenRef.current;
         try {
-            const delay = await GetSingleTaskRunnerClearDelay(capturedSessionKey);
+            const delay = await api.GetSingleTaskRunnerClearDelay(capturedSessionKey);
             if (
                 !isMountedRef.current
                 || !matchesCapturedSessionKey(capturedSessionKey, latestSessionKeyRef.current)
@@ -298,13 +288,12 @@ export function useSingleTaskRunner() {
             return false;
         }
         try {
-            await StartSingleTaskRunner(capturedSessionKey);
+            await api.StartSingleTaskRunner(capturedSessionKey);
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return false;
             }
             generationIdRef.current = null;
-            void refreshStatus(capturedSessionKey);
-            return true;
+            return await refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return false;
@@ -321,11 +310,11 @@ export function useSingleTaskRunner() {
             return;
         }
         try {
-            await StopSingleTaskRunner(capturedSessionKey);
+            await api.StopSingleTaskRunner(capturedSessionKey);
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return;
             }
-            void refreshStatus(capturedSessionKey);
+            await refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return;
@@ -347,8 +336,11 @@ export function useSingleTaskRunner() {
             return false;
         }
         try {
-            await AddSingleTaskRunnerItem(capturedSessionKey, title, message, targetPaneID, clearBefore, clearCommand);
-            return !shouldIgnoreMutationResult(capturedSessionKey);
+            await api.AddSingleTaskRunnerItem(capturedSessionKey, title, message, targetPaneID, clearBefore, clearCommand);
+            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+                return false;
+            }
+            return await refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return false;
@@ -356,7 +348,7 @@ export function useSingleTaskRunner() {
             setError(toErrorMessage(err, "Failed to add task"));
             return false;
         }
-    }, [resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreMutationResult]);
 
     const removeItem = useCallback(async (id: string) => {
         const capturedSessionKey = resolveMutationSessionKey();
@@ -365,11 +357,11 @@ export function useSingleTaskRunner() {
             return;
         }
         try {
-            await RemoveSingleTaskRunnerItem(capturedSessionKey, id);
+            await api.RemoveSingleTaskRunnerItem(capturedSessionKey, id);
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return;
             }
-            void refreshStatus(capturedSessionKey);
+            await refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return;
@@ -392,8 +384,11 @@ export function useSingleTaskRunner() {
             return false;
         }
         try {
-            await UpdateSingleTaskRunnerItem(capturedSessionKey, id, title, message, targetPaneID, clearBefore, clearCommand);
-            return !shouldIgnoreMutationResult(capturedSessionKey);
+            await api.UpdateSingleTaskRunnerItem(capturedSessionKey, id, title, message, targetPaneID, clearBefore, clearCommand);
+            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+                return false;
+            }
+            return await refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return false;
@@ -401,7 +396,7 @@ export function useSingleTaskRunner() {
             setError(toErrorMessage(err, "Failed to update task"));
             return false;
         }
-    }, [resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreMutationResult]);
 
     const reorderItems = useCallback(async (orderedIDs: string[]) => {
         const capturedSessionKey = resolveMutationSessionKey();
@@ -410,11 +405,11 @@ export function useSingleTaskRunner() {
             return;
         }
         try {
-            await ReorderSingleTaskRunnerItems(capturedSessionKey, orderedIDs);
+            await api.ReorderSingleTaskRunnerItems(capturedSessionKey, orderedIDs);
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return;
             }
-            void refreshStatus(capturedSessionKey);
+            await refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return;
@@ -430,8 +425,11 @@ export function useSingleTaskRunner() {
             return false;
         }
         try {
-            await SetSingleTaskRunnerClearDelay(capturedSessionKey, delaySec);
-            return !shouldIgnoreMutationResult(capturedSessionKey);
+            await api.SetSingleTaskRunnerClearDelay(capturedSessionKey, delaySec);
+            if (shouldIgnoreMutationResult(capturedSessionKey)) {
+                return false;
+            }
+            return await refreshStatus(capturedSessionKey);
         } catch (err: unknown) {
             if (shouldIgnoreMutationResult(capturedSessionKey)) {
                 return false;
@@ -439,7 +437,7 @@ export function useSingleTaskRunner() {
             setError(toErrorMessage(err, "Failed to update clear delay"));
             return false;
         }
-    }, [resolveMutationSessionKey, shouldIgnoreMutationResult]);
+    }, [refreshStatus, resolveMutationSessionKey, shouldIgnoreMutationResult]);
 
     return {
         status,

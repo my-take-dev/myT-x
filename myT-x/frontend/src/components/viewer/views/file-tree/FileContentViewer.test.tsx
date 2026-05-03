@@ -97,6 +97,7 @@ describe("FileContentViewer", () => {
                     renderMode={overrides?.renderMode}
                     canPreview={overrides?.canPreview}
                     onRenderModeChange={overrides?.onRenderModeChange}
+                    onRefresh={overrides?.onRefresh}
                     previewRenderer={overrides?.previewRenderer ?? (() => <div>custom preview</div>)}
                 />,
             );
@@ -236,5 +237,19 @@ describe("FileContentViewer", () => {
         expect(toggleButton?.title).toBe("ソース表示 (Ctrl+Shift+V)");
         expect(toggleButton?.getAttribute("aria-label")).toBe("ソース表示 (Ctrl+Shift+V)");
         expect(toggleButton?.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("renders a refresh button in the file header", async () => {
+        const onRefresh = vi.fn();
+        await renderViewer("markdown", {onRefresh});
+
+        const refreshButton = container.querySelector<HTMLButtonElement>("button[aria-label='ファイルを再読み込み']");
+        expect(refreshButton).not.toBeNull();
+
+        act(() => {
+            refreshButton?.click();
+        });
+
+        expect(onRefresh).toHaveBeenCalledTimes(1);
     });
 });

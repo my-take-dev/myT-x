@@ -3,12 +3,13 @@ import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import type {FileContentViewerProps} from "../src/components/viewer/views/file-tree/FileContentViewer";
 import type {DocumentKind} from "../src/components/viewer/views/file-tree/documentTypes";
-import type {FileContentResult} from "../src/components/viewer/views/file-tree/fileTreeTypes";
+import type {FileContentResult, FileNode, FlatNode} from "../src/components/viewer/views/file-tree/fileTreeTypes";
 import {RendererSurface} from "../src/components/viewer/views/file-tree/renderers/RendererSurface";
 
 const closeViewMock = vi.fn();
 const fileContentViewerMock = vi.fn<(props: FileContentViewerProps) => ReactNode>();
 const fileSearchPanelMock = vi.fn<() => ReactNode>();
+const fileTreeSidebarMock = vi.fn<(props: {flatNodes: readonly FlatNode[]}) => ReactNode>();
 const setQueryMock = vi.fn();
 const clearSearchMock = vi.fn();
 const tmuxState = {
@@ -18,7 +19,7 @@ const tmuxState = {
 };
 
 const viewState = {
-    tree: [],
+    tree: [] as readonly FileNode[],
     expandedPaths: new Set<string>(),
     loadingPaths: new Set<string>(),
     selectedPath: "docs/diagram.drawio.svg",
@@ -28,7 +29,6 @@ const viewState = {
     error: null as string | null,
     contentError: null as string | null,
     dirError: null as string | null,
-    watcherError: null as string | null,
     toggleDir: vi.fn(),
     selectFile: vi.fn(),
     loadRoot: vi.fn(),
@@ -64,7 +64,10 @@ vi.mock("../src/components/viewer/views/shared/ViewerPanelShell", () => ({
 }));
 
 vi.mock("../src/components/viewer/views/file-tree/FileTreeSidebar", () => ({
-    FileTreeSidebar: () => <div/>,
+    FileTreeSidebar: (props: {flatNodes: readonly FlatNode[]}) => {
+        fileTreeSidebarMock(props);
+        return <div/>;
+    },
 }));
 
 vi.mock("../src/components/viewer/views/file-tree/FileSearchPanel", () => ({
@@ -87,6 +90,12 @@ vi.mock("../src/components/viewer/views/file-tree/FileContentViewer", () => ({
     },
 }));
 
+vi.mock("../src/components/viewer/views/file-tree/renderers/DrawioRenderer", () => ({
+    DrawioRenderer: (props: Record<string, unknown>) => (
+        <div data-testid="drawio-renderer" data-kind={String(props.kind)}/>
+    ),
+}));
+
 import {FileTreeView} from "../src/components/viewer/views/file-tree/FileTreeView";
 
 describe("FileTreeView", () => {
@@ -100,9 +109,16 @@ describe("FileTreeView", () => {
         closeViewMock.mockReset();
         fileContentViewerMock.mockReset();
         fileSearchPanelMock.mockReset();
+        fileTreeSidebarMock.mockReset();
         setQueryMock.mockReset();
         clearSearchMock.mockReset();
+        viewState.toggleDir.mockReset();
+        viewState.selectFile.mockReset();
+        viewState.loadRoot.mockReset();
         tmuxState.config.viewer_shortcuts = null;
+        viewState.tree = [];
+        viewState.expandedPaths = new Set<string>();
+        viewState.loadingPaths = new Set<string>();
         viewState.selectedPath = "docs/diagram.drawio.svg";
         viewState.fileContent = {
             path: "docs/diagram.drawio.svg",
@@ -133,7 +149,7 @@ describe("FileTreeView", () => {
         return container.querySelector<HTMLElement>("[data-testid='file-content-viewer']")?.dataset.renderMode ?? null;
     }
 
-function dispatchShortcut(eventInit: KeyboardEventInit): void {
+    function dispatchShortcut(eventInit: KeyboardEventInit): void {
         act(() => {
             document.dispatchEvent(new KeyboardEvent("keydown", {
                 bubbles: true,
@@ -184,6 +200,57 @@ function dispatchShortcut(eventInit: KeyboardEventInit): void {
         }));
     });
 
+    it("refreshes the current file from the file content header", () => {
+        renderView();
+
+        fileContentViewerMock.mock.lastCall?.[0].onRefresh?.();
+
+        expect(viewState.selectFile).toHaveBeenCalledWith("docs/diagram.drawio.svg");
+        expect(viewState.loadRoot).not.toHaveBeenCalled();
+    });
+
+    it("passes document-filtered flat nodes to the sidebar", () => {
+        viewState.tree = [
+            {
+                name: "src",
+                path: "src",
+                isDir: true,
+                hasChildren: true,
+                hasViewTarget: false,
+            },
+            {
+                name: "docs",
+                path: "docs",
+                isDir: true,
+                hasChildren: true,
+                hasViewTarget: true,
+            },
+            {
+                name: "README.md",
+                path: "README.md",
+                isDir: false,
+                hasChildren: false,
+                hasViewTarget: true,
+                size: 128,
+            },
+            {
+                name: "main.go",
+                path: "main.go",
+                isDir: false,
+                hasChildren: false,
+                hasViewTarget: false,
+                size: 64,
+            },
+        ] satisfies readonly FileNode[];
+
+        renderView();
+
+        expect(fileTreeSidebarMock.mock.lastCall?.[0].flatNodes.map((node) => node.path)).toEqual([
+            "docs",
+            "README.md",
+        ]);
+    });
+
     it.each([
         ["graphviz", "Graphviz プレビューを読み込み中...", {code: "digraph { a -> b }"}],
         ["markmap", "Markmap プレビューを読み込み中...", {code: "# Root"}],
@@ -215,6 +282,37 @@ function dispatchShortcut(eventInit: KeyboardEventInit): void {
             const lazyChild = surface.props.children;
             expect(isValidElement(lazyChild)).toBe(true);
             expect((lazyChild as {props: Record<string, unknown>}).props).toEqual(expect.objectContaining(expectedProps));
+        },
+    );
+
+    it.each([
+        ["drawio-svg", "docs/diagram.drawio.svg", "<svg/>"],
+        ["drawio-xml", "docs/diagram.drawio", "<mxfile/>"],
+    ] satisfies readonly [DocumentKind, string, string][])(
+        "routes %s documents to the draw.io renderer with session context",
+        (kind, path, content) => {
+            renderView();
+
+            const previewRenderer = fileContentViewerMock.mock.lastCall?.[0].previewRenderer;
+            expect(previewRenderer).toBeTypeOf("function");
+
+            const rendered = previewRenderer?.({
+                path,
+                content,
+                line_count: 1,
+                size: content.length,
+                truncated: false,
+                binary: false,
+            }, kind);
+
+            expect(isValidElement(rendered)).toBe(true);
+            expect((rendered as {props: Record<string, unknown>}).props).toEqual(expect.objectContaining({
+                kind,
+                content,
+                filePath: path,
+                sessionKey: "session-a:1",
+                sessionName: "session-a",
+            }));
         },
     );
 

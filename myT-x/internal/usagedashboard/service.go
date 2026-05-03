@@ -22,7 +22,8 @@ const (
 )
 
 // Deps are required external dependencies injected by the composition root.
-// ResolveSessionWorkDir must be non-nil; the rest fall back to safe defaults.
+// ResolveSessionWorkDir and ConfigDir must be non-nil; the rest fall back to
+// safe defaults.
 type Deps struct {
 	// ResolveSessionWorkDir maps a session name to its effective working
 	// directory. Worktree sessions must return Worktree.Path, regular sessions
@@ -32,16 +33,21 @@ type Deps struct {
 	// HomeDir returns the user home directory. Defaults to os.UserHomeDir.
 	HomeDir func() (string, error)
 
+	// ConfigDir returns the app config directory. The default file repository
+	// stores caches under session-info, a sibling directory under configDir
+	// with a separate workDir-keyed layout from input-history/session-logs.
+	ConfigDir func() (string, error)
+
 	// NowFunc returns the current time. Defaults to time.Now.
 	NowFunc func() time.Time
 
 	// SnapshotRepo persists the aggregation result to disk so subsequent
 	// dashboard opens can return cached data instead of re-scanning every
-	// JSONL file. nil → defaults to NewFileSnapshotRepository().
+	// JSONL file. nil defaults to NewFileSnapshotRepository(ConfigDir).
 	SnapshotRepo SnapshotRepository
 
 	// SnapshotTTL is how long a cached snapshot is considered fresh.
-	// 0 → DefaultSnapshotTTL (24h).
+	// 0 defaults to DefaultSnapshotTTL (24h).
 	SnapshotTTL time.Duration
 }
 
@@ -58,6 +64,9 @@ func NewService(deps Deps) *Service {
 	if deps.ResolveSessionWorkDir == nil {
 		panic("usagedashboard.NewService: Deps.ResolveSessionWorkDir is required")
 	}
+	if deps.ConfigDir == nil {
+		panic("usagedashboard.NewService: Deps.ConfigDir is required")
+	}
 	if deps.HomeDir == nil {
 		deps.HomeDir = os.UserHomeDir
 	}
@@ -65,7 +74,7 @@ func NewService(deps Deps) *Service {
 		deps.NowFunc = time.Now
 	}
 	if deps.SnapshotRepo == nil {
-		deps.SnapshotRepo = NewFileSnapshotRepository()
+		deps.SnapshotRepo = NewFileSnapshotRepository(deps.ConfigDir)
 	}
 	if deps.SnapshotTTL <= 0 {
 		deps.SnapshotTTL = DefaultSnapshotTTL
@@ -74,12 +83,13 @@ func NewService(deps Deps) *Service {
 }
 
 // GetUsageDashboard returns aggregated usage statistics for sessionName,
-// served from the per-project JSON cache when fresh.
+// served from the app-config JSON cache when fresh.
 //
 // When force is false:
-//   - A cached snapshot at <workDir>/.myT-x/usage-dashboard.json is returned
-//     when present and within Deps.SnapshotTTL. Read errors and schema
-//     mismatches are logged and treated as cache miss (re-aggregate).
+//   - A cached snapshot at
+//     <configDir>/session-info/<sha256(workDir)>/usage-dashboard.json is
+//     returned when present and within Deps.SnapshotTTL. Read errors and
+//     schema mismatches are logged and treated as cache miss (re-aggregate).
 //
 // When force is true (e.g. user pressed "Refresh" in the UI):
 //   - The cache is bypassed, both sources are re-scanned, and the file is
@@ -88,7 +98,9 @@ func NewService(deps Deps) *Service {
 // Aggregation always covers BOTH Claude and Codex regardless of mode so
 // the saved file is mode-agnostic and a later mode switch never triggers
 // an unnecessary re-aggregation. The returned snapshot is filtered to the
-// requested mode in filterByMode.
+// requested mode in filterByMode. The current React view requests ModeBoth
+// and filters locally, but ModeClaude and ModeCodex remain supported API
+// modes for other callers.
 //
 // Contract (#157):
 //   - error==nil implies LastUpdatedAt is non-zero.

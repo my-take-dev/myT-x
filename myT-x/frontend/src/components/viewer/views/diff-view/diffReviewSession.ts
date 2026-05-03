@@ -12,3 +12,14 @@ export function useDiffReviewSessionKey(): string {
 
     return activeSessionSnapshot ? buildDiffReviewSessionKey(activeSessionSnapshot.id) : "";
 }
+
+export function useDiffReviewApiSessionKey(): string {
+    const sessions = useTmuxStore((state) => state.sessions);
+    const activeSession = useTmuxStore((state) => state.activeSession);
+    const activeSessionSnapshot = useMemo(
+        () => (activeSession ? sessions.find((entry) => entry.name === activeSession) ?? null : null),
+        [sessions, activeSession],
+    );
+
+    return activeSessionSnapshot ? `${activeSessionSnapshot.name}:${activeSessionSnapshot.id}` : "";
+}

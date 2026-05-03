@@ -1,12 +1,16 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"myT-x/internal/config"
 	"myT-x/internal/ipc"
 	"myT-x/internal/scheduler"
+	"myT-x/internal/sessioninfo"
 	"myT-x/internal/tmux"
 )
 
@@ -287,6 +291,7 @@ func TestSchedulerSendMessage(t *testing.T) {
 func setupTemplateTestApp(t *testing.T) (*App, string) {
 	t.Helper()
 	app := NewApp()
+	app.configState.Initialize(newConfigPathForTest(t, "config.yaml"), config.DefaultConfig())
 	app.sessions = tmux.NewSessionManager()
 
 	_, _, err := app.sessions.CreateSession("test-session", "main", 120, 40)
@@ -321,6 +326,64 @@ func TestSaveAndLoadSchedulerTemplate(t *testing.T) {
 	}
 	if loaded[0].Title != "Deploy Check" {
 		t.Errorf("Title = %q, want %q", loaded[0].Title, "Deploy Check")
+	}
+}
+
+func TestSchedulerTemplateUsesSessionInfoStorage(t *testing.T) {
+	app, workDir := setupTemplateTestApp(t)
+
+	if err := app.SaveSchedulerTemplate("test-session", scheduler.Template{
+		Title: "Session Scoped", Message: "msg", IntervalSeconds: 10, MaxCount: 1,
+	}); err != nil {
+		t.Fatalf("SaveSchedulerTemplate() error = %v", err)
+	}
+
+	configDir := filepath.Dir(app.configState.ConfigPath())
+	templatePath, err := sessioninfo.FilePath(configDir, workDir, "scheduler-templates.json")
+	if err != nil {
+		t.Fatalf("sessioninfo.FilePath() error = %v", err)
+	}
+	if _, err := os.Stat(templatePath); err != nil {
+		t.Fatalf("session-info scheduler template file not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".myT-x")); err == nil {
+		t.Fatal("unexpected .myT-x directory created for scheduler templates")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat .myT-x directory: %v", err)
+	}
+}
+
+func TestSchedulerTemplateUsesWorktreeWorkDir(t *testing.T) {
+	app, rootDir := setupTemplateTestApp(t)
+	worktreeDir := t.TempDir()
+	if err := app.sessions.SetWorktreeInfo("test-session", &tmux.SessionWorktreeInfo{
+		Path:       worktreeDir,
+		RepoPath:   rootDir,
+		BranchName: "feature/session-info",
+	}); err != nil {
+		t.Fatalf("SetWorktreeInfo() error = %v", err)
+	}
+
+	if err := app.SaveSchedulerTemplate("test-session", scheduler.Template{
+		Title: "Worktree Scoped", Message: "msg", IntervalSeconds: 10, MaxCount: 1,
+	}); err != nil {
+		t.Fatalf("SaveSchedulerTemplate() error = %v", err)
+	}
+
+	configDir := filepath.Dir(app.configState.ConfigPath())
+	worktreeTemplatePath, err := sessioninfo.FilePath(configDir, worktreeDir, "scheduler-templates.json")
+	if err != nil {
+		t.Fatalf("sessioninfo.FilePath(worktree) error = %v", err)
+	}
+	if _, err := os.Stat(worktreeTemplatePath); err != nil {
+		t.Fatalf("worktree session-info scheduler template file not created: %v", err)
+	}
+	rootTemplatePath, err := sessioninfo.FilePath(configDir, rootDir, "scheduler-templates.json")
+	if err != nil {
+		t.Fatalf("sessioninfo.FilePath(root) error = %v", err)
+	}
+	if _, err := os.Stat(rootTemplatePath); !os.IsNotExist(err) {
+		t.Fatalf("root session-info template should not be used for worktree session: %v", err)
 	}
 }
 

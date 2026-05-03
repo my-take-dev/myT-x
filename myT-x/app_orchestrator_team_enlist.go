@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -169,9 +170,12 @@ func (a *App) rollbackEnlistedMember(sessionName string, originalTeam orchestrat
 }
 
 func (a *App) listOrchestratorRegisteredPaneIDs(sessionName string) ([]string, error) {
-	db, cleanup, err := a.openOrchestratorDB(sessionName)
+	db, cleanup, ok, err := a.openOrchestratorDBOptional(sessionName)
 	if err != nil {
 		return nil, err
+	}
+	if !ok {
+		return []string{}, nil
 	}
 	defer cleanup()
 
@@ -180,7 +184,11 @@ func (a *App) listOrchestratorRegisteredPaneIDs(sessionName string) ([]string, e
 		return nil, fmt.Errorf("list registered pane ids: %w", err)
 	}
 	defer func() {
-		_ = rows.Close()
+		if closeErr := rows.Close(); closeErr != nil {
+			// Close failures after iteration do not change the already collected pane IDs.
+			// Log the issue so resource cleanup problems stay visible.
+			slog.Warn("[WARN-orchestrator] failed to close registered pane id rows", "error", closeErr)
+		}
 	}()
 
 	result := make([]string, 0)
@@ -198,9 +206,12 @@ func (a *App) listOrchestratorRegisteredPaneIDs(sessionName string) ([]string, e
 }
 
 func (a *App) findOrchestratorAgentNameByPaneID(sessionName string, paneID string) (string, error) {
-	db, cleanup, err := a.openOrchestratorDB(sessionName)
+	db, cleanup, ok, err := a.openOrchestratorDBOptional(sessionName)
 	if err != nil {
 		return "", err
+	}
+	if !ok {
+		return "", nil
 	}
 	defer cleanup()
 

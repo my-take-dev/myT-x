@@ -6,9 +6,9 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 
 	orchestrator "myT-x/internal/mcp/agent-orchestrator"
+	"myT-x/internal/orchestratorstorage"
 	"myT-x/internal/singletaskrunner"
 	"myT-x/internal/tmux"
 )
@@ -18,6 +18,7 @@ import (
 // runtime shares a SQLite database at dbPath for cross-connection state.
 func orchestratorRuntimeFactory(
 	dbPath string,
+	projectRoot string,
 	sessionName string,
 	allPanes bool,
 	router *tmux.CommandRouter,
@@ -26,6 +27,7 @@ func orchestratorRuntimeFactory(
 	return func(in io.Reader, out io.Writer) (MCPRuntime, error) {
 		cfg := orchestrator.Config{
 			DBPath:          dbPath,
+			ProjectRoot:     projectRoot,
 			In:              in,
 			Out:             out,
 			Logger:          log.New(os.Stderr, "[orchestrator] ", log.LstdFlags),
@@ -55,6 +57,7 @@ func configParamValue(params []ConfigParam, key, fallback string) string {
 
 type pipeConfigContext struct {
 	rootDir                 string
+	configDir               func() (string, error)
 	sessionName             string
 	router                  *tmux.CommandRouter
 	emitFn                  func(string, any)
@@ -79,11 +82,21 @@ func (r *routerBackedSplitter) SplitPane(_ context.Context, targetPaneID string,
 func buildPipeConfig(pipeName string, def Definition, ctx pipeConfigContext) (MCPPipeConfig, error) {
 	switch def.Kind {
 	case DefinitionKindOrchestrator:
-		dbPath := filepath.Join(ctx.rootDir, ".myT-x", "orchestrator.db")
+		if ctx.configDir == nil {
+			return MCPPipeConfig{}, fmt.Errorf("config dir provider is required for orchestrator pipe %s", pipeName)
+		}
+		configDir, err := ctx.configDir()
+		if err != nil {
+			return MCPPipeConfig{}, fmt.Errorf("resolve config dir for orchestrator pipe %s: %w", pipeName, err)
+		}
+		dbPath, err := orchestratorstorage.DBPath(configDir, ctx.rootDir)
+		if err != nil {
+			return MCPPipeConfig{}, fmt.Errorf("resolve orchestrator db path for pipe %s: %w", pipeName, err)
+		}
 		allPanes := configParamValue(def.ConfigParams, "session_all_panes", "false") == "true"
 		return MCPPipeConfig{
 			PipeName:       pipeName,
-			RuntimeFactory: orchestratorRuntimeFactory(dbPath, ctx.sessionName, allPanes, ctx.router, ctx.emitFn),
+			RuntimeFactory: orchestratorRuntimeFactory(dbPath, ctx.rootDir, ctx.sessionName, allPanes, ctx.router, ctx.emitFn),
 		}, nil
 	case DefinitionKindSingleTaskRunner:
 		if ctx.singleTaskRunnerManager == nil {

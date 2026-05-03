@@ -44,6 +44,20 @@ vi.mock("../wailsjs/go/main/App", () => ({
     UpdateSingleTaskRunnerItem: (...args: unknown[]) => appMock.UpdateSingleTaskRunnerItem(...args),
 }));
 
+vi.mock("../src/api", () => ({
+    api: {
+        AddSingleTaskRunnerItem: (...args: unknown[]) => appMock.AddSingleTaskRunnerItem(...args),
+        GetSingleTaskRunnerClearDelay: (...args: unknown[]) => appMock.GetSingleTaskRunnerClearDelay(...args),
+        GetSingleTaskRunnerStatus: (...args: unknown[]) => appMock.GetSingleTaskRunnerStatus(...args),
+        RemoveSingleTaskRunnerItem: (...args: unknown[]) => appMock.RemoveSingleTaskRunnerItem(...args),
+        ReorderSingleTaskRunnerItems: (...args: unknown[]) => appMock.ReorderSingleTaskRunnerItems(...args),
+        SetSingleTaskRunnerClearDelay: (...args: unknown[]) => appMock.SetSingleTaskRunnerClearDelay(...args),
+        StartSingleTaskRunner: (...args: unknown[]) => appMock.StartSingleTaskRunner(...args),
+        StopSingleTaskRunner: (...args: unknown[]) => appMock.StopSingleTaskRunner(...args),
+        UpdateSingleTaskRunnerItem: (...args: unknown[]) => appMock.UpdateSingleTaskRunnerItem(...args),
+    },
+}));
+
 vi.mock("../wailsjs/runtime", () => runtimeMock);
 
 vi.mock("../src/stores/tmuxStore", () => ({
@@ -486,7 +500,7 @@ describe("useSingleTaskRunner", () => {
                 return () => hookResult!.setClearDelay(2);
             },
         },
-    ])("returns success without refreshing status after $name succeeds", async ({arrangeMutation}) => {
+    ])("returns success and refreshes status after $name succeeds", async ({arrangeMutation}) => {
         const invoke = arrangeMutation();
 
         act(() => {
@@ -501,7 +515,8 @@ describe("useSingleTaskRunner", () => {
         await flushEffects();
 
         expect(result).toBe(true);
-        expect(appMock.GetSingleTaskRunnerStatus).toHaveBeenCalledTimes(1);
+        expect(appMock.GetSingleTaskRunnerStatus).toHaveBeenCalledTimes(2);
+        expect(appMock.GetSingleTaskRunnerStatus).toHaveBeenLastCalledWith("session-a:1");
         expect(getProbeText(container, "error")).toBe("");
     });
 

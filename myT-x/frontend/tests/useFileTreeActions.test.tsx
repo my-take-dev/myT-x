@@ -30,20 +30,44 @@ import {useFileTreeActions} from "../src/hooks/useFileTreeActions";
 let mockActiveSession: string | null = "session-a";
 let mockActiveSessionKey = "session-a:1";
 let probeActions: ReturnType<typeof useFileTreeActions> | null = null;
+let probeLoadFileContent = false;
+let probeAutoRefreshExternalChanges: boolean | undefined;
 
 function makeDirEntry(name: string, hasChildren: boolean = false, path: string = name) {
-    return {name, path, is_dir: true, size: 0, has_children: hasChildren};
+    return {name, path, is_dir: true, size: 0, has_children: hasChildren, has_view_target: true};
 }
 
 function makeFileEntry(name: string, path: string = name) {
-    return {name, path, is_dir: false, size: 100, has_children: false};
+    return {name, path, is_dir: false, size: 100, has_children: false, has_view_target: true};
+}
+
+function makeFileContent(path: string, content: string) {
+    return {
+        path,
+        content,
+        line_count: 1,
+        size: content.length,
+        truncated: false,
+        binary: false,
+    };
+}
+
+function createDeferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return {promise, resolve, reject};
 }
 
 function Probe() {
     probeActions = useFileTreeActions(probeStore, {
         activeSession: mockActiveSession,
         activeSessionKey: mockActiveSessionKey,
-        loadFileContent: false,
+        loadFileContent: probeLoadFileContent,
+        autoRefreshExternalChanges: probeAutoRefreshExternalChanges,
     });
     return null;
 }
@@ -65,6 +89,8 @@ describe("useFileTreeActions", () => {
         probeStore = createFileTreeStore();
         mockActiveSession = "session-a";
         mockActiveSessionKey = "session-a:1";
+        probeLoadFileContent = false;
+        probeAutoRefreshExternalChanges = undefined;
         probeActions = null;
         eventHandlers = new Map<string, (payload: unknown) => void>();
         runtimeMock.EventsOn.mockReset();
@@ -360,6 +386,53 @@ describe("useFileTreeActions", () => {
         expect(probeStore.getState().expandedPaths.has("src")).toBe(false);
     });
 
+    it("refreshes root and known ancestors from watcher invalidation events", async () => {
+        apiMock.DevPanelListDir.mockReset();
+        apiMock.DevPanelListDir.mockImplementation((_, dirPath) => {
+            if (dirPath === "src") {
+                return Promise.resolve([makeFileEntry("guide.md", "src/guide.md")]);
+            }
+            return Promise.resolve([makeDirEntry("src", true)]);
+        });
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        const invalidationHandler = eventHandlers.get("devpanel:tree-invalidated");
+        act(() => {
+            invalidationHandler?.({session_name: "session-a", paths: ["src/guide.md", "src", ""]});
+        });
+        await flushEffects();
+        await flushEffects();
+
+        expect(apiMock.DevPanelListDir).toHaveBeenCalledWith("session-a", "");
+        expect(apiMock.DevPanelListDir).toHaveBeenCalledWith("session-a", "src");
+        expect(probeStore.getState().tree[0]?.children?.[0]?.path).toBe("src/guide.md");
+    });
+
+    it("rediscovers a previously hidden directory when watcher invalidates root", async () => {
+        apiMock.DevPanelListDir
+            .mockReset()
+            .mockResolvedValueOnce([makeDirEntry("src", false)])
+            .mockResolvedValueOnce([makeDirEntry("src", false), makeDirEntry("docs", true)]);
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        const invalidationHandler = eventHandlers.get("devpanel:tree-invalidated");
+        act(() => {
+            invalidationHandler?.({session_name: "session-a", paths: ["docs/guide.md", "docs", ""]});
+        });
+        await flushEffects();
+
+        expect(apiMock.DevPanelListDir).toHaveBeenNthCalledWith(2, "session-a", "");
+        expect(probeStore.getState().tree.map((node) => node.path)).toEqual(["src", "docs"]);
+    });
+
     it("surfaces automatic refresh failures in watcherError", async () => {
         act(() => {
             root.render(<Probe/>);
@@ -482,5 +555,287 @@ describe("useFileTreeActions", () => {
         const childNode = probeStore.getState().tree[0]?.children?.[0];
         expect(childNode?.path).toBe("src/empty");
         expect(childNode?.hasChildren).toBe(false);
+    });
+
+    it("does not start watcher or subscribe to invalidation events when external auto refresh is disabled", async () => {
+        probeAutoRefreshExternalChanges = false;
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        expect(apiMock.DevPanelListDir).toHaveBeenCalledWith("session-a", "");
+        expect(apiMock.DevPanelStartWatcher).not.toHaveBeenCalled();
+        expect(runtimeMock.EventsOn).not.toHaveBeenCalled();
+    });
+
+    it("manually refreshes root, expanded directories, and selected file content", async () => {
+        probeLoadFileContent = true;
+        apiMock.DevPanelListDir.mockReset();
+        apiMock.DevPanelListDir.mockImplementation((_, dirPath) => {
+            if (dirPath === "src") {
+                return Promise.resolve([makeFileEntry("index.ts", "src/index.ts")]);
+            }
+            return Promise.resolve([makeDirEntry("src", true)]);
+        });
+        apiMock.DevPanelReadFile.mockReset();
+        apiMock.DevPanelReadFile.mockResolvedValue({
+            path: "src/index.ts",
+            content: "fresh content",
+            line_count: 1,
+            size: 13,
+            truncated: false,
+            binary: false,
+        });
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.toggleDir("src");
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.selectFile("src/index.ts");
+        });
+        await flushEffects();
+
+        apiMock.DevPanelListDir.mockClear();
+        apiMock.DevPanelReadFile.mockClear();
+
+        act(() => {
+            probeActions?.loadRoot();
+        });
+        await flushEffects();
+        await flushEffects();
+        await flushEffects();
+
+        expect(apiMock.DevPanelListDir).toHaveBeenCalledWith("session-a", "");
+        expect(apiMock.DevPanelListDir).toHaveBeenCalledWith("session-a", "src");
+        expect(apiMock.DevPanelReadFile).toHaveBeenCalledWith("session-a", "src/index.ts");
+        expect(probeStore.getState().fileContent?.content).toBe("fresh content");
+    });
+
+    it("re-fetches expanded directories by depth during manual root refresh", async () => {
+        apiMock.DevPanelListDir.mockReset();
+        apiMock.DevPanelListDir.mockImplementation((_, dirPath) => {
+            if (dirPath === "src/docs") {
+                return Promise.resolve([makeFileEntry("guide.md", "src/docs/guide.md")]);
+            }
+            if (dirPath === "src") {
+                return Promise.resolve([makeDirEntry("docs", true, "src/docs")]);
+            }
+            return Promise.resolve([makeDirEntry("src", true)]);
+        });
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.toggleDir("src");
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.toggleDir("src/docs");
+        });
+        await flushEffects();
+
+        apiMock.DevPanelListDir.mockClear();
+
+        act(() => {
+            probeActions?.loadRoot();
+        });
+        await flushEffects();
+        await flushEffects();
+        await flushEffects();
+
+        expect(apiMock.DevPanelListDir.mock.calls.map(([, dirPath]) => dirPath)).toEqual(["", "src", "src/docs"]);
+    });
+
+    it("does not reload selected content during manual root refresh when file content loading is disabled", async () => {
+        apiMock.DevPanelListDir.mockReset();
+        apiMock.DevPanelListDir.mockResolvedValue([makeFileEntry("README.md")]);
+        apiMock.DevPanelReadFile.mockReset();
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.selectFile("README.md");
+            probeActions?.loadRoot();
+        });
+        await flushEffects();
+        await flushEffects();
+
+        expect(apiMock.DevPanelReadFile).not.toHaveBeenCalled();
+    });
+
+    it("does not let manual root refresh reload a stale selected file after the user selects another file", async () => {
+        probeLoadFileContent = true;
+        apiMock.DevPanelListDir.mockReset();
+        apiMock.DevPanelListDir.mockResolvedValueOnce([makeFileEntry("a.md"), makeFileEntry("b.md")]);
+        apiMock.DevPanelReadFile.mockReset();
+        apiMock.DevPanelReadFile.mockResolvedValueOnce(makeFileContent("a.md", "old a"));
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.selectFile("a.md");
+        });
+        await flushEffects();
+        expect(probeStore.getState().fileContent?.content).toBe("old a");
+
+        const rootRefresh = createDeferred<ReturnType<typeof makeFileEntry>[]>();
+        apiMock.DevPanelListDir.mockReset();
+        apiMock.DevPanelListDir.mockReturnValueOnce(rootRefresh.promise);
+        apiMock.DevPanelReadFile.mockReset();
+        apiMock.DevPanelReadFile.mockResolvedValueOnce(makeFileContent("b.md", "new b"));
+
+        act(() => {
+            probeActions?.loadRoot();
+        });
+
+        act(() => {
+            rootRefresh.resolve([makeFileEntry("a.md"), makeFileEntry("b.md")]);
+            probeActions?.selectFile("b.md");
+        });
+        await flushEffects();
+        await flushEffects();
+
+        expect(apiMock.DevPanelReadFile).toHaveBeenCalledTimes(1);
+        expect(apiMock.DevPanelReadFile).toHaveBeenCalledWith("session-a", "b.md");
+        expect(probeStore.getState().selectedPath).toBe("b.md");
+        expect(probeStore.getState().fileContent?.content).toBe("new b");
+    });
+
+    it("keeps selected file content visible when an expanded directory refresh fails during manual root refresh", async () => {
+        probeLoadFileContent = true;
+        let srcLoadCount = 0;
+        apiMock.DevPanelListDir.mockReset();
+        apiMock.DevPanelListDir.mockImplementation((_, dirPath) => {
+            if (dirPath === "src") {
+                srcLoadCount += 1;
+                if (srcLoadCount === 1) {
+                    return Promise.resolve([makeFileEntry("index.ts", "src/index.ts")]);
+                }
+                return Promise.reject(new Error("directory refresh failed"));
+            }
+            return Promise.resolve([makeDirEntry("src", true), makeFileEntry("README.md")]);
+        });
+        apiMock.DevPanelReadFile.mockReset();
+        apiMock.DevPanelReadFile.mockResolvedValue(makeFileContent("README.md", "fresh content"));
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.toggleDir("src");
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.selectFile("README.md");
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.loadRoot();
+        });
+        await flushEffects();
+        await flushEffects();
+
+        expect(probeStore.getState().dirError).toBeNull();
+        expect(probeStore.getState().contentError).toBeNull();
+        expect(probeStore.getState().fileContent?.content).toBe("fresh content");
+    });
+
+    it("reloads a cached collapsed directory after manual root refresh", async () => {
+        apiMock.DevPanelListDir
+            .mockReset()
+            .mockResolvedValueOnce([makeDirEntry("src", true)])
+            .mockResolvedValueOnce([makeFileEntry("old.ts", "src/old.ts")])
+            .mockResolvedValueOnce([makeDirEntry("src", true)])
+            .mockResolvedValueOnce([makeFileEntry("new.ts", "src/new.ts")]);
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        act(() => {
+            probeActions?.toggleDir("src");
+        });
+        await flushEffects();
+
+        expect(probeStore.getState().tree[0]?.children?.[0]?.path).toBe("src/old.ts");
+
+        act(() => {
+            probeActions?.toggleDir("src");
+        });
+        expect(probeStore.getState().expandedPaths.has("src")).toBe(false);
+
+        act(() => {
+            probeActions?.loadRoot();
+        });
+        await flushEffects();
+        await flushEffects();
+
+        expect(probeStore.getState().tree[0]?.children).toBeUndefined();
+
+        act(() => {
+            probeActions?.toggleDir("src");
+        });
+        await flushEffects();
+
+        expect(apiMock.DevPanelListDir).toHaveBeenNthCalledWith(4, "session-a", "src");
+        expect(probeStore.getState().tree[0]?.children?.[0]?.path).toBe("src/new.ts");
+    });
+
+    it("keeps a search-selected descendant when its ancestors are not loaded during root refresh", async () => {
+        probeLoadFileContent = true;
+        apiMock.DevPanelListDir
+            .mockReset()
+            .mockResolvedValueOnce([makeDirEntry("docs", true)])
+            .mockResolvedValueOnce([makeDirEntry("docs", true)]);
+
+        act(() => {
+            root.render(<Probe/>);
+        });
+        await flushEffects();
+
+        act(() => {
+            probeStore.getState().setSelectedPath("docs/specs/deep.md");
+            probeStore.getState().setFileContent({
+                path: "docs/specs/deep.md",
+                content: "existing content",
+                line_count: 1,
+                size: 16,
+                truncated: false,
+                binary: false,
+            });
+        });
+
+        act(() => {
+            probeActions?.loadRoot();
+        });
+        await flushEffects();
+        await flushEffects();
+
+        expect(probeStore.getState().selectedPath).toBe("docs/specs/deep.md");
+        expect(probeStore.getState().fileContent?.content).toBe("existing content");
     });
 });

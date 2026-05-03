@@ -57,11 +57,25 @@ vi.mock("../src/components/viewer/views/single-task-runner/SingleTaskRunnerList"
     SingleTaskRunnerList: ({
         onNew,
         onEdit,
+        onToggleClearBefore,
         status,
     }: {
         onNew: () => void;
         onEdit: (id: string) => void;
-        status: {items: Array<{id: string}>} | null;
+        onToggleClearBefore: (item: {
+            id: string;
+            title: string;
+            message: string;
+            target_pane_id: string;
+            clear_command?: string;
+        }, clearBefore: boolean) => Promise<boolean>;
+        status: {items: Array<{
+            id: string;
+            title: string;
+            message: string;
+            target_pane_id: string;
+            clear_command?: string;
+        }>} | null;
     }) => (
         <div data-testid="single-task-runner-list">
             <span>{status === null ? "loading" : `items:${status.items.length}`}</span>
@@ -72,6 +86,18 @@ vi.mock("../src/components/viewer/views/single-task-runner/SingleTaskRunnerList"
                 onClick={() => onEdit(status?.items[0]?.id ?? "item-1")}
             >
                 Edit
+            </button>
+            <button
+                type="button"
+                data-testid="single-task-runner-toggle-clear"
+                onClick={() => {
+                    const item = status?.items[0];
+                    if (item) {
+                        void onToggleClearBefore(item, true);
+                    }
+                }}
+            >
+                Toggle Clear
             </button>
         </div>
     ),
@@ -99,6 +125,14 @@ describe("SingleTaskRunnerView", () => {
     beforeEach(() => {
         closeViewMock.mockReset();
         setErrorMock.mockReset();
+        hookState.start.mockClear();
+        hookState.stop.mockClear();
+        hookState.addItem.mockClear();
+        hookState.removeItem.mockClear();
+        hookState.updateItem.mockClear();
+        hookState.reorderItems.mockClear();
+        hookState.setClearDelay.mockClear();
+        hookState.refreshStatus.mockClear();
         hookState.status = null;
         hookState.error = "Failed to update clear delay";
         container = document.createElement("div");
@@ -183,5 +217,47 @@ describe("SingleTaskRunnerView", () => {
         });
         expect(container.querySelector("[data-testid='single-task-runner-list']")).not.toBeNull();
         expect(container.textContent).toContain("items:1");
+    });
+
+    it("maps clear_before toggles to updateItem with the existing item payload", async () => {
+        hookState.error = null;
+        hookState.status = {
+            run_status: "idle",
+            current_index: 0,
+            session_name: "session-a",
+            generation_id: "gen-1",
+            clear_delay_sec: 2,
+            last_stop_reason: "",
+            items: [{
+                id: "item-1",
+                title: "Title",
+                message: "Message",
+                target_pane_id: "%1",
+                order_index: 0,
+                status: "pending",
+                created_at: "2026-04-12T00:00:00Z",
+                clear_before: false,
+                clear_command: "/new",
+            }],
+        };
+
+        await act(async () => {
+            root.render(<SingleTaskRunnerView/>);
+        });
+
+        const toggleButton = container.querySelector("[data-testid='single-task-runner-toggle-clear']") as HTMLButtonElement;
+        await act(async () => {
+            toggleButton.click();
+            await Promise.resolve();
+        });
+
+        expect(hookState.updateItem).toHaveBeenCalledWith(
+            "item-1",
+            "Title",
+            "Message",
+            "%1",
+            true,
+            "/new",
+        );
     });
 });

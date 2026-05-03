@@ -1,3 +1,4 @@
+import {readFileSync} from "node:fs";
 import {act} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
@@ -6,6 +7,8 @@ import {useTmuxStore} from "../../../../stores/tmuxStore";
 import type {ParsedDiffLine} from "../../../../utils/diffParser";
 import {buildDiffReviewDraftKey} from "./diffReviewKeys";
 import {DiffReviewLineRow} from "./DiffReviewLineRow";
+
+const diffViewCss = readFileSync("src/styles/viewer/diff-view.css", "utf8");
 
 vi.mock("./DiffCommentForm", () => ({
     DiffCommentForm: ({
@@ -280,5 +283,62 @@ describe("DiffReviewLineRow", () => {
         });
 
         expect(useDiffReviewStore.getState().activeCommentLineKey).toBeNull();
+    });
+
+    it("applies pending comment styling alongside range selection classes", async () => {
+        const hunkLines: ParsedDiffLine[] = [{
+            type: "added",
+            content: "added line",
+            newLineNum: 14,
+        }];
+
+        await act(async () => {
+            root.render(
+                <DiffReviewLineRow
+                    filePath="src/app.ts"
+                    lineKey="hunk:n:14:0"
+                    line={hunkLines[0]!}
+                    hunkLines={hunkLines}
+                    lineIndex={0}
+                    isInDragSelection={true}
+                    isDragSelectionAnchor={true}
+                    hasPendingComment={true}
+                />,
+            );
+        });
+
+        const row = container.querySelector(".diff-review-line-wrapper");
+        expect(row?.classList.contains("added")).toBe(true);
+        expect(row?.classList.contains("diff-review-line-wrapper--range-selected")).toBe(true);
+        expect(row?.classList.contains("diff-review-line-wrapper--range-anchor")).toBe(true);
+        expect(row?.classList.contains("diff-review-line-wrapper--pending-comment")).toBe(true);
+        expect(diffViewCss).toContain(".diff-line.diff-review-line-wrapper--range-selected");
+        expect(diffViewCss).toContain(".diff-line.diff-review-line-wrapper--pending-comment");
+        expect(diffViewCss).toContain("background-image: linear-gradient");
+    });
+
+    it("applies pending comment styling to removed diff rows", async () => {
+        const hunkLines: ParsedDiffLine[] = [{
+            type: "removed",
+            content: "removed line",
+            oldLineNum: 14,
+        }];
+
+        await act(async () => {
+            root.render(
+                <DiffReviewLineRow
+                    filePath="src/app.ts"
+                    lineKey="hunk:14:n:0"
+                    line={hunkLines[0]!}
+                    hunkLines={hunkLines}
+                    lineIndex={0}
+                    hasPendingComment={true}
+                />,
+            );
+        });
+
+        const row = container.querySelector(".diff-review-line-wrapper");
+        expect(row?.classList.contains("removed")).toBe(true);
+        expect(row?.classList.contains("diff-review-line-wrapper--pending-comment")).toBe(true);
     });
 });

@@ -124,6 +124,21 @@ func (bs *BufferStore) Delete(name string) bool {
 	return true
 }
 
+// DeleteLatest removes the most recent buffer. Returns the removed buffer name
+// and true if a buffer existed.
+func (bs *BufferStore) DeleteLatest() (string, bool) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	if len(bs.buffers) == 0 {
+		return "", false
+	}
+	name := bs.buffers[0].Name
+	bs.buffers = bs.buffers[1:]
+	bs.rebuildIndex()
+	return name, true
+}
+
 // List returns a snapshot of all buffers (newest first).
 // Returned buffers are copies safe for use outside the lock.
 func (bs *BufferStore) List() []*PasteBuffer {

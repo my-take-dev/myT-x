@@ -18,7 +18,6 @@ export interface UseFileTreeResult {
     readonly error: string | null;
     readonly contentError: string | null;
     readonly dirError: string | null;
-    readonly watcherError: string | null;
     readonly toggleDir: (path: string) => void;
     readonly selectFile: (path: string) => void;
     readonly loadRoot: () => void;
@@ -46,12 +45,12 @@ export function useFileTree(): UseFileTreeResult {
     const error = useStore(store, (state) => state.error);
     const contentError = useStore(store, (state) => state.contentError);
     const dirError = useStore(store, (state) => state.dirError);
-    const watcherError = useStore(store, (state) => state.watcherError);
 
     const {loadRoot, selectFile, toggleDir} = useFileTreeActions(store, {
         activeSession,
         activeSessionKey,
         loadFileContent: true,
+        autoRefreshExternalChanges: false,
     });
 
     const flatNodes = useMemo(
@@ -71,7 +70,6 @@ export function useFileTree(): UseFileTreeResult {
         error,
         contentError,
         dirError,
-        watcherError,
         toggleDir,
         selectFile,
         loadRoot,

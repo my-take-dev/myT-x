@@ -94,6 +94,9 @@ func newTestService(t *testing.T, home, workDir string) *Service {
 			return workDir, nil
 		},
 		HomeDir: func() (string, error) { return home, nil },
+		ConfigDir: func() (string, error) {
+			return filepath.Join(home, "config"), nil
+		},
 		NowFunc: func() time.Time {
 			return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
 		},
@@ -189,6 +192,7 @@ func TestGetUsageDashboardRejectsEmptyWorkDir(t *testing.T) {
 	svc := NewService(Deps{
 		ResolveSessionWorkDir: func(string) (string, error) { return "   ", nil },
 		HomeDir:               func() (string, error) { return t.TempDir(), nil },
+		ConfigDir:             func() (string, error) { return t.TempDir(), nil },
 		NowFunc:               func() time.Time { return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC) },
 	})
 
@@ -203,7 +207,8 @@ func TestGetUsageDashboardPropagatesHomeDirFailure(t *testing.T) {
 		HomeDir: func() (string, error) {
 			return "", errors.New("synthetic home failure")
 		},
-		NowFunc: func() time.Time { return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC) },
+		ConfigDir: func() (string, error) { return t.TempDir(), nil },
+		NowFunc:   func() time.Time { return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC) },
 	})
 
 	if _, err := svc.GetUsageDashboard("session-1", "both", false); err == nil {
@@ -217,6 +222,7 @@ func TestGetUsageDashboardCodexMissingSessionsRootDoesNotWarn(t *testing.T) {
 	svc := NewService(Deps{
 		ResolveSessionWorkDir: func(string) (string, error) { return workDir, nil },
 		HomeDir:               func() (string, error) { return home, nil },
+		ConfigDir:             func() (string, error) { return filepath.Join(home, "config"), nil },
 		NowFunc:               func() time.Time { return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC) },
 	})
 
@@ -244,6 +250,7 @@ func TestGetUsageDashboardPartialClaudeMiss(t *testing.T) {
 	svc := NewService(Deps{
 		ResolveSessionWorkDir: func(string) (string, error) { return workDir, nil },
 		HomeDir:               func() (string, error) { return home, nil },
+		ConfigDir:             func() (string, error) { return filepath.Join(home, "config"), nil },
 		NowFunc:               func() time.Time { return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC) },
 	})
 	snapshot, err := svc.GetUsageDashboard("s", "both", false)
@@ -303,6 +310,19 @@ func TestNewServicePanicsOnMissingDeps(t *testing.T) {
 		}
 	}()
 	_ = NewService(Deps{})
+}
+
+func TestNewServicePanicsOnMissingConfigDirForFileRepo(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for missing ConfigDir")
+		}
+	}()
+	_ = NewService(Deps{
+		ResolveSessionWorkDir: func(string) (string, error) {
+			return t.TempDir(), nil
+		},
+	})
 }
 
 // writeClaudeFixture writes a Claude-only fake home with a custom main
@@ -657,6 +677,9 @@ func newTestServiceWithRepo(t *testing.T, home, workDir string, repo SnapshotRep
 			return workDir, nil
 		},
 		HomeDir: func() (string, error) { return home, nil },
+		ConfigDir: func() (string, error) {
+			return filepath.Join(home, "config"), nil
+		},
 		NowFunc: func() time.Time {
 			return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
 		},
@@ -708,6 +731,9 @@ func TestGetUsageDashboard_AggregationSamplesNowOnce(t *testing.T) {
 			return workDir, nil
 		},
 		HomeDir: func() (string, error) { return home, nil },
+		ConfigDir: func() (string, error) {
+			return filepath.Join(home, "config"), nil
+		},
 		NowFunc: func() time.Time {
 			nowCalls++
 			return time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
@@ -753,13 +779,15 @@ func TestGetUsageDashboard_UsesCachedSnapshotWithinTTL(t *testing.T) {
 func TestGetUsageDashboard_OldSchemaCacheReaggregates(t *testing.T) {
 	home := t.TempDir()
 	workDir := filepath.Join(home, "myT-x", "dev-myT-x")
-	cacheDir := filepath.Join(workDir, ".myT-x")
+	configDir := filepath.Join(home, "config")
+	cachePath := snapshotPathForTest(t, configDir, workDir)
+	cacheDir := filepath.Dir(cachePath)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatalf("mkdir cache dir: %v", err)
 	}
 	oldVersion := strconv.Itoa(snapshotSchemaVersion - 1)
 	oldCache := `{"schema_version":` + oldVersion + `,"work_dir":"` + escapePath(workDir) + `","saved_at":"2026-04-15T11:00:00Z","claude":{"total_sessions":99,"skills":[],"agents":[],"slash_commands":[],"skills_daily":[],"agents_daily":[],"slash_commands_daily":[],"daily_activity":[],"health":{"partial_errors":[]}},"codex":{"skills":[],"agents":[],"skills_daily":[],"agents_daily":[],"daily_activity":[],"health":{"partial_errors":[]}}}`
-	if err := os.WriteFile(filepath.Join(cacheDir, "usage-dashboard.json"), []byte(oldCache), 0o644); err != nil {
+	if err := os.WriteFile(cachePath, []byte(oldCache), 0o644); err != nil {
 		t.Fatalf("write old cache: %v", err)
 	}
 	claudeHome := filepath.Join(home, ".claude")

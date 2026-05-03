@@ -1,6 +1,7 @@
 import type {Terminal} from "@xterm/xterm";
 import {EventsOn} from "../../wailsjs/runtime/runtime";
-import {registerPaneHandler, isConnected as isWsConnected, setReconnectCallback} from "../services/paneDataStream";
+import {registerPaneHandler, isConnected as isWsConnected, registerReconnectCallback} from "../services/paneDataStream";
+import {applyPaneReplayBoundary} from "../utils/terminalOutputFilter";
 import type {TerminalEventShared} from "./useTerminalKeyHandler";
 
 export interface PaneDataParams {
@@ -55,6 +56,10 @@ export function setupPaneDataStream({term, shared, paneId}: PaneDataParams): () 
     const enqueuePendingWrite = (data: string) => {
         // I-28: Guard against writes after cleanup.
         if (shared.disposed) return;
+
+        if (data.length === 0) {
+            return;
+        }
 
         if (shared.pageHidden) {
             // M-06: Skip RAF scheduling when page/tab is hidden, but preserve
@@ -113,18 +118,9 @@ export function setupPaneDataStream({term, shared, paneId}: PaneDataParams): () 
     // Using 'let' (not 'const') allows replacement with a fresh instance on reconnect.
     let paneTextDecoder = new TextDecoder("utf-8");
 
-    // I-18 / I-20: Register a callback so that when paneDataStream (re)connects,
-    // we flush any buffered bytes from the old stream-mode decoder and create a
-    // fresh one, and reset wsActive so IPC suppression is re-evaluated cleanly.
-    //
-    // DESIGN CONSTRAINT: setReconnectCallback holds a single global callback
-    // (last-write-wins). In a multi-pane environment only the last registered
-    // pane's callback is active. This is acceptable because paneDataStream
-    // reconnects affect all panes simultaneously, and each pane's WS handler
-    // independently resets wsActive on receiving new data. If per-pane
-    // reconnect logic is ever needed, migrate to a registry pattern similar
-    // to registerPaneHandler.
-    setReconnectCallback(() => {
+    // I-18 / I-20: Register a pane-scoped callback so WebSocket reconnects
+    // reset every mounted pane's connection-scoped decoder and fallback state.
+    const unregisterReconnectCallback = registerReconnectCallback(() => {
         // Flush remaining bytes from the previous decoder session. This causes the
         // decoder to emit any incomplete sequence as U+FFFD and then clear its buffer,
         // preventing stale bytes from corrupting the start of the new stream.
@@ -140,14 +136,16 @@ export function setupPaneDataStream({term, shared, paneId}: PaneDataParams): () 
         }
         paneTextDecoder = new TextDecoder("utf-8");
         wsActive = false; // I-20: re-enable IPC fallback until WS proves delivery
-    });
+    }, `pane:${paneId}`);
 
     const unregisterPane = registerPaneHandler(paneId, (rawData: Uint8Array) => {
         wsActive = true;
         // stream: true preserves incomplete multi-byte sequences across chunk boundaries,
         // preventing U+FFFD replacement characters when UTF-8 is split across WebSocket frames.
         const text = paneTextDecoder.decode(rawData, {stream: true});
-        enqueuePendingWrite(text);
+        if (text.length > 0) {
+            enqueuePendingWrite(applyPaneReplayBoundary(paneId, text));
+        }
     });
 
     // Wails IPC fallback: always registered so that if WebSocket never
@@ -170,7 +168,10 @@ export function setupPaneDataStream({term, shared, paneId}: PaneDataParams): () 
             wsActive = false;
         }
         if (typeof data === "string") {
-            enqueuePendingWrite(data);
+            if (data.length === 0) {
+                return;
+            }
+            enqueuePendingWrite(applyPaneReplayBoundary(paneId, data));
         } else {
             console.warn(`[terminal] IPC received non-string data for pane=${paneId}, ignoring`, typeof data);
         }
@@ -196,9 +197,9 @@ export function setupPaneDataStream({term, shared, paneId}: PaneDataParams): () 
             }
         }
 
-        // Clear the reconnect callback so that paneDataStream does not call into
-        // a stale closure after this effect cleans up. (I-18 / I-20 cleanup)
-        setReconnectCallback(null);
+        // Remove only this pane's reconnect callback so other panes keep their
+        // connection-scoped reset handlers alive. (I-18 / I-20 cleanup)
+        unregisterReconnectCallback();
 
         // Unsubscribe pane from WebSocket stream and remove handler.
         unregisterPane();

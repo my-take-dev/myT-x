@@ -49,7 +49,7 @@ type sessionScopedLifecycleParticipant struct {
 	rename  func(oldName, newName string) error
 }
 
-const expectedSessionScopedLifecycleParticipantCount = 4
+const expectedSessionScopedLifecycleParticipantCount = 5
 
 func (a *App) emitSessionCleanupDegraded(component, sessionName string, err error) {
 	if err == nil {
@@ -149,6 +149,13 @@ func (a *App) sessionScopedLifecycleParticipants() []sessionScopedLifecycleParti
 			name:    "mcp",
 			cleanup: a.mcpManager.CleanupSession,
 			rename:  a.mcpManager.RenameSession,
+		})
+	}
+	if a.sessionMemoService != nil {
+		participants = append(participants, sessionScopedLifecycleParticipant{
+			name:    "session memo",
+			cleanup: a.sessionMemoService.CleanupSession,
+			rename:  a.sessionMemoService.RenameSession,
 		})
 	}
 	return participants
@@ -406,6 +413,7 @@ func (a *App) startup(ctx context.Context) {
 		EmitFn:                  a.emitBackendEvent,
 		Router:                  a.router,
 		ResolveWorkDir:          a.sessionService.ResolveSessionWorkDir,
+		ConfigDir:               appConfigDirProvider(a),
 		SingleTaskRunnerManager: a.singleTaskRunnerManager,
 	})
 

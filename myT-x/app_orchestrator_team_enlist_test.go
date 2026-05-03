@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,7 +14,7 @@ import (
 
 func TestGetSessionEnlistmentContextAggregatesSavedTeamsAndRegisteredPanes(t *testing.T) {
 	app := newOrchestratorTaskTestApp(t)
-	db, tmpDir := createOrchestratorTaskTestDB(t)
+	db, tmpDir := createOrchestratorTaskTestDB(t, app)
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
@@ -87,6 +89,84 @@ func TestGetSessionEnlistmentContextAggregatesSavedTeamsAndRegisteredPanes(t *te
 	}
 }
 
+func TestGetSessionEnlistmentContextTreatsMissingDBAsNoRegisteredPanes(t *testing.T) {
+	app := newOrchestratorTaskTestApp(t)
+	createOrchestratorTestSession(t, app, "alpha", t.TempDir())
+
+	got, err := app.GetSessionEnlistmentContext("alpha")
+	if err != nil {
+		t.Fatalf("GetSessionEnlistmentContext() error = %v, want nil", err)
+	}
+	if len(got.RegisteredPaneIDs) != 0 {
+		t.Fatalf("RegisteredPaneIDs = %#v, want empty", got.RegisteredPaneIDs)
+	}
+}
+
+func TestEnlistPaneInitializesMissingDBBeforeSavingMember(t *testing.T) {
+	origEmit := runtimeEventsEmitFn
+	t.Cleanup(func() {
+		runtimeEventsEmitFn = origEmit
+	})
+	runtimeEventsEmitFn = func(context.Context, string, ...any) {}
+
+	app := newOrchestratorTaskTestApp(t)
+	app.setRuntimeContext(context.Background())
+	app.router = &tmux.CommandRouter{}
+
+	projectRoot := t.TempDir()
+	sessionSnapshot := createOrchestratorTestSession(t, app, "alpha", projectRoot)
+	paneID := sessionSnapshot.Windows[0].Panes[0].ID
+
+	mocks := withOrchestratorStartMocks(t, app)
+	mocks.sendKeysPaste = func(string, string) error {
+		return nil
+	}
+
+	if err := app.SaveOrchestratorTeam(OrchestratorTeamDefinition{
+		ID:              "team-alpha",
+		Name:            "Alpha",
+		StorageLocation: orchestrator.StorageLocationGlobal,
+		Members:         []OrchestratorTeamMember{},
+	}, "alpha"); err != nil {
+		t.Fatalf("SaveOrchestratorTeam() error = %v", err)
+	}
+
+	result, err := app.EnlistPane(EnlistPaneRequest{
+		SessionName:     "alpha",
+		PaneID:          paneID,
+		TeamID:          "team-alpha",
+		StorageLocation: orchestrator.StorageLocationGlobal,
+		PaneState:       orchestrator.PaneStateCLIRunning,
+		Member: OrchestratorTeamMember{
+			PaneTitle: "Worker",
+			Role:      "QA engineer",
+			Command:   "claude",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EnlistPane() error = %v", err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("Warnings = %#v, want none", result.Warnings)
+	}
+
+	agents, err := app.ListOrchestratorAgents("alpha")
+	if err != nil {
+		t.Fatalf("ListOrchestratorAgents() error = %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("len(agents) = %d, want 1", len(agents))
+	}
+	if agents[0].Name != "worker" || agents[0].PaneID != paneID {
+		t.Fatalf("agents = %#v, want worker on %s", agents, paneID)
+	}
+
+	legacyDBPath := filepath.Join(projectRoot, ".myT-x", "orchestrator.db")
+	if _, statErr := os.Stat(legacyDBPath); !os.IsNotExist(statErr) {
+		t.Fatalf("legacy db stat error = %v, want not exist", statErr)
+	}
+}
+
 func TestEnlistPaneSavesMemberRegistersAgentAndBootstrapsPane(t *testing.T) {
 	origEmit := runtimeEventsEmitFn
 	t.Cleanup(func() {
@@ -106,7 +186,7 @@ func TestEnlistPaneSavesMemberRegistersAgentAndBootstrapsPane(t *testing.T) {
 	app.setRuntimeContext(context.Background())
 	app.router = &tmux.CommandRouter{}
 
-	db, tmpDir := createOrchestratorTaskTestDB(t)
+	db, tmpDir := createOrchestratorTaskTestDB(t, app)
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
@@ -230,7 +310,7 @@ func TestEnlistPaneRejectsMissingPaneBeforeSavingMember(t *testing.T) {
 	app.setRuntimeContext(context.Background())
 	app.router = &tmux.CommandRouter{}
 
-	db, tmpDir := createOrchestratorTaskTestDB(t)
+	db, tmpDir := createOrchestratorTaskTestDB(t, app)
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
@@ -294,7 +374,7 @@ func TestEnlistPaneRollsBackWhenProvisionalRegistrationFails(t *testing.T) {
 	app.setRuntimeContext(context.Background())
 	app.router = &tmux.CommandRouter{}
 
-	db, tmpDir := createOrchestratorTaskTestDB(t)
+	db, tmpDir := createOrchestratorTaskTestDB(t, app)
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
@@ -380,7 +460,7 @@ func TestEnlistPaneRollsBackWhenBootstrapFails(t *testing.T) {
 	app.setRuntimeContext(context.Background())
 	app.router = &tmux.CommandRouter{}
 
-	db, tmpDir := createOrchestratorTaskTestDB(t)
+	db, tmpDir := createOrchestratorTaskTestDB(t, app)
 	t.Cleanup(func() {
 		_ = db.Close()
 	})

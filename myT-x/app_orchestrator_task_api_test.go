@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"myT-x/internal/config"
+	"myT-x/internal/orchestratorstorage"
 	"myT-x/internal/tmux"
 
 	_ "modernc.org/sqlite"
@@ -25,16 +27,20 @@ func newOrchestratorTaskTestApp(t *testing.T) *App {
 
 // createOrchestratorTaskTestDB creates a temporary SQLite database with orchestrator tables.
 // Returns the database path.
-func createOrchestratorTaskTestDB(t *testing.T) (*sql.DB, string) {
+func createOrchestratorTaskTestDB(t *testing.T, app *App) (*sql.DB, string) {
 	t.Helper()
 
-	tmpDir := t.TempDir()
-	dbDir := filepath.Join(tmpDir, ".myT-x")
+	projectRoot := t.TempDir()
+	configDir := filepath.Dir(app.configState.ConfigPath())
+	dbPath, err := orchestratorstorage.DBPath(configDir, projectRoot)
+	if err != nil {
+		t.Fatalf("orchestratorstorage.DBPath() error = %v", err)
+	}
+	dbDir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
-	dbPath := filepath.Join(dbDir, "orchestrator.db")
 	dsn := dbPath + "?mode=rwc&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 
 	db, err := sql.Open("sqlite", dsn)
@@ -96,7 +102,7 @@ func createOrchestratorTaskTestDB(t *testing.T) (*sql.DB, string) {
 		}
 	}
 
-	return db, tmpDir
+	return db, projectRoot
 }
 
 // createOrchestratorTestSession creates a test session with a root path pointing to tmpDir.
@@ -164,45 +170,51 @@ func TestOrchestratorTaskDetailFieldCount(t *testing.T) {
 
 func TestOpenOrchestratorDB(t *testing.T) {
 	tests := []struct {
-		name        string
-		setupDB     bool
-		sessionName string
-		wantErr     bool
-		errMsg      string
+		name         string
+		setupDB      bool
+		setupSession bool
+		sessionName  string
+		wantErr      bool
+		errMsg       string
 	}{
 		{
-			name:        "valid session with db file",
-			setupDB:     true,
-			sessionName: "valid-session",
-			wantErr:     false,
+			name:         "valid session with db file",
+			setupDB:      true,
+			setupSession: true,
+			sessionName:  "valid-session",
+			wantErr:      false,
 		},
 		{
-			name:        "missing session",
-			setupDB:     false,
-			sessionName: "missing-session",
-			wantErr:     true,
-			errMsg:      "not found",
+			name:         "missing session",
+			setupDB:      false,
+			setupSession: false,
+			sessionName:  "missing-session",
+			wantErr:      true,
+			errMsg:       "not found",
 		},
 		{
-			name:        "empty session name",
-			setupDB:     true,
-			sessionName: "",
-			wantErr:     true,
-			errMsg:      "session name is required",
+			name:         "empty session name",
+			setupDB:      true,
+			setupSession: false,
+			sessionName:  "",
+			wantErr:      true,
+			errMsg:       "session name is required",
 		},
 		{
-			name:        "whitespace session name",
-			setupDB:     true,
-			sessionName: "   ",
-			wantErr:     true,
-			errMsg:      "session name is required",
+			name:         "whitespace session name",
+			setupDB:      true,
+			setupSession: false,
+			sessionName:  "   ",
+			wantErr:      true,
+			errMsg:       "session name is required",
 		},
 		{
-			name:        "session exists but db file missing",
-			setupDB:     false,
-			sessionName: "no-db-session",
-			wantErr:     true,
-			errMsg:      "orchestrator db not found",
+			name:         "session exists but db file missing",
+			setupDB:      false,
+			setupSession: true,
+			sessionName:  "no-db-session",
+			wantErr:      true,
+			errMsg:       "orchestrator db is not initialized",
 		},
 	}
 
@@ -213,23 +225,16 @@ func TestOpenOrchestratorDB(t *testing.T) {
 			var tmpDir string
 			if tt.setupDB || !tt.wantErr {
 				// Create DB for this test case
-				db, dir := createOrchestratorTaskTestDB(t)
+				db, dir := createOrchestratorTaskTestDB(t, app)
 				tmpDir = dir
 				db.Close()
-			} else if tt.sessionName != "" && tt.sessionName != "   " {
+			} else if tt.setupSession {
 				// Create session without DB
 				tmpDir = t.TempDir()
 			}
 
-			// Create session for non-empty session names
-			if tt.sessionName != "" && strings.TrimSpace(tt.sessionName) != "" {
-				if tt.setupDB {
-					// Use tmpDir where DB was created
-					createOrchestratorTestSession(t, app, tt.sessionName, tmpDir)
-				} else {
-					// Use separate tmpDir without DB
-					createOrchestratorTestSession(t, app, tt.sessionName, tmpDir)
-				}
+			if tt.setupSession {
+				createOrchestratorTestSession(t, app, tt.sessionName, tmpDir)
 			}
 
 			db, cleanup, err := app.openOrchestratorDB(tt.sessionName)
@@ -241,6 +246,9 @@ func TestOpenOrchestratorDB(t *testing.T) {
 			if tt.wantErr {
 				if err != nil && tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 					t.Fatalf("openOrchestratorDB() error = %v, want to contain %q", err, tt.errMsg)
+				}
+				if tt.errMsg == "orchestrator db is not initialized" && !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("openOrchestratorDB() error = %v, want to wrap os.ErrNotExist", err)
 				}
 				return
 			}
@@ -261,6 +269,60 @@ func TestOpenOrchestratorDB(t *testing.T) {
 				t.Fatal("cleanup function is nil")
 			}
 		})
+	}
+}
+
+func TestResolveOrchestratorDBPathPropagatesUnexpectedStatError(t *testing.T) {
+	app := newOrchestratorTaskTestApp(t)
+	createOrchestratorTestSession(t, app, "stat-error-session", t.TempDir())
+
+	statErr := errors.New("stat permission denied")
+	originalStat := orchestratorDBStat
+	orchestratorDBStat = func(string) (os.FileInfo, error) {
+		return nil, statErr
+	}
+	t.Cleanup(func() {
+		orchestratorDBStat = originalStat
+	})
+
+	_, err := app.resolveOrchestratorDBPath("stat-error-session")
+	if err == nil {
+		t.Fatal("resolveOrchestratorDBPath() expected error")
+	}
+	if errors.Is(err, errOrchestratorDBNotReady) {
+		t.Fatalf("resolveOrchestratorDBPath() error = %v, must not be db-not-ready", err)
+	}
+	if !errors.Is(err, statErr) {
+		t.Fatalf("resolveOrchestratorDBPath() error = %v, want stat error", err)
+	}
+	if !strings.Contains(err.Error(), "stat orchestrator db") {
+		t.Fatalf("resolveOrchestratorDBPath() error = %v, want stat context", err)
+	}
+}
+
+func TestListOrchestratorTasksReturnsEmptyWhenDBIsNotInitialized(t *testing.T) {
+	app := newOrchestratorTaskTestApp(t)
+	createOrchestratorTestSession(t, app, "no-db-session", t.TempDir())
+
+	tasks, err := app.ListOrchestratorTasks("no-db-session")
+	if err != nil {
+		t.Fatalf("ListOrchestratorTasks() error = %v, want nil", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("ListOrchestratorTasks() len = %d, want 0", len(tasks))
+	}
+}
+
+func TestGetOrchestratorTaskDetailReturnsNilWhenDBIsNotInitialized(t *testing.T) {
+	app := newOrchestratorTaskTestApp(t)
+	createOrchestratorTestSession(t, app, "no-db-session", t.TempDir())
+
+	detail, err := app.GetOrchestratorTaskDetail("no-db-session", "task-1")
+	if err != nil {
+		t.Fatalf("GetOrchestratorTaskDetail() error = %v, want nil", err)
+	}
+	if detail != nil {
+		t.Fatalf("GetOrchestratorTaskDetail() detail = %#v, want nil", detail)
 	}
 }
 
@@ -582,7 +644,7 @@ func TestListOrchestratorTasks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			app := newOrchestratorTaskTestApp(t)
 
-			db, tmpDir := createOrchestratorTaskTestDB(t)
+			db, tmpDir := createOrchestratorTaskTestDB(t, app)
 			defer db.Close()
 
 			if !tt.wantErr {
@@ -804,7 +866,7 @@ func TestListOrchestratorAgents(t *testing.T) {
 			app := newOrchestratorTaskTestApp(t)
 
 			// Setup database and session
-			db, tmpDir := createOrchestratorTaskTestDB(t)
+			db, tmpDir := createOrchestratorTaskTestDB(t, app)
 			defer db.Close()
 
 			// Only create session if not an error test case
@@ -849,9 +911,22 @@ func TestListOrchestratorAgents(t *testing.T) {
 	}
 }
 
+func TestListOrchestratorAgentsReturnsEmptyWhenDBIsNotInitialized(t *testing.T) {
+	app := newOrchestratorTaskTestApp(t)
+	createOrchestratorTestSession(t, app, "no-db-session", t.TempDir())
+
+	agents, err := app.ListOrchestratorAgents("no-db-session")
+	if err != nil {
+		t.Fatalf("ListOrchestratorAgents() error = %v, want nil", err)
+	}
+	if len(agents) != 0 {
+		t.Fatalf("ListOrchestratorAgents() len = %d, want 0", len(agents))
+	}
+}
+
 func TestOpenOrchestratorDBCleanup(t *testing.T) {
 	app := newOrchestratorTaskTestApp(t)
-	db, tmpDir := createOrchestratorTaskTestDB(t)
+	db, tmpDir := createOrchestratorTaskTestDB(t, app)
 	db.Close()
 
 	createOrchestratorTestSession(t, app, "cleanup-test", tmpDir)
@@ -878,7 +953,7 @@ func TestOpenOrchestratorDBCleanup(t *testing.T) {
 
 func TestListOrchestratorTasksColumnsCorrect(t *testing.T) {
 	app := newOrchestratorTaskTestApp(t)
-	db, tmpDir := createOrchestratorTaskTestDB(t)
+	db, tmpDir := createOrchestratorTaskTestDB(t, app)
 
 	createOrchestratorTestSession(t, app, "column-test", tmpDir)
 
@@ -1198,7 +1273,7 @@ func TestGetOrchestratorTaskDetail(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			app := newOrchestratorTaskTestApp(t)
-			db, tmpDir := createOrchestratorTaskTestDB(t)
+			db, tmpDir := createOrchestratorTaskTestDB(t, app)
 			defer db.Close()
 
 			createOrchestratorTestSession(t, app, "detail-test-session", tmpDir)
@@ -1230,7 +1305,7 @@ func TestGetOrchestratorTaskDetail(t *testing.T) {
 
 func TestListOrchestratorAgentsColumnsCorrect(t *testing.T) {
 	app := newOrchestratorTaskTestApp(t)
-	db, tmpDir := createOrchestratorTaskTestDB(t)
+	db, tmpDir := createOrchestratorTaskTestDB(t, app)
 
 	createOrchestratorTestSession(t, app, "agent-column-test", tmpDir)
 

@@ -26,7 +26,7 @@ export function TaskSchedulerAlert({readiness, onBack, onRegisterMember}: TaskSc
                         {tr(
                             "viewer.taskScheduler.alert.noDb",
                             "orchestrator.db が見つかりません。エージェントチームを起動するか、ペインにメンバーを登録してください。",
-                            "orchestrator.db not found. Start an agent team or register members to panes.",
+                            "Orchestrator runtime DB is not initialized. Start an agent team or register members to panes.",
                         )}
                     </p>
                 )}
@@ -66,7 +66,7 @@ export function TaskSchedulerAlert({readiness, onBack, onRegisterMember}: TaskSc
                         {tr(
                             "viewer.taskScheduler.alert.unknown",
                             "準備状態を確認できません。セッションと orchestrator.db を再確認してください。",
-                            "Unable to verify readiness. Recheck the session and orchestrator.db.",
+                            "Unable to verify readiness. Recheck the session and orchestrator runtime DB.",
                         )}
                     </p>
                 )}

@@ -1,8 +1,8 @@
-import {useCallback, useEffect, useMemo, useState} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {api} from "../../../../api";
 import {useI18n} from "../../../../i18n";
 import {toErrorMessage} from "../../../../utils/errorUtils";
-import {isEditableStatus, type QueueStatus} from "./useSingleTaskRunner";
+import {isEditableStatus, type QueueItem, type QueueStatus} from "./useSingleTaskRunner";
 
 interface SingleTaskRunnerListProps {
     readonly defaultClearDelay: number | null;
@@ -13,6 +13,7 @@ interface SingleTaskRunnerListProps {
     onStart: () => Promise<boolean>;
     onStop: () => Promise<void>;
     onSetClearDelay: (delaySec: number) => Promise<boolean>;
+    onToggleClearBefore: (item: QueueItem, clearBefore: boolean) => Promise<boolean>;
     onError: (message: string | null) => void;
 }
 
@@ -41,6 +42,7 @@ export function SingleTaskRunnerList({
     onStart,
     onStop,
     onSetClearDelay,
+    onToggleClearBefore,
     onError,
 }: SingleTaskRunnerListProps) {
     const {language, t} = useI18n();
@@ -58,6 +60,13 @@ export function SingleTaskRunnerList({
     const currentClearDelay = status?.clear_delay_sec ?? defaultClearDelay;
     const [clearDelayInput, setClearDelayInput] = useState(currentClearDelay === null ? "" : String(currentClearDelay));
     const [clearDelayBounds, setClearDelayBounds] = useState(fallbackClearDelayBounds);
+    const [clearToggleInFlightIds, setClearToggleInFlightIds] = useState<ReadonlySet<string>>(() => new Set());
+    const clearToggleInFlightIdsRef = useRef<ReadonlySet<string>>(new Set());
+    const isMountedRef = useRef(true);
+
+    useEffect(() => () => {
+        isMountedRef.current = false;
+    }, []);
 
     useEffect(() => {
         setClearDelayInput(currentClearDelay === null ? "" : String(currentClearDelay));
@@ -100,6 +109,30 @@ export function SingleTaskRunnerList({
             setClearDelayInput(currentClearDelay === null ? "" : String(currentClearDelay));
         }
     }, [clearDelayBounds.max, clearDelayBounds.min, clearDelayInput, currentClearDelay, onError, onSetClearDelay]);
+
+    const handleToggleClearBefore = useCallback(async (item: QueueItem, clearBefore: boolean) => {
+        if (clearToggleInFlightIdsRef.current.has(item.id)) {
+            return;
+        }
+        const nextInFlightIds = new Set(clearToggleInFlightIdsRef.current);
+        nextInFlightIds.add(item.id);
+        clearToggleInFlightIdsRef.current = nextInFlightIds;
+        setClearToggleInFlightIds(nextInFlightIds);
+
+        try {
+            await onToggleClearBefore(item, clearBefore);
+        } catch (err: unknown) {
+            console.warn("[single-task-runner] failed to toggle clear_before", err);
+            onError(toErrorMessage(err, "Failed to update clear setting"));
+        } finally {
+            const updatedInFlightIds = new Set(clearToggleInFlightIdsRef.current);
+            updatedInFlightIds.delete(item.id);
+            clearToggleInFlightIdsRef.current = updatedInFlightIds;
+            if (isMountedRef.current) {
+                setClearToggleInFlightIds(updatedInFlightIds);
+            }
+        }
+    }, [onError, onToggleClearBefore]);
 
     return (
         <div className="single-task-runner-list">
@@ -173,55 +206,78 @@ export function SingleTaskRunnerList({
                     </p>
                 </div>
             ) : (
-                items.map((item) => (
-                    <div
-                        key={item.id}
-                        className={[
-                            "single-task-runner-card",
-                            item.status === "failed" ? "single-task-runner-card-failed" : "",
-                            item.status === "active" ? "single-task-runner-card-active" : "",
-                        ].filter(Boolean).join(" ")}
-                    >
-                        <div className="single-task-runner-card-header">
-                            <span className="single-task-runner-card-status">
-                                {STATUS_ICONS[item.status] ?? "?"}
-                            </span>
-                            <span className="single-task-runner-card-title">{item.title}</span>
-                            {isEditableStatus(item.status) && (
-                                <div className="single-task-runner-card-actions">
-                                    <button
-                                        type="button"
-                                        className="single-task-runner-edit-btn"
-                                        onClick={() => onEdit(item.id)}
-                                    >
-                                        {tr("viewer.singleTaskRunner.edit", "編集", "Edit")}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="single-task-runner-delete-btn"
-                                        onClick={() => void onRemove(item.id)}
-                                    >
-                                        {tr("viewer.singleTaskRunner.remove", "削除", "Remove")}
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                        <div className="single-task-runner-card-meta">
-                            <span>{item.target_pane_id}</span>
-                            {item.clear_before && (
-                                <span className="single-task-runner-card-clear">
-                                    Clear{item.clear_command && item.clear_command !== "/new" ? `: ${item.clear_command}` : ""}
+                items.map((item) => {
+                    const isEditable = isEditableStatus(item.status);
+                    const isClearToggleInFlight = clearToggleInFlightIds.has(item.id);
+                    const clearLabel = item.clear_before
+                        ? tr("viewer.singleTaskRunner.clearEnabled", "Clear 有効", "Clear enabled")
+                        : tr("viewer.singleTaskRunner.clearDisabled", "Clear 無効", "Clear disabled");
+                    return (
+                        <div
+                            key={item.id}
+                            className={[
+                                "single-task-runner-card",
+                                item.status === "failed" ? "single-task-runner-card-failed" : "",
+                                item.status === "active" ? "single-task-runner-card-active" : "",
+                            ].filter(Boolean).join(" ")}
+                        >
+                            <div className="single-task-runner-card-header">
+                                <span className="single-task-runner-card-status">
+                                    {STATUS_ICONS[item.status] ?? "?"}
                                 </span>
-                            )}
-                            {item.error_message && (
-                                <span className="single-task-runner-card-error">{item.error_message}</span>
+                                <span className="single-task-runner-card-title">{item.title}</span>
+                                {isEditable && (
+                                    <div className="single-task-runner-card-actions">
+                                        <button
+                                            type="button"
+                                            className="single-task-runner-edit-btn"
+                                            onClick={() => onEdit(item.id)}
+                                        >
+                                            {tr("viewer.singleTaskRunner.edit", "編集", "Edit")}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="single-task-runner-delete-btn"
+                                            onClick={() => void onRemove(item.id)}
+                                        >
+                                            {tr("viewer.singleTaskRunner.remove", "削除", "Remove")}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="single-task-runner-card-meta">
+                                <span>{item.target_pane_id}</span>
+                                <label className="single-task-runner-card-clear-toggle">
+                                    <input
+                                        type="checkbox"
+                                        role="switch"
+                                        checked={item.clear_before}
+                                        disabled={!isEditable || isClearToggleInFlight}
+                                        onChange={(event) => {
+                                            void handleToggleClearBefore(item, event.target.checked);
+                                        }}
+                                        aria-checked={item.clear_before}
+                                        aria-label={`${item.title}: ${clearLabel}`}
+                                    />
+                                    <span>
+                                        {isClearToggleInFlight
+                                            ? tr("viewer.singleTaskRunner.clearUpdating", "Updating...", "Updating...")
+                                            : clearLabel}
+                                        {item.clear_before && item.clear_command && item.clear_command !== "/new"
+                                            ? `: ${item.clear_command}`
+                                            : ""}
+                                    </span>
+                                </label>
+                                {item.error_message && (
+                                    <span className="single-task-runner-card-error">{item.error_message}</span>
+                                )}
+                            </div>
+                            {item.result_message && (
+                                <div className="single-task-runner-card-result">{item.result_message}</div>
                             )}
                         </div>
-                        {item.result_message && (
-                            <div className="single-task-runner-card-result">{item.result_message}</div>
-                        )}
-                    </div>
-                ))
+                    );
+                })
             )}
         </div>
     );

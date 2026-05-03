@@ -167,6 +167,26 @@ func (r *CommandRouter) handlePasteBuffer(req ipc.TmuxRequest) ipc.TmuxResponse 
 	return okResp("")
 }
 
+// handleDeleteBuffer deletes a named paste buffer, or the latest buffer when
+// -b is omitted.
+func (r *CommandRouter) handleDeleteBuffer(req ipc.TmuxRequest) ipc.TmuxResponse {
+	bufferName := mustString(req.Flags["-b"])
+	if bufferName != "" {
+		if !r.buffers.Delete(bufferName) {
+			return errResp(fmt.Errorf("buffer not found: %s", bufferName))
+		}
+		slog.Debug("[DEBUG-BUFFER] delete-buffer", "buffer", bufferName)
+		return okResp("")
+	}
+
+	deletedName, ok := r.buffers.DeleteLatest()
+	if !ok {
+		return errResp(fmt.Errorf("no buffer found"))
+	}
+	slog.Debug("[DEBUG-BUFFER] delete-buffer", "buffer", deletedName)
+	return okResp("")
+}
+
 // handleLoadBuffer reads a file and stores its contents in a paste buffer.
 // Flags: -b (buffer name), -w (no-op: clipboard), -t (no-op: target client).
 func (r *CommandRouter) handleLoadBuffer(req ipc.TmuxRequest) ipc.TmuxResponse {

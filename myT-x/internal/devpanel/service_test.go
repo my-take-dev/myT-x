@@ -85,6 +85,15 @@ func newTestServiceWithResolver(sessionName, rootPath string) (*Service, *testSe
 	return svc, resolver
 }
 
+func findEntryByName(entries []FileEntry, name string) *FileEntry {
+	for i := range entries {
+		if entries[i].Name == name {
+			return &entries[i]
+		}
+	}
+	return nil
+}
+
 type recordedEvent struct {
 	name    string
 	payload any
@@ -295,6 +304,15 @@ func TestListDir(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmpDir, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "ignored-only", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "ignored-only", "node_modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(tmpDir, "empty"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -311,6 +329,15 @@ func TestListDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(tmpDir, "src", "app.go"), []byte("package src"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "docs", "guide.md"), []byte("# guide"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "ignored-only", ".git", "README.md"), []byte("# hidden"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "ignored-only", "node_modules", "openapi.yaml"), []byte("openapi: 3.0.0"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -339,6 +366,40 @@ func TestListDir(t *testing.T) {
 		}
 		if entryByName["empty"].HasChildren {
 			t.Fatal("expected empty directory to report no children")
+		}
+	})
+
+	t.Run("view target metadata matches supported descendants", func(t *testing.T) {
+		entries, err := svc.ListDir("test-session", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		entryByName := make(map[string]FileEntry, len(entries))
+		for _, entry := range entries {
+			entryByName[entry.Name] = entry
+		}
+
+		tests := []struct {
+			name string
+			want bool
+		}{
+			{name: "README.md", want: true},
+			{name: "main.go", want: false},
+			{name: "docs", want: true},
+			{name: "src", want: false},
+			{name: "ignored-only", want: false},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				entry, ok := entryByName[tt.name]
+				if !ok {
+					t.Fatalf("missing entry %q", tt.name)
+				}
+				if entry.HasViewTarget != tt.want {
+					t.Fatalf("%s HasViewTarget = %v, want %v", tt.name, entry.HasViewTarget, tt.want)
+				}
+			})
 		}
 	})
 
@@ -454,6 +515,67 @@ func TestListDirCacheInvalidation(t *testing.T) {
 	}
 }
 
+func TestListDirCacheInvalidationRefreshesAncestorViewTargets(t *testing.T) {
+	tmpDir := t.TempDir()
+	docsDir := filepath.Join(tmpDir, "docs", "nested")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test-session", tmpDir)
+	entries, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("initial ListDir failed: %v", err)
+	}
+	if docs := findEntryByName(entries, "docs"); docs == nil || docs.HasViewTarget {
+		t.Fatalf("initial docs HasViewTarget = %v, want false", docs != nil && docs.HasViewTarget)
+	}
+
+	if _, err := svc.CreateFile("test-session", "docs/nested/guide.md"); err != nil {
+		t.Fatalf("CreateFile failed: %v", err)
+	}
+
+	entriesAfterCreate, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("ListDir after CreateFile failed: %v", err)
+	}
+	if docs := findEntryByName(entriesAfterCreate, "docs"); docs == nil || !docs.HasViewTarget {
+		t.Fatalf("docs HasViewTarget after create = %v, want true", docs != nil && docs.HasViewTarget)
+	}
+}
+
+func TestListDirCacheInvalidationClearsAncestorViewTargets(t *testing.T) {
+	tmpDir := t.TempDir()
+	docsDir := filepath.Join(tmpDir, "docs", "nested")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(docsDir, "guide.md"), []byte("# guide"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService("test-session", tmpDir)
+	entries, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("initial ListDir failed: %v", err)
+	}
+	if docs := findEntryByName(entries, "docs"); docs == nil || !docs.HasViewTarget {
+		t.Fatalf("initial docs HasViewTarget = %v, want true", docs != nil && docs.HasViewTarget)
+	}
+
+	if err := svc.DeleteFile("test-session", "docs/nested/guide.md"); err != nil {
+		t.Fatalf("DeleteFile failed: %v", err)
+	}
+
+	entriesAfterDelete, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("ListDir after DeleteFile failed: %v", err)
+	}
+	if docs := findEntryByName(entriesAfterDelete, "docs"); docs == nil || docs.HasViewTarget {
+		t.Fatalf("docs HasViewTarget after delete = %v, want false", docs != nil && docs.HasViewTarget)
+	}
+}
+
 func TestListDirLargeDirectoryUsesLazyHasChildrenHints(t *testing.T) {
 	tmpDir := t.TempDir()
 	for i := range maxDirHasChildrenProbes + 1 {
@@ -472,8 +594,15 @@ func TestListDirLargeDirectoryUsesLazyHasChildrenHints(t *testing.T) {
 		probeCalls++
 		return false, nil
 	}
+	viewTargetProbeCalls := 0
+	originalViewTargetProbe := dirHasViewTargetFunc
+	dirHasViewTargetFunc = func(string) (bool, error) {
+		viewTargetProbeCalls++
+		return false, nil
+	}
 	t.Cleanup(func() {
 		dirHasVisibleChildrenFunc = originalProbe
+		dirHasViewTargetFunc = originalViewTargetProbe
 	})
 
 	entries, err := svc.ListDir("test-session", "")
@@ -483,6 +612,9 @@ func TestListDirLargeDirectoryUsesLazyHasChildrenHints(t *testing.T) {
 	if probeCalls != 0 {
 		t.Fatalf("large listing should avoid per-directory probes, got %d", probeCalls)
 	}
+	if viewTargetProbeCalls != 0 {
+		t.Fatalf("large listing should avoid view-target subtree probes, got %d", viewTargetProbeCalls)
+	}
 
 	entryByName := make(map[string]FileEntry, len(entries))
 	for _, entry := range entries {
@@ -491,8 +623,109 @@ func TestListDirLargeDirectoryUsesLazyHasChildrenHints(t *testing.T) {
 	if entryByName["dir0"].HasChildren {
 		t.Fatal("cached empty directory should keep HasChildren=false")
 	}
+	if entryByName["dir0"].HasViewTarget {
+		t.Fatal("cached empty directory should keep HasViewTarget=false")
+	}
 	if !entryByName["dir1"].HasChildren {
 		t.Fatal("uncached directory should keep lazy expansion hint")
+	}
+	if !entryByName["dir1"].HasViewTarget {
+		t.Fatal("uncached large directory should keep conservative view-target hint")
+	}
+}
+
+func TestViewTargetFrontendBackendContract(t *testing.T) {
+	documentFilterPath := filepath.Join("..", "..", "frontend", "src", "components", "viewer", "views", "file-tree", "documentFilter.ts")
+	content, err := os.ReadFile(documentFilterPath)
+	if err != nil {
+		t.Fatalf("read documentFilter.ts: %v", err)
+	}
+
+	frontendExtensions := parseStringArrayExport(t, string(content), "DOCUMENT_EXTENSIONS")
+	backendExtensions := make([]string, 0, len(viewTargetExtensions))
+	for extension := range viewTargetExtensions {
+		backendExtensions = append(backendExtensions, extension)
+	}
+	slices.Sort(backendExtensions)
+	if !slices.Equal(frontendExtensions, backendExtensions) {
+		t.Fatalf("DOCUMENT_EXTENSIONS drift: frontend=%v backend=%v", frontendExtensions, backendExtensions)
+	}
+
+	frontendCompoundSuffixes := parseStringArrayExport(t, string(content), "COMPOUND_SUFFIXES")
+	backendCompoundSuffixes := slices.Clone(viewTargetCompoundSuffixes)
+	slices.Sort(backendCompoundSuffixes)
+	if !slices.Equal(frontendCompoundSuffixes, backendCompoundSuffixes) {
+		t.Fatalf("COMPOUND_SUFFIXES drift: frontend=%v backend=%v", frontendCompoundSuffixes, backendCompoundSuffixes)
+	}
+}
+
+func parseStringArrayExport(t *testing.T, content string, exportName string) []string {
+	t.Helper()
+
+	exportIndex := strings.Index(content, "export const "+exportName)
+	if exportIndex < 0 {
+		t.Fatalf("missing export %s", exportName)
+	}
+	assignmentIndex := strings.Index(content[exportIndex:], "=")
+	if assignmentIndex < 0 {
+		t.Fatalf("missing assignment for %s", exportName)
+	}
+	assignmentIndex += exportIndex
+	openIndex := strings.Index(content[assignmentIndex:], "[")
+	if openIndex < 0 {
+		t.Fatalf("missing array opener for %s", exportName)
+	}
+	openIndex += assignmentIndex
+	closeIndex := strings.Index(content[openIndex:], "]")
+	if closeIndex < 0 {
+		t.Fatalf("missing array closer for %s", exportName)
+	}
+	closeIndex += openIndex
+
+	var values []string
+	for line := range strings.SplitSeq(content[openIndex+1:closeIndex], "\n") {
+		trimmed := strings.TrimSpace(strings.TrimSuffix(line, ","))
+		if !strings.HasPrefix(trimmed, "\"") {
+			continue
+		}
+		value, err := strconv.Unquote(trimmed)
+		if err != nil {
+			t.Fatalf("parse %s literal %q: %v", exportName, trimmed, err)
+		}
+		values = append(values, value)
+	}
+	slices.Sort(values)
+	return values
+}
+
+func TestListDirKeepsViewTargetOnInspectionError(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalProbe := dirHasViewTargetFunc
+	dirHasViewTargetFunc = func(path string) (bool, error) {
+		if path == srcPath {
+			return false, errors.New("inspection failed")
+		}
+		return false, nil
+	}
+	t.Cleanup(func() {
+		dirHasViewTargetFunc = originalProbe
+	})
+
+	svc := newTestService("test-session", tmpDir)
+	entries, err := svc.ListDir("test-session", "")
+	if err != nil {
+		t.Fatalf("ListDir failed: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entry count = %d, want 1", len(entries))
+	}
+	if !entries[0].HasViewTarget {
+		t.Fatal("expected HasViewTarget=true when view-target inspection fails")
 	}
 }
 
@@ -562,6 +795,32 @@ func TestDirHasVisibleChildren(t *testing.T) {
 			t.Fatal("expected regular files to count as visible children")
 		}
 	})
+}
+
+func TestIsViewTargetFileName(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		want bool
+	}{
+		{name: "markdown lowercase", file: "README.md", want: true},
+		{name: "markdown uppercase", file: "README.MD", want: true},
+		{name: "extension-only dotfile", file: ".md", want: true},
+		{name: "compound drawio svg", file: "diagram.drawio.svg", want: true},
+		{name: "compound vega lite json", file: "chart.vl.json", want: true},
+		{name: "unsupported extension", file: "notes.txt", want: false},
+		{name: "missing extension", file: "Makefile", want: false},
+		{name: "trailing dot", file: "README.", want: false},
+		{name: "blank", file: " ", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isViewTargetFileName(tt.file); got != tt.want {
+				t.Fatalf("isViewTargetFileName(%q) = %v, want %v", tt.file, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestIsExcludedWatchPath(t *testing.T) {
@@ -1343,7 +1602,7 @@ func TestReadFile(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFileEntryFieldCountGuard(t *testing.T) {
-	const expectedFieldCount = 5
+	const expectedFieldCount = 6
 	got := reflect.TypeFor[FileEntry]().NumField()
 	if got != expectedFieldCount {
 		t.Fatalf("FileEntry field count = %d, want %d; update frontend fileTreeTypes.ts", got, expectedFieldCount)

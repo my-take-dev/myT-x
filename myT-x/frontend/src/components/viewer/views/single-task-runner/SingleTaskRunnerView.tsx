@@ -5,7 +5,7 @@ import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
 import {SingleTaskRunnerForm} from "./SingleTaskRunnerForm";
 import {SingleTaskRunnerList} from "./SingleTaskRunnerList";
-import {useSingleTaskRunner} from "./useSingleTaskRunner";
+import {type QueueItem, useSingleTaskRunner} from "./useSingleTaskRunner";
 
 type Screen = "list" | "form";
 
@@ -16,7 +16,7 @@ export function SingleTaskRunnerView() {
     const closeView = useViewerStore((s) => s.closeView);
     const activeSession = useTmuxStore((s) => s.activeSession);
     const hook = useSingleTaskRunner();
-    const {setError} = hook;
+    const {setError, updateItem} = hook;
     const [screen, setScreen] = useState<Screen>("list");
     const [editingItemID, setEditingItemID] = useState<string | null>(null);
 
@@ -42,6 +42,17 @@ export function SingleTaskRunnerView() {
         setEditingItemID(id);
         setScreen("form");
     }, [setError]);
+
+    const handleToggleClearBefore = useCallback(async (item: QueueItem, clearBefore: boolean) => {
+        return await updateItem(
+            item.id,
+            item.title,
+            item.message,
+            item.target_pane_id,
+            clearBefore,
+            item.clear_command ?? "",
+        );
+    }, [updateItem]);
 
     return (
         <ViewerPanelShell
@@ -70,6 +81,7 @@ export function SingleTaskRunnerView() {
                         onStart={hook.start}
                         onStop={hook.stop}
                         onSetClearDelay={hook.setClearDelay}
+                        onToggleClearBefore={handleToggleClearBefore}
                         onError={hook.setError}
                     />
                 )}

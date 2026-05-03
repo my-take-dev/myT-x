@@ -2,6 +2,7 @@ import {createStore} from "zustand/vanilla";
 import type {StoreApi} from "zustand/vanilla";
 import type {FileContentResult, FileNode} from "../components/viewer/views/file-tree/fileTreeTypes";
 import {
+    clearLoadedChildrenForPaths,
     isSameOrDescendantPath,
     mergeChildrenIntoTree,
     mergeRootNodes,
@@ -20,11 +21,13 @@ interface FileTreeState {
     readonly error: string | null;
     readonly contentError: string | null;
     readonly dirError: string | null;
+    /** Used only by auto-refresh owners such as editor tree actions. */
     readonly watcherError: string | null;
 }
 
 interface FileTreeActions {
     readonly reset: () => void;
+    readonly clearLoadedChildrenForPaths: (paths: readonly string[]) => void;
     readonly setRootNodes: (nodes: readonly FileNode[]) => void;
     readonly setChildrenForPath: (path: string, children: readonly FileNode[]) => void;
     readonly removePath: (path: string) => void;
@@ -99,6 +102,10 @@ export function createFileTreeStore(): FileTreeStore {
     return createStore<FileTreeState & FileTreeActions>((set) => ({
         ...createInitialState(),
         reset: () => set(() => createInitialState()),
+        clearLoadedChildrenForPaths: (paths) =>
+            set((state) => ({
+                tree: clearLoadedChildrenForPaths(state.tree, paths),
+            })),
         setRootNodes: (nodes) =>
             set((state) => ({
                 tree: mergeRootNodes(nodes, state.tree),

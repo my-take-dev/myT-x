@@ -148,7 +148,7 @@ describe("useEditor", () => {
     });
 
     it("returns a degraded rename result when the follow-up refresh fails", async () => {
-        seedTree([{name: "old.txt", path: "old.txt", isDir: false, hasChildren: false, size: 12}]);
+        seedTree([{name: "old.txt", path: "old.txt", isDir: false, hasChildren: false, hasViewTarget: false, size: 12}]);
         fileTreeActionsMock.refreshDirectory.mockRejectedValueOnce(new Error("refresh failed"));
         expect(latestResult).not.toBeNull();
 
@@ -160,7 +160,7 @@ describe("useEditor", () => {
         expect(apiMock.DevPanelRenameFile).toHaveBeenCalledWith("session-a:1", "old.txt", "new.txt");
         expect(fileTreeActionsMock.refreshDirectory).toHaveBeenCalledWith("", {expandOnSuccess: false});
         expect(latestStore?.getState().tree).toEqual([
-            {name: "old.txt", path: "old.txt", isDir: false, hasChildren: false, size: 12},
+            {name: "old.txt", path: "old.txt", isDir: false, hasChildren: false, hasViewTarget: false, size: 12},
         ]);
         expect(result).toEqual({
             result: "new.txt",
@@ -169,7 +169,7 @@ describe("useEditor", () => {
     });
 
     it("returns a degraded delete result when the follow-up refresh fails", async () => {
-        seedTree([{name: "old.txt", path: "old.txt", isDir: false, hasChildren: false, size: 12}]);
+        seedTree([{name: "old.txt", path: "old.txt", isDir: false, hasChildren: false, hasViewTarget: false, size: 12}]);
         fileTreeActionsMock.refreshDirectory.mockRejectedValueOnce(new Error("refresh failed"));
         expect(latestResult).not.toBeNull();
 
@@ -181,7 +181,7 @@ describe("useEditor", () => {
         expect(apiMock.DevPanelDeleteFile).toHaveBeenCalledWith("session-a:1", "old.txt");
         expect(fileTreeActionsMock.refreshDirectory).toHaveBeenCalledWith("", {expandOnSuccess: false});
         expect(latestStore?.getState().tree).toEqual([
-            {name: "old.txt", path: "old.txt", isDir: false, hasChildren: false, size: 12},
+            {name: "old.txt", path: "old.txt", isDir: false, hasChildren: false, hasViewTarget: false, size: 12},
         ]);
         expect(result).toEqual({
             result: true,

@@ -61,7 +61,6 @@ function FileTreeProbe() {
     return (
         <div>
             <output data-testid="dirError">{hookResult.dirError ?? ""}</output>
-            <output data-testid="watcherError">{hookResult.watcherError ?? ""}</output>
             <output data-testid="contentError">{hookResult.contentError ?? ""}</output>
             <output data-testid="error">{hookResult.error ?? ""}</output>
             <output data-testid="isRootLoading">{String(hookResult.isRootLoading)}</output>
@@ -76,11 +75,67 @@ function getProbeText(container: HTMLElement, testId: string): string {
 
 // ── Helpers ──
 
-function makeFileEntry(name: string, isDir: boolean, hasChildren: boolean = isDir): FileEntry {
-    return {name, path: name, is_dir: isDir, size: isDir ? 0 : 100, has_children: isDir ? hasChildren : false};
+function makeFileEntry(
+    name: string,
+    isDir: boolean,
+    hasChildren: boolean = isDir,
+    hasViewTarget: boolean = true,
+): FileEntry {
+    return {
+        name,
+        path: name,
+        is_dir: isDir,
+        size: isDir ? 0 : 100,
+        has_children: isDir ? hasChildren : false,
+        has_view_target: hasViewTarget,
+    };
 }
 
 // ── Tests ──
+
+describe("useFileTree – manual external refresh mode", () => {
+    let container: HTMLDivElement;
+    let root: Root;
+
+    beforeEach(() => {
+        container = document.createElement("div");
+        document.body.appendChild(container);
+        root = createRoot(container);
+        hookResult = null;
+        mockActiveSession = "test-session";
+        mockSessions = [{id: 1, name: "test-session", windows: []}];
+        apiMock.DevPanelListDir.mockReset();
+        apiMock.DevPanelListDir.mockResolvedValue([]);
+        apiMock.DevPanelReadFile.mockReset();
+        apiMock.DevPanelStartWatcher.mockReset();
+        apiMock.DevPanelStartWatcher.mockResolvedValue(undefined);
+        apiMock.DevPanelStopWatcher.mockReset();
+        apiMock.DevPanelStopWatcher.mockResolvedValue(undefined);
+        runtimeMock.EventsOn.mockClear();
+        watcherCleanupMock.mockReset();
+        (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    });
+
+    afterEach(() => {
+        act(() => {
+            root.unmount();
+        });
+        hookResult = null;
+        container.remove();
+        (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
+    });
+
+    it("loads the root without starting the filesystem watcher", async () => {
+        act(() => {
+            root.render(<FileTreeProbe/>);
+        });
+        await act(async () => {});
+
+        expect(apiMock.DevPanelListDir).toHaveBeenCalledWith("test-session", "");
+        expect(apiMock.DevPanelStartWatcher).not.toHaveBeenCalled();
+        expect(runtimeMock.EventsOn).not.toHaveBeenCalled();
+    });
+});
 
 describe("useFileTree – dirError lifecycle (C-3)", () => {
     let container: HTMLDivElement;
@@ -142,7 +197,7 @@ describe("useFileTree – dirError lifecycle (C-3)", () => {
         expect(getProbeText(container, "error")).toBe("");
     });
 
-    it("cleans watcher subscriptions on unmount", async () => {
+    it("does not register watcher subscriptions on unmount", async () => {
         apiMock.DevPanelListDir.mockResolvedValueOnce([]);
 
         act(() => {
@@ -154,8 +209,7 @@ describe("useFileTree – dirError lifecycle (C-3)", () => {
             root.unmount();
         });
 
-        // 3 subscriptions: tree-invalidated, watcher-failed, session-renamed.
-        expect(watcherCleanupMock).toHaveBeenCalledTimes(3);
+        expect(watcherCleanupMock).not.toHaveBeenCalled();
     });
 
     it("clears dirError when a subsequent toggleDir expansion succeeds", async () => {

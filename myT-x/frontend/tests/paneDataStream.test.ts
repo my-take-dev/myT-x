@@ -7,6 +7,7 @@ import {
     disconnect,
     isConnected,
     registerPaneHandler,
+    registerReconnectCallback,
     unregisterPaneHandler,
 } from "../src/services/paneDataStream";
 
@@ -125,6 +126,7 @@ describe("paneDataStream", () => {
         disconnect();
         vi.useRealTimers();
         vi.unstubAllGlobals();
+        vi.unstubAllEnvs();
     });
 
     // -------------------------------------------------------------------------
@@ -148,6 +150,19 @@ describe("paneDataStream", () => {
             // Advance timers; no reconnect should occur because intentionalDisconnect=true.
             vi.advanceTimersByTime(5000);
             expect(MockWebSocket.instances).toHaveLength(0);
+        });
+
+        it("disconnect() clears reconnect callbacks before later connections", () => {
+            const callback = vi.fn();
+            registerReconnectCallback(callback);
+
+            disconnect();
+            connect("ws://127.0.0.1:12345/ws");
+            const socket = MockWebSocket.instances[0];
+            socket.readyState = MockWebSocket.OPEN;
+            socket.simulateOpen();
+
+            expect(callback).not.toHaveBeenCalled();
         });
 
         it("connect() after disconnect() creates a new connection", () => {
@@ -858,6 +873,62 @@ describe("paneDataStream", () => {
     // -------------------------------------------------------------------------
     // S-15: onopen re-subscribe test
     describe("onopen re-subscribe behavior", () => {
+        it("invokes every registered reconnect callback on WebSocket open", () => {
+            const first = vi.fn();
+            const second = vi.fn();
+            registerReconnectCallback(first);
+            registerReconnectCallback(second);
+
+            connect("ws://127.0.0.1:12345/ws");
+            const socket = MockWebSocket.instances[0];
+            socket.readyState = MockWebSocket.OPEN;
+            socket.simulateOpen();
+
+            expect(first).toHaveBeenCalledTimes(1);
+            expect(second).toHaveBeenCalledTimes(1);
+        });
+
+        it("unregisters one reconnect callback without clearing other panes", () => {
+            const first = vi.fn();
+            const second = vi.fn();
+            const unregisterFirst = registerReconnectCallback(first);
+            registerReconnectCallback(second);
+            unregisterFirst();
+
+            connect("ws://127.0.0.1:12345/ws");
+            const socket = MockWebSocket.instances[0];
+            socket.readyState = MockWebSocket.OPEN;
+            socket.simulateOpen();
+
+            expect(first).not.toHaveBeenCalled();
+            expect(second).toHaveBeenCalledTimes(1);
+        });
+
+        it("continues reconnect callbacks after one callback throws and logs owner in production", () => {
+            vi.stubEnv("DEV", false);
+            const throwing = vi.fn(() => {
+                throw new Error("callback failed");
+            });
+            const succeeding = vi.fn();
+            const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            registerReconnectCallback(throwing, "pane:%1");
+            registerReconnectCallback(succeeding, "pane:%2");
+
+            connect("ws://127.0.0.1:12345/ws");
+            const socket = MockWebSocket.instances[0];
+            socket.readyState = MockWebSocket.OPEN;
+            socket.simulateOpen();
+
+            expect(throwing).toHaveBeenCalledTimes(1);
+            expect(succeeding).toHaveBeenCalledTimes(1);
+            expect(warnSpy).toHaveBeenCalledWith(
+                "[WARN-WS] reconnect callback failed",
+                "owner",
+                "pane:%1",
+                expect.any(Error),
+            );
+        });
+
         it("re-subscribes all registered pane handlers on WebSocket reconnect", () => {
             connect("ws://127.0.0.1:12345/ws");
             const socket = MockWebSocket.instances[0];

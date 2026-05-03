@@ -9,18 +9,21 @@ function makeTree(): readonly FileNode[] {
             path: "src",
             isDir: true,
             hasChildren: true,
+            hasViewTarget: true,
             children: [
                 {
                     name: "nested",
                     path: "src/nested",
                     isDir: true,
                     hasChildren: true,
+                    hasViewTarget: true,
                     children: [
                         {
                             name: "file.ts",
                             path: "src/nested/file.ts",
                             isDir: false,
                             hasChildren: false,
+                            hasViewTarget: false,
                             size: 12,
                         },
                     ],
@@ -32,6 +35,7 @@ function makeTree(): readonly FileNode[] {
             path: "README.md",
             isDir: false,
             hasChildren: false,
+            hasViewTarget: true,
             size: 5,
         },
     ];

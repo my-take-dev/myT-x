@@ -2,7 +2,9 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -24,6 +26,14 @@ type RealExecutor struct {
 	// SessionAllPanes が false（デフォルト）かつ SessionName が非空の場合、
 	// ListPanes は自セッションのペインのみ返す。
 	SessionAllPanes bool
+
+	hooks *executorHooks
+}
+
+type executorHooks struct {
+	combinedOutput func(ctx context.Context, args ...string) ([]byte, error)
+	output         func(ctx context.Context, args ...string) ([]byte, error)
+	sleep          func(ctx context.Context, delay time.Duration) error
 }
 
 // NewExecutor は新しい RealExecutor を返す（全セッション対象、既存互換）。
@@ -42,8 +52,29 @@ func newTmuxCommand(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
+func (e *RealExecutor) combinedOutput(ctx context.Context, args ...string) ([]byte, error) {
+	if e.hooks != nil && e.hooks.combinedOutput != nil {
+		return e.hooks.combinedOutput(ctx, args...)
+	}
+	return newTmuxCommand(ctx, args...).CombinedOutput()
+}
+
+func (e *RealExecutor) output(ctx context.Context, args ...string) ([]byte, error) {
+	if e.hooks != nil && e.hooks.output != nil {
+		return e.hooks.output(ctx, args...)
+	}
+	return newTmuxCommand(ctx, args...).Output()
+}
+
+func (e *RealExecutor) sleep(ctx context.Context, delay time.Duration) error {
+	if e.hooks != nil && e.hooks.sleep != nil {
+		return e.hooks.sleep(ctx, delay)
+	}
+	return sleepContext(ctx, delay)
+}
+
 // GetPaneID は自ペインのIDを取得する。
-func (e *RealExecutor) GetPaneID(ctx context.Context) (string, error) {
+func (e *RealExecutor) GetPaneID(_ context.Context) (string, error) {
 	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
 	if paneID == "" {
 		return "", fmt.Errorf("get pane id: TMUX_PANE is unavailable")
@@ -69,7 +100,7 @@ func (e *RealExecutor) ListPanes(ctx context.Context) ([]domain.PaneInfo, error)
 		args = append(args, "-a")
 	}
 	args = append(args, "-F", "#{pane_id}\t#{pane_title}\t#{session_name}\t#{window_index}")
-	out, err := newTmuxCommand(ctx, args...).Output()
+	out, err := e.output(ctx, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list panes: %w", err)
 	}
@@ -97,8 +128,7 @@ func (e *RealExecutor) SetPaneTitle(ctx context.Context, paneID string, title st
 	if err := ValidatePaneID(paneID); err != nil {
 		return err
 	}
-	cmd := newTmuxCommand(ctx, "select-pane", "-t", paneID, "-T", title)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := e.combinedOutput(ctx, "select-pane", "-t", paneID, "-T", title); err != nil {
 		return fmt.Errorf("set pane title: %w: %s", err, out)
 	}
 	return nil
@@ -122,31 +152,30 @@ func (e *RealExecutor) SendKeys(ctx context.Context, paneID string, text string)
 	if err := e.sendText(ctx, paneID, text); err != nil {
 		return err
 	}
-	if err := sleepContext(ctx, sendKeysDelay); err != nil {
+	// Keep text-send and paste-send ordering symmetric: wait for tmux to deliver
+	// the payload before Enter so C-m cannot overtake pending text delivery.
+	if err := e.sleep(ctx, sendKeysDelay); err != nil {
 		return err
 	}
 	return e.sendEnter(ctx, paneID)
 }
 
 func (e *RealExecutor) selectPane(ctx context.Context, paneID string) error {
-	cmd := newTmuxCommand(ctx, "select-pane", "-t", paneID)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := e.combinedOutput(ctx, "select-pane", "-t", paneID); err != nil {
 		return fmt.Errorf("select-pane: %w: %s", err, out)
 	}
 	return nil
 }
 
 func (e *RealExecutor) sendText(ctx context.Context, paneID string, text string) error {
-	cmd := newTmuxCommand(ctx, "send-keys", "-t", paneID, "-l", "--", text)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := e.combinedOutput(ctx, "send-keys", "-t", paneID, "-l", "--", text); err != nil {
 		return fmt.Errorf("send-keys text: %w: %s", err, out)
 	}
 	return nil
 }
 
 func (e *RealExecutor) sendEnter(ctx context.Context, paneID string) error {
-	cmd := newTmuxCommand(ctx, "send-keys", "-t", paneID, "C-m")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := e.combinedOutput(ctx, "send-keys", "-t", paneID, "C-m"); err != nil {
 		return fmt.Errorf("send-keys C-m: %w: %s", err, out)
 	}
 	return nil
@@ -160,7 +189,7 @@ func (e *RealExecutor) sendKeysChunked(ctx context.Context, paneID string, text 
 		if err := e.sendText(ctx, paneID, chunk); err != nil {
 			return err
 		}
-		if err := sleepContext(ctx, sendKeysDelay); err != nil {
+		if err := e.sleep(ctx, sendKeysDelay); err != nil {
 			return err
 		}
 	}
@@ -178,7 +207,7 @@ func (e *RealExecutor) SplitPane(ctx context.Context, targetPaneID string, horiz
 		args = append(args, "-h")
 	}
 	args = append(args, "-P", "-F", "#{pane_id}")
-	out, err := newTmuxCommand(ctx, args...).Output()
+	out, err := e.output(ctx, args...)
 	if err != nil {
 		return "", fmt.Errorf("split-window: %w", err)
 	}
@@ -207,9 +236,15 @@ func (e *RealExecutor) SendKeysPaste(ctx context.Context, paneID string, text st
 		return fmt.Errorf("create paste temp file: %w", err)
 	}
 	bufferPath := bufferFile.Name()
-	defer os.Remove(bufferPath)
+	defer func() {
+		if err := os.Remove(bufferPath); err != nil && !os.IsNotExist(err) {
+			slog.Debug("[DEBUG-ORCH-TMUX] failed to remove paste temp file", "path", bufferPath, "error", err)
+		}
+	}()
 	if _, err := bufferFile.WriteString(text); err != nil {
-		bufferFile.Close()
+		if closeErr := bufferFile.Close(); closeErr != nil {
+			return fmt.Errorf("write paste temp file: %w; close paste temp file: %v", err, closeErr)
+		}
 		return fmt.Errorf("write paste temp file: %w", err)
 	}
 	if err := bufferFile.Close(); err != nil {
@@ -219,10 +254,20 @@ func (e *RealExecutor) SendKeysPaste(ctx context.Context, paneID string, text st
 	if err := e.loadBufferFromFile(ctx, bufferName, bufferPath); err != nil {
 		return err
 	}
-	defer func() {
-		_ = e.deleteBuffer(context.Background(), bufferName)
-	}()
 	if err := e.pasteBuffer(ctx, paneID, bufferName); err != nil {
+		if cleanupErr := e.deleteBuffer(context.Background(), bufferName); cleanupErr != nil {
+			slog.Warn("[WARN-ORCH-TMUX] failed to delete paste buffer",
+				"bufferName", bufferName,
+				"paneID", paneID,
+				"error", cleanupErr,
+			)
+			return errors.Join(err, fmt.Errorf("delete paste buffer %q: %w", bufferName, cleanupErr))
+		}
+		return err
+	}
+	// paste-buffer can complete asynchronously relative to the target pane.
+	// Wait before Enter so C-m cannot arrive before the pasted payload.
+	if err := e.sleep(ctx, sendKeysDelay); err != nil {
 		return err
 	}
 
@@ -235,8 +280,7 @@ func (e *RealExecutor) CapturePaneOutput(ctx context.Context, paneID string, lin
 		return "", err
 	}
 	arg := fmt.Sprintf("-%d", lines)
-	cmd := newTmuxCommand(ctx, "capture-pane", "-t", paneID, "-p", "-S", arg)
-	out, err := cmd.CombinedOutput()
+	out, err := e.combinedOutput(ctx, "capture-pane", "-t", paneID, "-p", "-S", arg)
 	if err != nil {
 		return "", fmt.Errorf("capture-pane: %w: %s", err, out)
 	}
@@ -256,24 +300,21 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 }
 
 func (e *RealExecutor) loadBufferFromFile(ctx context.Context, bufferName string, path string) error {
-	cmd := newTmuxCommand(ctx, "load-buffer", "-b", bufferName, path)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := e.combinedOutput(ctx, "load-buffer", "-b", bufferName, path); err != nil {
 		return fmt.Errorf("load-buffer: %w: %s", err, out)
 	}
 	return nil
 }
 
 func (e *RealExecutor) pasteBuffer(ctx context.Context, paneID string, bufferName string) error {
-	cmd := newTmuxCommand(ctx, "paste-buffer", "-d", "-p", "-b", bufferName, "-t", paneID)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := e.combinedOutput(ctx, "paste-buffer", "-d", "-p", "-b", bufferName, "-t", paneID); err != nil {
 		return fmt.Errorf("paste-buffer: %w: %s", err, out)
 	}
 	return nil
 }
 
 func (e *RealExecutor) deleteBuffer(ctx context.Context, bufferName string) error {
-	cmd := newTmuxCommand(ctx, "delete-buffer", "-b", bufferName)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := e.combinedOutput(ctx, "delete-buffer", "-b", bufferName); err != nil {
 		return fmt.Errorf("delete-buffer: %w: %s", err, out)
 	}
 	return nil

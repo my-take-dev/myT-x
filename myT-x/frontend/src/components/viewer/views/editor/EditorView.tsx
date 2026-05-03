@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from "react";
+import {EventsOn} from "../../../../../wailsjs/runtime";
 import {useViewerStore} from "../../viewerStore";
 import {toErrorMessage} from "../../../../utils/errorUtils";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
@@ -27,6 +28,43 @@ interface DeleteDialogState {
     readonly isDir: boolean;
     readonly name: string;
     readonly path: string;
+}
+
+interface TreeInvalidationEvent {
+    readonly session_name?: unknown;
+    readonly paths?: unknown;
+}
+
+function normalizeInvalidationPath(path: string): string {
+    return path.trim().replaceAll("\\", "/");
+}
+
+function parseTreeInvalidationEvent(payload: unknown): { sessionName: string; paths: string[] } | null {
+    if (!payload || typeof payload !== "object") {
+        return null;
+    }
+
+    const event = payload as TreeInvalidationEvent;
+    if (typeof event.session_name !== "string" || !Array.isArray(event.paths)) {
+        return null;
+    }
+
+    const sessionName = event.session_name.trim();
+    if (sessionName === "") {
+        return null;
+    }
+
+    return {
+        sessionName,
+        paths: event.paths
+            .filter((path): path is string => typeof path === "string")
+            .map(normalizeInvalidationPath),
+    };
+}
+
+function isOpenFileInvalidated(currentPath: string, invalidatedPaths: readonly string[]): boolean {
+    const normalizedCurrentPath = normalizeInvalidationPath(currentPath);
+    return invalidatedPaths.includes(normalizedCurrentPath);
 }
 
 export function EditorView() {
@@ -110,6 +148,51 @@ export function EditorView() {
         setShowDiscardDialog(true);
         return false;
     }, [isModified]);
+
+    useEffect(() => {
+        const capturedSession = activeSession?.trim();
+        const capturedPath = currentPath;
+        if (!capturedSession || !capturedPath) {
+            return;
+        }
+
+        let disposed = false;
+        const reloadCurrentFile = async () => {
+            try {
+                await loadFile(capturedPath);
+            } catch (err: unknown) {
+                if (disposed) {
+                    return;
+                }
+                console.error("[editor] external file reload failed", {
+                    path: capturedPath,
+                    session: capturedSession,
+                    err,
+                });
+                setDialogError(toErrorMessage(err, `Failed to reload file: ${capturedPath}`));
+            }
+        };
+
+        const cancel = EventsOn("devpanel:tree-invalidated", (payload: unknown) => {
+            if (disposed) {
+                return;
+            }
+
+            const event = parseTreeInvalidationEvent(payload);
+            if (!event || event.sessionName !== capturedSession || !isOpenFileInvalidated(capturedPath, event.paths)) {
+                return;
+            }
+
+            if (confirmDiscardUnsavedChanges(reloadCurrentFile)) {
+                void reloadCurrentFile();
+            }
+        });
+
+        return () => {
+            disposed = true;
+            cancel();
+        };
+    }, [activeSession, confirmDiscardUnsavedChanges, currentPath, loadFile]);
 
     useEffect(() => {
         if (selectedPath) {

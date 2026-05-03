@@ -385,6 +385,29 @@ func TestGetPaneReplay(t *testing.T) {
 			t.Fatalf("GetPaneReplay() = %q, want %q", got, "hello pane")
 		}
 	})
+
+	t.Run("returns viewport snapshot for active pane", func(t *testing.T) {
+		app := NewApp()
+		app.paneStates.EnsurePane("%9", 40, 2)
+		app.paneStates.SetActivePanes(map[string]struct{}{"%9": {}})
+		app.paneStates.Feed("%9", []byte("line1\nline2\nline3"))
+
+		got := app.GetPaneReplay("%9")
+		if got != "line2\nline3" {
+			t.Fatalf("GetPaneReplay() = %q, want active pane viewport", got)
+		}
+	})
+
+	t.Run("returns exact bounded history for inactive pane", func(t *testing.T) {
+		app := NewApp()
+		app.paneStates.EnsurePane("%10", 40, 2)
+		app.paneStates.Feed("%10", []byte("line1\nline2\nline3"))
+
+		got := app.GetPaneReplay("%10")
+		if got != "line1\nline2\nline3" {
+			t.Fatalf("GetPaneReplay() = %q, want exact inactive replay", got)
+		}
+	})
 }
 
 func TestGetPaneEnvValidation(t *testing.T) {

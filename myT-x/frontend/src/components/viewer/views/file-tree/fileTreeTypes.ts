@@ -1,21 +1,10 @@
+import type {devpanel} from "../../../../../wailsjs/go/models";
+
 /** Backend FileEntry returned by DevPanelListDir. */
-export interface FileEntry {
-    readonly name: string;
-    readonly path: string;
-    readonly is_dir: boolean;
-    readonly size: number;
-    readonly has_children: boolean;
-}
+export type FileEntry = devpanel.FileEntry;
 
 /** Backend FileContent returned by DevPanelReadFile. */
-export interface FileContentResult {
-    readonly path: string;
-    readonly content: string;
-    readonly line_count: number;
-    readonly size: number;
-    readonly truncated: boolean;
-    readonly binary: boolean;
-}
+export type FileContentResult = devpanel.FileContent;
 
 /**
  * @internal Base fields shared by FlatDirNode and FlatFileNode.
@@ -34,6 +23,8 @@ export interface FileNode {
     readonly path: string;
     readonly isDir: boolean;
     readonly hasChildren: boolean;
+    /** Files: supported document target. Directories: may contain a supported descendant. */
+    readonly hasViewTarget: boolean;
     readonly children?: readonly FileNode[];
     readonly size?: number;
 }

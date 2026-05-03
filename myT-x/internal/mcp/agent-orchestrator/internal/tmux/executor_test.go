@@ -2,8 +2,11 @@ package tmux
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"myT-x/internal/mcp/agent-orchestrator/domain"
 )
@@ -52,6 +55,200 @@ func TestExecutorMethodsRejectInvalidPaneID(t *testing.T) {
 	}
 	if err := exec.SendKeysPaste(ctx, "invalid", "hello"); err == nil {
 		t.Fatal("SendKeysPaste should reject invalid pane_id")
+	}
+}
+
+func TestSendKeysWaitsAfterTextBeforeEnter(t *testing.T) {
+	var events []string
+	exec := newRecordingExecutor(t, &events, nil)
+
+	if err := exec.SendKeys(context.Background(), "%1", "hello\n"); err != nil {
+		t.Fatalf("SendKeys: %v", err)
+	}
+
+	want := []string{"select-pane", "send-keys", "sleep", "send-keys C-m"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSendKeysDoesNotSendEnterWhenPostTextWaitCanceled(t *testing.T) {
+	var events []string
+	ctx, cancel := context.WithCancel(context.Background())
+	exec := newRecordingExecutor(t, &events, func(ctx context.Context) error {
+		cancel()
+		return ctx.Err()
+	})
+
+	err := exec.SendKeys(ctx, "%1", "hello")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SendKeys error = %v, want context.Canceled", err)
+	}
+	for _, event := range events {
+		if event == "send-keys C-m" {
+			t.Fatalf("send-keys C-m should not be sent after canceled wait: %v", events)
+		}
+	}
+	want := []string{"select-pane", "send-keys", "sleep"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSendKeysChunkedDoesNotSendEnterWhenChunkWaitCanceled(t *testing.T) {
+	var events []string
+	sleepCalls := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	exec := newRecordingExecutor(t, &events, func(ctx context.Context) error {
+		sleepCalls++
+		if sleepCalls == 2 {
+			cancel()
+			return ctx.Err()
+		}
+		return nil
+	})
+
+	err := exec.SendKeys(ctx, "%1", strings.Repeat("x", maxSendKeysLength+1))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SendKeys error = %v, want context.Canceled", err)
+	}
+	for _, event := range events {
+		if event == "send-keys C-m" {
+			t.Fatalf("send-keys C-m should not be sent after canceled chunk wait: %v", events)
+		}
+	}
+	want := []string{"select-pane", "send-keys", "sleep", "send-keys", "sleep"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSendKeysPasteWaitsAfterPasteBeforeEnter(t *testing.T) {
+	var events []string
+	exec := newRecordingExecutor(t, &events, nil)
+
+	if err := exec.SendKeysPaste(context.Background(), "%1", "hello\n"); err != nil {
+		t.Fatalf("SendKeysPaste: %v", err)
+	}
+
+	want := []string{"select-pane", "load-buffer", "paste-buffer", "sleep", "send-keys C-m"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSendKeysPasteDoesNotSendEnterWhenPostPasteWaitCanceled(t *testing.T) {
+	var events []string
+	ctx, cancel := context.WithCancel(context.Background())
+	exec := newRecordingExecutor(t, &events, func(ctx context.Context) error {
+		cancel()
+		return ctx.Err()
+	})
+
+	err := exec.SendKeysPaste(ctx, "%1", "hello")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SendKeysPaste error = %v, want context.Canceled", err)
+	}
+	for _, event := range events {
+		if event == "send-keys C-m" {
+			t.Fatalf("send-keys C-m should not be sent after canceled wait: %v", events)
+		}
+	}
+	want := []string{"select-pane", "load-buffer", "paste-buffer", "sleep"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSendKeysPasteDoesNotDeleteBufferAfterSuccessfulPaste(t *testing.T) {
+	var events []string
+	deleteErr := errors.New("delete failed")
+	exec := NewExecutor()
+	exec.hooks = &executorHooks{
+		combinedOutput: func(ctx context.Context, args ...string) ([]byte, error) {
+			recordTmuxCommand(&events, args)
+			if len(args) > 0 && args[0] == "delete-buffer" {
+				return []byte("tmux delete refused"), deleteErr
+			}
+			return nil, nil
+		},
+		sleep: func(ctx context.Context, delay time.Duration) error {
+			if delay != sendKeysDelay {
+				t.Fatalf("sleep delay = %v, want %v", delay, sendKeysDelay)
+			}
+			events = append(events, "sleep")
+			return nil
+		},
+	}
+
+	err := exec.SendKeysPaste(context.Background(), "%1", "hello")
+	if err != nil {
+		t.Fatalf("SendKeysPaste error = %v, want nil", err)
+	}
+	want := []string{"select-pane", "load-buffer", "paste-buffer", "sleep", "send-keys C-m"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSendKeysPasteCleansUpAfterPasteFailure(t *testing.T) {
+	var events []string
+	pasteErr := errors.New("paste failed")
+	exec := NewExecutor()
+	exec.hooks = &executorHooks{
+		combinedOutput: func(ctx context.Context, args ...string) ([]byte, error) {
+			recordTmuxCommand(&events, args)
+			if len(args) > 0 && args[0] == "paste-buffer" {
+				return []byte("tmux paste refused"), pasteErr
+			}
+			return nil, nil
+		},
+	}
+
+	err := exec.SendKeysPaste(context.Background(), "%1", "hello")
+	if !errors.Is(err, pasteErr) {
+		t.Fatalf("SendKeysPaste error = %v, want pasteErr", err)
+	}
+	if !strings.Contains(err.Error(), "paste-buffer") || !strings.Contains(err.Error(), "tmux paste refused") {
+		t.Fatalf("SendKeysPaste error = %q, want paste context and tmux output", err.Error())
+	}
+	want := []string{"select-pane", "load-buffer", "paste-buffer", "delete-buffer"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSendKeysPasteJoinsCleanupFailureWithPasteFailure(t *testing.T) {
+	var events []string
+	pasteErr := errors.New("paste failed")
+	deleteErr := errors.New("delete failed")
+	exec := NewExecutor()
+	exec.hooks = &executorHooks{
+		combinedOutput: func(ctx context.Context, args ...string) ([]byte, error) {
+			recordTmuxCommand(&events, args)
+			if len(args) > 0 && args[0] == "paste-buffer" {
+				return []byte("tmux paste refused"), pasteErr
+			}
+			if len(args) > 0 && args[0] == "delete-buffer" {
+				return []byte("tmux delete refused"), deleteErr
+			}
+			return nil, nil
+		},
+	}
+
+	err := exec.SendKeysPaste(context.Background(), "%1", "hello")
+	if !errors.Is(err, pasteErr) {
+		t.Fatalf("SendKeysPaste error = %v, want pasteErr", err)
+	}
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("SendKeysPaste error = %v, want cleanup error wrapping deleteErr", err)
+	}
+	if !strings.Contains(err.Error(), "delete paste buffer") || !strings.Contains(err.Error(), "tmux delete refused") {
+		t.Fatalf("SendKeysPaste error = %q, want cleanup context and tmux output", err.Error())
+	}
+	want := []string{"select-pane", "load-buffer", "paste-buffer", "delete-buffer"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
 	}
 }
 
@@ -147,4 +344,38 @@ func TestFilterPanesBySession_NoMatch(t *testing.T) {
 	if len(filtered) != 0 {
 		t.Fatalf("filtered count = %d, want 0", len(filtered))
 	}
+}
+
+func recordTmuxCommand(events *[]string, args []string) {
+	if len(args) == 0 {
+		*events = append(*events, "")
+		return
+	}
+	if args[0] == "send-keys" && args[len(args)-1] == "C-m" {
+		*events = append(*events, "send-keys C-m")
+		return
+	}
+	*events = append(*events, args[0])
+}
+
+func newRecordingExecutor(t *testing.T, events *[]string, onSleep func(context.Context) error) *RealExecutor {
+	t.Helper()
+	exec := NewExecutor()
+	exec.hooks = &executorHooks{
+		combinedOutput: func(ctx context.Context, args ...string) ([]byte, error) {
+			recordTmuxCommand(events, args)
+			return nil, nil
+		},
+		sleep: func(ctx context.Context, delay time.Duration) error {
+			if delay != sendKeysDelay {
+				t.Fatalf("sleep delay = %v, want %v", delay, sendKeysDelay)
+			}
+			*events = append(*events, "sleep")
+			if onSleep != nil {
+				return onSleep(ctx)
+			}
+			return nil
+		},
+	}
+	return exec
 }

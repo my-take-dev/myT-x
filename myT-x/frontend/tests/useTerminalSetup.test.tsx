@@ -5,6 +5,7 @@ import type {FitAddon} from "@xterm/addon-fit";
 import type {SearchAddon} from "@xterm/addon-search";
 import type {Terminal} from "@xterm/xterm";
 import {__resetTerminalWebglProbeForTest, useTerminalSetup} from "../src/hooks/useTerminalSetup";
+import {applyPaneReplayBoundary, clearPaneReplayBoundary} from "../src/utils/terminalOutputFilter";
 
 interface FakeTerminalInstance {
     cols: number;
@@ -250,6 +251,35 @@ describe("useTerminalSetup focus-on-open contract", () => {
             "[terminal] replay load failed for pane=pane-1",
             expect.any(Error),
         );
+    });
+
+    it("writes sanitized replay output to the terminal", async () => {
+        getPaneReplayMock.mockResolvedValueOnce("before\x1b[3Jafter");
+
+        act(() => {
+            root.render(<SetupProbe paneId="pane-1" focusOnOpen={false}/>);
+        });
+        await act(async () => {
+            await Promise.resolve();
+        });
+
+        expect(terminalInstances[0]?.write).toHaveBeenCalledWith("beforeafter");
+    });
+
+    it("skips replay writes when live output wins the startup race", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        clearPaneReplayBoundary("pane-live-before-replay");
+        getPaneReplayMock.mockResolvedValueOnce("replay-after-live");
+
+        act(() => {
+            root.render(<SetupProbe paneId="pane-live-before-replay" focusOnOpen={false}/>);
+        });
+        applyPaneReplayBoundary("pane-live-before-replay", "live-first");
+        await act(async () => {
+            await Promise.resolve();
+        });
+
+        expect(terminalInstances[0]?.write).not.toHaveBeenCalledWith("replay-after-live");
     });
 
 });

@@ -348,6 +348,7 @@ export namespace devpanel {
 	    is_dir: boolean;
 	    size: number;
 	    has_children: boolean;
+	    has_view_target: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FileEntry(source);
@@ -360,6 +361,7 @@ export namespace devpanel {
 	        this.is_dir = source["is_dir"];
 	        this.size = source["size"];
 	        this.has_children = source["has_children"];
+	        this.has_view_target = source["has_view_target"];
 	    }
 	}
 	export class FileMetadata {

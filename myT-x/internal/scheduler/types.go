@@ -10,11 +10,8 @@ const (
 	// InfiniteCount means the scheduler runs until manually stopped or the target pane disappears.
 	InfiniteCount = 0
 
-	// templateFileName is the JSON file name for scheduler templates within the session directory.
+	// templateFileName is the JSON file name for scheduler templates within session-info.
 	templateFileName = "scheduler-templates.json"
-
-	// templateDir is the subdirectory under a session's root path that holds myT-x metadata.
-	templateDir = ".myT-x"
 )
 
 // runGeneration is a monotonically increasing token that identifies

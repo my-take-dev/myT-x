@@ -237,6 +237,30 @@ func TestParseCommandSaveBuffer(t *testing.T) {
 	}
 }
 
+func TestParseCommandDeleteBuffer(t *testing.T) {
+	req, err := parseCommand([]string{"delete-buffer", "-b", "clip"})
+	if err != nil {
+		t.Fatalf("parseCommand(delete-buffer) error = %v", err)
+	}
+	if req.Command != "delete-buffer" {
+		t.Fatalf("command = %q, want %q", req.Command, "delete-buffer")
+	}
+	if got := asString(req.Flags["-b"]); got != "clip" {
+		t.Fatalf("-b = %q, want %q", got, "clip")
+	}
+
+	req, err = parseCommand([]string{"delete-buffer"})
+	if err != nil {
+		t.Fatalf("parseCommand(delete-buffer without -b) error = %v", err)
+	}
+	if req.Command != "delete-buffer" {
+		t.Fatalf("command = %q, want %q", req.Command, "delete-buffer")
+	}
+	if len(req.Flags) != 0 {
+		t.Fatalf("flags = %v, want empty", req.Flags)
+	}
+}
+
 func TestValidateCommandSpecConsistency(t *testing.T) {
 	if err := validateCommandSpecConsistency(); err != nil {
 		t.Fatalf("validateCommandSpecConsistency() error = %v", err)
@@ -1979,6 +2003,17 @@ func TestParseCommandNewCommands(t *testing.T) {
 			args:      []string{"list-sessions", "-F", "#{session_name}:#{session_id}"},
 			wantCmd:   "list-sessions",
 			wantFlags: map[string]any{"-F": "#{session_name}:#{session_id}"},
+		},
+		{
+			name:      "delete-buffer with named buffer",
+			args:      []string{"delete-buffer", "-b", "clip"},
+			wantCmd:   "delete-buffer",
+			wantFlags: map[string]any{"-b": "clip"},
+		},
+		{
+			name:    "delete-buffer without flags",
+			args:    []string{"delete-buffer"},
+			wantCmd: "delete-buffer",
 		},
 		// S-52: show-environment combined flags
 		{

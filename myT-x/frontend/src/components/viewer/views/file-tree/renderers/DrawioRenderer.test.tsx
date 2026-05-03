@@ -57,26 +57,64 @@ describe("DrawioRenderer", () => {
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
     });
 
-    async function flushRenderer(): Promise<void> {
-        await act(async () => {
-            await Promise.resolve();
-            await new Promise((resolve) => setTimeout(resolve, 0));
-        });
+    function delayRenderTick(): Promise<void> {
+        return new Promise((resolve) => setTimeout(resolve, 0));
     }
 
-    it("renders draw.io XML content in a highlighted code block", async () => {
+    async function waitForRenderer(expectation: () => void): Promise<void> {
+        const deadline = Date.now() + 1000;
+        let lastError: unknown = null;
+        while (Date.now() < deadline) {
+            try {
+                expectation();
+                return;
+            } catch (err: unknown) {
+                lastError = err;
+                await act(async () => {
+                    await delayRenderTick();
+                });
+            }
+        }
+        throw lastError instanceof Error ? lastError : new Error("Timed out waiting for draw.io renderer update.");
+    }
+
+    it("renders uncompressed draw.io XML content as an inline diagram preview", async () => {
         await act(async () => {
             root.render(
                 <DrawioRenderer
                     kind="drawio-xml"
-                    content={"<mxfile><diagram id=\"1\">hello</diagram></mxfile>"}
+                    content={`
+                        <mxfile>
+                            <diagram id="1">
+                                <mxGraphModel>
+                                    <root>
+                                        <mxCell id="0"/>
+                                        <mxCell id="1" parent="0"/>
+                                        <mxCell id="2" value="Start" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+                                            <mxGeometry x="40" y="60" width="120" height="60" as="geometry"/>
+                                        </mxCell>
+                                        <mxCell id="3" value="End" style="ellipse;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+                                            <mxGeometry x="240" y="60" width="120" height="60" as="geometry"/>
+                                        </mxCell>
+                                        <mxCell id="4" edge="1" source="2" target="3" parent="1"/>
+                                    </root>
+                                </mxGraphModel>
+                            </diagram>
+                        </mxfile>
+                    `}
                     filePath="docs/arch.drawio.xml"
                 />,
             );
         });
+        await waitForRenderer(() => {
+            expect(container.querySelector(".file-view-drawio-svg")).not.toBeNull();
+        });
 
-        const codeBlock = container.querySelector(".file-view-drawio-code code.language-xml");
-        expect(codeBlock?.textContent).toContain("<mxfile><diagram id=\"1\">hello</diagram></mxfile>");
+        const svg = container.querySelector(".file-view-drawio-svg");
+        expect(svg).not.toBeNull();
+        expect(svg?.textContent).toContain("Start");
+        expect(svg?.textContent).toContain("End");
+        expect(container.querySelector(".file-view-drawio-code")).toBeNull();
         expect(devPanelReadBinaryMock).not.toHaveBeenCalled();
     });
 
@@ -98,7 +136,9 @@ describe("DrawioRenderer", () => {
                 />,
             );
         });
-        await flushRenderer();
+        await waitForRenderer(() => {
+            expect(container.querySelector(".file-view-drawio-image")).not.toBeNull();
+        });
 
         expect(devPanelReadBinaryMock).toHaveBeenCalledWith("test-session", "docs/arch.drawio.svg");
         expect(createObjectURLMock).toHaveBeenCalledTimes(1);
@@ -122,7 +162,9 @@ describe("DrawioRenderer", () => {
                 />,
             );
         });
-        await flushRenderer();
+        await waitForRenderer(() => {
+            expect(container.textContent).toContain("read failed");
+        });
 
         expect(container.textContent).toContain("read failed");
         expect(consoleWarnSpy).toHaveBeenCalledWith("[drawio] failed to load svg preview", expect.objectContaining({

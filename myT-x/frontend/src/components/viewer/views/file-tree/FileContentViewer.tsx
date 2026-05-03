@@ -34,6 +34,7 @@ export interface FileContentViewerProps {
     readonly renderMode?: RenderMode;
     readonly canPreview?: boolean;
     readonly onRenderModeChange?: (mode: RenderMode) => void;
+    readonly onRefresh?: () => void;
     readonly previewRenderer?: (content: FileContentResult, kind: DocumentKind) => ReactNode;
 }
 
@@ -55,6 +56,7 @@ export function FileContentViewer({
     renderMode,
     canPreview,
     onRenderModeChange,
+    onRefresh,
     previewRenderer,
 }: FileContentViewerProps) {
     const [internalRenderMode, setInternalRenderMode] = useState<RenderMode>("raw");
@@ -223,6 +225,7 @@ export function FileContentViewer({
                 canPreview={effectiveCanPreview}
                 isPreviewMode={isPreviewMode}
                 onTogglePreview={handleTogglePreview}
+                onRefresh={onRefresh}
                 size={content.size}
                 truncated={content.truncated}
                 headerNotice={headerNotice}

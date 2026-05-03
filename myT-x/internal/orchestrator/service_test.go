@@ -67,6 +67,42 @@ func TestNewServicePanicsOnMissingDeps(t *testing.T) {
 	NewService(Deps{})
 }
 
+func TestProjectTeamStorageUsesProjectMyTXStorage(t *testing.T) {
+	configDir := t.TempDir()
+	projectRoot := filepath.Join(t.TempDir(), "project")
+	deps := testDeps(t, filepath.Join(configDir, "config.yaml"))
+	deps.FindSessionSnapshot = func(sessionName string) (tmux.SessionSnapshot, error) {
+		return tmux.SessionSnapshot{Name: sessionName, RootPath: projectRoot}, nil
+	}
+	s := NewService(deps)
+
+	if err := s.SaveTeam(TeamDefinition{
+		ID:              "team-project",
+		Name:            "Project Team",
+		StorageLocation: StorageLocationProject,
+		Members: []TeamMember{{
+			ID:        "member-1",
+			PaneTitle: "Worker",
+			Role:      "Worker",
+			Command:   "codex",
+		}},
+	}, "alpha"); err != nil {
+		t.Fatalf("SaveTeam(project) error = %v", err)
+	}
+
+	definitionsPath := filepath.Join(projectRoot, ".myT-x", definitionsFileName)
+	membersPath := filepath.Join(projectRoot, ".myT-x", membersFileName)
+	if _, err := os.Stat(definitionsPath); err != nil {
+		t.Fatalf("project team definitions file not created under .myT-x: %v", err)
+	}
+	if _, err := os.Stat(membersPath); err != nil {
+		t.Fatalf("project team members file not created under .myT-x: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "session-info")); !os.IsNotExist(err) {
+		t.Fatalf("project team storage should not create session-info storage: %v", err)
+	}
+}
+
 func TestNewServiceDefaultsSleepFn(t *testing.T) {
 	deps := testDeps(t, filepath.Join(t.TempDir(), "config.yaml"))
 	deps.SleepFn = nil

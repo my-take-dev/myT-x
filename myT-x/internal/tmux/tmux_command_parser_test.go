@@ -185,6 +185,20 @@ func TestParseTmuxCommandLine(t *testing.T) {
 			wantArgs:    []string{},
 		},
 		{
+			name:        "delete-buffer with named buffer",
+			input:       "delete-buffer -b orch-paste-1",
+			wantCommand: "delete-buffer",
+			wantFlags:   map[string]any{"-b": "orch-paste-1"},
+			wantArgs:    []string{},
+		},
+		{
+			name:        "delete-buffer without flags",
+			input:       "delete-buffer",
+			wantCommand: "delete-buffer",
+			wantFlags:   map[string]any{},
+			wantArgs:    []string{},
+		},
+		{
 			name:        "list-panes with bool and string flags",
 			input:       "list-panes -a -f #{session_name}",
 			wantCommand: "list-panes",

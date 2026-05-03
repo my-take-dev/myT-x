@@ -19,6 +19,8 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+const appTitle = "myT-x v1.1.2"
+
 func main() {
 	os.Exit(run())
 }
@@ -66,7 +68,7 @@ func run() int {
 	}
 
 	err = wails.Run(&options.App{
-		Title:     "myT-x v1.1.000",
+		Title:     appTitle,
 		Width:     1440,
 		Height:    900,
 		MinWidth:  980, // Keep in sync with DOCKED_WINDOW_MIN_WIDTH in frontend viewerDocking.ts.

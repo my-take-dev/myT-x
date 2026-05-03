@@ -31,6 +31,7 @@ const (
 // Config はオーケストレーターの設定を表す。
 type Config struct {
 	DBPath        string
+	ProjectRoot   string
 	In            io.Reader
 	Out           io.Writer
 	Logger        *log.Logger
@@ -61,14 +62,15 @@ type Config struct {
 
 // Runtime は MCP サーバーとライフサイクルを管理する。
 type Runtime struct {
-	cfg        Config
-	store      *store.Store
-	resolver   domain.SelfPaneResolver
-	agentRepo  domain.AgentRepository
-	taskRepo   domain.TaskRepository
-	server     *mcp.Server
-	selfPane   string
-	instanceID string
+	cfg         Config
+	store       *store.Store
+	resolver    domain.SelfPaneResolver
+	agentRepo   domain.AgentRepository
+	taskRepo    domain.TaskRepository
+	server      *mcp.Server
+	selfPane    string
+	instanceID  string
+	projectRoot string
 
 	mu      sync.Mutex
 	started bool
@@ -92,6 +94,10 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	}
 
 	normalized := normalizeConfig(cfg)
+	projectRoot, err := resolveProjectRoot(normalized)
+	if err != nil {
+		return nil, fmt.Errorf("resolve project root: %w", err)
+	}
 
 	var st *store.Store
 	agentRepo := normalized.AgentRepo
@@ -164,21 +170,6 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	}
 	stickyResolver := newStickySelfResolver(resolver, normalized.Logger)
 
-	absDBPath, err := filepath.Abs(normalized.DBPath)
-	if err != nil {
-		var cleanupErrs []error
-		if st != nil {
-			if closeErr := st.Close(); closeErr != nil {
-				cleanupErrs = append(cleanupErrs, fmt.Errorf("close store: %w", closeErr))
-			}
-		}
-		if joined := errors.Join(cleanupErrs...); joined != nil {
-			return nil, fmt.Errorf("resolve db path: %w (cleanup: %v)", err, joined)
-		}
-		return nil, fmt.Errorf("resolve db path: %w", err)
-	}
-	projectRoot := filepath.Dir(filepath.Dir(absDBPath))
-
 	// usecase サービス構築
 	agentSvc := usecase.NewAgentService(agentRepo, agentStatusRepo, stickyResolver, lister, titleSetter, normalized.Logger)
 	agentSvc.SetAgentsUpdatedEmitter(normalized.SessionName, normalized.EmitFn)
@@ -219,14 +210,27 @@ func NewRuntime(cfg Config) (*Runtime, error) {
 	})
 
 	return &Runtime{
-		cfg:        normalized,
-		store:      st,
-		resolver:   stickyResolver,
-		agentRepo:  agentRepo,
-		taskRepo:   taskRepo,
-		server:     server,
-		instanceID: instanceID,
+		cfg:         normalized,
+		store:       st,
+		resolver:    stickyResolver,
+		agentRepo:   agentRepo,
+		taskRepo:    taskRepo,
+		server:      server,
+		instanceID:  instanceID,
+		projectRoot: projectRoot,
 	}, nil
+}
+
+// EnsureDatabase creates or migrates the orchestrator SQLite database at dbPath.
+func EnsureDatabase(dbPath string) error {
+	st, err := store.New(dbPath)
+	if err != nil {
+		return err
+	}
+	if err := st.Close(); err != nil {
+		return fmt.Errorf("close database: %w", err)
+	}
+	return nil
 }
 
 // Run はワンショット実行用エントリーポイント。
@@ -394,9 +398,6 @@ func runWithContext(ctx context.Context, fn func() error) error {
 }
 
 func normalizeConfig(cfg Config) Config {
-	if cfg.DBPath == "" {
-		cfg.DBPath = ".myT-x/orchestrator.db"
-	}
 	if cfg.In == nil {
 		cfg.In = os.Stdin
 	}
@@ -413,4 +414,16 @@ func normalizeConfig(cfg Config) Config {
 		cfg.ServerVersion = DefaultServerVersion
 	}
 	return cfg
+}
+
+func resolveProjectRoot(cfg Config) (string, error) {
+	projectRoot := strings.TrimSpace(cfg.ProjectRoot)
+	if projectRoot == "" {
+		return "", fmt.Errorf("project root is required")
+	}
+	absProjectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve project root: %w", err)
+	}
+	return filepath.Clean(absProjectRoot), nil
 }

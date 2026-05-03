@@ -23,10 +23,12 @@ function mergeLoadedSubtrees(
         }
 
         if (node.children) {
+            const children = mergeLoadedSubtrees(node.children, existingNode.children ?? []);
             return {
                 ...node,
-                hasChildren: node.hasChildren || node.children.length > 0,
-                children: mergeLoadedSubtrees(node.children, existingNode.children ?? []),
+                hasChildren: node.hasChildren || children.length > 0,
+                hasViewTarget: node.hasViewTarget || hasViewTargetInNodes(children),
+                children,
             };
         }
 
@@ -36,9 +38,14 @@ function mergeLoadedSubtrees(
 
         return {
             ...node,
+            hasViewTarget: node.hasViewTarget || hasViewTargetInNodes(existingNode.children),
             children: existingNode.children,
         };
     });
+}
+
+function hasViewTargetInNodes(nodes: readonly FileNode[]): boolean {
+    return nodes.some((node) => node.hasViewTarget);
 }
 
 function remapNodePath(path: string, oldPath: string, newPath: string): string {
@@ -54,6 +61,7 @@ export function fileEntriesToNodes(entries: readonly FileEntry[]): readonly File
         path: normalizePath(entry.path),
         isDir: entry.is_dir,
         hasChildren: entry.is_dir ? entry.has_children : false,
+        hasViewTarget: entry.has_view_target,
         size: entry.is_dir ? undefined : entry.size,
     }));
 }
@@ -76,11 +84,92 @@ export function findNodeByPath(nodes: readonly FileNode[], targetPath: string): 
     return null;
 }
 
+export function isPathKnownAbsent(nodes: readonly FileNode[], targetPath: string): boolean {
+    const normalizedTarget = normalizePath(targetPath);
+    if (normalizedTarget === "") {
+        return false;
+    }
+
+    const segments = normalizedTarget.split("/");
+    let currentNodes = nodes;
+    let currentPath = "";
+
+    for (let index = 0; index < segments.length; index += 1) {
+        currentPath = currentPath === "" ? segments[index] : `${currentPath}/${segments[index]}`;
+        const node = currentNodes.find((entry) => normalizePath(entry.path) === currentPath);
+        if (!node) {
+            return true;
+        }
+        if (index === segments.length - 1) {
+            return false;
+        }
+        if (!node.isDir) {
+            return true;
+        }
+        if (!node.children) {
+            return false;
+        }
+        currentNodes = node.children;
+    }
+
+    return false;
+}
+
 export function mergeRootNodes(
     nextNodes: readonly FileNode[],
     existingTree: readonly FileNode[],
 ): readonly FileNode[] {
     return mergeLoadedSubtrees(nextNodes, existingTree);
+}
+
+function clearLoadedChildren(node: FileNode): FileNode {
+    const cleared: FileNode = {
+        name: node.name,
+        path: node.path,
+        isDir: node.isDir,
+        hasChildren: node.hasChildren,
+        hasViewTarget: node.hasViewTarget,
+    };
+    if (node.size === undefined) {
+        return cleared;
+    }
+    return {
+        ...cleared,
+        size: node.size,
+    };
+}
+
+export function clearLoadedChildrenForPaths(
+    tree: readonly FileNode[],
+    paths: readonly string[],
+): readonly FileNode[] {
+    const targetPaths = new Set(paths.map(normalizePath));
+    if (targetPaths.size === 0) {
+        return tree;
+    }
+
+    return clearLoadedChildrenForTargetPaths(tree, targetPaths);
+}
+
+function clearLoadedChildrenForTargetPaths(
+    tree: readonly FileNode[],
+    targetPaths: ReadonlySet<string>,
+): readonly FileNode[] {
+    return tree.map((node) => {
+        if (!node.isDir) {
+            return node;
+        }
+        if (targetPaths.has(normalizePath(node.path))) {
+            return clearLoadedChildren(node);
+        }
+        if (!node.children) {
+            return node;
+        }
+        return {
+            ...node,
+            children: clearLoadedChildrenForTargetPaths(node.children, targetPaths),
+        };
+    });
 }
 
 /**
@@ -144,14 +233,17 @@ export function mergeChildrenIntoTree(
             return {
                 ...node,
                 hasChildren: children.length > 0,
+                hasViewTarget: hasViewTargetInNodes(children),
                 children: mergeLoadedSubtrees(children, node.children ?? []),
             };
         }
 
         if (node.isDir && node.children && isSameOrDescendantPath(normalizedTarget, node.path)) {
+            const nextChildren = mergeChildrenIntoTree(node.children, normalizedTarget, children);
             return {
                 ...node,
-                children: mergeChildrenIntoTree(node.children, normalizedTarget, children),
+                hasViewTarget: node.hasViewTarget || hasViewTargetInNodes(nextChildren),
+                children: nextChildren,
             };
         }
 
@@ -174,6 +266,7 @@ export function removePathFromTree(tree: readonly FileNode[], targetPath: string
                 ...node,
                 children: nextChildren,
                 hasChildren: nextChildren.length > 0,
+                hasViewTarget: hasViewTargetInNodes(nextChildren),
             });
             continue;
         }

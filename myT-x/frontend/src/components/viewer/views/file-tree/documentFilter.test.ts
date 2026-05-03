@@ -1,14 +1,15 @@
 import {describe, expect, it} from "vitest";
 import type {FileNode} from "./fileTreeTypes";
-import {classifyDocument, filterDocumentTree, isDocumentFile} from "./documentFilter";
+import {classifyDocument, filterDocumentTree, isDocumentFile, isDocumentFileName} from "./documentFilter";
 
-function makeFile(path: string): FileNode {
+function makeFile(path: string, hasViewTarget: boolean = isDocumentFileName(path)): FileNode {
     const segments = path.split("/");
     return {
         name: segments[segments.length - 1] ?? path,
         path,
         isDir: false,
         hasChildren: false,
+        hasViewTarget,
         size: 128,
     };
 }
@@ -20,6 +21,7 @@ function makeDir(path: string, children?: readonly FileNode[], hasChildren: bool
         path,
         isDir: true,
         hasChildren,
+        hasViewTarget: children ? children.some((child) => child.hasViewTarget) : hasChildren,
         children,
     };
 }
@@ -45,6 +47,7 @@ describe("isDocumentFile", () => {
         ["chart.vega", true],
         ["chart.vl.json", true],
         ["chart.vg.json", true],
+        [".md", true],
         ["notes.txt", false],
         ["Makefile", false],
         ["archive.tar.gz", false],
@@ -57,8 +60,18 @@ describe("isDocumentFile", () => {
                 path: name,
                 isDir: name === "folder.md",
                 hasChildren: false,
-            };
+                hasViewTarget: expected,
+        };
         expect(isDocumentFile(node)).toBe(expected);
+    });
+
+    it.each([
+        ["README.MD", true],
+        [".md", true],
+        ["archive.tar.gz", false],
+        ["Makefile", false],
+    ])("classifies file name %s as supported=%s", (name, expected) => {
+        expect(isDocumentFileName(name)).toBe(expected);
     });
 });
 
@@ -103,12 +116,21 @@ describe("filterDocumentTree", () => {
         expect(filtered).toEqual([]);
     });
 
-    it("keeps unexplored directories with children so lazy loading can continue", () => {
+    it("keeps unexplored directories with view targets so lazy loading can continue", () => {
         const filtered = filterDocumentTree([
             makeDir("docs", undefined, true),
         ]);
 
         expect(filtered.map((node) => node.path)).toEqual(["docs"]);
+    });
+
+    it("removes unexplored directories without view targets", () => {
+        const filtered = filterDocumentTree([{
+            ...makeDir("src", undefined, true),
+            hasViewTarget: false,
+        }]);
+
+        expect(filtered).toEqual([]);
     });
 
     it("removes empty directories with no known children", () => {

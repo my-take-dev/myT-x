@@ -6,17 +6,25 @@ import {useChatStore} from "../src/stores/chatStore";
 
 const apiMock = vi.hoisted(() => ({
     SendChatMessage: vi.fn<(paneId: string, message: string) => Promise<void>>(),
+    LoadPromptPresets: vi.fn<(sessionName: string) => Promise<unknown>>(),
 }));
 
 vi.mock("../src/api", () => ({
     api: {
         SendChatMessage: (paneId: string, message: string) => apiMock.SendChatMessage(paneId, message),
+        LoadPromptPresets: (sessionName: string) => apiMock.LoadPromptPresets(sessionName),
     },
 }));
 
 async function flushEffects(): Promise<void> {
     await act(async () => {
         await Promise.resolve();
+    });
+}
+
+function unresolvedPromptPresetLoad(): Promise<unknown> {
+    return new Promise<unknown>(() => {
+        // ChatLayout tests do not exercise prompt preset loading.
     });
 }
 
@@ -31,6 +39,8 @@ describe("ChatLayout", () => {
         useChatStore.setState({requestedPaneId: null});
         apiMock.SendChatMessage.mockReset();
         apiMock.SendChatMessage.mockResolvedValue(undefined);
+        apiMock.LoadPromptPresets.mockReset();
+        apiMock.LoadPromptPresets.mockImplementation(unresolvedPromptPresetLoad);
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     });
 

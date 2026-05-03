@@ -14,6 +14,7 @@ interface FileContentHeaderProps {
     readonly canPreview: boolean;
     readonly isPreviewMode: boolean;
     readonly onTogglePreview: () => void;
+    readonly onRefresh?: () => void;
     readonly size: number;
     readonly truncated: boolean;
     readonly headerNotice: string | null;
@@ -48,6 +49,7 @@ export function FileContentHeader({
     canPreview,
     isPreviewMode,
     onTogglePreview,
+    onRefresh,
     size,
     truncated,
     headerNotice,
@@ -61,11 +63,23 @@ export function FileContentHeader({
         : t("viewer.fileContent.showPreviewWithShortcut", "プレビュー表示 ({shortcut})", {
             shortcut: FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT_LABEL,
         });
+    const reloadFileLabel = t("viewer.fileContent.reload", "ファイルを再読み込み");
 
     return (
         <div className="file-content-header">
             <span className="file-content-path">{path}</span>
             <CopyPathButton state={pathCopyState} onClick={onCopyPath}/>
+            {onRefresh && (
+                <button
+                    type="button"
+                    className="file-content-refresh"
+                    onClick={onRefresh}
+                    title={reloadFileLabel}
+                    aria-label={reloadFileLabel}
+                >
+                    {"\u21BB"}
+                </button>
+            )}
             {canPreview && (
                 <button
                     type="button"

@@ -31,6 +31,7 @@ import "./views/input-history"; // DIFFの直下に配置
 import "./views/mcp-manager";
 import "./views/pane-scheduler";
 import "./views/prompt-presets";
+import "./views/session-memo";
 import "./views/orchestrator-teams";
 import "./views/single-task-runner";
 import "./views/task-scheduler";

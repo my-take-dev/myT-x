@@ -49,8 +49,9 @@ md,openAPI(swagger),drawio...
 | ファイルビュー (File View) | Markdown / Mermaid / Swagger(OpenAPI) / draw.io / SQLite / Markmap / Vega / Vega-Lite / WaveDrom の統合プレビュー（`Ctrl+Shift+E`） |
 | SQLite Viewer | `.db` / `.sqlite` / `.sqlite3` のテーブル一覧 + 行データ表示 + CSV エクスポート（読み取り専用） |
 | Prompt Presets | 固定プロンプトテンプレートを登録してチャット入力に追記（グローバル / プロジェクトの 2 スコープ、最大 200 件、`Ctrl+Shift+P`） |
-| Usage Dashboard | Claude Code / Codex の利用統計を可視化（エージェント / スキル / スラッシュコマンドの集計、カテゴリタブ + 日次棒グラフ、30 日間日次アクティビティ、`Ctrl+Shift+U`） |
-| 13種のビューア | Editor / File View / Git Graph / Diff / Input History / MCP Manager / スケジューラ / タスクキュー / Single Task Runner / チーム管理 / Usage Dashboard / Prompt Presets / Error Log |
+| Usage Dashboard | Claude Code / Codex の利用統計を可視化（比較モード + ソース選択、エージェント / スキル / スラッシュコマンドの集計、日次棒グラフ、30 日間日次アクティビティ、`Ctrl+Shift+U`） |
+| Session Memo | セッション単位のメモを右サイドバーで編集し、`.myT-x/session-memo.md` に保存（`Ctrl+Shift+N`） |
+| 14種のビューア | Editor / File View / Git Graph / Diff / Input History / MCP Manager / スケジューラ / タスクキュー / Single Task Runner / チーム管理 / Usage Dashboard / Session Memo / Prompt Presets / Error Log |
 | MCP内蔵 | オーケストレーションMCP + Single Task Runner MCP + LSP-MCP 200種以上 |
 | タスク自動化 | ペインスケジューラ（定期実行）+ タスクスケジューラ（順次実行）+ Single Task Runner（軽量版、`Ctrl+Shift+J`） |
 | ペインチャットバー | 各ペイン下部にチャット入力バーを常時ドッキング、クリックで対象ペインへ送信 |
@@ -82,8 +83,8 @@ https://github.com/my-take-dev/myT-x/releases
 | [はじめかた](doc/getting-started.md) | インストール、最初のセッション作成 |
 | [画面の見かた](doc/screen-layout.md) | メニューバー、サイドバー、メインエリア、Activity Strip の各UI要素 |
 | [ターミナル操作](doc/terminal-operations.md) | 分割、コピペ、検索、Quake Mode、同期入力、チャット入力バー |
-| [ビューアシステム](doc/viewer-system.md) | 13種のビューア（Editor / File View / Git Graph / Diff / Usage Dashboard / Prompt Presets 等）の詳細操作 |
-| [設定](doc/settings.md) | 6つの設定タブ（Shell / キーバインド / Worktree / Agent Model / 環境変数） |
+| [ビューアシステム](doc/viewer-system.md) | 14種のビューア（Editor / File View / Git Graph / Diff / Usage Dashboard / Session Memo / Prompt Presets 等）の詳細操作 |
+| [設定](doc/settings.md) | 7つの設定タブ（基本設定 / AutoStart / キーバインド / Worktree / Agent Model / 環境変数） |
 | [Agent Teams](doc/agent-teams.md) | チーム作成、メンバー管理、オーケストレーションMCP、キャンバスモード |
 | [タスクスケジューラ](doc/task-scheduler.md) | ペインスケジューラとタスクスケジューラの使い方 |
 | [ショートカット一覧](doc/shortcuts.md) | 全キーボードショートカット |

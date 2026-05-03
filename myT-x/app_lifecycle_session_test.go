@@ -43,7 +43,7 @@ func TestSessionScopedLifecycleParticipantsIncludeAllSessionManagers(t *testing.
 		}
 	}
 
-	wantNames := []string{"task scheduler", "single task runner", "devpanel", "mcp"}
+	wantNames := []string{"task scheduler", "single task runner", "devpanel", "mcp", "session memo"}
 	for i, wantName := range wantNames {
 		if gotNames[i] != wantName {
 			t.Fatalf("participant[%d] = %q, want %q", i, gotNames[i], wantName)

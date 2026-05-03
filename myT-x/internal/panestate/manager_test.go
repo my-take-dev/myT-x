@@ -43,6 +43,60 @@ func TestManagerLazyEmulationForInactivePanes(t *testing.T) {
 	}
 }
 
+func TestManagerReplayReturnsRawHistoryForActivePane(t *testing.T) {
+	manager := NewManager(1024)
+	manager.EnsurePane("%0", 40, 2)
+	manager.SetActivePanes(map[string]struct{}{"%0": {}})
+
+	manager.Feed("%0", []byte("line1\nline2\nline3"))
+
+	replay := manager.Replay("%0")
+	if replay != "line1\nline2\nline3" {
+		t.Fatalf("Replay() = %q, want exact raw history", replay)
+	}
+}
+
+func TestManagerSnapshotKeepsCurrentViewportTail(t *testing.T) {
+	manager := NewManager(1024)
+	manager.EnsurePane("%0", 40, 2)
+	manager.SetActivePanes(map[string]struct{}{"%0": {}})
+
+	manager.Feed("%0", []byte("line1\nline2\nline3"))
+
+	snapshot := manager.Snapshot("%0")
+	if strings.Contains(snapshot, "line1") {
+		t.Fatalf("Snapshot() should keep current viewport semantics, got %q", snapshot)
+	}
+	if !strings.Contains(snapshot, "line2") || !strings.Contains(snapshot, "line3") {
+		t.Fatalf("Snapshot() = %q, want current viewport tail", snapshot)
+	}
+}
+
+func TestManagerSnapshotForActivePaneDoesNotFallbackToRawReplay(t *testing.T) {
+	manager := NewManager(1024)
+	manager.EnsurePane("%0", 40, 2)
+	manager.SetActivePanes(map[string]struct{}{"%0": {}})
+	manager.Feed("%0", []byte("\x1b[31m"))
+
+	if snapshot := manager.Snapshot("%0"); snapshot != "" {
+		t.Fatalf("Snapshot() = %q, want empty active viewport without raw replay fallback", snapshot)
+	}
+	if replay := manager.Replay("%0"); replay != "\x1b[31m" {
+		t.Fatalf("Replay() = %q, want raw replay to remain available for non-restore callers", replay)
+	}
+}
+
+func TestManagerReplayReturnsRawHistoryForInactivePane(t *testing.T) {
+	manager := NewManager(1024)
+	manager.EnsurePane("%0", 40, 2)
+	manager.Feed("%0", []byte("line1\nline2\nline3"))
+
+	replay := manager.Replay("%0")
+	if replay != "line1\nline2\nline3" {
+		t.Fatalf("Replay() = %q, want exact raw history", replay)
+	}
+}
+
 func TestManagerResizeAndRetain(t *testing.T) {
 	manager := NewManager(1024)
 	manager.EnsurePane("%0", 40, 8)

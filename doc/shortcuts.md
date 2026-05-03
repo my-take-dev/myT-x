@@ -49,6 +49,7 @@
 | `Ctrl+Shift+J` | Single Task Runner（シングルタスクランナー） |
 | `Ctrl+Shift+T` | Teams（オーケストレーターチーム） |
 | `Ctrl+Shift+U` | Usage Dashboard（使用状況ダッシュボード） |
+| `Ctrl+Shift+N` | Session Memo |
 | `Ctrl+Shift+P` | Prompt Presets（プロンプトプリセット） |
 | `Ctrl+Shift+L` | Error Log（エラーログ） |
 

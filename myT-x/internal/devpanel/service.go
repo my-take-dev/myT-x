@@ -81,6 +81,32 @@ const DetachedHEADSentinel = "(HEAD detached)"
 // excludedDirs contains directory names excluded from listings.
 var excludedDirs = []string{".git", "node_modules"}
 
+// Keep in sync with DOCUMENT_EXTENSIONS in frontend file-tree documentFilter.ts.
+var viewTargetExtensions = map[string]struct{}{
+	"db":       {},
+	"md":       {},
+	"mmd":      {},
+	"drawio":   {},
+	"sqlite":   {},
+	"sqlite3":  {},
+	"yaml":     {},
+	"yml":      {},
+	"json":     {},
+	"dot":      {},
+	"gv":       {},
+	"mm":       {},
+	"wavedrom": {},
+	"vega":     {},
+}
+
+// Keep in sync with COMPOUND_SUFFIXES in frontend file-tree documentFilter.ts.
+var viewTargetCompoundSuffixes = []string{
+	".drawio.svg",
+	".drawio.xml",
+	".vl.json",
+	".vg.json",
+}
+
 // Deps holds external dependencies injected into the devpanel Service.
 type Deps struct {
 	// ResolveSessionDir resolves a directory path for a session.
@@ -253,27 +279,32 @@ func parentPanelPath(relPath string) string {
 	return parent
 }
 
+func panelPathAndAncestors(relPath string) []string {
+	normalizedPath := normalizePanelPath(relPath)
+	paths := []string{normalizedPath}
+	for normalizedPath != "" {
+		normalizedPath = parentPanelPath(normalizedPath)
+		paths = append(paths, normalizedPath)
+	}
+	return paths
+}
+
 func (s *Service) invalidateDirCache(sessionName string, paths ...string) {
 	if s.dirCache == nil {
 		return
 	}
 
 	// Avoid repeated subtree scans when a mutation touches both a path and its
-	// parent within the same operation; Invalidate itself is idempotent.
+	// ancestors within the same operation; Invalidate itself is idempotent.
 	invalidated := make(map[string]struct{}, len(paths)*2)
 	for _, path := range paths {
-		normalizedPath := normalizePanelPath(path)
-		if _, ok := invalidated[normalizedPath]; !ok {
-			s.dirCache.Invalidate(sessionName, normalizedPath)
-			invalidated[normalizedPath] = struct{}{}
+		for _, invalidatedPath := range panelPathAndAncestors(path) {
+			if _, ok := invalidated[invalidatedPath]; ok {
+				continue
+			}
+			s.dirCache.Invalidate(sessionName, invalidatedPath)
+			invalidated[invalidatedPath] = struct{}{}
 		}
-
-		parentPath := parentPanelPath(normalizedPath)
-		if _, ok := invalidated[parentPath]; ok {
-			continue
-		}
-		s.dirCache.Invalidate(sessionName, parentPath)
-		invalidated[parentPath] = struct{}{}
 	}
 }
 
@@ -296,7 +327,11 @@ func dirHasVisibleChildren(dirPath string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer dir.Close()
+	defer func() {
+		if closeErr := dir.Close(); closeErr != nil {
+			slog.Debug("[DEBUG-DEVPANEL] failed to close directory probe", "path", dirPath, "error", closeErr)
+		}
+	}()
 
 	for {
 		entries, readErr := dir.ReadDir(16)
@@ -316,6 +351,66 @@ func dirHasVisibleChildren(dirPath string) (bool, error) {
 }
 
 var dirHasVisibleChildrenFunc = dirHasVisibleChildren
+
+func isViewTargetFileName(name string) bool {
+	normalizedName := strings.ToLower(strings.TrimSpace(name))
+	if normalizedName == "" {
+		return false
+	}
+
+	for _, suffix := range viewTargetCompoundSuffixes {
+		if strings.HasSuffix(normalizedName, suffix) {
+			return true
+		}
+	}
+
+	lastDotIndex := strings.LastIndex(normalizedName, ".")
+	if lastDotIndex < 0 || lastDotIndex == len(normalizedName)-1 {
+		return false
+	}
+	_, ok := viewTargetExtensions[normalizedName[lastDotIndex+1:]]
+	return ok
+}
+
+func dirHasViewTarget(dirPath string) (bool, error) {
+	found := false
+	err := filepath.WalkDir(dirPath, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == dirPath {
+			return nil
+		}
+		if entry.IsDir() {
+			if slices.Contains(excludedDirs, entry.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isViewTargetFileName(entry.Name()) {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found, err
+}
+
+var dirHasViewTargetFunc = dirHasViewTarget
+
+func entriesHaveViewTarget(entries []FileEntry) bool {
+	return slices.ContainsFunc(entries, func(entry FileEntry) bool {
+		return entry.HasViewTarget
+	})
+}
+
+func logDirViewTargetInspectionError(relPath string, err error) {
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, os.ErrPermission) {
+		slog.Debug("[DEBUG-DEVPANEL] permission denied while inspecting directory view targets", "path", relPath, "error", err)
+		return
+	}
+	slog.Warn("[DEVPANEL] failed to inspect directory view targets", "path", relPath, "error", err)
+}
 
 func validateMutationPath(relPath, fieldName string) (string, error) {
 	trimmed := strings.TrimSpace(relPath)
@@ -577,6 +672,14 @@ func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, erro
 		if entry.IsDir() {
 			switch {
 			case shouldProbeChildren:
+				hasViewTarget, hasViewTargetErr := dirHasViewTargetFunc(filepath.Join(targetDir, name))
+				if hasViewTargetErr != nil {
+					logDirViewTargetInspectionError(relPath, hasViewTargetErr)
+					fe.HasViewTarget = true
+				} else {
+					fe.HasViewTarget = hasViewTarget
+				}
+
 				hasChildren, hasChildrenErr := dirHasVisibleChildrenFunc(filepath.Join(targetDir, name))
 				if hasChildrenErr != nil {
 					slog.Warn("[DEVPANEL] failed to inspect directory children", "path", relPath, "error", hasChildrenErr)
@@ -595,10 +698,17 @@ func (s *Service) ListDir(sessionName string, dirPath string) ([]FileEntry, erro
 				} else {
 					fe.HasChildren = true
 				}
+				if cachedEntries, ok := s.dirCache.Get(sessionName, relPath); ok {
+					fe.HasViewTarget = entriesHaveViewTarget(cachedEntries)
+				} else {
+					fe.HasViewTarget = true
+				}
 			default:
 				fe.HasChildren = true
+				fe.HasViewTarget = true
 			}
 		} else {
+			fe.HasViewTarget = isViewTargetFileName(name)
 			if info, infoErr := entry.Info(); infoErr == nil {
 				fe.Size = info.Size()
 			} else {

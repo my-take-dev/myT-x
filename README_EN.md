@@ -50,8 +50,9 @@ md,openAPI(swagger),drawio...
 | File View | Unified preview for Markdown / Mermaid / Swagger(OpenAPI) / draw.io / SQLite / Markmap / Vega / Vega-Lite / WaveDrom (`Ctrl+Shift+E`) |
 | SQLite Viewer | Read-only table list + row data + CSV export for `.db` / `.sqlite` / `.sqlite3` |
 | Prompt Presets | Register reusable prompt templates and append to chat input (global / project scopes, up to 200, `Ctrl+Shift+P`) |
-| Usage Dashboard | Visualize Claude Code / Codex usage stats (agents / skills / slash commands, category tabs + daily bar charts, 30-day activity, `Ctrl+Shift+U`) |
-| 13 Viewers | Editor / File View / Git Graph / Diff / Input History / MCP Manager / Scheduler / Task Queue / Single Task Runner / Team Management / Usage Dashboard / Prompt Presets / Error Log |
+| Usage Dashboard | Visualize Claude Code / Codex usage stats (compare mode + source selection, agents / skills / slash commands, daily bar charts, 30-day activity, `Ctrl+Shift+U`) |
+| Session Memo | Edit session-scoped notes in the right sidebar and save them to `.myT-x/session-memo.md` (`Ctrl+Shift+N`) |
+| 14 Viewers | Editor / File View / Git Graph / Diff / Input History / MCP Manager / Scheduler / Task Queue / Single Task Runner / Team Management / Usage Dashboard / Session Memo / Prompt Presets / Error Log |
 | Built-in MCP | Orchestration MCP + Single Task Runner MCP + 200+ LSP-MCP integrations |
 | Task Automation | Pane Scheduler (recurring) + Task Scheduler (sequential) + Single Task Runner (lightweight, `Ctrl+Shift+J`) |
 | Per-pane Chat Bar | Chat input bar docked at the bottom of each pane, click to target that pane |
@@ -83,8 +84,8 @@ See the `doc/` folder for detailed manuals.
 | [Getting Started](doc/getting-started_en.md) | Installation, creating your first session |
 | [Screen Layout](doc/screen-layout_en.md) | Menu bar, sidebar, main area, Activity Strip UI elements |
 | [Terminal Operations](doc/terminal-operations_en.md) | Splitting, copy/paste, search, Quake Mode, sync input, chat bar |
-| [Viewer System](doc/viewer-system_en.md) | Detailed guide for all 13 viewers (Editor / File View / Git Graph / Diff / Usage Dashboard / Prompt Presets, etc.) |
-| [Settings](doc/settings_en.md) | 6 settings tabs (Shell / Key Bindings / Worktree / Agent Model / Env Vars) |
+| [Viewer System](doc/viewer-system_en.md) | Detailed guide for all 14 viewers (Editor / File View / Git Graph / Diff / Usage Dashboard / Session Memo / Prompt Presets, etc.) |
+| [Settings](doc/settings_en.md) | 7 settings tabs (General / AutoStart / Key Bindings / Worktree / Agent Model / Env Vars) |
 | [Agent Teams](doc/agent-teams_en.md) | Team creation, member management, Orchestration MCP, Canvas Mode |
 | [Task Scheduler](doc/task-scheduler_en.md) | Pane Scheduler and Task Scheduler usage |
 | [Shortcuts](doc/shortcuts_en.md) | Complete keyboard shortcut reference |

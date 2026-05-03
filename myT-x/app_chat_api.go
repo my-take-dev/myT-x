@@ -8,6 +8,9 @@ import (
 // SendChatMessage sends a chat message to the specified pane using the 3-step
 // send-keys pattern: literal text in chunks → delay → Enter (C-m).
 // This is the Wails binding called from the frontend chat input bar.
+// It does not apply the Diff Review line-order workaround because chat input
+// sends operator-authored text directly, not a precomposed review Markdown
+// document whose section order must be reconstructed after pane display.
 func (a *App) SendChatMessage(paneID string, text string) error {
 	sessions, err := a.requireSessionsWithPaneID(&paneID)
 	if err != nil {

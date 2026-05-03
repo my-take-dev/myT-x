@@ -7,6 +7,12 @@ import {BrowserOpenURL} from "../../wailsjs/runtime/runtime";
 import {api} from "../api";
 import {useTmuxStore} from "../stores/tmuxStore";
 import {suppressNextTerminalFocusImeRecovery} from "../utils/imeRecovery";
+import {
+    canWritePaneReplay,
+    clearPaneReplayBoundary,
+    sanitizeTerminalReplay,
+    setPaneReplayBoundaryPrefix,
+} from "../utils/terminalOutputFilter";
 
 // ---------------------------------------------------------------------------
 // webglUnavailable: モジュールスコープのフラグ
@@ -213,7 +219,26 @@ export function useTerminalSetup({
                 // 例外を投げる場合がある。disposed フラグは上でチェック済みだが、
                 // 非同期のため微小な競合窓が残る。try-catch で安全に吸収する。
                 try {
-                    term.write(replay);
+                    const sanitizedReplay = sanitizeTerminalReplay(replay);
+                    if (!canWritePaneReplay(paneId)) {
+                        if (import.meta.env.DEV) {
+                            console.warn(`[terminal] replay skipped after live output started for pane=${paneId}`);
+                        }
+                        return;
+                    }
+                    if (sanitizedReplay.pendingPrefix.length > 0) {
+                        const armed = setPaneReplayBoundaryPrefix(paneId, sanitizedReplay.pendingPrefix);
+                        if (!armed) {
+                            if (import.meta.env.DEV) {
+                                console.warn(`[terminal] replay boundary skipped after live output started for pane=${paneId}`);
+                            }
+                            return;
+                        }
+                    }
+                    const replayOutput = sanitizedReplay.output;
+                    if (replayOutput.length > 0) {
+                        term.write(replayOutput);
+                    }
                 } catch (err: unknown) {
                     console.warn(`[terminal] replay write failed for pane=${paneId}`, err);
                 }
@@ -224,6 +249,7 @@ export function useTerminalSetup({
 
         return () => {
             disposed = true;
+            clearPaneReplayBoundary(paneId);
             rendererAddon?.dispose();
             term.dispose();
             terminalRef.current = null;

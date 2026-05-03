@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -209,10 +210,12 @@ func (testMessageRepo) GetResponse(context.Context, string) (domain.TaskMessage,
 }
 
 func TestNewRuntimeCreatesFallbackStatusRepoWhenNotInjected(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), ".myT-x", "orchestrator.db")
+	projectRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "session-info", "hash", "orchestrator.db")
 	paneOps := noopPaneOps{}
 	rt, err := NewRuntime(Config{
 		DBPath:        dbPath,
+		ProjectRoot:   projectRoot,
 		Logger:        log.New(io.Discard, "", 0),
 		AgentRepo:     &testAgentRepo{},
 		TaskRepo:      &testTaskRepo{},
@@ -239,10 +242,14 @@ func TestNewRuntimeCreatesFallbackStatusRepoWhenNotInjected(t *testing.T) {
 }
 
 func TestNewRuntimeUsesInjectedStatusRepoWithoutFallbackStore(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), ".myT-x", "orchestrator.db")
+	// The DB path and project root intentionally live in separate temp trees:
+	// session-info stores private runtime state, while payload artifacts use the workspace.
+	dbPath := filepath.Join(t.TempDir(), "session-info", "hash", "orchestrator.db")
+	projectRoot := filepath.Join(t.TempDir(), "workspace")
 	paneOps := noopPaneOps{}
 	rt, err := NewRuntime(Config{
 		DBPath:          dbPath,
+		ProjectRoot:     projectRoot,
 		Logger:          log.New(io.Discard, "", 0),
 		AgentRepo:       &testAgentRepo{},
 		AgentStatusRepo: testStatusRepo{},
@@ -263,5 +270,74 @@ func TestNewRuntimeUsesInjectedStatusRepoWithoutFallbackStore(t *testing.T) {
 	}
 	if rt.store != nil {
 		t.Fatal("did not expect fallback store when all repositories are injected")
+	}
+	wantProjectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		t.Fatalf("Abs(projectRoot): %v", err)
+	}
+	if rt.projectRoot != filepath.Clean(wantProjectRoot) {
+		t.Fatalf("projectRoot = %q, want %q", rt.projectRoot, filepath.Clean(wantProjectRoot))
+	}
+}
+
+func TestNewRuntimeRejectsSessionInfoDBPathWithoutProjectRoot(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "session-info", "hash", "orchestrator.db")
+	paneOps := noopPaneOps{}
+
+	_, err := NewRuntime(Config{
+		DBPath:          dbPath,
+		Logger:          log.New(io.Discard, "", 0),
+		AgentRepo:       &testAgentRepo{},
+		AgentStatusRepo: testStatusRepo{},
+		TaskRepo:        &testTaskRepo{},
+		MessageRepo:     testMessageRepo{},
+		Sender:          paneOps,
+		Lister:          paneOps,
+		Capturer:        paneOps,
+		SelfResolver:    testResolver{paneID: "%1"},
+		TitleSetter:     paneOps,
+		Splitter:        paneOps,
+		PasteSender:     paneOps,
+		ServerName:      "test-server",
+		ServerVersion:   "test-version",
+	})
+	if err == nil {
+		t.Fatal("NewRuntime() expected project root error")
+	}
+	if !strings.Contains(err.Error(), "project root is required") {
+		t.Fatalf("NewRuntime() error = %v, want project root requirement", err)
+	}
+}
+
+func TestNewRuntimeRejectsDBPathWithoutProjectRoot(t *testing.T) {
+	projectRoot := t.TempDir()
+	dbPath := filepath.Join(projectRoot, ".myT-x", "orchestrator.db")
+	paneOps := noopPaneOps{}
+
+	_, err := NewRuntime(Config{
+		DBPath:          dbPath,
+		Logger:          log.New(io.Discard, "", 0),
+		AgentRepo:       &testAgentRepo{},
+		AgentStatusRepo: testStatusRepo{},
+		TaskRepo:        &testTaskRepo{},
+		MessageRepo:     testMessageRepo{},
+		Sender:          paneOps,
+		Lister:          paneOps,
+		Capturer:        paneOps,
+		SelfResolver:    testResolver{paneID: "%1"},
+		TitleSetter:     paneOps,
+		Splitter:        paneOps,
+		PasteSender:     paneOps,
+		ServerName:      "test-server",
+		ServerVersion:   "test-version",
+	})
+	if err == nil {
+		t.Fatal("NewRuntime() expected project root error")
+	}
+	if !strings.Contains(err.Error(), "project root is required") {
+		t.Fatalf("NewRuntime() error = %v, want project root requirement", err)
+	}
+	if _, statErr := os.Stat(dbPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("legacy db path stat error = %v, want not exist", statErr)
 	}
 }
