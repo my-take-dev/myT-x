@@ -7,6 +7,7 @@ interface ViewerPanelShellBase {
     readonly title: string;
     readonly onClose: () => void;
     readonly onRefresh?: () => void;
+    readonly refreshDisabled?: boolean;
     readonly refreshTitle?: string;
     readonly headerChildren?: ReactNode;
 }
@@ -30,7 +31,7 @@ type ViewerPanelShellProps =
  * Omit `message` and pass `children` for the main content body.
  */
 export function ViewerPanelShell(props: ViewerPanelShellProps) {
-    const {className, title, onClose, onRefresh, refreshTitle, headerChildren, message} = props;
+    const {className, title, onClose, onRefresh, refreshDisabled, refreshTitle, headerChildren, message} = props;
     // Truthy check: message is always a non-empty string when the message variant
     // is used (callers pass user-facing error/status text). The `?? never` variant
     // makes message undefined when children are passed, so this correctly picks
@@ -44,6 +45,7 @@ export function ViewerPanelShell(props: ViewerPanelShellProps) {
                 title={title}
                 onClose={onClose}
                 onRefresh={onRefresh}
+                refreshDisabled={refreshDisabled}
                 refreshTitle={refreshTitle}
             >
                 {headerChildren}

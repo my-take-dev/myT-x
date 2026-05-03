@@ -232,6 +232,57 @@ func TestTreeWatcherHandleEventUsesRenamedSessionForInvalidation(t *testing.T) {
 	}
 }
 
+func TestTreeWatcherHandleEventInvalidatesAncestorViewTargetPaths(t *testing.T) {
+	rootDir := t.TempDir()
+	filePath := filepath.Join(rootDir, "docs", "nested", "guide.md")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("# guide"), 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	emitter := &testEmitter{}
+	dirCache := NewDirCache(time.Second)
+	cachedPaths := []string{"", "docs", "docs/nested", "docs/nested/guide.md"}
+	for _, path := range cachedPaths {
+		dirCache.Set("session-a", path, []FileEntry{{Name: "stale", Path: path}})
+	}
+
+	watcher := &treeWatcher{
+		sessionName:      "session-a",
+		rootDir:          rootDir,
+		dirCache:         dirCache,
+		emitter:          emitter,
+		debounceInterval: testWatcherDebounceInterval,
+		pendingPaths:     make(map[string]struct{}),
+		ignoredPaths:     make(map[string]time.Time),
+		watchedDirs:      make(map[string]struct{}),
+	}
+
+	watcher.handleEvent(fsnotify.Event{Name: filePath, Op: fsnotify.Write})
+
+	event := emitter.waitForEvent(t, treeInvalidatedEventName, time.Second)
+	payload, ok := event.payload.(TreeInvalidationEvent)
+	if !ok {
+		t.Fatalf("payload type = %T, want TreeInvalidationEvent", event.payload)
+	}
+	if payload.SessionName != "session-a" {
+		t.Fatalf("SessionName = %q, want %q", payload.SessionName, "session-a")
+	}
+	wantPaths := []string{"", "docs", "docs/nested", "docs/nested/guide.md"}
+	if !reflect.DeepEqual(payload.Paths, wantPaths) {
+		t.Fatalf("Paths = %v, want %v", payload.Paths, wantPaths)
+	}
+	watcher.wg.Wait()
+
+	for _, path := range cachedPaths {
+		if _, ok := dirCache.Get("session-a", path); ok {
+			t.Fatalf("cache path %q should be invalidated", path)
+		}
+	}
+}
+
 func TestTreeWatcherAddRecursiveDirectoryLimitEmitsWatcherFailedEvent(t *testing.T) {
 	rootDir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(rootDir, "child"), 0o755); err != nil {

@@ -20,6 +20,7 @@ interface DiffReviewLineRowProps {
     readonly consumePendingAddClickSuppression?: (lineKey: string) => boolean;
     readonly isInDragSelection?: boolean;
     readonly isDragSelectionAnchor?: boolean;
+    readonly hasPendingComment?: boolean;
 }
 
 interface DiffReviewRangeOption extends DiffCommentRangeOption {
@@ -40,6 +41,7 @@ export const DiffReviewLineRow = memo(function DiffReviewLineRow({
     consumePendingAddClickSuppression,
     isInDragSelection = false,
     isDragSelectionAnchor = false,
+    hasPendingComment = false,
 }: DiffReviewLineRowProps) {
     const activeSessionKey = useDiffReviewSessionKey();
     const scopedLineKey = useMemo(
@@ -145,11 +147,21 @@ export const DiffReviewLineRow = memo(function DiffReviewLineRow({
 
     const oldLineLabel = line.type !== "added" ? `old line ${line.oldLineNum}` : "old line";
     const newLineLabel = line.type !== "removed" ? `new line ${line.newLineNum}` : "new line";
+    const rowClassNames = ["diff-line", line.type, "diff-review-line-wrapper"];
+    if (isInDragSelection) {
+        rowClassNames.push("diff-review-line-wrapper--range-selected");
+    }
+    if (isDragSelectionAnchor) {
+        rowClassNames.push("diff-review-line-wrapper--range-anchor");
+    }
+    if (hasPendingComment) {
+        rowClassNames.push("diff-review-line-wrapper--pending-comment");
+    }
 
     return (
         <>
             <div
-                className={`diff-line ${line.type} diff-review-line-wrapper${isInDragSelection ? " diff-review-line-wrapper--range-selected" : ""}${isDragSelectionAnchor ? " diff-review-line-wrapper--range-anchor" : ""}`}
+                className={rowClassNames.join(" ")}
                 onMouseMove={handleRangeSelectionMove}
                 role="row"
                 aria-selected={isInDragSelection}

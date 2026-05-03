@@ -1,6 +1,6 @@
 # Viewer System
 
-Thirteen development tools accessible from the **Activity Strip** on the right edge.
+Fourteen development tools accessible from the **Activity Strip** on the right edge.
 Click an icon or use a keyboard shortcut to toggle. Press `Escape` to close.
 
 ## Display Modes
@@ -254,6 +254,20 @@ After adding comments, the action bar shows a badge with the comment count.
 | 💬 Comments (N) | Number of saved comments |
 | Pane selector | Choose the destination pane |
 | **Send** button | Send all comments to the selected pane as Markdown via Bracketed Paste |
+| **Register to Single Task Runner** | Register comments as Single Task Runner tasks (shown only when the Single Task Runner MCP is enabled for the session) |
+
+Rows with saved but unsent comments are highlighted with a subtle pink background in the diff.
+Both single-line and range comments are supported. The highlight disappears when the comment is sent or registered to Single Task Runner.
+
+#### Registering to Single Task Runner
+
+When the Single Task Runner MCP is enabled for the session, review comments can be queued instead of sent directly to a pane.
+
+- One Single Task Runner task is created for each comment
+- The task title is `レビュー指摘修正`
+- The task body uses the same Markdown format as direct sending
+- The Single Task Runner list opens after registration
+- Tasks are not started automatically; use the existing Start action in Single Task Runner
 
 #### Markdown Format
 
@@ -412,6 +426,7 @@ A lightweight task runner that executes tasks sequentially on a single pane with
 | Task name | Task title |
 | Status | pending / sending / active / done / failed / cancelled |
 | Error message | Reason for failure |
+| Clear before running | Editable tasks can be toggled from the list checkbox |
 
 | Button | Description |
 |--------|-------------|
@@ -487,13 +502,18 @@ Logs are persisted in JSONL format, so they can be reviewed even after the sessi
 
 Aggregates and visualizes Claude Code CLI and Codex CLI usage statistics scoped to the current session's working directory (added in v1.0.4).
 
-### Tabs
+### Source Selection
 
-| Tab | Source |
-|-----|--------|
-| **Claude** | `~/.claude/projects/**/*.jsonl` + `subagents/*.jsonl` |
+Display mode is selected from a list selector. The initial view is compare mode, showing Claude Code and Codex side by side.
+
+| Selection | Source |
+|-----------|--------|
+| **Claude Code** | `~/.claude/projects/**/*.jsonl` + `subagents/*.jsonl` |
 | **Codex** | `.codex/sessions/**/*.jsonl` + `state_5.sqlite` |
-| **Both** | Both sources side by side |
+| **Compare** | Shows the selected sources side by side |
+
+In compare mode, use checkboxes to choose visible sources. At least one source remains selected, and up to three sources can be selected.
+Data loading always targets both current sources, so changing the display selection does not trigger re-aggregation.
 
 ### Display
 
@@ -527,7 +547,35 @@ Category tabs have been added for Agents, Skills, and Slash Commands.
 
 ---
 
-## 13. Prompt Presets
+## 13. Session Memo
+
+**Shortcut:** `Ctrl+Shift+N`
+
+A right-sidebar viewer for editing notes scoped to the current session.
+Drafts are kept in the frontend while the application is running, and the Save button persists the note under the selected session's working directory.
+
+### Storage
+
+| Item | Value |
+|------|-------|
+| File | `{session working directory}\\.myT-x\\session-memo.md` |
+| Write strategy | Atomic write (temp file → rename) |
+| Size limit | 1 MiB |
+
+### Operations
+
+| Operation | Description |
+|-----------|-------------|
+| Edit memo | Type freely in the text area |
+| **Save** | Save the current memo to `session-memo.md` |
+| Switch session | Switch to that session's draft |
+
+Drafts are keyed by session so they are less likely to be lost when a session is renamed.
+If the memo file does not exist, the viewer opens with an empty memo.
+
+---
+
+## 14. Prompt Presets
 
 **Shortcut:** `Ctrl+Shift+P`
 

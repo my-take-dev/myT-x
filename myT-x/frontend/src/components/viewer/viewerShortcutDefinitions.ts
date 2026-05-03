@@ -17,6 +17,7 @@ export const VIEWER_SHORTCUTS: readonly ViewerShortcutDef[] = [
     {viewId: "mcp-manager", label: "MCP Manager", defaultShortcut: "Ctrl+Shift+M"},
     {viewId: "pane-scheduler", label: "Schedule", defaultShortcut: "Ctrl+Shift+K"},
     {viewId: "prompt-presets", label: "Prompt Presets", defaultShortcut: "Ctrl+Shift+P"},
+    {viewId: "session-memo", label: "Session Memo", defaultShortcut: "Ctrl+Shift+N"},
     {viewId: "single-task-runner", label: "Single Task Runner", defaultShortcut: "Ctrl+Shift+J"},
     {viewId: "task-scheduler", label: "Task Scheduler", defaultShortcut: "Ctrl+Shift+Q"},
     {viewId: "editor", label: "Editor", defaultShortcut: "Ctrl+Shift+O"},

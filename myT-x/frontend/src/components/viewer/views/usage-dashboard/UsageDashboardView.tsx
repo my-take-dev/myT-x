@@ -1,27 +1,63 @@
-import {useCallback, useState} from "react";
+import {useCallback, useMemo, useState} from "react";
 import {useI18n} from "../../../../i18n";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
-import {useUsageDashboard, type UsageMode} from "./useUsageDashboard";
-import {UsageModeTabs} from "./UsageModeTabs";
+import {useUsageDashboard, type UsageDashboardSelection, type UsageSource} from "./useUsageDashboard";
+import {UsageModeList} from "./UsageModeList";
 import {ClaudePanel} from "./ClaudePanel";
 import {CodexPanel} from "./CodexPanel";
-import {BothPanel} from "./BothPanel";
+import {UsageComparisonPanel, type UsageComparisonSource} from "./UsageComparisonPanel";
+import {useUsageDashboardI18n, useUsageDashboardLabels} from "./i18n";
+import {
+    getComparisonSourceLockedReason,
+    getInitialComparisonSources,
+    type NonEmptyReadonlyArray,
+    toggleComparisonSourceSelection,
+} from "./usageSourceSelection";
 
 export function UsageDashboardView() {
-    const {language, t} = useI18n();
-    const tr = (key: string, ja: string, en: string) => t(key, language === "ja" ? ja : en);
+    const {language} = useI18n();
+    const tr = useUsageDashboardI18n();
+    const labels = useUsageDashboardLabels();
     const closeView = useViewerStore((s) => s.closeView);
 
-    const [mode, setMode] = useState<UsageMode>("both");
+    const [selection, setSelection] = useState<UsageDashboardSelection>("compare");
+    const [selectedSources, setSelectedSources] = useState<NonEmptyReadonlyArray<UsageSource>>(
+        () => getInitialComparisonSources(),
+    );
     const {snapshot, isLoading, error, hasActiveSession, activeSessionName, refresh} =
-        useUsageDashboard(mode);
+        useUsageDashboard();
 
     // Manual refresh always forces re-aggregation so the user gets fresh
-    // numbers; automatic loads (mode/session change) reuse the JSON cache.
+    // numbers; automatic loads (session change) reuse the JSON cache.
     const handleRefresh = useCallback(() => {
         refresh(true);
     }, [refresh]);
+
+    const sources = useMemo<ReadonlyArray<UsageComparisonSource>>(() => [
+        {
+            id: "claude",
+            title: labels.claude,
+        },
+        {
+            id: "codex",
+            title: labels.codex,
+        },
+    ], [labels.claude, labels.codex]);
+
+    const selectionOptions = useMemo(() => [
+        {id: "claude" as const, label: labels.claude},
+        {id: "codex" as const, label: labels.codex},
+        {id: "compare" as const, label: labels.compare},
+    ], [labels.claude, labels.codex, labels.compare]);
+
+    const handleComparisonSourceToggle = useCallback((source: UsageSource) => {
+        setSelectedSources((current) => {
+            return toggleComparisonSourceSelection(current, source);
+        });
+    }, []);
+
+    const comparisonHelpId = "usage-dashboard-comparison-help";
 
     if (!hasActiveSession) {
         return (
@@ -51,12 +87,6 @@ export function UsageDashboardView() {
         );
     }
 
-    const labels = {
-        claude: tr("viewer.usageDashboard.modeClaude", "Claude", "Claude"),
-        codex: tr("viewer.usageDashboard.modeCodex", "Codex", "Codex"),
-        both: tr("viewer.usageDashboard.modeBoth", "両方", "Both"),
-    };
-
     const workDir = snapshot?.work_dir ?? "";
     const lastUpdated = snapshot?.last_updated_at
         ? new Date(snapshot.last_updated_at).toLocaleString(language === "ja" ? "ja-JP" : "en-US")
@@ -70,13 +100,53 @@ export function UsageDashboardView() {
             onRefresh={handleRefresh}
             refreshTitle={tr("viewer.usageDashboard.refresh", "更新", "Refresh")}
         >
-            <UsageModeTabs
-                mode={mode}
-                onModeChange={setMode}
-                labelClaude={labels.claude}
-                labelCodex={labels.codex}
-                labelBoth={labels.both}
+            <UsageModeList
+                selection={selection}
+                onSelectionChange={setSelection}
+                options={selectionOptions}
             />
+            {selection === "compare" ? (
+                <div
+                    className="usage-dashboard-comparison-controls"
+                    role="group"
+                    aria-label={tr("viewer.usageDashboard.compareSources", "比較対象", "Comparison sources")}
+                    aria-describedby={comparisonHelpId}
+                >
+                    <p id={comparisonHelpId} className="usage-dashboard-comparison-help">
+                        {labels.compareHelp}
+                    </p>
+                    {sources.map((source) => {
+                        const checked = selectedSources.includes(source.id);
+                        const lockedReason = getComparisonSourceLockedReason(
+                            selectedSources,
+                            source.id,
+                            labels.compareHelp,
+                        );
+                        return (
+                            <label key={source.id} className="usage-dashboard-comparison-choice">
+                                <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    aria-disabled={lockedReason ? "true" : undefined}
+                                    title={lockedReason ?? undefined}
+                                    onClick={(event) => {
+                                        if (lockedReason) {
+                                            event.preventDefault();
+                                        }
+                                    }}
+                                    onChange={(event) => {
+                                        if (lockedReason) {
+                                            return;
+                                        }
+                                        handleComparisonSourceToggle(source.id);
+                                    }}
+                                />
+                                <span>{source.title}</span>
+                            </label>
+                        );
+                    })}
+                </div>
+            ) : null}
             <div className="usage-dashboard-body">
                 {isLoading && !snapshot ? (
                     <div
@@ -106,12 +176,16 @@ export function UsageDashboardView() {
                             <div className="usage-dashboard-skeleton-row"/>
                         </div>
                     </div>
-                ) : mode === "claude" ? (
+                ) : selection === "claude" ? (
                     <ClaudePanel stats={snapshot?.claude}/>
-                ) : mode === "codex" ? (
+                ) : selection === "codex" ? (
                     <CodexPanel stats={snapshot?.codex}/>
                 ) : (
-                    <BothPanel claude={snapshot?.claude} codex={snapshot?.codex}/>
+                    <UsageComparisonPanel
+                        snapshot={snapshot}
+                        selectedSources={selectedSources}
+                        sources={sources}
+                    />
                 )}
             </div>
             <div className="usage-dashboard-meta">

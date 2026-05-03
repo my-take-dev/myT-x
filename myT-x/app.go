@@ -19,6 +19,7 @@ import (
 	"myT-x/internal/scheduler"
 	"myT-x/internal/session"
 	"myT-x/internal/sessionlog"
+	"myT-x/internal/sessionmemo"
 	"myT-x/internal/singletaskrunner"
 	"myT-x/internal/snapshot"
 	"myT-x/internal/taskscheduler"
@@ -39,6 +40,9 @@ type App struct {
 	// initial snapshot are set during startup via configState.Initialize().
 	// See config.StateService for lock ordering.
 	configState *config.StateService
+	// configDirProvider resolves the app config directory from configState.
+	// It is cached so session-info users share one provider closure.
+	configDirProvider func() (string, error)
 
 	// Nested lock ordering (one-way only):
 	//   paneEnvUpdateMu -> tmux.CommandRouter.paneEnvMu (via UpdatePaneEnv)
@@ -137,6 +141,11 @@ type App struct {
 	// Initialized in NewApp().
 	promptPresetsService *promptpresets.Service
 
+	// Session memo storage for the right sidebar plugin.
+	// Thread-safety is managed internally by the Service. No App-level mutex is needed.
+	// Initialized in NewApp().
+	sessionMemoService *sessionmemo.Service
+
 	// Developer panel file browsing and git operations.
 	// Stateless service; no mutex needed. Initialized in NewApp().
 	devpanelService *devpanel.Service
@@ -182,6 +191,7 @@ func NewApp() *App {
 		sendKeys:       defaultSendKeysIO(),
 		openExplorerFn: openExplorer,
 	}
+	app.configDirProvider = appConfigDirProvider(app)
 
 	emitter := newAppRuntimeEventEmitterAdapter(app)
 	isShuttingDown := func() bool { return app.shuttingDown.Load() }
@@ -191,6 +201,7 @@ func NewApp() *App {
 	app.sessionService = session.NewService(buildSessionServiceDeps(app))
 	app.orchestratorService = orchestrator.NewService(buildOrchestratorServiceDeps(app))
 	app.promptPresetsService = promptpresets.NewService(buildPromptPresetsServiceDeps(app))
+	app.sessionMemoService = sessionmemo.NewService(buildSessionMemoServiceDeps(app))
 	app.devpanelService = devpanel.NewService(buildDevPanelServiceDeps(app))
 	app.worktreeService = worktree.NewService(buildWorktreeServiceDeps(app))
 	app.mcpAPIService = mcpapi.NewService(buildMCPAPIServiceDeps(app))

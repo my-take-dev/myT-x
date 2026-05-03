@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"myT-x/internal/apptypes"
+	"myT-x/internal/sessioninfo"
 	"myT-x/internal/workerutil"
 
 	"github.com/google/uuid"
@@ -50,10 +51,12 @@ type Deps struct {
 	// Abstracts the tmux send-keys command.
 	SendMessage func(paneID, message string) error
 
-	// ResolveSessionRootPath returns the filesystem root path for the
-	// named session. Returns error if the session does not exist or has
-	// no root path.
-	ResolveSessionRootPath func(sessionName string) (string, error)
+	// ResolveSessionWorkDir returns the effective work directory for the
+	// named session. Worktree sessions must resolve to the worktree path.
+	ResolveSessionWorkDir func(sessionName string) (string, error)
+
+	// ConfigDir returns the application config directory that owns session-info.
+	ConfigDir func() (string, error)
 
 	// NewContext creates a cancellable context derived from the app
 	// runtime context for a new scheduler worker.
@@ -83,10 +86,10 @@ type Service struct {
 // Panics if any required function field in deps is nil.
 func NewService(deps Deps) *Service {
 	if deps.CheckPaneAlive == nil || deps.SendMessage == nil ||
-		deps.ResolveSessionRootPath == nil || deps.NewContext == nil ||
+		deps.ResolveSessionWorkDir == nil || deps.ConfigDir == nil || deps.NewContext == nil ||
 		deps.LaunchWorker == nil || deps.BaseRecoveryOptions == nil {
 		panic("scheduler.NewService: required function fields in Deps must be non-nil " +
-			"(CheckPaneAlive, SendMessage, ResolveSessionRootPath, NewContext, LaunchWorker, BaseRecoveryOptions)")
+			"(CheckPaneAlive, SendMessage, ResolveSessionWorkDir, ConfigDir, NewContext, LaunchWorker, BaseRecoveryOptions)")
 	}
 	if deps.IsShuttingDown == nil {
 		deps.IsShuttingDown = func() bool { return false }
@@ -536,6 +539,10 @@ func (s *Service) SaveTemplate(sessionName string, tmpl Template) error {
 	s.templateMu.Lock()
 	defer s.templateMu.Unlock()
 
+	if err := migrateLegacyTemplatesIfNeeded(path, sessionName, s.deps.ResolveSessionWorkDir); err != nil {
+		return fmt.Errorf("migrate legacy templates: %w", err)
+	}
+
 	templates, err := readTemplatesForWrite(path)
 	if err != nil {
 		return fmt.Errorf("read templates: %w", err)
@@ -573,6 +580,10 @@ func (s *Service) LoadTemplates(sessionName string) ([]Template, error) {
 	s.templateMu.Lock()
 	defer s.templateMu.Unlock()
 
+	if err := migrateLegacyTemplatesIfNeeded(path, sessionName, s.deps.ResolveSessionWorkDir); err != nil {
+		return []Template{}, fmt.Errorf("migrate legacy templates: %w", err)
+	}
+
 	templates, err := readTemplates(path)
 	if err != nil {
 		return []Template{}, fmt.Errorf("read templates: %w", err)
@@ -597,6 +608,10 @@ func (s *Service) DeleteTemplate(sessionName, title string) error {
 	s.templateMu.Lock()
 	defer s.templateMu.Unlock()
 
+	if err := migrateLegacyTemplatesIfNeeded(path, sessionName, s.deps.ResolveSessionWorkDir); err != nil {
+		return fmt.Errorf("migrate legacy templates: %w", err)
+	}
+
 	templates, err := readTemplatesForWrite(path)
 	if err != nil {
 		return fmt.Errorf("read templates: %w", err)
@@ -618,18 +633,25 @@ func (s *Service) DeleteTemplate(sessionName, title string) error {
 	return writeTemplates(path, filtered)
 }
 
-// resolveTemplatePath returns the file path for scheduler templates
-// in the session's root directory.
+// resolveTemplatePath returns the app-config session-info path for scheduler templates.
 func (s *Service) resolveTemplatePath(sessionName string) (string, error) {
 	sessionName = strings.TrimSpace(sessionName)
 	if sessionName == "" {
 		return "", errors.New("session name is required")
 	}
-	rootPath, err := s.deps.ResolveSessionRootPath(sessionName)
+	workDir, err := s.deps.ResolveSessionWorkDir(sessionName)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(rootPath, templateDir, templateFileName), nil
+	configDir, err := s.deps.ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	path, err := sessioninfo.FilePath(configDir, workDir, templateFileName)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // readTemplates reads templates from file.
@@ -663,6 +685,62 @@ func readTemplatesWithMode(path string, allowMalformed bool) ([]Template, error)
 		return nil, fmt.Errorf("parse templates: %w", err)
 	}
 	return templates, nil
+}
+
+func migrateLegacyTemplatesIfNeeded(
+	currentPath string,
+	sessionName string,
+	resolveSessionWorkDir func(string) (string, error),
+) error {
+	if _, err := os.Stat(currentPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	workDir, err := resolveSessionWorkDir(sessionName)
+	if err != nil {
+		return err
+	}
+	legacyPath, err := sessioninfo.LegacyProjectFilePath(workDir, templateFileName)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(legacyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	dir := filepath.Dir(currentPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create directory %s: %w", dir, err)
+	}
+	tmp := currentPath + ".legacy-migration.tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		if removeErr := os.Remove(tmp); removeErr != nil && !os.IsNotExist(removeErr) {
+			slog.Warn("[SCHEDULER] failed to remove legacy template migration temp file after write failure",
+				"path", tmp,
+				"err", removeErr,
+			)
+		}
+		return fmt.Errorf("write temp legacy template migration file: %w", err)
+	}
+	if err := os.Rename(tmp, currentPath); err != nil {
+		if removeErr := os.Remove(tmp); removeErr != nil && !os.IsNotExist(removeErr) {
+			slog.Warn("[SCHEDULER] failed to remove legacy template migration temp file",
+				"path", tmp,
+				"err", removeErr,
+			)
+		}
+		return fmt.Errorf("rename legacy template migration file: %w", err)
+	}
+	slog.Info("[SCHEDULER] migrated legacy project templates to session-info",
+		"session", sessionName,
+		"legacy_path", legacyPath,
+		"current_path", currentPath,
+	)
+	return nil
 }
 
 // writeTemplates writes templates to file with indented JSON.

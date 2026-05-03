@@ -96,7 +96,10 @@ func (a *App) SendSyncInput(paneID string, input string) error {
 	return nil
 }
 
-// GetPaneReplay returns buffered output for a pane to restore terminal view.
+// GetPaneReplay returns best-effort replay data for remounting a pane.
+// Active panes use Snapshot semantics so restore does not start from an
+// arbitrary replay-ring byte boundary. Inactive panes may fall back to bounded
+// recent replay data.
 func (a *App) GetPaneReplay(paneID string) string {
 	if a.paneStates == nil {
 		return ""

@@ -1,7 +1,10 @@
 import {StrictMode, act} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {useUsageDashboard} from "../src/components/viewer/views/usage-dashboard/useUsageDashboard";
+import {
+    COMBINED_USAGE_MODE,
+    useUsageDashboard,
+} from "../src/components/viewer/views/usage-dashboard/useUsageDashboard";
 import {setLanguage} from "../src/i18n";
 import {useTmuxStore} from "../src/stores/tmuxStore";
 import {usagedashboard} from "../wailsjs/go/models";
@@ -18,10 +21,11 @@ interface ProbeState {
     error: string | null;
     hasActiveSession: boolean;
     activeSessionName: string;
+    refresh: (force?: boolean) => void;
 }
 
 function UsageDashboardProbe({onChange}: {onChange: (state: ProbeState) => void}) {
-    const state = useUsageDashboard("both");
+    const state = useUsageDashboard();
     onChange(state);
     return null;
 }
@@ -108,6 +112,8 @@ describe("useUsageDashboard", () => {
 
         await flushEffects();
         expect(getUsageDashboardMock).toHaveBeenCalledTimes(2);
+        expect(getUsageDashboardMock).toHaveBeenNthCalledWith(1, "feature-usage", COMBINED_USAGE_MODE, false);
+        expect(getUsageDashboardMock).toHaveBeenNthCalledWith(2, "feature-usage", COMBINED_USAGE_MODE, false);
         expect(resolvers).toHaveLength(2);
         expect(latestState?.isLoading).toBe(true);
 
@@ -147,6 +153,7 @@ describe("useUsageDashboard", () => {
 
         await flushEffects();
         expect(getUsageDashboardMock).toHaveBeenCalledTimes(1);
+        expect(getUsageDashboardMock).toHaveBeenNthCalledWith(1, "feature-usage", COMBINED_USAGE_MODE, false);
         expect(latestState?.isLoading).toBe(true);
 
         act(() => {
@@ -170,6 +177,7 @@ describe("useUsageDashboard", () => {
 
         await flushEffects();
         expect(getUsageDashboardMock).toHaveBeenCalledTimes(2);
+        expect(getUsageDashboardMock).toHaveBeenNthCalledWith(2, "feature-usage-2", COMBINED_USAGE_MODE, false);
         expect(latestState?.isLoading).toBe(true);
 
         await act(async () => {
@@ -299,5 +307,30 @@ describe("useUsageDashboard", () => {
         expect(latestState?.snapshot?.claude?.skills_daily[0]).toBeInstanceOf(usagedashboard.DailyUsageSeries);
         expect(latestState?.snapshot?.claude?.skills_daily[0]?.buckets[0])
             .toBeInstanceOf(usagedashboard.DailyUsageBucket);
+    });
+
+    it("uses force=true only for manual refreshes", async () => {
+        getUsageDashboardMock.mockResolvedValue({
+            work_dir: "D:/myT-x/dev-myT-x",
+            last_updated_at: "2026-04-15T20:00:00Z",
+            claude: null,
+            codex: null,
+        } satisfies usagedashboard.UsageDashboardSnapshot);
+
+        act(() => {
+            root.render(<UsageDashboardProbe onChange={(state) => {
+                latestState = state;
+            }}/>);
+        });
+        await flushEffects();
+
+        act(() => {
+            latestState?.refresh(true);
+        });
+        await flushEffects();
+
+        expect(getUsageDashboardMock).toHaveBeenCalledTimes(2);
+        expect(getUsageDashboardMock).toHaveBeenNthCalledWith(1, "feature-usage", COMBINED_USAGE_MODE, false);
+        expect(getUsageDashboardMock).toHaveBeenNthCalledWith(2, "feature-usage", COMBINED_USAGE_MODE, true);
     });
 });

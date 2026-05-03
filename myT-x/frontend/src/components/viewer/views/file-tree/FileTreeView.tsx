@@ -19,7 +19,7 @@ import {
     type RenderMode,
 } from "./documentTypes";
 import {FILE_CONTENT_PREVIEW_TOGGLE_SHORTCUT} from "./fileContentShortcuts";
-import {classifyDocument, filterDocumentTree, isDocumentFile} from "./documentFilter";
+import {classifyDocument, filterDocumentTree, isDocumentFileName} from "./documentFilter";
 import {flattenTree} from "./treeUtils";
 import type {FileContentResult} from "./fileTreeTypes";
 import {useFileSearch} from "./useFileSearch";
@@ -91,7 +91,6 @@ export function FileTreeView() {
         error,
         contentError,
         dirError,
-        watcherError,
         toggleDir,
         selectFile,
         loadRoot,
@@ -111,12 +110,7 @@ export function FileTreeView() {
         [expandedPaths, filteredTree, loadingPaths],
     );
     const filteredSearchResults = useMemo(
-        () => results.filter((result) => isDocumentFile({
-            name: result.name,
-            path: result.path,
-            isDir: false,
-            hasChildren: false,
-        })),
+        () => results.filter((result) => isDocumentFileName(result.name)),
         [results],
     );
 
@@ -160,6 +154,12 @@ export function FileTreeView() {
             mode,
         });
     }, [currentFilePath]);
+    const handleRefreshCurrentFile = useCallback(() => {
+        if (!currentFilePath) {
+            return;
+        }
+        selectFile(currentFilePath);
+    }, [currentFilePath, selectFile]);
 
     // Double-click handler: select file + close search.
     const handleOpenFile = useCallback((path: string) => {
@@ -378,6 +378,7 @@ export function FileTreeView() {
                 title={t("viewer.fileTree.title", "ファイルツリー")}
                 onClose={closeView}
                 onRefresh={loadRoot}
+                refreshTitle={t("viewer.fileTree.refresh", "ファイルツリーを更新")}
                 message={error}
             />
         );
@@ -389,6 +390,7 @@ export function FileTreeView() {
             title={t("viewer.fileTree.title", "ファイルツリー")}
             onClose={closeView}
             onRefresh={loadRoot}
+            refreshTitle={t("viewer.fileTree.refresh", "ファイルツリーを更新")}
         >
             <div className="file-tree-body">
                 {isRootLoading ? (
@@ -419,12 +421,7 @@ export function FileTreeView() {
                         )}
                         {/* Right panel: always visible (shared between both modes) */}
                         <div className="file-tree-content">
-                            {watcherError ? (
-                                <div className="file-tree-watcher-warning">{watcherError}</div>
-                            ) : null}
-                            {/* Priority: dirError > contentError > content.
-                               watcherError is rendered separately because degraded auto-refresh
-                               should stay visible until the watcher is restarted or the session changes. */}
+                            {/* Priority: dirError > contentError > content. */}
                             {dirError ? (
                                 <div className="file-tree-dir-error">{dirError}</div>
                             ) : contentError ? (
@@ -438,6 +435,7 @@ export function FileTreeView() {
                                     renderMode={currentRenderMode}
                                     canPreview={canPreviewCurrentDocument}
                                     onRenderModeChange={handleRenderModeChange}
+                                    onRefresh={handleRefreshCurrentFile}
                                     previewRenderer={previewRenderer}
                                 />
                             )}

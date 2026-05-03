@@ -171,6 +171,7 @@ func NewCommandRouter(sessions *SessionManager, emitter EventEmitter, opts Route
 		"list-buffers":           router.handleListBuffers,
 		"set-buffer":             router.handleSetBuffer,
 		"paste-buffer":           router.handlePasteBuffer,
+		"delete-buffer":          router.handleDeleteBuffer,
 		"load-buffer":            router.handleLoadBuffer,
 		"save-buffer":            router.handleSaveBuffer,
 		"capture-pane":           router.handleCapturePane,

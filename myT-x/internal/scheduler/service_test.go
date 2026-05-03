@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"myT-x/internal/sessioninfo"
 	"myT-x/internal/workerutil"
 )
 
@@ -31,8 +32,11 @@ func testDeps() Deps {
 		SendMessage: func(paneID, message string) error {
 			return nil
 		},
-		ResolveSessionRootPath: func(sessionName string) (string, error) {
+		ResolveSessionWorkDir: func(sessionName string) (string, error) {
 			return "", fmt.Errorf("session %s not found", sessionName)
+		},
+		ConfigDir: func() (string, error) {
+			return "", errors.New("config dir not configured")
 		},
 		NewContext: func() (context.Context, context.CancelFunc) {
 			return context.WithCancel(context.Background())
@@ -62,18 +66,31 @@ func testDepsWithPanes(alivePanes ...string) Deps {
 	return d
 }
 
-// setupTemplateTestService creates a Service with ResolveSessionRootPath pointing to a temp dir.
-func setupTemplateTestService(t *testing.T) (*Service, string) {
+// setupTemplateTestService creates a Service with session-info storage under temp dirs.
+func setupTemplateTestService(t *testing.T) (*Service, string, string) {
 	t.Helper()
-	tmpDir := t.TempDir()
+	workDir := t.TempDir()
+	configDir := t.TempDir()
 	d := testDeps()
-	d.ResolveSessionRootPath = func(sessionName string) (string, error) {
+	d.ResolveSessionWorkDir = func(sessionName string) (string, error) {
 		if sessionName == "test-session" {
-			return tmpDir, nil
+			return workDir, nil
 		}
 		return "", fmt.Errorf("session %s not found", sessionName)
 	}
-	return NewService(d), tmpDir
+	d.ConfigDir = func() (string, error) {
+		return configDir, nil
+	}
+	return NewService(d), workDir, configDir
+}
+
+func templatePathForTest(t *testing.T, configDir, workDir string) string {
+	t.Helper()
+	path, err := sessioninfo.FilePath(configDir, workDir, templateFileName)
+	if err != nil {
+		t.Fatalf("sessioninfo.FilePath() error = %v", err)
+	}
+	return path
 }
 
 // ------------------------------------------------------------
@@ -845,7 +862,7 @@ func TestSaveTemplateValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, _ := setupTemplateTestService(t)
+			svc, _, _ := setupTemplateTestService(t)
 			err := svc.SaveTemplate("test-session", tt.tmpl)
 			if err == nil {
 				t.Fatalf("expected error %q, got nil", tt.wantErr)
@@ -858,7 +875,7 @@ func TestSaveTemplateValidation(t *testing.T) {
 }
 
 func TestSaveAndLoadTemplate(t *testing.T) {
-	svc, _ := setupTemplateTestService(t)
+	svc, _, _ := setupTemplateTestService(t)
 
 	tmpl := Template{
 		Title: "Deploy Check", Message: "check deploy status",
@@ -889,8 +906,32 @@ func TestSaveAndLoadTemplate(t *testing.T) {
 	}
 }
 
+func TestSaveTemplateCreatesSessionInfoDirectoryOnly(t *testing.T) {
+	svc, workDir, configDir := setupTemplateTestService(t)
+
+	if err := svc.SaveTemplate("test-session", Template{
+		Title: "Local Template", Message: "msg", IntervalSeconds: 10, MaxCount: 1,
+	}); err != nil {
+		t.Fatalf("SaveTemplate() error = %v", err)
+	}
+
+	templatePath := templatePathForTest(t, configDir, workDir)
+	if _, err := os.Stat(templatePath); err != nil {
+		t.Fatalf("session-info template file not created: %v", err)
+	}
+	sessionInfoDir := filepath.Join(configDir, sessioninfo.DirName)
+	if _, err := os.Stat(sessionInfoDir); err != nil {
+		t.Fatalf("session-info directory not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".myT-x")); err == nil {
+		t.Fatal("unexpected .myT-x directory created for scheduler templates")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat .myT-x directory: %v", err)
+	}
+}
+
 func TestSaveTemplateOverwrite(t *testing.T) {
-	svc, _ := setupTemplateTestService(t)
+	svc, _, _ := setupTemplateTestService(t)
 
 	if err := svc.SaveTemplate("test-session", Template{
 		Title: "Check", Message: "original", IntervalSeconds: 10, MaxCount: 1,
@@ -920,7 +961,7 @@ func TestSaveTemplateOverwrite(t *testing.T) {
 }
 
 func TestSaveTemplatesSortedByTitle(t *testing.T) {
-	svc, _ := setupTemplateTestService(t)
+	svc, _, _ := setupTemplateTestService(t)
 
 	for _, title := range []string{"Zebra", "Alpha", "Middle"} {
 		if err := svc.SaveTemplate("test-session", Template{
@@ -943,7 +984,7 @@ func TestSaveTemplatesSortedByTitle(t *testing.T) {
 }
 
 func TestDeleteTemplate(t *testing.T) {
-	svc, _ := setupTemplateTestService(t)
+	svc, _, _ := setupTemplateTestService(t)
 
 	for _, title := range []string{"Keep", "Remove"} {
 		if err := svc.SaveTemplate("test-session", Template{
@@ -970,7 +1011,7 @@ func TestDeleteTemplate(t *testing.T) {
 }
 
 func TestDeleteTemplateEmptyTitle(t *testing.T) {
-	svc, _ := setupTemplateTestService(t)
+	svc, _, _ := setupTemplateTestService(t)
 	err := svc.DeleteTemplate("test-session", "")
 	if err == nil {
 		t.Fatal("expected error for empty title")
@@ -978,7 +1019,7 @@ func TestDeleteTemplateEmptyTitle(t *testing.T) {
 }
 
 func TestDeleteTemplateNonExistent(t *testing.T) {
-	svc, _ := setupTemplateTestService(t)
+	svc, _, _ := setupTemplateTestService(t)
 	err := svc.DeleteTemplate("test-session", "ghost")
 	if err == nil {
 		t.Fatal("expected error for non-existent template")
@@ -989,7 +1030,7 @@ func TestDeleteTemplateNonExistent(t *testing.T) {
 }
 
 func TestLoadTemplatesNoFile(t *testing.T) {
-	svc, _ := setupTemplateTestService(t)
+	svc, _, _ := setupTemplateTestService(t)
 
 	loaded, err := svc.LoadTemplates("test-session")
 	if err != nil {
@@ -1000,14 +1041,85 @@ func TestLoadTemplatesNoFile(t *testing.T) {
 	}
 }
 
-func TestLoadTemplatesMalformedJSON(t *testing.T) {
-	svc, tmpDir := setupTemplateTestService(t)
+func TestLoadTemplatesMigratesLegacyProjectTemplates(t *testing.T) {
+	svc, workDir, configDir := setupTemplateTestService(t)
+	legacyDir := filepath.Join(workDir, ".myT-x")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacyTemplates := []Template{{
+		Title: "Legacy", Message: "msg", IntervalSeconds: 10, MaxCount: 1,
+	}}
+	data, err := json.Marshal(legacyTemplates)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, templateFileName), data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
 
-	dir := filepath.Join(tmpDir, templateDir)
+	got, err := svc.LoadTemplates("test-session")
+	if err != nil {
+		t.Fatalf("LoadTemplates() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Title != "Legacy" {
+		t.Fatalf("LoadTemplates() = %+v, want migrated legacy template", got)
+	}
+	if _, err := os.Stat(templatePathForTest(t, configDir, workDir)); err != nil {
+		t.Fatalf("session-info template file not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(legacyDir, templateFileName)); err != nil {
+		t.Fatalf("legacy template should remain untouched: %v", err)
+	}
+}
+
+func TestLoadTemplatesPrefersSessionInfoOverLegacyProjectTemplates(t *testing.T) {
+	svc, workDir, configDir := setupTemplateTestService(t)
+	legacyDir := filepath.Join(workDir, ".myT-x")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() legacy error = %v", err)
+	}
+	legacyData, err := json.Marshal([]Template{{
+		Title: "Legacy", Message: "legacy", IntervalSeconds: 10, MaxCount: 1,
+	}})
+	if err != nil {
+		t.Fatalf("Marshal() legacy error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, templateFileName), legacyData, 0o644); err != nil {
+		t.Fatalf("WriteFile() legacy error = %v", err)
+	}
+	currentPath := templatePathForTest(t, configDir, workDir)
+	if err := os.MkdirAll(filepath.Dir(currentPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() current error = %v", err)
+	}
+	currentData, err := json.Marshal([]Template{{
+		Title: "Current", Message: "current", IntervalSeconds: 10, MaxCount: 1,
+	}})
+	if err != nil {
+		t.Fatalf("Marshal() current error = %v", err)
+	}
+	if err := os.WriteFile(currentPath, currentData, 0o644); err != nil {
+		t.Fatalf("WriteFile() current error = %v", err)
+	}
+
+	got, err := svc.LoadTemplates("test-session")
+	if err != nil {
+		t.Fatalf("LoadTemplates() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Title != "Current" {
+		t.Fatalf("LoadTemplates() = %+v, want current session-info template", got)
+	}
+}
+
+func TestLoadTemplatesMalformedJSON(t *testing.T) {
+	svc, workDir, configDir := setupTemplateTestService(t)
+
+	templatePath := templatePathForTest(t, configDir, workDir)
+	dir := filepath.Dir(templatePath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, templateFileName), []byte("not json"), 0o644); err != nil {
+	if err := os.WriteFile(templatePath, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1021,13 +1133,14 @@ func TestLoadTemplatesMalformedJSON(t *testing.T) {
 }
 
 func TestSaveTemplateMalformedJSONReturnsError(t *testing.T) {
-	svc, tmpDir := setupTemplateTestService(t)
+	svc, workDir, configDir := setupTemplateTestService(t)
 
-	dir := filepath.Join(tmpDir, templateDir)
+	templatePath := templatePathForTest(t, configDir, workDir)
+	dir := filepath.Dir(templatePath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, templateFileName), []byte("not json"), 0o644); err != nil {
+	if err := os.WriteFile(templatePath, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1040,13 +1153,14 @@ func TestSaveTemplateMalformedJSONReturnsError(t *testing.T) {
 }
 
 func TestDeleteTemplateMalformedJSONReturnsError(t *testing.T) {
-	svc, tmpDir := setupTemplateTestService(t)
+	svc, workDir, configDir := setupTemplateTestService(t)
 
-	dir := filepath.Join(tmpDir, templateDir)
+	templatePath := templatePathForTest(t, configDir, workDir)
+	dir := filepath.Dir(templatePath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, templateFileName), []byte("not json"), 0o644); err != nil {
+	if err := os.WriteFile(templatePath, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1073,7 +1187,7 @@ func TestResolveTemplatePathEmptyName(t *testing.T) {
 }
 
 func TestTemplateFileFormat(t *testing.T) {
-	svc, tmpDir := setupTemplateTestService(t)
+	svc, workDir, configDir := setupTemplateTestService(t)
 
 	if err := svc.SaveTemplate("test-session", Template{
 		Title: "Test", Message: "hello\nworld", IntervalSeconds: 30, MaxCount: 99,
@@ -1081,7 +1195,7 @@ func TestTemplateFileFormat(t *testing.T) {
 		t.Fatalf("SaveTemplate() error = %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(tmpDir, templateDir, templateFileName))
+	data, err := os.ReadFile(templatePathForTest(t, configDir, workDir))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -1099,7 +1213,7 @@ func TestTemplateFileFormat(t *testing.T) {
 }
 
 func TestSaveTemplateTitleTrimmed(t *testing.T) {
-	svc, _ := setupTemplateTestService(t)
+	svc, _, _ := setupTemplateTestService(t)
 
 	if err := svc.SaveTemplate("test-session", Template{
 		Title: "  Padded  ", Message: "msg", IntervalSeconds: 10, MaxCount: 1,
@@ -1120,7 +1234,7 @@ func TestSaveTemplateTitleTrimmed(t *testing.T) {
 }
 
 func TestSaveTemplateSessionNameTrimmed(t *testing.T) {
-	svc, _ := setupTemplateTestService(t)
+	svc, _, _ := setupTemplateTestService(t)
 
 	if err := svc.SaveTemplate("  test-session  ", Template{
 		Title: "Trimmed Session", Message: "msg", IntervalSeconds: 10, MaxCount: 0,

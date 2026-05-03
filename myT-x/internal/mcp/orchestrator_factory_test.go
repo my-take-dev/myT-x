@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"myT-x/internal/singletaskrunner"
@@ -47,6 +48,7 @@ func TestBuildPipeConfig_OrchestratorPassesSessionInfo(t *testing.T) {
 	}
 	cfg, err := buildPipeConfig(`\\.\pipe\test`, def, pipeConfigContext{
 		rootDir:     "/root",
+		configDir:   func() (string, error) { return t.TempDir(), nil },
 		sessionName: "my-session",
 	})
 	if err != nil {
@@ -68,6 +70,7 @@ func TestBuildPipeConfig_LSPIgnoresSessionName(t *testing.T) {
 	}
 	cfg, err := buildPipeConfig(`\\.\pipe\test`, def, pipeConfigContext{
 		rootDir:     "/root",
+		configDir:   func() (string, error) { return t.TempDir(), nil },
 		sessionName: "my-session",
 	})
 	if err != nil {
@@ -91,6 +94,7 @@ func TestBuildPipeConfig_CustomKindUsesExternalCommand(t *testing.T) {
 	}
 	cfg, err := buildPipeConfig(`\\.\pipe\test`, def, pipeConfigContext{
 		rootDir:     "/root",
+		configDir:   func() (string, error) { return t.TempDir(), nil },
 		sessionName: "my-session",
 	})
 	if err != nil {
@@ -119,6 +123,7 @@ func TestBuildPipeConfig_OrchestratorAllPanesTrue(t *testing.T) {
 	// Verify it doesn't panic and creates a valid config.
 	cfg, err := buildPipeConfig(`\\.\pipe\test`, def, pipeConfigContext{
 		rootDir:     "/root",
+		configDir:   func() (string, error) { return t.TempDir(), nil },
 		sessionName: "my-session",
 	})
 	if err != nil {
@@ -126,6 +131,27 @@ func TestBuildPipeConfig_OrchestratorAllPanesTrue(t *testing.T) {
 	}
 	if cfg.RuntimeFactory == nil {
 		t.Fatal("RuntimeFactory should not be nil for orchestrator kind")
+	}
+}
+
+func TestBuildPipeConfig_OrchestratorRequiresConfigDir(t *testing.T) {
+	def := Definition{
+		ID:   "orch-test",
+		Name: "Test Orchestrator",
+		Kind: DefinitionKindOrchestrator,
+	}
+	cfg, err := buildPipeConfig(`\\.\pipe\test`, def, pipeConfigContext{
+		rootDir:     "/root",
+		sessionName: "my-session",
+	})
+	if err == nil {
+		t.Fatal("expected buildPipeConfig to fail when config dir provider is nil")
+	}
+	if !strings.Contains(err.Error(), "config dir provider is required") {
+		t.Fatalf("error = %v, want config dir provider context", err)
+	}
+	if cfg.RuntimeFactory != nil {
+		t.Fatal("RuntimeFactory should be nil on configuration error")
 	}
 }
 

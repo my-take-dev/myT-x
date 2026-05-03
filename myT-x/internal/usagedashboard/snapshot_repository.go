@@ -8,13 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"myT-x/internal/sessioninfo"
 )
 
 const (
-	// snapshotDir is the per-project subdirectory that holds myT-x metadata
-	// (matches scheduler.templateDir convention).
-	snapshotDir = ".myT-x"
-
 	// snapshotFileName is the cached aggregation result file.
 	snapshotFileName = "usage-dashboard.json"
 
@@ -55,17 +53,25 @@ type SnapshotRepository interface {
 }
 
 // fileSnapshotRepository persists snapshots under
-// <workDir>/.myT-x/usage-dashboard.json.
-type fileSnapshotRepository struct{}
-
-// NewFileSnapshotRepository returns the default file-backed repository.
-func NewFileSnapshotRepository() SnapshotRepository {
-	return &fileSnapshotRepository{}
+// <configDir>/session-info/<sha256(workDir)>/usage-dashboard.json.
+type fileSnapshotRepository struct {
+	configDir func() (string, error)
 }
 
-// snapshotPath returns the on-disk JSON path for the given workDir.
-func snapshotPath(workDir string) string {
-	return filepath.Join(workDir, snapshotDir, snapshotFileName)
+// NewFileSnapshotRepository returns the default file-backed repository.
+func NewFileSnapshotRepository(configDir func() (string, error)) SnapshotRepository {
+	return &fileSnapshotRepository{configDir: configDir}
+}
+
+func (r *fileSnapshotRepository) snapshotPath(workDir string) (string, error) {
+	if r.configDir == nil {
+		return "", errors.New("snapshot repository configDir is nil")
+	}
+	configDir, err := r.configDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve config dir: %w", err)
+	}
+	return sessioninfo.FilePath(configDir, workDir, snapshotFileName)
 }
 
 func schemaVersionMismatchMessage(foundVersion int) string {
@@ -76,7 +82,10 @@ func schemaVersionMismatchMessage(foundVersion int) string {
 }
 
 func (r *fileSnapshotRepository) Load(workDir string) (PersistedSnapshot, bool, error) {
-	path := snapshotPath(workDir)
+	path, err := r.snapshotPath(workDir)
+	if err != nil {
+		return PersistedSnapshot{}, false, fmt.Errorf("snapshot path: %w", err)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -100,7 +109,10 @@ func (r *fileSnapshotRepository) Save(snap PersistedSnapshot) error {
 	if snap.WorkDir == "" {
 		return errors.New("save snapshot: WorkDir is empty")
 	}
-	path := snapshotPath(snap.WorkDir)
+	path, err := r.snapshotPath(snap.WorkDir)
+	if err != nil {
+		return fmt.Errorf("snapshot path: %w", err)
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create directory %s: %w", dir, err)

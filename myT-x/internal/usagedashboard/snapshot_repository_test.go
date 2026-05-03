@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"myT-x/internal/sessioninfo"
 )
 
 func sampleSnapshot(workDir string, savedAt time.Time) PersistedSnapshot {
@@ -37,8 +39,25 @@ func sampleSnapshot(workDir string, savedAt time.Time) PersistedSnapshot {
 	}
 }
 
+func newFileSnapshotRepositoryForTest(t *testing.T) (SnapshotRepository, string) {
+	t.Helper()
+	configDir := t.TempDir()
+	return NewFileSnapshotRepository(func() (string, error) {
+		return configDir, nil
+	}), configDir
+}
+
+func snapshotPathForTest(t *testing.T, configDir, workDir string) string {
+	t.Helper()
+	key, err := sessioninfo.FolderKey(workDir)
+	if err != nil {
+		t.Fatalf("sessioninfo.FolderKey: %v", err)
+	}
+	return filepath.Join(configDir, sessioninfo.DirName, key, snapshotFileName)
+}
+
 func TestFileSnapshotRepository_LoadNotExist(t *testing.T) {
-	repo := NewFileSnapshotRepository()
+	repo, _ := newFileSnapshotRepositoryForTest(t)
 	workDir := t.TempDir()
 
 	snap, found, err := repo.Load(workDir)
@@ -51,7 +70,7 @@ func TestFileSnapshotRepository_LoadNotExist(t *testing.T) {
 }
 
 func TestFileSnapshotRepository_SaveLoadRoundTrip(t *testing.T) {
-	repo := NewFileSnapshotRepository()
+	repo, configDir := newFileSnapshotRepositoryForTest(t)
 	workDir := t.TempDir()
 	saved := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
 	original := sampleSnapshot(workDir, saved)
@@ -61,7 +80,7 @@ func TestFileSnapshotRepository_SaveLoadRoundTrip(t *testing.T) {
 	}
 
 	// File must exist at the documented path.
-	wantPath := filepath.Join(workDir, ".myT-x", "usage-dashboard.json")
+	wantPath := snapshotPathForTest(t, configDir, workDir)
 	if _, err := os.Stat(wantPath); err != nil {
 		t.Fatalf("expected file at %s: %v", wantPath, err)
 	}
@@ -91,13 +110,13 @@ func TestFileSnapshotRepository_SaveLoadRoundTrip(t *testing.T) {
 }
 
 func TestFileSnapshotRepository_LoadCorrupted(t *testing.T) {
-	repo := NewFileSnapshotRepository()
+	repo, configDir := newFileSnapshotRepositoryForTest(t)
 	workDir := t.TempDir()
-	dir := filepath.Join(workDir, ".myT-x")
+	path := snapshotPathForTest(t, configDir, workDir)
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	path := filepath.Join(dir, "usage-dashboard.json")
 	if err := os.WriteFile(path, []byte("{not valid json"), 0o644); err != nil {
 		t.Fatalf("write corrupt: %v", err)
 	}
@@ -112,16 +131,16 @@ func TestFileSnapshotRepository_LoadCorrupted(t *testing.T) {
 }
 
 func TestFileSnapshotRepository_LoadSchemaVersionMismatch(t *testing.T) {
-	repo := NewFileSnapshotRepository()
+	repo, configDir := newFileSnapshotRepositoryForTest(t)
 	workDir := t.TempDir()
-	dir := filepath.Join(workDir, ".myT-x")
+	path := snapshotPathForTest(t, configDir, workDir)
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	// Write a snapshot with a future schema version that the current
 	// reader does not understand.
 	body := []byte(`{"schema_version":99,"work_dir":"x","saved_at":"2026-04-15T12:00:00Z","claude":null,"codex":null}`)
-	path := filepath.Join(dir, "usage-dashboard.json")
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -162,23 +181,25 @@ func TestSchemaVersionMismatchMessage(t *testing.T) {
 	}
 }
 
-func TestFileSnapshotRepository_SaveCreatesDirectory(t *testing.T) {
-	repo := NewFileSnapshotRepository()
+func TestFileSnapshotRepository_SaveCreatesSessionInfoDirectoryOnly(t *testing.T) {
+	repo, configDir := newFileSnapshotRepositoryForTest(t)
 	workDir := t.TempDir()
-	// Confirm .myT-x does not exist yet.
 	if _, err := os.Stat(filepath.Join(workDir, ".myT-x")); !os.IsNotExist(err) {
 		t.Fatalf("precondition: .myT-x should not exist: err=%v", err)
 	}
 	if err := repo.Save(sampleSnapshot(workDir, time.Now().UTC())); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".myT-x")); err != nil {
-		t.Errorf(".myT-x not created: %v", err)
+	if _, err := os.Stat(filepath.Join(workDir, ".myT-x")); !os.IsNotExist(err) {
+		t.Errorf("Save created workDir .myT-x, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(snapshotPathForTest(t, configDir, workDir))); err != nil {
+		t.Errorf("session-info cache directory not created: %v", err)
 	}
 }
 
 func TestFileSnapshotRepository_SaveRejectsEmptyWorkDir(t *testing.T) {
-	repo := NewFileSnapshotRepository()
+	repo, _ := newFileSnapshotRepositoryForTest(t)
 	snap := sampleSnapshot("", time.Now().UTC())
 	snap.WorkDir = ""
 	if err := repo.Save(snap); err == nil {
@@ -187,13 +208,13 @@ func TestFileSnapshotRepository_SaveRejectsEmptyWorkDir(t *testing.T) {
 }
 
 func TestFileSnapshotRepository_SaveAtomicLeavesNoTempFile(t *testing.T) {
-	repo := NewFileSnapshotRepository()
+	repo, configDir := newFileSnapshotRepositoryForTest(t)
 	workDir := t.TempDir()
 	if err := repo.Save(sampleSnapshot(workDir, time.Now().UTC())); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	// After a successful save, no leftover .tmp files should remain.
-	entries, err := os.ReadDir(filepath.Join(workDir, ".myT-x"))
+	entries, err := os.ReadDir(filepath.Dir(snapshotPathForTest(t, configDir, workDir)))
 	if err != nil {
 		t.Fatalf("readdir: %v", err)
 	}
@@ -205,9 +226,9 @@ func TestFileSnapshotRepository_SaveAtomicLeavesNoTempFile(t *testing.T) {
 }
 
 func TestFileSnapshotRepository_SaveRenameFailureCleansTempFile(t *testing.T) {
-	repo := NewFileSnapshotRepository()
+	repo, configDir := newFileSnapshotRepositoryForTest(t)
 	workDir := t.TempDir()
-	blockedPath := filepath.Join(workDir, ".myT-x", "usage-dashboard.json")
+	blockedPath := snapshotPathForTest(t, configDir, workDir)
 	if err := os.MkdirAll(blockedPath, 0o755); err != nil {
 		t.Fatalf("mkdir blocked target: %v", err)
 	}
@@ -217,7 +238,7 @@ func TestFileSnapshotRepository_SaveRenameFailureCleansTempFile(t *testing.T) {
 		t.Fatal("expected Save to fail when target path is a directory")
 	}
 
-	entries, readErr := os.ReadDir(filepath.Join(workDir, ".myT-x"))
+	entries, readErr := os.ReadDir(filepath.Dir(blockedPath))
 	if readErr != nil {
 		t.Fatalf("readdir: %v", readErr)
 	}
@@ -229,12 +250,12 @@ func TestFileSnapshotRepository_SaveRenameFailureCleansTempFile(t *testing.T) {
 }
 
 func TestFileSnapshotRepository_SavedFileIsValidJSON(t *testing.T) {
-	repo := NewFileSnapshotRepository()
+	repo, configDir := newFileSnapshotRepositoryForTest(t)
 	workDir := t.TempDir()
 	if err := repo.Save(sampleSnapshot(workDir, time.Now().UTC())); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(workDir, ".myT-x", "usage-dashboard.json"))
+	data, err := os.ReadFile(snapshotPathForTest(t, configDir, workDir))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -244,6 +265,31 @@ func TestFileSnapshotRepository_SavedFileIsValidJSON(t *testing.T) {
 	}
 	if probe["schema_version"] == nil {
 		t.Error("schema_version field missing")
+	}
+}
+
+func TestFileSnapshotRepository_IgnoresLegacyWorkDirCache(t *testing.T) {
+	repo, _ := newFileSnapshotRepositoryForTest(t)
+	workDir := t.TempDir()
+	legacyDir := filepath.Join(workDir, ".myT-x")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy dir: %v", err)
+	}
+	legacyCache := sampleSnapshot(workDir, time.Now().UTC())
+	data, err := json.Marshal(legacyCache)
+	if err != nil {
+		t.Fatalf("marshal legacy cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, snapshotFileName), data, 0o644); err != nil {
+		t.Fatalf("write legacy cache: %v", err)
+	}
+
+	_, found, err := repo.Load(workDir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if found {
+		t.Fatal("legacy workDir cache was loaded")
 	}
 }
 

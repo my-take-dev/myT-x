@@ -1,9 +1,12 @@
 import {memo, useCallback, useEffect, useMemo, useRef, useState} from "react";
-import type {ParsedDiffGap, ParsedDiffHunk} from "../../../../utils/diffParser";
+import {useShallow} from "zustand/react/shallow";
+import type {ParsedDiffGap, ParsedDiffHunk, ParsedDiffLine} from "../../../../utils/diffParser";
+import type {DiffReviewComment} from "../../../../stores/diffReviewStore";
 import {useDiffReviewStore} from "../../../../stores/diffReviewStore";
 import {buildDiffReviewDraftKey} from "./diffReviewKeys";
 import {DiffReviewLineRow} from "./DiffReviewLineRow";
 import {useDiffReviewSessionKey} from "./diffReviewSession";
+import {type DiffReviewLineRef, toDiffReviewLineRef} from "./diffReviewRange";
 
 interface DiffHunkSectionWithReviewProps {
     readonly filePath: string;
@@ -24,6 +27,75 @@ interface DragRangeSelection {
     readonly hasMoved: boolean;
 }
 
+function buildLineRefKey(lineRef: DiffReviewLineRef): string {
+    return `${lineRef.lineType}:${lineRef.lineNum}`;
+}
+
+function hasNumericRangeOverlap(
+    lineRefs: readonly DiffReviewLineRef[],
+    startRef: DiffReviewLineRef,
+    endRef: DiffReviewLineRef,
+): boolean {
+    const rangeStart = Math.min(startRef.lineNum, endRef.lineNum);
+    const rangeEnd = Math.max(startRef.lineNum, endRef.lineNum);
+    return lineRefs.some((lineRef) => lineRef.lineNum >= rangeStart && lineRef.lineNum <= rangeEnd);
+}
+
+function collectPendingCommentLineIndexes(
+    comments: readonly DiffReviewComment[],
+    activeSessionKey: string,
+    filePath: string,
+    lineRows: readonly {
+        readonly line: ParsedDiffLine;
+        readonly lineIndex: number;
+    }[],
+): Set<number> {
+    const pendingIndexes = new Set<number>();
+    if (activeSessionKey === "") {
+        return pendingIndexes;
+    }
+
+    const lineRefs = lineRows.map(({line}) => toDiffReviewLineRef(line));
+    if (lineRefs.length === 0) {
+        return pendingIndexes;
+    }
+    const lineIndexByRefKey = new Map(lineRefs.map((lineRef, index) => [buildLineRefKey(lineRef), index]));
+
+    for (const comment of comments) {
+        if (comment.sessionKey !== activeSessionKey || comment.filePath !== filePath) {
+            continue;
+        }
+
+        const startRef: DiffReviewLineRef = {
+            lineNum: comment.startLineNum,
+            lineType: comment.startLineType,
+        };
+        const endRef: DiffReviewLineRef = {
+            lineNum: comment.endLineNum,
+            lineType: comment.endLineType,
+        };
+        const startIndex = lineIndexByRefKey.get(buildLineRefKey(startRef)) ?? -1;
+        const endIndex = lineIndexByRefKey.get(buildLineRefKey(endRef)) ?? -1;
+        if (startIndex < 0 && endIndex < 0 && !hasNumericRangeOverlap(lineRefs, startRef, endRef)) {
+            continue;
+        }
+        const clampedStartIndex = startIndex < 0 ? 0 : startIndex;
+        const clampedEndIndex = endIndex < 0 ? lineRefs.length - 1 : endIndex;
+        if (clampedEndIndex < clampedStartIndex) {
+            continue;
+        }
+
+        for (let lineIndex = clampedStartIndex; lineIndex <= clampedEndIndex; lineIndex++) {
+            const row = lineRows[lineIndex];
+            if (row != null) {
+                pendingIndexes.add(row.lineIndex);
+            }
+        }
+    }
+
+    return pendingIndexes;
+}
+
 export const DiffHunkSectionWithReview = memo(function DiffHunkSectionWithReview({
     filePath,
     oldFilePath,
@@ -32,6 +104,11 @@ export const DiffHunkSectionWithReview = memo(function DiffHunkSectionWithReview
 }: DiffHunkSectionWithReviewProps) {
     const activeSessionKey = useDiffReviewSessionKey();
     const setActiveCommentLineKey = useDiffReviewStore((state) => state.setActiveCommentLineKey);
+    const comments = useDiffReviewStore(useShallow(
+        (state) => state.comments.filter(
+            (comment) => comment.sessionKey === activeSessionKey && comment.filePath === filePath,
+        ),
+    ));
     const [dragRangeSelection, setDragRangeSelection] = useState<DragRangeSelection | null>(null);
     const [pendingRangeSelectionRequest, setPendingRangeSelectionRequest] = useState<PendingRangeSelectionRequest | null>(null);
     const dragRangeSelectionRef = useRef<DragRangeSelection | null>(null);
@@ -45,6 +122,10 @@ export const DiffHunkSectionWithReview = memo(function DiffHunkSectionWithReview
             lineKey: `${hunk.header}:${line.oldLineNum ?? "n"}:${line.newLineNum ?? "n"}:${li}`,
         })),
         [hunk.header, hunk.lines],
+    );
+    const pendingCommentLineIndexes = useMemo(
+        () => collectPendingCommentLineIndexes(comments, activeSessionKey, filePath, lineRows),
+        [activeSessionKey, comments, filePath, lineRows],
     );
 
     const resetSuppressedAddClick = useCallback(() => {
@@ -188,6 +269,7 @@ export const DiffHunkSectionWithReview = memo(function DiffHunkSectionWithReview
                         && lineIndex <= selectedRangeEndIndex
                     }
                     isDragSelectionAnchor={dragRangeSelection?.anchorIndex === lineIndex}
+                    hasPendingComment={pendingCommentLineIndexes.has(lineIndex)}
                 />
             ))}
             {gap && (

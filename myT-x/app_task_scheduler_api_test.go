@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -389,6 +390,7 @@ func TestCheckTaskSchedulerOrchestratorReadyReturnsErrorWhenSourceRootIsUnavaila
 
 func TestCheckTaskSchedulerOrchestratorReadyReturnsReadinessWhenSourceRootExists(t *testing.T) {
 	app := NewApp()
+	app.configState.Initialize(filepath.Join(t.TempDir(), "config.yaml"), config.DefaultConfig())
 	app.sessions = tmux.NewSessionManager()
 
 	if _, _, err := app.sessions.CreateSession("session-a", "main", 120, 40); err != nil {
@@ -416,6 +418,46 @@ func TestCheckTaskSchedulerOrchestratorReadyReturnsReadinessWhenSourceRootExists
 	}
 	if readiness.Ready {
 		t.Fatal("Readiness.Ready = true, want false without orchestrator.db")
+	}
+}
+
+func TestCheckTaskSchedulerOrchestratorReadyUsesSessionInfoDBPath(t *testing.T) {
+	app := NewApp()
+	app.configState.Initialize(filepath.Join(t.TempDir(), "config.yaml"), config.DefaultConfig())
+	app.sessions = tmux.NewSessionManager()
+
+	if _, _, err := app.sessions.CreateSession("session-a", "main", 120, 40); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	db, rootDir := createOrchestratorTaskTestDB(t, app)
+	defer db.Close()
+	if err := app.sessions.SetRootPath("session-a", rootDir); err != nil {
+		t.Fatalf("SetRootPath() error = %v", err)
+	}
+	if _, err := db.Exec(
+		"INSERT INTO agents (name, pane_id, role, mcp_instance_id) VALUES (?, ?, ?, ?)",
+		"agent1",
+		"%1",
+		"developer",
+		"test-instance-1",
+	); err != nil {
+		t.Fatalf("insert agent error: %v", err)
+	}
+	app.SetActiveSession("session-a")
+	sessionKey := mustSessionKey(t, app, "session-a")
+
+	readiness, err := app.CheckTaskSchedulerOrchestratorReady(sessionKey)
+	if err != nil {
+		t.Fatalf("CheckTaskSchedulerOrchestratorReady() error = %v", err)
+	}
+	if !readiness.DBExists {
+		t.Fatal("Readiness.DBExists = false, want true")
+	}
+	if readiness.AgentCount != 1 {
+		t.Fatalf("Readiness.AgentCount = %d, want 1", readiness.AgentCount)
+	}
+	if !readiness.Ready {
+		t.Fatal("Readiness.Ready = false, want true")
 	}
 }
 

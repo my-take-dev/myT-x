@@ -7,6 +7,10 @@ type FileEntry struct {
 	IsDir       bool   `json:"is_dir"`
 	Size        int64  `json:"size"` // file size in bytes (0 for directories)
 	HasChildren bool   `json:"has_children"`
+	// HasViewTarget is true for supported files. For directories, true means
+	// the directory may contain a supported descendant and should stay visible
+	// in document-filtered lazy trees.
+	HasViewTarget bool `json:"has_view_target"`
 }
 
 // FileContent represents the contents of a file read from disk.

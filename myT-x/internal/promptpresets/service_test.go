@@ -136,6 +136,34 @@ func TestSaveAndLoadGlobalAndProjectPresets(t *testing.T) {
 	}
 }
 
+func TestProjectPresetUsesProjectMyTXStorage(t *testing.T) {
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "config.yaml")
+	projectRoot := filepath.Join(t.TempDir(), "project")
+	s := NewService(Deps{
+		ConfigPath: func() string { return configPath },
+		FindSessionSnapshot: func(sessionName string) (tmux.SessionSnapshot, error) {
+			return tmux.SessionSnapshot{Name: sessionName, RootPath: projectRoot}, nil
+		},
+	})
+
+	if err := s.Save(PromptPreset{
+		Name:            "Project preset",
+		Body:            "Run tests first.",
+		StorageLocation: StorageLocationProject,
+	}, "alpha"); err != nil {
+		t.Fatalf("Save(project) error = %v", err)
+	}
+
+	projectPath := filepath.Join(projectRoot, ".myT-x", presetsFileName)
+	if _, err := os.Stat(projectPath); err != nil {
+		t.Fatalf("project prompt preset file not created under .myT-x: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "session-info")); !os.IsNotExist(err) {
+		t.Fatalf("project prompt preset should not create session-info storage: %v", err)
+	}
+}
+
 func TestSaveUpdatesExistingPresetWithoutChangingOrder(t *testing.T) {
 	s := newTestService(t)
 

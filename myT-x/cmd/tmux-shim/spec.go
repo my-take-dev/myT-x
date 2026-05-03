@@ -282,6 +282,12 @@ var commandSpecs = map[string]commandSpec{
 			"-s": flagString, // separator
 		},
 	},
+	"delete-buffer": {
+		description: "Delete a paste buffer. Use -b name, or omit -b to delete the latest buffer.",
+		flags: map[string]flagKind{
+			"-b": flagString,
+		},
+	},
 	"load-buffer": {
 		description: "Load file contents into a paste buffer.",
 		flags: map[string]flagKind{
@@ -364,6 +370,7 @@ var commandOrder = []string{
 	"list-buffers",
 	"set-buffer",
 	"paste-buffer",
+	"delete-buffer",
 	"load-buffer",
 	"save-buffer",
 	"capture-pane",

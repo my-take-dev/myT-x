@@ -11,7 +11,14 @@ import {
 import {OverviewCards} from "../src/components/viewer/views/usage-dashboard/OverviewCards";
 import {RankingTable} from "../src/components/viewer/views/usage-dashboard/RankingTable";
 import {SourceHealthBanner} from "../src/components/viewer/views/usage-dashboard/SourceHealthBanner";
-import {UsageModeTabs} from "../src/components/viewer/views/usage-dashboard/UsageModeTabs";
+import {UsageComparisonPanel} from "../src/components/viewer/views/usage-dashboard/UsageComparisonPanel";
+import {UsageModeList} from "../src/components/viewer/views/usage-dashboard/UsageModeList";
+import {
+    getComparisonSourceLockedReason,
+    getInitialComparisonSources,
+    MAX_COMPARISON_SOURCES,
+    toggleComparisonSourceSelection,
+} from "../src/components/viewer/views/usage-dashboard/usageSourceSelection";
 import {setLanguage} from "../src/i18n";
 import {usagedashboard as usageDashboardModels} from "../wailsjs/go/models";
 import type {usagedashboard} from "../wailsjs/go/models";
@@ -197,24 +204,121 @@ describe("usage dashboard components", () => {
         expect(cards[1]?.dataset.cardId).toBe("tool-calls");
     });
 
-    it("renders mode tabs with data-mode attributes for CSS targeting", () => {
+    it("renders mode selection as a list selector", () => {
+        const onSelectionChange = vi.fn();
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
         act(() => {
             root.render(
-                <UsageModeTabs
-                    mode="codex"
-                    onModeChange={() => undefined}
-                    labelClaude="Claude"
-                    labelCodex="Codex"
-                    labelBoth="Both"
+                <UsageModeList
+                    selection="codex"
+                    onSelectionChange={onSelectionChange}
+                    options={[
+                        {id: "claude", label: "Claude Code"},
+                        {id: "codex", label: "Codex"},
+                        {id: "compare", label: "Compare"},
+                    ]}
                 />,
             );
         });
 
-        const tabs = container.querySelectorAll<HTMLButtonElement>(".usage-dashboard-tab");
-        expect(tabs).toHaveLength(3);
-        expect(tabs[0]?.dataset.mode).toBe("claude");
-        expect(tabs[1]?.dataset.mode).toBe("codex");
-        expect(tabs[2]?.dataset.mode).toBe("both");
+        const selector = container.querySelector<HTMLSelectElement>(".usage-dashboard-mode-select");
+        const options = Array.from(container.querySelectorAll<HTMLOptionElement>("option"));
+        expect(selector?.value).toBe("codex");
+        expect(options.map((option) => option.value)).toEqual(["claude", "codex", "compare"]);
+        expect(options.map((option) => option.textContent)).toEqual(["Claude Code", "Codex", "Compare"]);
+        expect(selector?.getAttribute("aria-label")).toBeNull();
+        expect(selector?.getAttribute("aria-labelledby")).toBeTruthy();
+
+        act(() => {
+            if (!selector) return;
+            selector.value = "";
+            selector.dispatchEvent(new Event("change", {bubbles: true}));
+        });
+
+        expect(onSelectionChange).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalledWith(
+            "[UsageDashboard] Ignoring unknown dashboard selection",
+            {value: ""},
+        );
+        warnSpy.mockRestore();
+    });
+
+    it("renders only selected comparison sources in source order", () => {
+        act(() => {
+            root.render(
+                <UsageComparisonPanel
+                    snapshot={{
+                        work_dir: "D:/myT-x/dev-myT-x",
+                        last_updated_at: "2026-04-15T20:00:00Z",
+                        claude: null,
+                        codex: {
+                            total_sessions: 1,
+                            active_days: 1,
+                            total_prompts: 0,
+                            total_spawned_agents: 0,
+                            skills: [],
+                            agents: [],
+                            skills_daily: [],
+                            agents_daily: [],
+                            daily_activity: [],
+                            health: {
+                                jsonl_available: true,
+                                history_available: true,
+                                sqlite_available: true,
+                                project_dir: "D:/myT-x/dev-myT-x",
+                                partial_errors: [],
+                            },
+                        },
+                    } satisfies usagedashboard.UsageDashboardSnapshot}
+                    selectedSources={["codex"]}
+                    sources={[
+                        {id: "claude", title: "Claude Code"},
+                        {id: "codex", title: "Codex"},
+                    ]}
+                />,
+            );
+        });
+
+        expect(container.querySelector(".usage-dashboard-comparison")?.getAttribute("data-source-count")).toBe("1");
+        expect(container.querySelector('.usage-dashboard-comparison-item[data-source="claude"]')).toBeNull();
+        expect(container.querySelector('.usage-dashboard-comparison-item[data-source="codex"]')).not.toBeNull();
+        expect(container.querySelector(".usage-dashboard-codex")?.classList.contains("compact")).toBe(false);
+    });
+
+    it("renders an empty comparison fallback defensively", () => {
+        act(() => {
+            root.render(
+                <UsageComparisonPanel
+                    snapshot={null}
+                    selectedSources={[]}
+                    sources={[
+                        {id: "claude", title: "Claude Code"},
+                        {id: "codex", title: "Codex"},
+                    ]}
+                />,
+            );
+        });
+
+        expect(container.querySelector(".usage-dashboard-comparison")?.getAttribute("data-source-count")).toBe("0");
+        expect(container.textContent).toContain("No comparison sources selected.");
+    });
+
+    it("keeps comparison source selection between one and the available source count", () => {
+        expect(MAX_COMPARISON_SOURCES).toBe(2);
+        expect(getInitialComparisonSources()).toEqual(["claude", "codex"]);
+        const single = ["claude"] as const;
+        const full = ["claude", "codex"] as const;
+
+        expect(getComparisonSourceLockedReason(single, "claude", "Select at least one source."))
+            .toBe("Select at least one source.");
+        expect(getComparisonSourceLockedReason(full, "codex", "Select at least one source."))
+            .toBeNull();
+        expect(toggleComparisonSourceSelection(single, "claude")).toBe(single);
+        expect(toggleComparisonSourceSelection(full, "claude")).toEqual(["codex"]);
+        expect(toggleComparisonSourceSelection(full, "codex")).toEqual(["claude"]);
+        expect(toggleComparisonSourceSelection(full, "codex", 1)).toEqual(["claude"]);
+        expect(toggleComparisonSourceSelection(full, "third")).toBe(full);
+        expect(toggleComparisonSourceSelection(full, "third", 3)).toEqual(["claude", "codex", "third"]);
     });
 
     it("wires each daily activity chart instance to its own gradient fill", () => {

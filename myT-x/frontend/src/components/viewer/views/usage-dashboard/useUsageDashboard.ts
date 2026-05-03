@@ -3,7 +3,11 @@ import {GetUsageDashboard} from "../../../../../wailsjs/go/main/App";
 import {usagedashboard} from "../../../../../wailsjs/go/models";
 import {useTmuxStore} from "../../../../stores/tmuxStore";
 
-export type UsageMode = "claude" | "codex" | "both";
+export type UsageSource = "claude" | "codex";
+export type UsageDashboardSelection = UsageSource | "compare";
+// Must match internal/usagedashboard.ModeBoth; the current React view asks
+// for the full snapshot and performs source filtering locally.
+export const COMBINED_USAGE_MODE = "both" as const;
 
 interface UseUsageDashboardResult {
     snapshot: usagedashboard.UsageDashboardSnapshot | null;
@@ -21,14 +25,15 @@ interface UseUsageDashboardResult {
 
 /**
  * useUsageDashboard fetches aggregated usage statistics for the currently
- * active tmux session and returns a snapshot scoped to the caller's `mode`.
+ * active tmux session. The hook always fetches the combined snapshot so
+ * view-only source selection can switch without another Wails IPC call.
  *
  * The hook implements defensive-coding-checklist #186 post-await session guard:
  * the active session key (name:id) is captured before the Wails IPC call and
  * compared afterwards so state updates from stale requests are dropped when
  * the user has switched sessions during the roundtrip.
  */
-export function useUsageDashboard(mode: UsageMode): UseUsageDashboardResult {
+export function useUsageDashboard(): UseUsageDashboardResult {
     const activeSession = useTmuxStore((s) => s.activeSession);
     const sessions = useTmuxStore((s) => s.sessions);
     const activeSessionSnapshot = useMemo(
@@ -71,7 +76,7 @@ export function useUsageDashboard(mode: UsageMode): UseUsageDashboardResult {
         const capturedSessionKey = activeSessionKey;
         pendingRequestCountRef.current += 1;
         setIsLoading(true);
-        void GetUsageDashboard(activeSession, mode, force)
+        void GetUsageDashboard(activeSession, COMBINED_USAGE_MODE, force)
             .then((result) => {
                 if (!isMountedRef.current) return;
                 if (capturedSessionKey !== latestSessionKeyRef.current) return;
@@ -92,10 +97,10 @@ export function useUsageDashboard(mode: UsageMode): UseUsageDashboardResult {
                 pendingRequestCountRef.current = Math.max(0, pendingRequestCountRef.current - 1);
                 setIsLoading(pendingRequestCountRef.current > 0);
             });
-    }, [activeSession, activeSessionKey, mode]);
+    }, [activeSession, activeSessionKey]);
 
-    // Auto-refresh when the callback identity changes because the session or
-    // mode changed. force=false so the on-disk JSON cache is reused when fresh.
+    // Auto-refresh when the callback identity changes because the session
+    // changed. force=false so the on-disk JSON cache is reused when fresh.
     useEffect(() => {
         refresh(false);
     }, [refresh]);

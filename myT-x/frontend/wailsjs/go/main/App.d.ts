@@ -204,6 +204,8 @@ export function LoadPromptPresets(arg1:string):Promise<promptpresets.LoadResult>
 
 export function LoadSchedulerTemplates(arg1:string):Promise<Array<scheduler.Template>>;
 
+export function LoadSessionMemo(arg1:string):Promise<string>;
+
 export function LogFrontendEvent(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function OpenDirectoryInExplorer(arg1:string):Promise<void>;
@@ -249,6 +251,8 @@ export function SaveOrchestratorTeam(arg1:orchestrator.TeamDefinition,arg2:strin
 export function SavePromptPreset(arg1:promptpresets.PromptPreset,arg2:string):Promise<void>;
 
 export function SaveSchedulerTemplate(arg1:string,arg2:scheduler.Template):Promise<void>;
+
+export function SaveSessionMemo(arg1:string,arg2:string):Promise<void>;
 
 export function SaveTaskSchedulerSettings(arg1:config.TaskSchedulerConfig):Promise<void>;
 

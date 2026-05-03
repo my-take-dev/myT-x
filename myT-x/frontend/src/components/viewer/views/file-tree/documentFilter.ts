@@ -1,6 +1,7 @@
 import type {FileNode} from "./fileTreeTypes";
 import type {DocumentKind} from "./documentTypes";
 
+// Keep in sync with viewTargetExtensions in internal/devpanel/service.go.
 export const DOCUMENT_EXTENSIONS = new Set<string>([
     "db",
     "md",
@@ -18,6 +19,7 @@ export const DOCUMENT_EXTENSIONS = new Set<string>([
     "vega",
 ]);
 
+// Keep in sync with viewTargetCompoundSuffixes in internal/devpanel/service.go.
 export const COMPOUND_SUFFIXES: readonly string[] = [
     ".drawio.svg",
     ".drawio.xml",
@@ -51,6 +53,10 @@ function hasSupportedDocumentExtension(name: string): boolean {
 
     const extension = normalizedName.slice(lastDotIndex + 1);
     return DOCUMENT_EXTENSIONS.has(extension);
+}
+
+export function isDocumentFileName(name: string): boolean {
+    return hasSupportedDocumentExtension(name);
 }
 
 function detectDocumentKindByName(name: string): DocumentKind | null {
@@ -180,7 +186,7 @@ export function isDocumentFile(node: FileNode): boolean {
     if (node.isDir) {
         return false;
     }
-    return hasSupportedDocumentExtension(node.name);
+    return node.hasViewTarget;
 }
 
 export function filterDocumentTree(
@@ -197,9 +203,9 @@ export function filterDocumentTree(
         }
 
         if (!node.children) {
-            // Lazy-loaded directories are preserved until their children are known.
-            // Hiding them eagerly would make reachable document files undiscoverable.
-            if (node.hasChildren) {
+            // Unexplored directories rely on backend subtree hints. Keeping
+            // possible targets visible preserves the lazy path to documents.
+            if (node.hasViewTarget) {
                 filteredNodes.push(node);
             }
             continue;

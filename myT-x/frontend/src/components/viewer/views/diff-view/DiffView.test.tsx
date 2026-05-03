@@ -15,8 +15,23 @@ vi.mock("./useDiffView", () => ({
 }));
 
 vi.mock("../shared/ViewerPanelShell", () => ({
-    ViewerPanelShell: ({children, message}: {children?: ReactNode; message?: string}) => (
+    ViewerPanelShell: ({
+        children,
+        message,
+        onRefresh,
+        refreshTitle,
+    }: {
+        children?: ReactNode;
+        message?: string;
+        onRefresh?: () => void;
+        refreshTitle?: string;
+    }) => (
         <div>
+            {onRefresh && (
+                <button type="button" aria-label={refreshTitle} onClick={onRefresh}>
+                    shell refresh
+                </button>
+            )}
             {message && <div>{message}</div>}
             {children}
         </div>
@@ -82,7 +97,10 @@ function buildDiff(diff: string): devpanel.WorkingDiffResult {
     });
 }
 
-function buildUseDiffViewState(diffResult: devpanel.WorkingDiffResult) {
+function buildUseDiffViewState(
+    diffResult: devpanel.WorkingDiffResult,
+    overrides: { readonly loadDiff?: () => void; readonly error?: string | null; readonly activeSession?: string | null } = {},
+) {
     return {
         flatNodes: [],
         selectedPath: "a.ts",
@@ -114,6 +132,7 @@ function buildUseDiffViewState(diffResult: devpanel.WorkingDiffResult) {
         fetch: vi.fn(),
         commitMessage: "",
         setCommitMessage: vi.fn(),
+        ...overrides,
     };
 }
 
@@ -199,5 +218,44 @@ describe("DiffView", () => {
         expect(container.textContent).toContain(
             "Diff changed while review comments were being prepared. Draft inputs were preserved.",
         );
+    });
+
+    it("refreshes the diff when the refresh button is clicked", async () => {
+        const loadDiff = vi.fn();
+        useDiffViewMock.mockReturnValue(buildUseDiffViewState(buildDiff("@@ -1 +1 @@\n-old\n+new"), {loadDiff}));
+
+        await act(async () => {
+            root.render(<DiffView/>);
+        });
+
+        const refreshButton = container.querySelector<HTMLButtonElement>("button[aria-label='Diff を更新']");
+        expect(refreshButton).not.toBeNull();
+
+        await act(async () => {
+            refreshButton?.click();
+        });
+
+        expect(loadDiff).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshes the diff from the error shell refresh button", async () => {
+        const loadDiff = vi.fn();
+        useDiffViewMock.mockReturnValue(buildUseDiffViewState(buildDiff("@@ -1 +1 @@\n-old\n+new"), {
+            error: "load failed",
+            loadDiff,
+        }));
+
+        await act(async () => {
+            root.render(<DiffView/>);
+        });
+
+        const refreshButton = container.querySelector<HTMLButtonElement>("button[aria-label='Diff を更新']");
+        expect(refreshButton).not.toBeNull();
+
+        await act(async () => {
+            refreshButton?.click();
+        });
+
+        expect(loadDiff).toHaveBeenCalledTimes(1);
     });
 });

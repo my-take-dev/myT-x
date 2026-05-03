@@ -1,4 +1,5 @@
 import {useEffect, useMemo, useRef, useState} from "react";
+import {useI18n} from "../../../../i18n";
 import {useDiffReviewStore} from "../../../../stores/diffReviewStore";
 import {useViewerStore} from "../../viewerStore";
 import {ViewerPanelShell} from "../shared/ViewerPanelShell";
@@ -14,6 +15,7 @@ import {StagingFlatView} from "./StagingFlatView";
 import {useDiffView} from "./useDiffView";
 
 export function DiffView() {
+    const {t} = useI18n();
     const closeView = useViewerStore((s) => s.closeView);
     const activeSessionKey = useDiffReviewSessionKey();
     const sessionCommentCount = useDiffReviewStore(
@@ -71,6 +73,8 @@ export function DiffView() {
     const previousSessionKeyRef = useRef(activeSessionKey);
     const previousGenerationKeyRef = useRef(diffReviewGenerationKey);
     const [diffReviewWarning, setDiffReviewWarning] = useState<string | null>(null);
+    const refreshDiffTitle = t("viewer.diff.refresh", "Diff を更新");
+    const closeDiffTitle = t("viewer.diff.close", "Diff を閉じる");
 
     useEffect(() => {
         const generationChanged = shouldResetDiffReviewState(
@@ -113,6 +117,7 @@ export function DiffView() {
                 title="Diff"
                 onClose={closeView}
                 onRefresh={loadDiff}
+                refreshTitle={refreshDiffTitle}
                 message={error}
             />
         );
@@ -131,9 +136,9 @@ export function DiffView() {
                 <DiffReviewActionBar />
                 <span className="diff-action-bar-spacer" />
                 <button type="button" className="viewer-header-btn" onClick={() => loadDiff()}
-                        title="Refresh" aria-label="Refresh">{"\u21BB"}</button>
+                        title={refreshDiffTitle} aria-label={refreshDiffTitle}>{"\u21BB"}</button>
                 <button type="button" className="viewer-header-btn" onClick={closeView}
-                        title="Close" aria-label="Close">{"\u2715"}</button>
+                        title={closeDiffTitle} aria-label={closeDiffTitle}>{"\u2715"}</button>
             </div>
 
             {fileCount > 0 && (

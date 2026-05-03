@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest";
 import type {DiffReviewComment} from "../../../../stores/diffReviewStore";
-import {buildReviewMarkdown} from "./diffReviewMarkdown";
+import {buildReviewMarkdown, buildReviewSendMarkdown} from "./diffReviewMarkdown";
 
 function createComment(overrides: Partial<DiffReviewComment> = {}): DiffReviewComment {
     return {
@@ -185,5 +185,42 @@ describe("buildReviewMarkdown", () => {
         const result = buildReviewMarkdown(comments);
 
         expect(result).toContain("(old L10 to new L14)");
+    });
+});
+
+describe("buildReviewSendMarkdown", () => {
+    it("keeps existing review markdown when the message is empty", () => {
+        const comments: DiffReviewComment[] = [createComment()];
+
+        expect(buildReviewSendMarkdown({message: "  ", comments})).toBe(buildReviewMarkdown(comments));
+    });
+
+    it("prepends a non-empty message before review comments", () => {
+        const comments: DiffReviewComment[] = [createComment({commentText: "Review this"})];
+
+        const result = buildReviewSendMarkdown({message: "Please focus on safety.", comments});
+
+        expect(result).toContain("# Overall Comment\n\nPlease focus on safety.\n\n---\n\n# Code Review Comments");
+        expect(result).toContain("> Review this");
+    });
+
+    it("preserves a user-authored top-level heading inside the overall comment section", () => {
+        const result = buildReviewSendMarkdown({message: "# Important\n\nDo not rewrite my heading.", comments: []});
+
+        expect(result).toBe("# Overall Comment\n\n# Important\n\nDo not rewrite my heading.");
+    });
+
+    it("allows message-only sends", () => {
+        expect(buildReviewSendMarkdown({message: "Please review the overall diff.", comments: []})).toBe(
+            "# Overall Comment\n\nPlease review the overall diff.",
+        );
+    });
+
+    it("trims whitespace-only overall messages before deciding whether to add the heading", () => {
+        expect(buildReviewSendMarkdown({message: "\n\t  \r\n", comments: []})).toBe("");
+    });
+
+    it("returns empty text for a completely empty payload", () => {
+        expect(buildReviewSendMarkdown({message: " ", comments: []})).toBe("");
     });
 });

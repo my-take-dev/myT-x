@@ -215,6 +215,32 @@
     color: var(--single-task-runner-accent);
 }
 
+.single-task-runner-card-clear-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72rem;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid rgba(163, 184, 204, 0.24);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--fg-dim);
+}
+
+.single-task-runner-card-clear-toggle:has(input:checked) {
+    border-color: var(--single-task-runner-accent-border);
+    background: var(--single-task-runner-accent-soft);
+    color: var(--single-task-runner-accent);
+}
+
+.single-task-runner-card-clear-toggle input {
+    margin: 0;
+}
+
+.single-task-runner-card-clear-toggle input:disabled {
+    cursor: not-allowed;
+}
+
 .single-task-runner-card-error {
     color: var(--danger);
 }

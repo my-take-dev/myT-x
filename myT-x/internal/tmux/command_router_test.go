@@ -47,6 +47,7 @@ func TestCommandRouterHandlerMapHasNoDuplicateKeys(t *testing.T) {
 		"list-buffers",
 		"set-buffer",
 		"paste-buffer",
+		"delete-buffer",
 		"load-buffer",
 		"save-buffer",
 		"capture-pane",

@@ -12,7 +12,7 @@ import {
     renamePathInTree,
 } from "./treeUtils";
 
-function directoryEntry(path: string, hasChildren: boolean): FileEntry {
+function directoryEntry(path: string, hasChildren: boolean, hasViewTarget: boolean = hasChildren): FileEntry {
     const segments = path.split("/");
     return {
         name: segments[segments.length - 1],
@@ -20,10 +20,11 @@ function directoryEntry(path: string, hasChildren: boolean): FileEntry {
         is_dir: true,
         size: 0,
         has_children: hasChildren,
+        has_view_target: hasViewTarget,
     };
 }
 
-function fileEntry(path: string, size: number): FileEntry {
+function fileEntry(path: string, size: number, hasViewTarget: boolean = true): FileEntry {
     const segments = path.split("/");
     return {
         name: segments[segments.length - 1],
@@ -31,6 +32,7 @@ function fileEntry(path: string, size: number): FileEntry {
         is_dir: false,
         size,
         has_children: false,
+        has_view_target: hasViewTarget,
     };
 }
 
@@ -47,6 +49,7 @@ describe("treeUtils", () => {
                 path: "src",
                 isDir: true,
                 hasChildren: true,
+                hasViewTarget: true,
                 size: undefined,
             },
             {
@@ -54,9 +57,19 @@ describe("treeUtils", () => {
                 path: "README.md",
                 isDir: false,
                 hasChildren: false,
+                hasViewTarget: true,
                 size: 128,
             },
         ]);
+    });
+
+    it("carries backend view-target metadata into nodes", () => {
+        const nodes = fileEntriesToNodes([
+            directoryEntry("src", true, false),
+            fileEntry("src/app.go", 64, false),
+        ]);
+
+        expect(nodes.map((node) => node.hasViewTarget)).toEqual([false, false]);
     });
 
     it("preserves loaded descendants when refreshing root nodes", () => {
@@ -66,16 +79,19 @@ describe("treeUtils", () => {
                 path: "src",
                 isDir: true,
                 hasChildren: true,
+                hasViewTarget: true,
                 children: [{
                     name: "nested",
                     path: "src/nested",
                     isDir: true,
                     hasChildren: true,
+                    hasViewTarget: true,
                     children: [{
                         name: "deep.txt",
                         path: "src/nested/deep.txt",
                         isDir: false,
                         hasChildren: false,
+                        hasViewTarget: true,
                         size: 42,
                     }],
                 }],
@@ -87,22 +103,60 @@ describe("treeUtils", () => {
         expect(refreshed[0]?.children?.[0]?.children?.[0]?.path).toBe("src/nested/deep.txt");
     });
 
+    it("recomputes view targets when preserving loaded descendants", () => {
+        const existingTree: readonly FileNode[] = [{
+            name: "src",
+            path: "src",
+            isDir: true,
+            hasChildren: true,
+            hasViewTarget: false,
+            children: [{
+                name: "guide.md",
+                path: "src/guide.md",
+                isDir: false,
+                hasChildren: false,
+                hasViewTarget: true,
+                size: 64,
+            }],
+        }];
+
+        const refreshed = mergeRootNodes(fileEntriesToNodes([directoryEntry("src", true, false)]), existingTree);
+        expect(refreshed[0]?.hasViewTarget).toBe(true);
+    });
+
+    it("allows refreshed backend metadata to clear stale view targets", () => {
+        const existingTree: readonly FileNode[] = [{
+            name: "src",
+            path: "src",
+            isDir: true,
+            hasChildren: true,
+            hasViewTarget: true,
+            children: fileEntriesToNodes([fileEntry("src/app.ts", 64, false)]),
+        }];
+
+        const refreshed = mergeRootNodes(fileEntriesToNodes([directoryEntry("src", true, false)]), existingTree);
+        expect(refreshed[0]?.hasViewTarget).toBe(false);
+    });
+
     it("replaces the target directory while retaining matching loaded descendants", () => {
         const existingTree: readonly FileNode[] = [{
             name: "src",
             path: "src",
             isDir: true,
             hasChildren: true,
+            hasViewTarget: true,
             children: [{
                 name: "nested",
                 path: "src/nested",
                 isDir: true,
                 hasChildren: true,
+                hasViewTarget: true,
                 children: [{
                     name: "deep.txt",
                     path: "src/nested/deep.txt",
                     isDir: false,
                     hasChildren: false,
+                    hasViewTarget: true,
                     size: 42,
                 }],
             }],
@@ -115,6 +169,32 @@ describe("treeUtils", () => {
 
         expect(merged[0]?.children?.map((node) => node.path)).toEqual(["src/nested", "src/app.ts"]);
         expect(merged[0]?.children?.[0]?.children?.[0]?.path).toBe("src/nested/deep.txt");
+    });
+
+    it("recomputes ancestor view targets after lazy-loading a descendant", () => {
+        const existingTree: readonly FileNode[] = [{
+            name: "src",
+            path: "src",
+            isDir: true,
+            hasChildren: true,
+            hasViewTarget: false,
+            children: [{
+                name: "nested",
+                path: "src/nested",
+                isDir: true,
+                hasChildren: true,
+                hasViewTarget: false,
+            }],
+        }];
+
+        const merged = mergeChildrenIntoTree(
+            existingTree,
+            "src/nested",
+            fileEntriesToNodes([fileEntry("src/nested/guide.md", 64)]),
+        );
+
+        expect(merged[0]?.hasViewTarget).toBe(true);
+        expect(merged[0]?.children?.[0]?.hasViewTarget).toBe(true);
     });
 
     it("flattens only expanded directories and carries hasChildren", () => {
@@ -158,6 +238,24 @@ describe("treeUtils", () => {
         expect(removePathFromTree(tree, "src/nested")[0]?.children?.map((node) => node.path)).toEqual(["src/app.ts"]);
     });
 
+    it("keeps ancestor view targets while another supported child remains", () => {
+        const tree = mergeChildrenIntoTree(
+            fileEntriesToNodes([directoryEntry("src", true)]),
+            "src",
+            fileEntriesToNodes([
+                fileEntry("src/guide.md", 64, true),
+                fileEntry("src/app.ts", 64, false),
+            ]),
+        );
+
+        const nextTree = removePathFromTree(tree, "src/app.ts");
+        expect(nextTree[0]).toMatchObject({
+            path: "src",
+            hasChildren: true,
+            hasViewTarget: true,
+        });
+    });
+
     it("marks a directory as empty after removing its last child", () => {
         const tree = mergeChildrenIntoTree(
             fileEntriesToNodes([directoryEntry("src", true)]),
@@ -169,6 +267,7 @@ describe("treeUtils", () => {
         expect(nextTree[0]).toMatchObject({
             path: "src",
             hasChildren: false,
+            hasViewTarget: false,
         });
     });
 

@@ -6,6 +6,7 @@ import {useCanvasStore} from "../src/stores/canvasStore";
 import {useDiffReviewStore} from "../src/stores/diffReviewStore";
 import {useMCPStore} from "../src/stores/mcpStore";
 import {useNotificationStore} from "../src/stores/notificationStore";
+import {buildSessionMemoDraftKey, useSessionMemoStore} from "../src/stores/sessionMemoStore";
 import {useTmuxStore} from "../src/stores/tmuxStore";
 import {buildDiffReviewDraftKey, buildDiffReviewSessionKey} from "../src/components/viewer/views/diff-view/diffReviewKeys";
 
@@ -103,6 +104,7 @@ describe("useSnapshotSync", () => {
             drafts: {},
             activeCommentLineKey: null,
         }));
+        useSessionMemoStore.setState({drafts: {}});
         useTmuxStore.setState((state) => ({
             ...state,
             activeSession: null,
@@ -240,6 +242,15 @@ describe("useSnapshotSync", () => {
                 "old-session": {loading: false, error: "stale"},
             },
         });
+        useSessionMemoStore.getState().initializeMemo(buildSessionMemoDraftKey("old-session", 7), "memo draft", true);
+        useTmuxStore.setState((state) => ({
+            ...state,
+            sessions: [{id: 7, name: "old-session", created_at: "", is_idle: false, active_window_id: 1, windows: []}],
+            sessionOrder: ["old-session"],
+        }));
+        apiMock.ListSessions.mockResolvedValueOnce([
+            {id: 7, name: "old-session", created_at: "", is_idle: false, active_window_id: 1, windows: []},
+        ]);
 
         act(() => {
             root.render(<SnapshotSyncProbe/>);
@@ -258,6 +269,8 @@ describe("useSnapshotSync", () => {
         expect(useMCPStore.getState().snapshots["old-session"]).toBeUndefined();
         expect(useMCPStore.getState().snapshots["renamed-session"]?.[0]?.id).toBe("mcp-1");
         expect(useMCPStore.getState().sessionStates["renamed-session"]?.error).toBe("stale");
+        expect(useSessionMemoStore.getState().drafts[buildSessionMemoDraftKey("old-session", 7)]).toBeUndefined();
+        expect(useSessionMemoStore.getState().drafts[buildSessionMemoDraftKey("renamed-session", 7)]?.content).toBe("memo draft");
     });
 
     it("clears diff review state when tmux:session-destroyed arrives", async () => {
@@ -285,6 +298,7 @@ describe("useSnapshotSync", () => {
             buildDiffReviewDraftKey(buildDiffReviewSessionKey(7), "a.ts", "hunk:1:1:0"),
             "draft text",
         );
+        useSessionMemoStore.getState().initializeMemo(buildSessionMemoDraftKey("old-session", 7), "memo draft", true);
 
         act(() => {
             root.render(<SnapshotSyncProbe/>);
@@ -301,5 +315,6 @@ describe("useSnapshotSync", () => {
         expect(useDiffReviewStore.getState().comments).toEqual([]);
         expect(useDiffReviewStore.getState().drafts).toEqual({});
         expect(useDiffReviewStore.getState().activeCommentLineKey).toBeNull();
+        expect(useSessionMemoStore.getState().drafts[buildSessionMemoDraftKey("old-session", 7)]).toBeUndefined();
     });
 });

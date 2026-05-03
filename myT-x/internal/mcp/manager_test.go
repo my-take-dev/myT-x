@@ -73,6 +73,35 @@ func payloadMap(t *testing.T, payload any) map[string]any {
 	return data
 }
 
+func TestNewManagerPanicsWhenOrchestratorConfigDirIsMissing(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register(MCPDefinition{
+		ID:   "agent-orchestrator",
+		Name: "Agent Orchestrator",
+		Kind: DefinitionKindOrchestrator,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	defer func() {
+		got := recover()
+		if got == nil {
+			t.Fatal("NewManager() expected panic")
+		}
+		msg, ok := got.(string)
+		if !ok {
+			t.Fatalf("NewManager() panic = %T(%v), want string", got, got)
+		}
+		if !strings.Contains(msg, "ConfigDir is required") {
+			t.Fatalf("NewManager() panic = %v, want ConfigDir requirement", got)
+		}
+	}()
+	_ = NewManager(ManagerConfig{
+		Registry: reg,
+		EmitFn:   func(string, any) {},
+	})
+}
+
 type fakeManagedPipeServer struct {
 	pipeName     string
 	startEntered chan struct{}

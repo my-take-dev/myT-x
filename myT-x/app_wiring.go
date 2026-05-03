@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 
 	"myT-x/internal/config"
 	"myT-x/internal/devpanel"
@@ -20,6 +21,7 @@ import (
 	"myT-x/internal/promptpresets"
 	"myT-x/internal/scheduler"
 	"myT-x/internal/session"
+	"myT-x/internal/sessionmemo"
 	"myT-x/internal/singletaskrunner"
 	"myT-x/internal/snapshot"
 	"myT-x/internal/taskscheduler"
@@ -165,6 +167,13 @@ func buildPromptPresetsServiceDeps(app *App) promptpresets.Deps {
 	}
 }
 
+func buildSessionMemoServiceDeps(app *App) sessionmemo.Deps {
+	return sessionmemo.Deps{
+		ResolveSessionWorkDir: app.sessionService.ResolveSessionWorkDir,
+		ConfigDir:             appConfigDirProvider(app),
+	}
+}
+
 // ---------------------------------------------------------------------------
 // DevPanel
 // ---------------------------------------------------------------------------
@@ -189,6 +198,7 @@ func buildDevPanelServiceDeps(app *App) devpanel.Deps {
 func buildUsageDashboardServiceDeps(app *App) usagedashboard.Deps {
 	return usagedashboard.Deps{
 		ResolveSessionWorkDir: app.sessionService.ResolveSessionWorkDir,
+		ConfigDir:             appConfigDirProvider(app),
 	}
 }
 
@@ -371,16 +381,8 @@ func buildSchedulerServiceDeps(app *App) scheduler.Deps {
 			}
 			return app.sendKeys.schedulerSendMessage(router, paneID, message)
 		},
-		ResolveSessionRootPath: func(sessionName string) (string, error) {
-			snap, err := requireSessionSnapshot(app, sessionName)
-			if err != nil {
-				return "", err
-			}
-			if snap.RootPath == "" {
-				return "", errors.New("session has no root path")
-			}
-			return snap.RootPath, nil
-		},
+		ResolveSessionWorkDir: app.sessionService.ResolveSessionWorkDir,
+		ConfigDir:             appConfigDirProvider(app),
 		NewContext: func() (context.Context, context.CancelFunc) {
 			parentCtx := app.runtimeContext()
 			if parentCtx == nil {
@@ -393,6 +395,19 @@ func buildSchedulerServiceDeps(app *App) scheduler.Deps {
 			workerutil.RunWithPanicRecovery(ctx, name, &app.bgWG, fn, opts)
 		},
 		BaseRecoveryOptions: app.defaultRecoveryOptions,
+	}
+}
+
+func appConfigDirProvider(app *App) func() (string, error) {
+	if app.configDirProvider != nil {
+		return app.configDirProvider
+	}
+	return func() (string, error) {
+		configPath := app.configState.ConfigPath()
+		if strings.TrimSpace(configPath) == "" {
+			return "", errors.New("config path is not initialized")
+		}
+		return filepath.Dir(configPath), nil
 	}
 }
 
@@ -427,10 +442,11 @@ func buildTaskSchedulerDepsFactory(app *App) taskscheduler.DepsFactory {
 				if err != nil {
 					return "", err
 				}
-				if snap.RootPath == "" {
-					return "", errors.New("session has no root path")
+				rootPath, err := orchestrator.ResolveSourceRootPath(snap)
+				if err != nil {
+					return "", err
 				}
-				return filepath.Join(snap.RootPath, ".myT-x", "orchestrator.db"), nil
+				return app.resolveOrchestratorDBPathForProjectRoot(rootPath)
 			},
 			NewContext: func() (context.Context, context.CancelFunc) {
 				parentCtx := app.runtimeContext()

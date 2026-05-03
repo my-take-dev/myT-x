@@ -49,6 +49,7 @@ Press the prefix key → "PREFIX" appears in the status bar → Press the action
 | `Ctrl+Shift+J` | Single Task Runner |
 | `Ctrl+Shift+T` | Orchestrator Teams |
 | `Ctrl+Shift+U` | Usage Dashboard |
+| `Ctrl+Shift+N` | Session Memo |
 | `Ctrl+Shift+P` | Prompt Presets |
 | `Ctrl+Shift+L` | Error Log |
 

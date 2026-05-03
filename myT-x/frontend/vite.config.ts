@@ -1,3 +1,6 @@
+import {mkdirSync, writeFileSync} from "node:fs";
+import {join} from "node:path";
+import {fileURLToPath} from "node:url";
 import react from "@vitejs/plugin-react";
 import {defineConfig} from "vitest/config";
 
@@ -59,8 +62,22 @@ function resolveShikiLangChunk(normalizedId: string): string {
     return "shiki-langs-ext-q-z";
 }
 
+function preserveGoEmbedPlaceholder() {
+    return {
+        name: "preserve-go-embed-placeholder",
+        closeBundle() {
+            const distDir = fileURLToPath(new URL("./dist", import.meta.url));
+            mkdirSync(distDir, {recursive: true});
+            writeFileSync(
+                join(distDir, ".gitkeep"),
+                "placeholder for go:embed before frontend build\n",
+            );
+        },
+    };
+}
+
 export default defineConfig({
-    plugins: [react()],
+    plugins: [react(), preserveGoEmbedPlaceholder()],
     test: {
         environment: "jsdom",
         globals: true,

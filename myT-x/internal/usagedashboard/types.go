@@ -25,6 +25,10 @@ const TopRankingLimit = 20
 //   - mode="codex":  Claude nil,     Codex non-nil
 //   - mode="both":   Claude non-nil, Codex non-nil
 //
+// The React usage dashboard currently requests mode="both" for local
+// source filtering, but the narrower modes remain part of the Wails contract
+// for other callers and tests.
+//
 // LastUpdatedAt is always set to the time the snapshot finished aggregating.
 type UsageDashboardSnapshot struct {
 	Claude        *ClaudeUsageStats `json:"claude,omitempty"`

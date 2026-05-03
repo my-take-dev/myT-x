@@ -46,11 +46,10 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
 let intentionalDisconnect = false;
 
-// reconnectCallback is invoked each time the WebSocket successfully (re)connects.
-// Callers can register a callback to reset stream-mode decoders or other per-connection
-// state that must be flushed when a new connection replaces the previous one.
-// Only one callback is stored; a new call to setReconnectCallback replaces the previous.
-let reconnectCallback: (() => void) | null = null;
+// reconnectCallbacks are invoked each time the WebSocket successfully (re)connects.
+// Each terminal pane owns connection-scoped state such as stream-mode decoders,
+// so callbacks must be registered per consumer rather than as a single global.
+const reconnectCallbacks = new Map<() => void, string>();
 
 // paneHandlers stores at most one handler per paneID. Re-registering a paneID
 // silently replaces the previous handler (previous handler is discarded on re-register).
@@ -98,6 +97,7 @@ export function disconnect(): void {
     clearReconnectTimer();
     closeExisting();
     paneHandlers.clear(); // I-3: prevent GC leak after unmount
+    reconnectCallbacks.clear();
     wsUrl = null;
 }
 
@@ -136,16 +136,20 @@ export function isConnected(): boolean {
 }
 
 /**
- * setReconnectCallback registers a callback that is invoked each time the
+ * registerReconnectCallback registers a callback that is invoked each time the
  * WebSocket successfully (re)connects (onopen fires). Use this to reset
  * per-connection streaming state, e.g. flush a stream-mode TextDecoder or
  * clear a "WS active" flag so that IPC fallback suppression is re-evaluated.
+ * Registering the same function reference twice updates its owner label; any
+ * unregister function for that reference removes the single stored callback.
  *
- * Only one callback is supported; a subsequent call replaces the previous one.
- * Pass null to clear the callback.
+ * Returns an unregister function that removes only this callback.
  */
-export function setReconnectCallback(cb: (() => void) | null): void {
-    reconnectCallback = cb;
+export function registerReconnectCallback(callback: () => void, owner = "unknown"): () => void {
+    reconnectCallbacks.set(callback, owner);
+    return () => {
+        reconnectCallbacks.delete(callback);
+    };
 }
 
 // --- Internal functions ---
@@ -162,12 +166,14 @@ function openConnection(url: string): void {
             // can reset per-connection state (e.g. flush streaming TextDecoders,
             // clear wsActive flags). Fired before re-subscribe to ensure state
             // is clean when the first new frames arrive. (I-18, I-20)
-            if (reconnectCallback !== null) {
+            // Copy first so callbacks can unregister themselves during iteration.
+            for (const [callback, owner] of Array.from(reconnectCallbacks.entries())) {
                 try {
-                    reconnectCallback();
+                    callback();
                 } catch (err) {
+                    console.warn("[WARN-WS] reconnect callback failed", "owner", owner, err);
                     if (import.meta.env.DEV) {
-                        console.warn("[DEBUG-WS] reconnectCallback threw", err);
+                        console.warn("[DEBUG-WS] reconnect callback threw", "owner", owner, err);
                     }
                 }
             }

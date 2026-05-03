@@ -626,13 +626,14 @@ func (w *treeWatcher) handleEvent(event fsnotify.Event) {
 		}
 	}
 
-	parentPath := parentPanelPath(relPath)
+	invalidatedPaths := panelPathAndAncestors(relPath)
 	if w.dirCache != nil {
-		w.dirCache.Invalidate(sessionName, relPath)
-		w.dirCache.Invalidate(sessionName, parentPath)
+		for _, invalidatedPath := range invalidatedPaths {
+			w.dirCache.Invalidate(sessionName, invalidatedPath)
+		}
 	}
 
-	w.queueInvalidation(parentPath)
+	w.queueInvalidation(invalidatedPaths...)
 }
 
 func (w *treeWatcher) addRecursive(root string) error {
@@ -711,14 +712,16 @@ func (w *treeWatcher) relativePath(path string) (string, bool) {
 	return normalizePanelPath(relPath), true
 }
 
-func (w *treeWatcher) queueInvalidation(path string) {
+func (w *treeWatcher) queueInvalidation(paths ...string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	if w.stopped {
 		return
 	}
-	w.pendingPaths[path] = struct{}{}
+	for _, path := range paths {
+		w.pendingPaths[normalizePanelPath(path)] = struct{}{}
+	}
 
 	// Stop any existing debounce timer before creating a new one.
 	// Using Reset() on AfterFunc timers is unsafe: in Go 1.23+ a Reset

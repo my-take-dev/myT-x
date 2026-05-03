@@ -55,6 +55,7 @@ export function useEditor(): UseEditorResult {
         activeSession,
         activeSessionKey,
         loadFileContent: false,
+        autoRefreshExternalChanges: true,
     });
 
     useEffect(() => {

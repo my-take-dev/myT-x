@@ -57,12 +57,18 @@ const fileSearchActions = vi.hoisted(() => ({
     clearSearch: vi.fn(),
 }));
 
+const runtimeMock = vi.hoisted(() => ({
+    EventsOn: vi.fn(),
+}));
+
 vi.mock("../src/components/viewer/viewerStore", () => ({
     useViewerStore: (selector: (state: { closeView: typeof viewerActions.closeView }) => unknown) =>
         selector({
             closeView: viewerActions.closeView,
         }),
 }));
+
+vi.mock("../wailsjs/runtime", () => runtimeMock);
 
 vi.mock("../src/components/viewer/views/editor/useEditor", () => ({
     useEditor: () => ({
@@ -176,11 +182,20 @@ function createDeferred<T>() {
 describe("EditorView", () => {
     let container: HTMLDivElement;
     let root: Root;
+    let eventHandlers: Map<string, (payload: unknown) => void>;
 
     beforeEach(() => {
         container = document.createElement("div");
         document.body.appendChild(container);
         root = createRoot(container);
+        eventHandlers = new Map<string, (payload: unknown) => void>();
+        runtimeMock.EventsOn.mockReset();
+        runtimeMock.EventsOn.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+            eventHandlers.set(eventName, handler);
+            return () => {
+                eventHandlers.delete(eventName);
+            };
+        });
         editorState.activeSession = "test-session";
         editorState.activeSessionKey = "test-session:1";
         editorState.error = null;
@@ -580,7 +595,8 @@ describe("EditorView", () => {
             root.render(<EditorView/>);
         });
 
-        const closeButton = container.querySelector("button[aria-label='Close']") as HTMLButtonElement;
+        const headerButtons = container.querySelectorAll(".viewer-header-btn");
+        const closeButton = headerButtons[headerButtons.length - 1] as HTMLButtonElement;
         act(() => {
             closeButton.click();
         });
@@ -678,6 +694,55 @@ describe("EditorView", () => {
         });
 
         expect(editorFileActions.clearFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("reloads an unmodified open file when the watcher invalidates the same path", async () => {
+        editorState.selectedPath = "src/app.ts";
+        editorFileState.currentPath = "src/app.ts";
+        editorFileState.isModified = false;
+
+        act(() => {
+            root.render(<EditorView/>);
+        });
+
+        await act(async () => {
+            eventHandlers.get("devpanel:tree-invalidated")?.({
+                session_name: "test-session",
+                paths: ["src/app.ts", "src", ""],
+            });
+            await Promise.resolve();
+        });
+
+        expect(editorFileActions.loadFile).toHaveBeenCalledWith("src/app.ts");
+    });
+
+    it("requires discard confirmation before reloading a modified externally invalidated file", async () => {
+        editorState.selectedPath = "src/app.ts";
+        editorFileState.currentPath = "src/app.ts";
+        editorFileState.isModified = true;
+
+        act(() => {
+            root.render(<EditorView/>);
+        });
+
+        await act(async () => {
+            eventHandlers.get("devpanel:tree-invalidated")?.({
+                session_name: "test-session",
+                paths: ["src/app.ts", "src", ""],
+            });
+            await Promise.resolve();
+        });
+
+        expect(container.textContent).toContain("Discard unsaved changes?");
+        expect(editorFileActions.loadFile).not.toHaveBeenCalled();
+
+        const discardButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Discard");
+        await act(async () => {
+            discardButton!.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+            await Promise.resolve();
+        });
+
+        expect(editorFileActions.loadFile).toHaveBeenCalledWith("src/app.ts");
     });
 
     it("requires discard confirmation before loading an externally selected file", async () => {

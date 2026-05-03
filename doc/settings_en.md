@@ -107,6 +107,7 @@ Customize keyboard shortcuts for each viewer:
 | Single Task Runner | `Ctrl+Shift+J` |
 | Teams | `Ctrl+Shift+T` |
 | Usage Dashboard | `Ctrl+Shift+U` |
+| Session Memo | `Ctrl+Shift+N` |
 | Prompt Presets | `Ctrl+Shift+P` |
 | Error Log | `Ctrl+Shift+L` |
 

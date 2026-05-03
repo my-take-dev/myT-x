@@ -107,6 +107,7 @@ auto_start:
 | Single Task Runner | `Ctrl+Shift+J` |
 | チーム | `Ctrl+Shift+T` |
 | Usage Dashboard | `Ctrl+Shift+U` |
+| Session Memo | `Ctrl+Shift+N` |
 | Prompt Presets | `Ctrl+Shift+P` |
 | Error Log | `Ctrl+Shift+L` |
 

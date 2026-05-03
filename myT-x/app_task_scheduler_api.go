@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"path/filepath"
 
 	"myT-x/internal/orchestrator"
 	"myT-x/internal/taskscheduler"
@@ -154,7 +153,11 @@ func (a *App) CheckTaskSchedulerOrchestratorReady(sessionKey string) (TaskSchedu
 		return TaskSchedulerOrchestratorReadiness{}, fmt.Errorf("resolve task scheduler source root: %w", err)
 	}
 
-	dbPath := filepath.Join(rootPath, ".myT-x", "orchestrator.db")
+	dbPath, err := a.resolveOrchestratorDBPathForProjectRoot(rootPath)
+	if err != nil {
+		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness: resolve orchestrator db path", "error", err)
+		return TaskSchedulerOrchestratorReadiness{}, fmt.Errorf("resolve task scheduler orchestrator db path: %w", err)
+	}
 	readiness, err := taskscheduler.CheckOrchestratorReady(dbPath)
 	if err != nil {
 		slog.Warn("[DEBUG-TASK-SCHEDULER] readiness: check orchestrator ready", "dbPath", dbPath, "error", err)

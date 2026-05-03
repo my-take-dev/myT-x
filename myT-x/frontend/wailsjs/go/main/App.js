@@ -374,6 +374,10 @@ export function LoadSchedulerTemplates(arg1) {
   return window['go']['main']['App']['LoadSchedulerTemplates'](arg1);
 }
 
+export function LoadSessionMemo(arg1) {
+  return window['go']['main']['App']['LoadSessionMemo'](arg1);
+}
+
 export function LogFrontendEvent(arg1, arg2, arg3) {
   return window['go']['main']['App']['LogFrontendEvent'](arg1, arg2, arg3);
 }
@@ -464,6 +468,10 @@ export function SavePromptPreset(arg1, arg2) {
 
 export function SaveSchedulerTemplate(arg1, arg2) {
   return window['go']['main']['App']['SaveSchedulerTemplate'](arg1, arg2);
+}
+
+export function SaveSessionMemo(arg1, arg2) {
+  return window['go']['main']['App']['SaveSessionMemo'](arg1, arg2);
 }
 
 export function SaveTaskSchedulerSettings(arg1) {

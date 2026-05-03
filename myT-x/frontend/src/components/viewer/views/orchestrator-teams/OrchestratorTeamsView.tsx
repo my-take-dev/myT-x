@@ -58,6 +58,11 @@ export function OrchestratorTeamsView() {
             title={t("viewer.orchestratorTeams.title", "チーム")}
             onClose={crud.handleGuardedClose}
             onRefresh={crud.refresh}
+            headerChildren={(
+                <span className="orchestrator-teams-header-note">
+                    {t("viewer.orchestratorTeams.mcpOnlyNote", "（オーケストレータMCP専用機能です）")}
+                </span>
+            )}
         >
             <div className="orchestrator-teams-body">
                 {crud.error && (

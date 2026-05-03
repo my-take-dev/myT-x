@@ -5,6 +5,7 @@ import {useMCPStore} from "../../stores/mcpStore";
 import {useNotificationStore} from "../../stores/notificationStore";
 import {useCanvasStore} from "../../stores/canvasStore";
 import {useDiffReviewStore} from "../../stores/diffReviewStore";
+import {buildSessionMemoDraftKey, useSessionMemoStore} from "../../stores/sessionMemoStore";
 import {useTmuxStore} from "../../stores/tmuxStore";
 import type {SessionSnapshot, SessionSnapshotDelta} from "../../types/tmux";
 import {logFrontendEventSafe} from "../../utils/logFrontendEventSafe";
@@ -46,11 +47,18 @@ export function useSnapshotSync(): void {
     const setActiveSession = useTmuxStore((s) => s.setActiveSession);
     const isMountedRef = useRef(true);
     const sessionKeyByNameRef = useRef<Map<string, string> | null>(null);
+    const sessionMemoKeyByNameRef = useRef<Map<string, string> | null>(null);
     const getSessionKeyByNameMap = useCallback((): Map<string, string> => {
         if (sessionKeyByNameRef.current === null) {
             sessionKeyByNameRef.current = new Map<string, string>();
         }
         return sessionKeyByNameRef.current;
+    }, []);
+    const getSessionMemoKeyByNameMap = useCallback((): Map<string, string> => {
+        if (sessionMemoKeyByNameRef.current === null) {
+            sessionMemoKeyByNameRef.current = new Map<string, string>();
+        }
+        return sessionMemoKeyByNameRef.current;
     }, []);
 
     useEffect(() => {
@@ -95,6 +103,9 @@ export function useSnapshotSync(): void {
                 normalizedSessions = sessionsResult.value ?? [];
                 sessionKeyByNameRef.current = new Map(
                     normalizedSessions.map((session) => [session.name, buildDiffReviewSessionKey(session.id)]),
+                );
+                sessionMemoKeyByNameRef.current = new Map(
+                    normalizedSessions.map((session) => [session.name, buildSessionMemoDraftKey(session.name, session.id)]),
                 );
                 setSessions(normalizedSessions);
             } else {
@@ -141,6 +152,9 @@ export function useSnapshotSync(): void {
             sessionKeyByNameRef.current = new Map(
                 snapshots.map((session) => [session.name, buildDiffReviewSessionKey(session.id)]),
             );
+            sessionMemoKeyByNameRef.current = new Map(
+                snapshots.map((session) => [session.name, buildSessionMemoDraftKey(session.name, session.id)]),
+            );
             setSessions(snapshots);
         });
 
@@ -161,6 +175,7 @@ export function useSnapshotSync(): void {
             }
             for (const session of upserts) {
                 getSessionKeyByNameMap().set(session.name, buildDiffReviewSessionKey(session.id));
+                getSessionMemoKeyByNameMap().set(session.name, buildSessionMemoDraftKey(session.name, session.id));
             }
             applySessionDelta(upserts, removed);
             // 削除されたセッションのキャンバスデータをクリーンアップ
@@ -168,6 +183,11 @@ export function useSnapshotSync(): void {
             // tmuxStore アクションは高頻度かつ主データフローのため deps 経由で参照する。
             for (const name of removed) {
                 if (name !== "") {
+                    const removedMemoKey = getSessionMemoKeyByNameMap().get(name);
+                    if (removedMemoKey != null) {
+                        useSessionMemoStore.getState().removeDraft(removedMemoKey);
+                        getSessionMemoKeyByNameMap().delete(name);
+                    }
                     useCanvasStore.getState().clearSessionData(name);
                 }
             }
@@ -218,6 +238,11 @@ export function useSnapshotSync(): void {
             if (destroyedSessionKey != null) {
                 useDiffReviewStore.getState().clearSessionState(destroyedSessionKey);
                 getSessionKeyByNameMap().delete(name);
+            }
+            const destroyedMemoKey = getSessionMemoKeyByNameMap().get(name);
+            if (destroyedMemoKey != null) {
+                useSessionMemoStore.getState().removeDraft(destroyedMemoKey);
+                getSessionMemoKeyByNameMap().delete(name);
             }
             useMCPStore.getState().clearSession(name);
             useCanvasStore.getState().clearSessionData(name);
@@ -270,6 +295,14 @@ export function useSnapshotSync(): void {
                 const sessionKeyByName = getSessionKeyByNameMap();
                 sessionKeyByName.delete(oldName);
                 sessionKeyByName.set(newName, renamedSessionKey);
+            }
+            const renamedMemoKey = getSessionMemoKeyByNameMap().get(oldName);
+            if (renamedMemoKey != null) {
+                const nextMemoKey = renamedMemoKey.replace(`${oldName}:`, `${newName}:`);
+                const sessionMemoKeyByName = getSessionMemoKeyByNameMap();
+                sessionMemoKeyByName.delete(oldName);
+                sessionMemoKeyByName.set(newName, nextMemoKey);
+                useSessionMemoStore.getState().moveDraft(renamedMemoKey, nextMemoKey);
             }
             useMCPStore.getState().migrateSession(oldName, newName);
             useCanvasStore.getState().migrateSessionData(oldName, newName);
@@ -481,5 +514,5 @@ export function useSnapshotSync(): void {
             cleanupEventListeners(cleanupFns);
         };
         // Zustand store actions are stable references.
-    }, [applySessionDelta, getSessionKeyByNameMap, setActiveSession, setSessions]);
+    }, [applySessionDelta, getSessionKeyByNameMap, getSessionMemoKeyByNameMap, setActiveSession, setSessions]);
 }

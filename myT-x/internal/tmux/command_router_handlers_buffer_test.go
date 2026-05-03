@@ -277,6 +277,79 @@ func TestHandlePasteBuffer(t *testing.T) {
 	}
 }
 
+func TestHandleDeleteBuffer(t *testing.T) {
+	tests := []struct {
+		name         string
+		flags        map[string]any
+		setup        func(*BufferStore)
+		wantExitCode int
+		verify       func(t *testing.T, bs *BufferStore)
+	}{
+		{
+			name:  "delete named buffer",
+			flags: map[string]any{"-b": "target"},
+			setup: func(bs *BufferStore) {
+				bs.Set("target", []byte("data"), false)
+			},
+			wantExitCode: 0,
+			verify: func(t *testing.T, bs *BufferStore) {
+				if _, ok := bs.Get("target"); ok {
+					t.Fatal("target buffer should not exist after delete-buffer -b")
+				}
+			},
+		},
+		{
+			name:  "delete latest buffer when name omitted",
+			flags: map[string]any{},
+			setup: func(bs *BufferStore) {
+				bs.Set("first", []byte("1"), false)
+				bs.Set("latest", []byte("2"), false)
+			},
+			wantExitCode: 0,
+			verify: func(t *testing.T, bs *BufferStore) {
+				if _, ok := bs.Get("latest"); ok {
+					t.Fatal("latest buffer should not exist after delete-buffer without -b")
+				}
+				if _, ok := bs.Get("first"); !ok {
+					t.Fatal("older buffer should remain after delete-buffer without -b")
+				}
+			},
+		},
+		{
+			name:         "missing named buffer returns error",
+			flags:        map[string]any{"-b": "missing"},
+			wantExitCode: 1,
+		},
+		{
+			name:         "empty store returns error",
+			flags:        map[string]any{},
+			wantExitCode: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessions := NewSessionManager()
+			t.Cleanup(sessions.Close)
+			router := NewCommandRouter(sessions, nil, RouterOptions{})
+			if tt.setup != nil {
+				tt.setup(router.buffers)
+			}
+
+			resp := router.Execute(ipc.TmuxRequest{
+				Command: "delete-buffer",
+				Flags:   tt.flags,
+			})
+			if resp.ExitCode != tt.wantExitCode {
+				t.Fatalf("delete-buffer exit code = %d, want %d, stderr = %q", resp.ExitCode, tt.wantExitCode, resp.Stderr)
+			}
+			if tt.verify != nil {
+				tt.verify(t, router.buffers)
+			}
+		})
+	}
+}
+
 // TestPasteBufferDataTransformViaHandler verifies the -r/-s flag priority logic
 // (C-2 fix) through the actual handlePasteBuffer handler path.
 // tmux semantics: -s (separator) takes priority over -r (replace newlines).

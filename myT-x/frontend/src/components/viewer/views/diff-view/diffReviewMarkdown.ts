@@ -25,6 +25,11 @@ const extensionLanguageMap: Record<string, string> = {
     yml: "yaml",
 };
 
+const REVIEW_MARKDOWN_HEADINGS = {
+    codeReviewComments: "# Code Review Comments",
+    overallComment: "# Overall Comment",
+} as const;
+
 function pickFence(content: string): string {
     const matches = content.match(/`{3,}/g);
     const longestMatch = matches == null ? 2 : Math.max(...matches.map((match) => match.length));
@@ -50,7 +55,7 @@ export function buildReviewMarkdown(comments: readonly DiffReviewComment[]): str
         byFile.set(fileGroupKey, group);
     }
 
-    const sections: string[] = ["# Code Review Comments"];
+    const sections: string[] = [REVIEW_MARKDOWN_HEADINGS.codeReviewComments];
 
     for (const [_, fileComments] of byFile) {
         const firstComment = fileComments[0];
@@ -79,4 +84,28 @@ export function buildReviewMarkdown(comments: readonly DiffReviewComment[]): str
     }
 
     return sections.join("\n\n---\n\n");
+}
+
+export interface DiffReviewSendMarkdownPayload {
+    readonly message?: string;
+    readonly comments?: readonly DiffReviewComment[];
+}
+
+export function buildReviewSendMarkdown(payload: DiffReviewSendMarkdownPayload): string {
+    const message = (payload.message ?? "").trim();
+    const comments = payload.comments ?? [];
+    const reviewMarkdown = buildReviewMarkdown(comments);
+    // Sent Markdown uses stable English headings because the receiver is an AI
+    // review tool, not localized UI. User-authored Markdown is preserved as-is;
+    // even if it starts with its own H1, it remains nested under this section by
+    // position rather than rewritten.
+    const overallCommentMarkdown = message === "" ? "" : `${REVIEW_MARKDOWN_HEADINGS.overallComment}\n\n${message}`;
+
+    if (overallCommentMarkdown === "") {
+        return reviewMarkdown;
+    }
+    if (reviewMarkdown === "") {
+        return overallCommentMarkdown;
+    }
+    return `${overallCommentMarkdown}\n\n---\n\n${reviewMarkdown}`;
 }

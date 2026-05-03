@@ -323,18 +323,6 @@
     color: var(--danger);
 }
 
-.file-tree-watcher-warning {
-    flex: 0 0 auto;
-    margin: 0 0 12px;
-    padding: 10px 12px;
-    border: 1px solid color-mix(in srgb, var(--warning, #d2a106) 55%, var(--line));
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--warning, #d2a106) 12%, transparent);
-    color: color-mix(in srgb, var(--warning, #d2a106) 85%, var(--fg));
-    font-size: 0.82rem;
-    line-height: 1.4;
-}
-
 /* ── File Tree Search Panel ── */
 .file-tree-search-panel {
     width: var(--sidebar-width);
@@ -504,6 +492,7 @@
 }
 
 /* ── Markdown Preview Toggle Button ── */
+.file-content-refresh,
 .file-content-toggle-preview {
     width: 24px;
     height: 24px;
@@ -519,11 +508,13 @@
     transition: color 0.15s, background 0.15s;
 }
 
+.file-content-refresh:hover,
 .file-content-toggle-preview:hover {
     color: var(--fg-main);
     background: var(--accent-06);
 }
 
+.file-content-refresh:active,
 .file-content-toggle-preview:active {
     background: var(--accent-10);
 }
@@ -964,6 +955,13 @@
     margin: 0;
 }
 
+.file-view-drawio-warning {
+    margin: 0 0 12px;
+    color: var(--warning);
+    font-family: system-ui, sans-serif;
+    font-size: 0.78rem;
+}
+
 .file-view-drawio-image-frame {
     display: flex;
     justify-content: center;
@@ -978,6 +976,44 @@
     border: 1px solid var(--line);
     background: var(--bg-elev);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.file-view-drawio-svg-frame {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100%;
+    overflow: auto;
+}
+
+.file-view-drawio-svg {
+    display: block;
+    width: 100%;
+    max-width: 1100px;
+    min-height: min(180px, 45vh);
+    max-height: min(720px, 70vh);
+    color: var(--fg-dim);
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.file-view-drawio-svg line {
+    stroke-width: 2;
+}
+
+.file-view-drawio-svg rect,
+.file-view-drawio-svg ellipse,
+.file-view-drawio-svg polygon {
+    stroke-width: 1.5;
+}
+
+.file-view-drawio-label {
+    fill: var(--fg-main);
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    pointer-events: none;
+    user-select: none;
 }
 
 /* ── SQLite Preview ── */

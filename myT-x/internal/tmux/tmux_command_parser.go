@@ -57,6 +57,7 @@ var internalCommandFlagSpecs = map[string]map[string]tmuxFlagKind{
 	"list-buffers":     {"-F": tmuxFlagString},
 	"set-buffer":       {"-a": tmuxFlagBool, "-b": tmuxFlagString, "-n": tmuxFlagString},
 	"paste-buffer":     {"-d": tmuxFlagBool, "-b": tmuxFlagString, "-t": tmuxFlagString, "-p": tmuxFlagBool, "-r": tmuxFlagBool, "-s": tmuxFlagString},
+	"delete-buffer":    {"-b": tmuxFlagString},
 	"load-buffer":      {"-b": tmuxFlagString, "-w": tmuxFlagBool, "-t": tmuxFlagString},
 	"save-buffer":      {"-a": tmuxFlagBool, "-b": tmuxFlagString},
 	"capture-pane":     {"-a": tmuxFlagBool, "-b": tmuxFlagString, "-C": tmuxFlagBool, "-e": tmuxFlagBool, "-E": tmuxFlagString, "-J": tmuxFlagBool, "-M": tmuxFlagBool, "-N": tmuxFlagBool, "-p": tmuxFlagBool, "-P": tmuxFlagBool, "-q": tmuxFlagBool, "-S": tmuxFlagString, "-T": tmuxFlagBool, "-t": tmuxFlagString},

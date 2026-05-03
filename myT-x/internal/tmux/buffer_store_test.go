@@ -126,6 +126,29 @@ func TestBufferStore_Delete(t *testing.T) {
 	}
 }
 
+func TestBufferStore_DeleteLatest(t *testing.T) {
+	bs := NewBufferStore()
+	if name, ok := bs.DeleteLatest(); ok || name != "" {
+		t.Fatalf("DeleteLatest() = (%q, %v), want empty false", name, ok)
+	}
+
+	bs.Set("first", []byte("1"), false)
+	bs.Set("second", []byte("2"), false)
+	name, ok := bs.DeleteLatest()
+	if !ok {
+		t.Fatal("DeleteLatest() should return true for existing buffer")
+	}
+	if name != "second" {
+		t.Fatalf("DeleteLatest() name = %q, want %q", name, "second")
+	}
+	if _, ok := bs.Get("second"); ok {
+		t.Fatal("latest buffer should not exist after DeleteLatest")
+	}
+	if _, ok := bs.Get("first"); !ok {
+		t.Fatal("older buffer should remain after DeleteLatest")
+	}
+}
+
 func TestBufferStore_List(t *testing.T) {
 	bs := NewBufferStore()
 	bs.Set("a", []byte("1"), false)

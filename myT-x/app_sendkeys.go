@@ -120,6 +120,11 @@ func (sk sendKeysIO) sendKeysLiteralWithEnter(router *tmux.CommandRouter, paneID
 // sendKeysLiteralPasteWithEnter wraps text in bracketed paste mode escape
 // sequences before sending. This prevents interactive TUIs (e.g. Claude Code)
 // from treating embedded \n as Enter/submit.
+// Orchestrator, Task Scheduler, and Single Task Runner use this path for task
+// messages that benefit from paste-mode grouping. Diff Review intentionally
+// uses sendKeysLiteralWithEnter plus its own line-order workaround because
+// bracketed paste did not preserve the expected Markdown display order for its
+// precomposed review document.
 //
 // Flow: select-pane → ESC[200~ → text chunks → ESC[201~ → C-m
 func (sk sendKeysIO) sendKeysLiteralPasteWithEnter(router *tmux.CommandRouter, paneID string, text string) error {

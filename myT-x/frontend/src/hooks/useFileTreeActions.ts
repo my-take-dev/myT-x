@@ -3,7 +3,8 @@ import {api} from "../api";
 import type {FileTreeStore} from "../stores/fileTreeStore";
 import {toErrorMessage} from "../utils/errorUtils";
 import {matchesCapturedSessionKey} from "../utils/sessionGuard";
-import {fileEntriesToNodes, findNodeByPath} from "../components/viewer/views/file-tree/treeUtils";
+import type {FileNode} from "../components/viewer/views/file-tree/fileTreeTypes";
+import {fileEntriesToNodes, findNodeByPath, isPathKnownAbsent} from "../components/viewer/views/file-tree/treeUtils";
 import {EventsOn} from "../../wailsjs/runtime";
 
 interface RefreshDirectoryOptions {
@@ -14,12 +15,17 @@ interface UseFileTreeActionsOptions {
     readonly activeSession: string | null;
     readonly activeSessionKey: string;
     readonly loadFileContent: boolean;
+    readonly autoRefreshExternalChanges?: boolean;
 }
 
 interface RequestState {
     root: number;
     select: number;
     readonly toggleByPath: Map<string, number>;
+}
+
+function getPathDepth(path: string): number {
+    return path === "" ? 0 : path.split("/").length;
 }
 
 // WeakMap keeps request bookkeeping outside the Zustand snapshot while still
@@ -115,10 +121,13 @@ function normalizePanelPath(path: string): string {
 
 function normalizeRefreshPaths(paths: readonly string[]): string[] {
     const unique = new Set(paths.map((path) => normalizePanelPath(path.trim())));
-    if (unique.has("")) {
-        return [""];
-    }
-    return [...unique].sort((left, right) => left.localeCompare(right));
+    return [...unique].sort((left, right) => {
+        const depthDelta = left.split("/").length - right.split("/").length;
+        if (depthDelta !== 0) {
+            return depthDelta;
+        }
+        return left.localeCompare(right);
+    });
 }
 
 function parseTreeInvalidationEvent(payload: unknown): { sessionName: string; paths: string[] } | null {
@@ -185,7 +194,7 @@ function parseSessionRenamedEvent(payload: unknown): { oldName: string; newName:
 function reconcileSelection(store: FileTreeStore): void {
     const state = store.getState();
     const selectedPath = state.selectedPath;
-    if (!selectedPath || findNodeByPath(state.tree, selectedPath)) {
+    if (!selectedPath || findNodeByPath(state.tree, selectedPath) || !isPathKnownAbsent(state.tree, selectedPath)) {
         return;
     }
 
@@ -197,14 +206,41 @@ function reconcileSelection(store: FileTreeStore): void {
     }
 }
 
+function collectCachedCollapsedDirPaths(
+    nodes: readonly FileNode[],
+    expandedPaths: ReadonlySet<string>,
+): string[] {
+    const paths: string[] = [];
+
+    for (const node of nodes) {
+        if (!node.isDir || node.children === undefined) {
+            continue;
+        }
+        if (!expandedPaths.has(node.path)) {
+            paths.push(node.path);
+            continue;
+        }
+        paths.push(...collectCachedCollapsedDirPaths(node.children, expandedPaths));
+    }
+
+    return paths;
+}
+
 export function useFileTreeActions(
     store: FileTreeStore,
-    {activeSession, activeSessionKey, loadFileContent}: UseFileTreeActionsOptions,
+    {
+        activeSession,
+        activeSessionKey,
+        loadFileContent,
+        autoRefreshExternalChanges = true,
+    }: UseFileTreeActionsOptions,
 ) {
+    const loadFileContentRef = useRef(loadFileContent);
     const latestRenderSnapshotRef = useRef<RenderSnapshot>({
         activeSession: activeSession?.trim() ?? null,
         activeSessionKey,
     });
+    loadFileContentRef.current = loadFileContent;
     latestRenderSnapshotRef.current = {
         activeSession: activeSession?.trim() ?? null,
         activeSessionKey,
@@ -278,11 +314,111 @@ export function useFileTreeActions(
         }
     }, [activeSession, activeSessionKey, store]);
 
+    const readFileContent = useCallback(async (path: string, expectedSelectedPath?: string) => {
+        const capturedSession = activeSession?.trim();
+        const capturedSessionKey = activeSessionKey;
+        if (!capturedSession) {
+            store.getState().setContentError("No active session");
+            store.getState().setIsLoadingContent(false);
+            return;
+        }
+
+        if (expectedSelectedPath !== undefined && store.getState().selectedPath !== expectedSelectedPath) {
+            return;
+        }
+
+        const requestState = getRequestState(store);
+        requestState.select += 1;
+        const requestID = requestState.select;
+
+        store.getState().setIsLoadingContent(true);
+        store.getState().setContentError(null);
+
+        try {
+            const content = await api.DevPanelReadFile(capturedSession, path);
+            if (!matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store)) || getRequestState(store).select !== requestID) {
+                return;
+            }
+            store.getState().setFileContent(content);
+        } catch (err: unknown) {
+            if (!matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store)) || getRequestState(store).select !== requestID) {
+                return;
+            }
+
+            console.error("[file-tree] DevPanelReadFile failed", {
+                session: capturedSession,
+                path,
+                err,
+            });
+            store.getState().setFileContent(null);
+            store.getState().setContentError(toErrorMessage(err, `Failed to read file: ${path}`));
+        } finally {
+            if (matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store)) && getRequestState(store).select === requestID) {
+                store.getState().setIsLoadingContent(false);
+            }
+        }
+    }, [activeSession, activeSessionKey, store]);
+
     const loadRoot = useCallback(() => {
-        void refreshDirectory("").catch((err: unknown) => {
+        const initialState = store.getState();
+        const expandedPaths = [...initialState.expandedPaths].sort((left, right) => {
+            const depthDelta = getPathDepth(left) - getPathDepth(right);
+            if (depthDelta !== 0) {
+                return depthDelta;
+            }
+            return left.localeCompare(right);
+        });
+        const selectedPath = initialState.selectedPath;
+        const collapsedCachedPaths = collectCachedCollapsedDirPaths(initialState.tree, initialState.expandedPaths);
+
+        void (async () => {
+            await refreshDirectory("");
+            if (collapsedCachedPaths.length > 0) {
+                store.getState().clearLoadedChildrenForPaths(collapsedCachedPaths);
+            }
+
+            for (let index = 0; index < expandedPaths.length;) {
+                const depth = getPathDepth(expandedPaths[index]);
+                const sameDepthPaths: string[] = [];
+                while (index < expandedPaths.length && getPathDepth(expandedPaths[index]) === depth) {
+                    sameDepthPaths.push(expandedPaths[index]);
+                    index += 1;
+                }
+
+                const refreshes = sameDepthPaths.map(async (dirPath) => {
+                    const state = store.getState();
+                    const node = findNodeByPath(state.tree, dirPath);
+                    if (!node?.isDir || !state.expandedPaths.has(dirPath)) {
+                        return;
+                    }
+                    await refreshDirectory(dirPath, {expandOnSuccess: true});
+                });
+                const results = await Promise.allSettled(refreshes);
+                for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
+                    const result = results[resultIndex];
+                    if (result.status === "fulfilled") {
+                        continue;
+                    }
+                    console.error("[file-tree] loadRoot expanded directory refresh failed", {
+                        dirPath: sameDepthPaths[resultIndex],
+                        err: result.reason,
+                    });
+                }
+            }
+
+            const state = store.getState();
+            if (
+                loadFileContentRef.current
+                && selectedPath
+                && state.selectedPath === selectedPath
+                && findNodeByPath(state.tree, selectedPath)
+            ) {
+                await readFileContent(selectedPath, selectedPath);
+            }
+        })().catch((err: unknown) => {
             console.error("[FILE-TREE] loadRoot failed", err);
         });
-    }, [refreshDirectory]);
+    }, [readFileContent, refreshDirectory, store]);
 
     const toggleDir = useCallback((path: string) => {
         const capturedSession = activeSession?.trim();
@@ -333,47 +469,14 @@ export function useFileTreeActions(
             return;
         }
 
-        const capturedSession = activeSession?.trim();
-        const capturedSessionKey = activeSessionKey;
-        if (!capturedSession) {
+        if (!activeSession?.trim()) {
             store.getState().setContentError("No active session");
             store.getState().setIsLoadingContent(false);
             return;
         }
 
-        const requestState = getRequestState(store);
-        requestState.select += 1;
-        const requestID = requestState.select;
-
-        store.getState().setIsLoadingContent(true);
-        store.getState().setContentError(null);
-
-        void api.DevPanelReadFile(capturedSession, path)
-            .then((content) => {
-                if (!matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store)) || getRequestState(store).select !== requestID) {
-                    return;
-                }
-                store.getState().setFileContent(content);
-            })
-            .catch((err: unknown) => {
-                if (!matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store)) || getRequestState(store).select !== requestID) {
-                    return;
-                }
-
-                console.error("[file-tree] DevPanelReadFile failed", {
-                    session: capturedSession,
-                    path,
-                    err,
-                });
-                store.getState().setFileContent(null);
-                store.getState().setContentError(toErrorMessage(err, `Failed to read file: ${path}`));
-            })
-            .finally(() => {
-                if (matchesCapturedSessionKey(capturedSessionKey, getCurrentSessionKey(store)) && getRequestState(store).select === requestID) {
-                    store.getState().setIsLoadingContent(false);
-                }
-            });
-    }, [activeSession, activeSessionKey, loadFileContent, store]);
+        void readFileContent(path, path);
+    }, [activeSession, loadFileContent, readFileContent, store]);
 
     useEffect(() => {
         latestSessionKeyByStore.set(store, activeSessionKey);
@@ -397,9 +500,11 @@ export function useFileTreeActions(
     }, [activeSessionKey, refreshDirectory, store]);
 
     useEffect(() => {
+        if (!autoRefreshExternalChanges) {
+            return;
+        }
         const capturedSession = activeSession?.trim();
         const capturedSessionKey = activeSessionKey;
-        const renamedSessionRef = {current: null as string | null};
         if (!capturedSession) {
             return;
         }
@@ -407,6 +512,7 @@ export function useFileTreeActions(
             return;
         }
 
+        const renamedSessionRef = {current: null as string | null};
         let disposed = false;
         void api.DevPanelStartWatcher(capturedSessionKey)
             .then(() => {
@@ -540,7 +646,7 @@ export function useFileTreeActions(
                 }
             });
         };
-    }, [activeSession, activeSessionKey, refreshDirectory, store]);
+    }, [activeSession, activeSessionKey, autoRefreshExternalChanges, refreshDirectory, store]);
 
     return {
         loadRoot,

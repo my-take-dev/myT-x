@@ -13,7 +13,8 @@ import (
 )
 
 func main() {
-	dbPath := flag.String("db", ".myT-x/orchestrator.db", "SQLite database path")
+	dbPath := flag.String("db", "", "SQLite database path; use the session-info orchestrator.db path supplied by myT-x")
+	projectRoot := flag.String("project-root", "", "project root for payload artifacts; required because it is not derived from --db")
 	serverName := flag.String("name", orchestrator.DefaultServerName, "MCP server name")
 	serverVersion := flag.String("version", orchestrator.DefaultServerVersion, "MCP server version")
 	verbose := flag.Bool("v", false, "enable verbose logging")
@@ -29,6 +30,7 @@ func main() {
 
 	cfg := orchestrator.Config{
 		DBPath:        *dbPath,
+		ProjectRoot:   *projectRoot,
 		ServerName:    *serverName,
 		ServerVersion: *serverVersion,
 		Logger:        logger,

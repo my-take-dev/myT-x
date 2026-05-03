@@ -17,6 +17,15 @@
         linear-gradient(180deg, rgba(15, 24, 35, 0.96), rgba(9, 14, 22, 0.98));
 }
 
+.orchestrator-teams-header-note {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-dim);
+    font-size: 0.78rem;
+}
+
 .orchestrator-teams-banner {
     display: flex;
     align-items: flex-start;

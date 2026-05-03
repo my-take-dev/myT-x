@@ -4,17 +4,23 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
+	agentorchestrator "myT-x/internal/mcp/agent-orchestrator"
 	"myT-x/internal/mcp/agent-orchestrator/domain"
 	"myT-x/internal/orchestrator"
+	"myT-x/internal/orchestratorstorage"
 
 	_ "modernc.org/sqlite"
 )
+
+var errOrchestratorDBNotReady = errors.New("orchestrator db is not initialized")
+
+var orchestratorDBStat = os.Stat
 
 // OrchestratorTask はフロントエンドに返すタスク情報。
 type OrchestratorTask struct {
@@ -69,9 +75,12 @@ type PaneProcessStatus struct {
 
 // ListOrchestratorTasks は現在のセッションのタスク一覧を返す（isNowSession=true のみ）。
 func (a *App) ListOrchestratorTasks(sessionName string) ([]OrchestratorTask, error) {
-	db, cleanup, err := a.openOrchestratorDB(sessionName)
+	db, cleanup, ok, err := a.openOrchestratorDBOptional(sessionName)
 	if err != nil {
 		return nil, err
+	}
+	if !ok {
+		return []OrchestratorTask{}, nil
 	}
 	defer cleanup()
 
@@ -87,9 +96,13 @@ func (a *App) ListOrchestratorTasks(sessionName string) ([]OrchestratorTask, err
 		 WHERE t.is_now_session = 1 ORDER BY t.sent_at DESC`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("[DEBUG-canvas] list tasks: %w", err)
+		return nil, fmt.Errorf("list orchestrator tasks: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			slog.Warn("[WARN-canvas] failed to close orchestrator task rows", "error", closeErr)
+		}
+	}()
 
 	var result []OrchestratorTask
 	for rows.Next() {
@@ -97,7 +110,7 @@ func (a *App) ListOrchestratorTasks(sessionName string) ([]OrchestratorTask, err
 		if err := rows.Scan(&t.TaskID, &t.AgentName, &t.AssigneePaneID, &t.SenderPaneID,
 			&t.SenderName, &t.Status, &t.SentAt, &t.CompletedAt,
 			&t.MessagePreview, &t.ResponsePreview); err != nil {
-			return nil, fmt.Errorf("[DEBUG-canvas] scan task: %w", err)
+			return nil, fmt.Errorf("scan orchestrator task: %w", err)
 		}
 		result = append(result, t)
 	}
@@ -115,9 +128,12 @@ func (a *App) GetOrchestratorTaskDetail(sessionName, taskID string) (*Orchestrat
 		return nil, err
 	}
 
-	db, cleanup, err := a.openOrchestratorDB(sessionName)
+	db, cleanup, ok, err := a.openOrchestratorDBOptional(sessionName)
 	if err != nil {
 		return nil, err
+	}
+	if !ok {
+		return nil, nil
 	}
 	defer cleanup()
 
@@ -162,15 +178,15 @@ func (a *App) GetOrchestratorTaskDetail(sessionName, taskID string) (*Orchestrat
 		&d.ResponseContentChars,
 		&d.ResponseSHA256,
 	); err != nil {
-		return nil, fmt.Errorf("[DEBUG-canvas] get task detail: %w", err)
+		return nil, fmt.Errorf("get orchestrator task detail: %w", err)
 	}
 	d.MessageArtifactPaths, err = parseArtifactPaths(projectRoot, messageArtifactPathsJSON)
 	if err != nil {
-		return nil, fmt.Errorf("[DEBUG-canvas] parse message artifact paths: %w", err)
+		return nil, fmt.Errorf("parse message artifact paths: %w", err)
 	}
 	d.ResponseArtifactPaths, err = parseArtifactPaths(projectRoot, responseArtifactPathsJSON)
 	if err != nil {
-		return nil, fmt.Errorf("[DEBUG-canvas] parse response artifact paths: %w", err)
+		return nil, fmt.Errorf("parse response artifact paths: %w", err)
 	}
 	return &d, nil
 }
@@ -178,9 +194,12 @@ func (a *App) GetOrchestratorTaskDetail(sessionName, taskID string) (*Orchestrat
 // ListOrchestratorAgents は現在のセッションの登録エージェント一覧を返す。
 // Provisional registrations are included so freshly enlisted panes appear immediately.
 func (a *App) ListOrchestratorAgents(sessionName string) ([]OrchestratorAgent, error) {
-	db, cleanup, err := a.openOrchestratorDB(sessionName)
+	db, cleanup, ok, err := a.openOrchestratorDBOptional(sessionName)
 	if err != nil {
 		return nil, err
+	}
+	if !ok {
+		return []OrchestratorAgent{}, nil
 	}
 	defer cleanup()
 
@@ -189,15 +208,19 @@ func (a *App) ListOrchestratorAgents(sessionName string) ([]OrchestratorAgent, e
 		`SELECT name, pane_id, COALESCE(role,'') FROM agents ORDER BY name`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("[DEBUG-canvas] list agents: %w", err)
+		return nil, fmt.Errorf("list orchestrator agents: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			slog.Warn("[WARN-canvas] failed to close orchestrator agent rows", "error", closeErr)
+		}
+	}()
 
 	var result []OrchestratorAgent
 	for rows.Next() {
 		var ag OrchestratorAgent
 		if err := rows.Scan(&ag.Name, &ag.PaneID, &ag.Role); err != nil {
-			return nil, fmt.Errorf("[DEBUG-canvas] scan agent: %w", err)
+			return nil, fmt.Errorf("scan orchestrator agent: %w", err)
 		}
 		result = append(result, ag)
 	}
@@ -209,8 +232,26 @@ func (a *App) openOrchestratorDB(sessionName string) (*sql.DB, func(), error) {
 	return a.openOrchestratorDBWithMode(sessionName, "ro")
 }
 
+func (a *App) openOrchestratorDBOptional(sessionName string) (*sql.DB, func(), bool, error) {
+	db, cleanup, err := a.openOrchestratorDB(sessionName)
+	if err != nil {
+		if errors.Is(err, errOrchestratorDBNotReady) {
+			return nil, nil, false, nil
+		}
+		return nil, nil, false, err
+	}
+	return db, cleanup, true, nil
+}
+
 func (a *App) openOrchestratorDBWritable(sessionName string) (*sql.DB, func(), error) {
-	return a.openOrchestratorDBWithMode(sessionName, "rwc")
+	dbPath, err := a.resolveOrchestratorDBPathForSession(sessionName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := agentorchestrator.EnsureDatabase(dbPath); err != nil {
+		return nil, nil, fmt.Errorf("initialize orchestrator db: %w", err)
+	}
+	return openOrchestratorDBPath(dbPath, "rwc")
 }
 
 func (a *App) openOrchestratorDBWithMode(sessionName string, mode string) (*sql.DB, func(), error) {
@@ -218,7 +259,10 @@ func (a *App) openOrchestratorDBWithMode(sessionName string, mode string) (*sql.
 	if err != nil {
 		return nil, nil, err
 	}
+	return openOrchestratorDBPath(dbPath, mode)
+}
 
+func openOrchestratorDBPath(dbPath string, mode string) (*sql.DB, func(), error) {
 	dsn := dbPath + "?mode=" + mode
 	if mode == "ro" {
 		dsn += "&_pragma=busy_timeout(5000)"
@@ -228,7 +272,7 @@ func (a *App) openOrchestratorDBWithMode(sessionName string, mode string) (*sql.
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("[DEBUG-canvas] open orchestrator db: %w", err)
+		return nil, nil, fmt.Errorf("open orchestrator db: %w", err)
 	}
 
 	return db, func() {
@@ -257,18 +301,35 @@ func (a *App) resolveOrchestratorProjectRoot(sessionName string) (string, error)
 }
 
 func (a *App) resolveOrchestratorDBPath(sessionName string) (string, error) {
-	rootPath, err := a.resolveOrchestratorProjectRoot(sessionName)
+	dbPath, err := a.resolveOrchestratorDBPathForSession(sessionName)
 	if err != nil {
 		return "", err
 	}
 
-	dbPath := filepath.Join(rootPath, ".myT-x", "orchestrator.db")
-
 	// I-8: DBファイルの存在確認
-	if _, statErr := os.Stat(dbPath); statErr != nil {
-		return "", fmt.Errorf("[DEBUG-canvas] orchestrator db not found: %w", statErr)
+	if _, statErr := orchestratorDBStat(dbPath); statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return "", fmt.Errorf("%w: %w", errOrchestratorDBNotReady, statErr)
+		}
+		return "", fmt.Errorf("stat orchestrator db: %w", statErr)
 	}
 	return dbPath, nil
+}
+
+func (a *App) resolveOrchestratorDBPathForSession(sessionName string) (string, error) {
+	rootPath, err := a.resolveOrchestratorProjectRoot(sessionName)
+	if err != nil {
+		return "", err
+	}
+	return a.resolveOrchestratorDBPathForProjectRoot(rootPath)
+}
+
+func (a *App) resolveOrchestratorDBPathForProjectRoot(rootPath string) (string, error) {
+	configDir, err := appConfigDirProvider(a)()
+	if err != nil {
+		return "", err
+	}
+	return orchestratorstorage.DBPath(configDir, rootPath)
 }
 
 func parseArtifactPaths(projectRoot string, raw string) ([]string, error) {

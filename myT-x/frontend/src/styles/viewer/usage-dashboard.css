@@ -62,50 +62,99 @@
     color: var(--udash-muted-fg);
 }
 
-/* ── Mode tabs ── */
-.usage-dashboard-tabs {
+/* ── Mode selector ── */
+.usage-dashboard-mode-list {
     display: flex;
-    gap: 4px;
+    align-items: center;
+    gap: 8px;
     padding: 6px 12px;
     border-bottom: 1px solid var(--udash-border);
     background: var(--udash-panel-bg);
 }
 
-.usage-dashboard-tab {
-    flex: 1;
-    padding: 6px 12px;
+.usage-dashboard-mode-list-label {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--udash-muted-fg);
+}
+
+.usage-dashboard-mode-select {
+    min-width: 180px;
+    max-width: 100%;
+    height: 28px;
+    padding: 2px 8px;
     font-size: 12px;
     font-weight: 500;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--udash-muted-fg);
+    border: 1px solid var(--udash-border);
+    border-radius: 4px;
+    background: var(--udash-card-bg);
+    color: var(--udash-panel-fg);
+    color-scheme: dark;
     cursor: pointer;
     transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
-.usage-dashboard-tab:hover {
-    background: var(--udash-hover-bg);
+.usage-dashboard-mode-select option,
+.usage-dashboard-item-select option {
+    background-color: var(--udash-card-bg);
     color: var(--udash-panel-fg);
 }
 
-/* Selected: per-mode pill coloring */
-.usage-dashboard-tab[aria-selected="true"] {
-    background: var(--udash-active-bg);
-    border-color: var(--udash-active-border);
-    color: var(--accent);
+.usage-dashboard-mode-select option:checked,
+.usage-dashboard-item-select option:checked {
+    background-color: color-mix(in srgb, var(--udash-active-border) 24%, var(--udash-card-bg));
+    color: var(--udash-panel-fg);
 }
 
-.usage-dashboard-tab[aria-selected="true"][data-mode="claude"] {
-    background: var(--udash-color-claude-08);
-    border-color: var(--udash-color-claude);
-    color: var(--udash-color-claude);
+.usage-dashboard-mode-select:hover {
+    background: var(--udash-hover-bg);
 }
 
-.usage-dashboard-tab[aria-selected="true"][data-mode="codex"] {
-    background: var(--udash-color-codex-08);
-    border-color: var(--udash-color-codex);
-    color: var(--udash-color-codex);
+.usage-dashboard-mode-select:focus-visible {
+    outline: 2px solid var(--udash-active-border);
+    outline-offset: 2px;
+}
+
+.usage-dashboard-comparison-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--udash-border);
+    background: rgba(150, 182, 219, 0.03);
+}
+
+.usage-dashboard-comparison-help {
+    flex-basis: 100%;
+    margin: 0;
+    color: var(--udash-muted-fg);
+    font-size: 10px;
+    line-height: 1.35;
+}
+
+.usage-dashboard-comparison-choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 24px;
+    padding: 2px 8px;
+    border: 1px solid var(--udash-border);
+    border-radius: 4px;
+    background: rgba(150, 182, 219, 0.04);
+    color: var(--udash-panel-fg);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.usage-dashboard-comparison-choice:has(input[aria-disabled="true"]) {
+    color: var(--udash-muted-fg);
+    cursor: not-allowed;
+}
+
+.usage-dashboard-comparison-choice input {
+    margin: 0;
+    accent-color: var(--udash-active-border);
 }
 
 /* ── Overview cards grid ── */
@@ -312,6 +361,7 @@
     border-radius: 4px;
     background: var(--udash-card-bg);
     color: var(--udash-panel-fg);
+    color-scheme: dark;
     font-size: 12px;
 }
 
@@ -508,11 +558,33 @@
     color: var(--accent);
 }
 
-/* ── Both panel layout ── */
-.usage-dashboard-both {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+/* ── Comparison panel layout ── */
+.usage-dashboard-comparison {
+    display: flex;
+    flex-wrap: nowrap;
     gap: 12px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--udash-scrollbar-thumb) transparent;
+}
+
+.usage-dashboard-comparison-item {
+    flex: 0 0 max(320px, calc((100% - 12px) / 2));
+    min-width: 320px;
+}
+
+.usage-dashboard-comparison[data-source-count="1"] .usage-dashboard-comparison-item {
+    flex-basis: 100%;
+    min-width: 0;
+}
+
+.usage-dashboard-comparison-empty {
+    width: 100%;
+    padding: 12px;
+    color: var(--udash-muted-fg);
+    font-size: 12px;
+    text-align: center;
 }
 
 .usage-dashboard-claude,
@@ -694,10 +766,6 @@
 
 /* ── Responsive container query ── */
 @container (max-width: 520px) {
-    .usage-dashboard-both {
-        grid-template-columns: 1fr;
-    }
-
     .usage-dashboard-overview {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
@@ -729,5 +797,15 @@
 
     .usage-dashboard-item-select {
         width: 100%;
+    }
+
+    .usage-dashboard-comparison {
+        flex-wrap: wrap;
+        overflow-x: visible;
+    }
+
+    .usage-dashboard-comparison-item {
+        flex-basis: 100%;
+        min-width: 0;
     }
 }

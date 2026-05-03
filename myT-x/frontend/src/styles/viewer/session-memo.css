@@ -1,0 +1,117 @@
+.session-memo-view {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-panel);
+}
+
+.session-memo-header-session {
+    min-width: 0;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+}
+
+.session-memo-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 10px 14px 0;
+    padding: 6px 8px;
+    border: 1px solid var(--danger-40);
+    border-radius: 6px;
+    background: var(--danger-08);
+    color: var(--danger);
+    font-size: 0.78rem;
+    text-align: left;
+}
+
+.session-memo-error span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.session-memo-error button {
+    flex: 0 0 auto;
+    border: 1px solid var(--danger-20);
+    border-radius: 6px;
+    background: var(--danger-08);
+    color: var(--danger);
+    cursor: pointer;
+}
+
+.session-memo-error button:hover {
+    background: var(--danger-20);
+}
+
+.session-memo-textarea {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 12px 14px 10px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-3);
+    color: var(--fg-main);
+    font-family: var(--font-mono);
+    font-size: 0.86rem;
+    line-height: 1.55;
+    resize: none;
+    outline: none;
+}
+
+.session-memo-textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-22);
+}
+
+.session-memo-textarea::placeholder {
+    color: var(--fg-dim);
+}
+
+.session-memo-textarea:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
+
+.session-memo-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 8px 14px 14px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-panel);
+}
+
+.session-memo-status {
+    color: var(--fg-dim);
+    font-size: 0.76rem;
+}
+
+.session-memo-save {
+    min-width: 88px;
+    padding: 6px 18px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--accent-10);
+    color: var(--accent);
+    font-size: 0.82rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.session-memo-save:hover {
+    background: var(--accent-22);
+}
+
+.session-memo-save:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}

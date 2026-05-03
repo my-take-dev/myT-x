@@ -141,6 +141,7 @@ A vertical bar of icons for opening viewers.
 | 🔁 | Single Task Runner | Ctrl+Shift+J |
 | 👥 | Orchestrator Teams | Ctrl+Shift+T |
 | 📊 | Usage Dashboard | Ctrl+Shift+U |
+| 📝 | Session Memo | Ctrl+Shift+N |
 | 📌 | Prompt Presets | Ctrl+Shift+P |
 | ⚠ | Error Log | Ctrl+Shift+L |
 
@@ -183,5 +184,5 @@ Click it to expand the chat input panel pre-targeted to that pane — no need to
 ## Next Steps
 
 - [Terminal Operations](terminal-operations_en.md) — Detailed pane splitting and input guide
-- [Viewer System](viewer-system_en.md) — All 13 viewers explained
+- [Viewer System](viewer-system_en.md) — All 14 viewers explained
 - [Settings](settings_en.md) — Customization options

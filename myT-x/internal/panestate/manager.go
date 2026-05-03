@@ -251,7 +251,9 @@ func (m *Manager) FeedTrimmed(paneID string, chunk []byte) {
 	}
 }
 
-// Snapshot returns a best-effort pane contents for restore.
+// Snapshot returns a best-effort pane contents snapshot.
+// Active panes prefer the terminal emulator viewport; inactive panes fall back
+// to the bounded recent replay ring.
 func (m *Manager) Snapshot(paneID string) string {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
@@ -277,14 +279,43 @@ func (m *Manager) Snapshot(paneID string) string {
 			m.rebuildTerminal(state)
 			state.dirty = false
 		}
-		snapshot := strings.TrimRight(state.terminal.String(), "\n")
-		if strings.TrimSpace(snapshot) != "" {
-			return snapshot
-		}
+		return strings.TrimRight(state.terminal.String(), "\n")
 	}
+	return m.replayStringLocked(state)
+}
+
+// Replay returns bounded recent replay-ring bytes for a pane.
+// Unlike Snapshot, Replay never substitutes the live emulator viewport. The
+// returned data is best-effort history and may be truncated at arbitrary byte
+// boundaries when the replay ring wraps.
+func (m *Manager) Replay(paneID string) string {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return ""
+	}
+
+	m.mu.RLock()
+	state := m.states[paneID]
+	m.mu.RUnlock()
+
+	if state == nil {
+		return ""
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	return m.replayStringLocked(state)
+}
+
+// replayStringLocked returns the raw replay ring contents as a string.
+// Caller must hold state.mu.
+func (m *Manager) replayStringLocked(state *paneState) string {
 	bp := m.replayPool.Get().(*[]byte)
 	replay := state.replay.snapshotInto(*bp)
 	result := string(replay)
+	// Put after converting to string so the reusable buffer is not overwritten
+	// before the copy is complete.
 	*bp = replay
 	m.replayPool.Put(bp)
 	return result

@@ -30,7 +30,19 @@ vi.mock("../../../../hooks/useUnregisteredPanes", () => ({
 }));
 
 vi.mock("../shared/ViewerPanelShell", () => ({
-    ViewerPanelShell: ({children}: {children: ReactNode}) => <div>{children}</div>,
+    ViewerPanelShell: ({children, headerChildren, title}: {
+        children: ReactNode;
+        headerChildren?: ReactNode;
+        title: string;
+    }) => (
+        <div>
+            <header>
+                <h2>{title}</h2>
+                {headerChildren}
+            </header>
+            {children}
+        </div>
+    ),
 }));
 
 vi.mock("./useTeamCRUD", () => ({
@@ -176,6 +188,8 @@ describe("OrchestratorTeamsView", () => {
 
         expect(handleInitAddTermMemberMock).toHaveBeenCalledWith("%7");
         expect(useViewerStore.getState().viewContext).toBeNull();
+        expect(container.textContent).toContain("チーム");
+        expect(container.textContent).toContain("（オーケストレータMCP専用機能です）");
         expect(container.querySelector("[data-testid='team-list']")).not.toBeNull();
     });
 });

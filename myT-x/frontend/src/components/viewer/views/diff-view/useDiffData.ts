@@ -9,11 +9,6 @@ import {buildDiffTree, collectDirectorySet} from "./diffTreeUtils";
 import type {DiffTreeNode, WorkingDiffFile, WorkingDiffResult} from "./diffViewTypes";
 import type {BranchInfo, StagingListItem} from "./sourceControlTypes";
 
-/** Background polling interval (ms) as a safety net for changes made in other tools.
- *  Primary refresh sources are window focus and post-operation silent reloads;
- *  this interval is kept long to minimize unnecessary API calls. */
-const BACKGROUND_POLL_INTERVAL_MS = 15_000;
-
 // Module-level consecutive failure counter for GitStatus polling.
 // Threshold 3: transient failures are silently recovered; persistent failures
 // (e.g., git process hang, disk error) surface a user-visible toast + error log.
@@ -31,6 +26,17 @@ const EMPTY_GIT_STATUS: devpanel.GitStatusResult = {
     behind: 0,
     upstream_configured: false,
 } satisfies devpanel.GitStatusResult;
+
+function mapGitStatusToBranchInfo(status: devpanel.GitStatusResult, statusFetchFailed: boolean): BranchInfo {
+    return {
+        branch: status.branch ?? "",
+        ahead: status.ahead ?? 0,
+        behind: status.behind ?? 0,
+        upstreamConfigured: status.upstream_configured ?? false,
+        conflicted: status.conflicted ?? [],
+        statusFetchFailed,
+    };
+}
 
 /** Builds a flat staging list with group headers from git status + diff data. */
 function buildStagingItems(
@@ -224,27 +230,13 @@ export function useDiffData(): UseDiffDataResult & DiffDataInternals {
                 // AND the BranchInfo interface in sourceControlTypes.ts.
                 if (status != null) {
                     setStagedPaths(status.staged ?? []);
-                    setBranchInfo({
-                        branch: status.branch ?? "",
-                        ahead: status.ahead ?? 0,
-                        behind: status.behind ?? 0,
-                        upstreamConfigured: status.upstream_configured ?? false,
-                        conflicted: status.conflicted ?? [],
-                        statusFetchFailed: false,
-                    });
+                    setBranchInfo(mapGitStatusToBranchInfo(status, statusFetchFailed));
                 } else {
                     // Status fetch failed — preserve previous branch info (stale data > empty data)
                     // and set the statusFetchFailed flag so the UI can show a warning.
                     setBranchInfo((prev) => prev
                         ? {...prev, statusFetchFailed: true}
-                        : {
-                            branch: "",
-                            ahead: 0,
-                            behind: 0,
-                            upstreamConfigured: false,
-                            conflicted: [],
-                            statusFetchFailed: true
-                        },
+                        : mapGitStatusToBranchInfo(EMPTY_GIT_STATUS, true),
                     );
                 }
             })
@@ -293,14 +285,7 @@ export function useDiffData(): UseDiffDataResult & DiffDataInternals {
                 gitStatusFailureCounter.recordSuccess();
                 if (!mountedRef.current || requestIDRef.current !== requestID) return;
                 setStagedPaths(status.staged ?? []);
-                setBranchInfo({
-                    branch: status.branch ?? "",
-                    ahead: status.ahead ?? 0,
-                    behind: status.behind ?? 0,
-                    upstreamConfigured: status.upstream_configured ?? false,
-                    conflicted: status.conflicted ?? [],
-                    statusFetchFailed: false,
-                });
+                setBranchInfo(mapGitStatusToBranchInfo(status, false));
             })
             .catch((err: unknown) => {
                 console.warn("[viewer/diff] refreshStatus failed (non-fatal)", {session: targetSession, err});
@@ -310,14 +295,7 @@ export function useDiffData(): UseDiffDataResult & DiffDataInternals {
                 if (!mountedRef.current || requestIDRef.current !== requestID) return;
                 setBranchInfo((prev) => prev
                     ? {...prev, statusFetchFailed: true}
-                    : {
-                        branch: "",
-                        ahead: 0,
-                        behind: 0,
-                        upstreamConfigured: false,
-                        conflicted: [],
-                        statusFetchFailed: true
-                    },
+                    : mapGitStatusToBranchInfo(EMPTY_GIT_STATUS, true),
                 );
                 // Re-throw so the caller can detect failure and fall back to full loadDiff.
                 throw err;
@@ -332,30 +310,18 @@ export function useDiffData(): UseDiffDataResult & DiffDataInternals {
         loadDiff(activeSession);
     }, [activeSession, loadDiff]);
 
-    // Auto-refresh on window focus — covers the common case of switching
-    // back from an external editor or terminal.
-    // Skipped when an operation is in flight to avoid UI flicker from stale data.
     useEffect(() => {
         const handleFocus = () => {
-            if (sessionRef.current && !operationActiveRef.current) {
-                loadDiff(undefined, true);
+            const targetSession = sessionRef.current?.trim() ?? "";
+            if (targetSession === "" || operationActiveRef.current) {
+                return;
             }
+            loadDiff(undefined, true);
         };
+
         window.addEventListener("focus", handleFocus);
         return () => window.removeEventListener("focus", handleFocus);
     }, [loadDiff]);
-
-    // Background polling as a safety net for changes made in other tools.
-    // Skipped when an operation is in flight to avoid UI flicker.
-    useEffect(() => {
-        if (!activeSession) return;
-        const timer = setInterval(() => {
-            if (!operationActiveRef.current) {
-                loadDiff(undefined, true);
-            }
-        }, BACKGROUND_POLL_INTERVAL_MS);
-        return () => clearInterval(timer);
-    }, [activeSession, loadDiff]);
 
     const toggleDir = useCallback((path: string) => {
         setExpandedDirs((prev) => {

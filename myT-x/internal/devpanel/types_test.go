@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestFileEntryMarshalIncludesFalseHasChildren(t *testing.T) {
+func TestFileEntryMarshalIncludesFalseBooleans(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -16,21 +16,23 @@ func TestFileEntryMarshalIncludesFalseHasChildren(t *testing.T) {
 		{
 			name: "root directory",
 			entry: FileEntry{
-				Name:        "empty",
-				Path:        "empty",
-				IsDir:       true,
-				Size:        0,
-				HasChildren: false,
+				Name:          "empty",
+				Path:          "empty",
+				IsDir:         true,
+				Size:          0,
+				HasChildren:   false,
+				HasViewTarget: false,
 			},
 		},
 		{
 			name: "nested directory",
 			entry: FileEntry{
-				Name:        "nested",
-				Path:        "src/nested",
-				IsDir:       true,
-				Size:        0,
-				HasChildren: false,
+				Name:          "nested",
+				Path:          "src/nested",
+				IsDir:         true,
+				Size:          0,
+				HasChildren:   false,
+				HasViewTarget: false,
 			},
 		},
 	}
@@ -46,6 +48,9 @@ func TestFileEntryMarshalIncludesFalseHasChildren(t *testing.T) {
 			}
 			if !strings.Contains(string(payload), `"has_children":false`) {
 				t.Fatalf("expected has_children=false in payload, got %s", payload)
+			}
+			if !strings.Contains(string(payload), `"has_view_target":false`) {
+				t.Fatalf("expected has_view_target=false in payload, got %s", payload)
 			}
 		})
 	}
