@@ -67,6 +67,24 @@ func TestFilePath(t *testing.T) {
 	}
 }
 
+func TestDirectoryPath(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "config")
+	workDir := filepath.Join(t.TempDir(), "workspace")
+	key, err := FolderKey(workDir)
+	if err != nil {
+		t.Fatalf("FolderKey(): %v", err)
+	}
+
+	got, err := DirectoryPath(configDir, workDir)
+	if err != nil {
+		t.Fatalf("DirectoryPath(): %v", err)
+	}
+	want := filepath.Join(configDir, DirName, key)
+	if got != want {
+		t.Fatalf("DirectoryPath() = %q, want %q", got, want)
+	}
+}
+
 func TestFilePathRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name      string

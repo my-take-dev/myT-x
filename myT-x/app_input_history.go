@@ -5,9 +5,19 @@ import "myT-x/internal/inputhistory"
 func (a *App) ensureInputHistoryService() *inputhistory.Service {
 	a.inputHistoryServiceOnce.Do(func() {
 		if a.inputHistoryService == nil {
+			options := []inputhistory.Option{}
+			if a.sessionService != nil {
+				options = append(options, inputhistory.WithSessionScopeResolver(
+					func(sessionName string) (string, error) {
+						return a.sessionService.ResolveSessionWorkDir(sessionName)
+					},
+					appConfigDirProvider(a),
+				))
+			}
 			a.inputHistoryService = inputhistory.NewService(
 				newAppRuntimeEventEmitterAdapter(a),
 				func() bool { return a.shuttingDown.Load() },
+				options...,
 			)
 		}
 	})
@@ -60,12 +70,26 @@ func (a *App) closeInputHistory() {
 	a.ensureInputHistoryService().Close()
 }
 
-// GetInputHistory returns a copy of all in-memory input history entries.
+// Deprecated: use GetInputHistoryForSession for scoped input history.
+// GetInputHistory returns input history for the active session.
 func (a *App) GetInputHistory() []InputHistoryEntry {
-	return a.ensureInputHistoryService().Snapshot()
+	activeSessionName := ""
+	if a.sessionService != nil {
+		activeSessionName = a.sessionService.GetActiveSessionName()
+	}
+	return a.ensureInputHistoryService().SnapshotForSession(activeSessionName).Entries
+}
+
+// GetInputHistoryForSession returns input history scoped to the session work directory.
+func (a *App) GetInputHistoryForSession(sessionName string) inputhistory.Snapshot {
+	return a.ensureInputHistoryService().SnapshotForSession(sessionName)
 }
 
 // GetInputHistoryFilePath returns the absolute path to the current session's JSONL input history file.
 func (a *App) GetInputHistoryFilePath() string {
-	return a.ensureInputHistoryService().FilePath()
+	activeSessionName := ""
+	if a.sessionService != nil {
+		activeSessionName = a.sessionService.GetActiveSessionName()
+	}
+	return a.ensureInputHistoryService().FilePathForSession(activeSessionName)
 }

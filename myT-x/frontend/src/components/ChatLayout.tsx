@@ -111,7 +111,7 @@ export function ChatLayout({
                 ref={input.textareaRef}
                 className="chat-panel-textarea"
                 value={input.text}
-                onChange={(event) => input.setText(event.target.value)}
+                onChange={(event) => input.setDirectText(event.target.value)}
                 onKeyDown={input.handleExpandedKeyDown}
                 onCompositionStart={input.handleCompositionStart}
                 onCompositionEnd={input.handleCompositionEnd}

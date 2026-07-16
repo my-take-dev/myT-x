@@ -165,9 +165,7 @@ func TestSendDiffReview_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// The expected text call is transport-compensated. Input history below
-	// remains in the logical user-authored order.
-	wantCalls := []string{"select-pane:%0", "text:> fix this\n\n# Review", "key:C-m"}
+	wantCalls := []string{"select-pane:%0", "text:# Review\n\n> fix this", "key:C-m"}
 	if !slices.Equal(calls, wantCalls) {
 		t.Fatalf("send call sequence = %v, want %v", calls, wantCalls)
 	}
@@ -205,116 +203,7 @@ func TestSendDiffReview_EndToEnd(t *testing.T) {
 	}
 }
 
-func TestReverseLinesForLiteralSendKeysWorkaround(t *testing.T) {
-	// These expectations describe the Diff Review transport workaround, not
-	// the logical Markdown document. If the receiving TUI changes its literal
-	// multiline display behavior, this contract and the manual verification
-	// note in knowledge/diff-review-pane-send-order.md must be revisited.
-	tests := []struct {
-		name string
-		text string
-		want string
-	}{
-		{
-			name: "single line unchanged",
-			text: "# Overall Comment",
-			want: "# Overall Comment",
-		},
-		{
-			name: "multiline markdown reversed for terminal display compensation",
-			text: strings.Join([]string{
-				"# Overall Comment",
-				"",
-				"ping 8.8.8.8",
-				"",
-				"---",
-				"",
-				"# Code Review Comments",
-				"",
-				"---",
-				"",
-				"te",
-				"",
-				"---",
-				"",
-				"## `readme.md` (L+4 to L+6)",
-				"",
-				"```md",
-				"ハロー7",
-				"ハロー6",
-				"Hello 5",
-				"```",
-			}, "\n"),
-			want: strings.Join([]string{
-				"```",
-				"Hello 5",
-				"ハロー6",
-				"ハロー7",
-				"```md",
-				"",
-				"## `readme.md` (L+4 to L+6)",
-				"",
-				"---",
-				"",
-				"te",
-				"",
-				"---",
-				"",
-				"# Code Review Comments",
-				"",
-				"---",
-				"",
-				"ping 8.8.8.8",
-				"",
-				"# Overall Comment",
-			}, "\n"),
-		},
-		{
-			name: "normalizes CRLF before reversing",
-			text: "one\r\ntwo\r\nthree",
-			want: "three\ntwo\none",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := reverseLinesForLiteralSendKeysWorkaround(tt.text); got != tt.want {
-				t.Fatalf("reverseLinesForLiteralSendKeysWorkaround() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestReverseLinesForLiteralSendKeysWorkaround_RestoresObservedMarkdownDisplay(t *testing.T) {
-	logicalMarkdown := strings.Join([]string{
-		"# Overall Comment",
-		"",
-		"Please check the fenced block.",
-		"",
-		"---",
-		"",
-		"# Code Review Comments",
-		"",
-		"## `README.md` (L+4 to L+6)",
-		"```md",
-		"Hello 5",
-		"ハロー6",
-		"ハロー7",
-		"```",
-		"> Keep this order.",
-	}, "\n")
-
-	transportText := reverseLinesForLiteralSendKeysWorkaround(logicalMarkdown)
-	if strings.Contains(transportText, "```md\nHello 5\nハロー6\nハロー7\n```") {
-		t.Fatal("transport text should expose the fenced block in reversed order until the TUI display compensation is applied")
-	}
-	observedDisplay := reverseLinesForLiteralSendKeysWorkaround(transportText)
-	if observedDisplay != logicalMarkdown {
-		t.Fatalf("observed display = %q, want logical Markdown %q", observedDisplay, logicalMarkdown)
-	}
-}
-
-func TestSendDiffReview_WorkaroundRunsBeforeChunking(t *testing.T) {
+func TestSendDiffReview_LogicalOrderRunsBeforeChunking(t *testing.T) {
 	mgr := tmux.NewSessionManager()
 	t.Cleanup(mgr.Close)
 	_, pane, err := mgr.CreateSession("test", "bash", 80, 24)
@@ -329,7 +218,6 @@ func TestSendDiffReview_WorkaroundRunsBeforeChunking(t *testing.T) {
 		sendKeys: callRecorder(&calls),
 	}
 	text := strings.Repeat("a", sendKeysLiteralChunkSize-1) + "\n" + "tail"
-	wantSentText := reverseLinesForLiteralSendKeysWorkaround(text)
 
 	if err := app.SendDiffReview(fmt.Sprintf("%%%d", pane.ID), text); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -344,7 +232,7 @@ func TestSendDiffReview_WorkaroundRunsBeforeChunking(t *testing.T) {
 	if len(chunks) < 2 {
 		t.Fatalf("expected chunked text calls, got calls: %v", calls)
 	}
-	if got := strings.Join(chunks, ""); got != wantSentText {
-		t.Fatalf("sent chunks joined = %q, want %q", got, wantSentText)
+	if got := strings.Join(chunks, ""); got != text {
+		t.Fatalf("sent chunks joined = %q, want %q", got, text)
 	}
 }

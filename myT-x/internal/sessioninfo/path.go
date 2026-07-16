@@ -24,13 +24,22 @@ func FolderKey(workDir string) (string, error) {
 
 // FilePath returns a file path under <configDir>/session-info/<FolderKey(workDir)>.
 func FilePath(configDir, workDir, fileName string) (string, error) {
-	configDir = strings.TrimSpace(configDir)
-	if configDir == "" {
-		return "", errors.New("config dir is empty")
-	}
 	fileName, err := cleanFileName(fileName)
 	if err != nil {
 		return "", err
+	}
+	dir, err := DirectoryPath(configDir, workDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fileName), nil
+}
+
+// DirectoryPath returns a directory path under <configDir>/session-info/<FolderKey(workDir)>.
+func DirectoryPath(configDir, workDir string) (string, error) {
+	configDir = strings.TrimSpace(configDir)
+	if configDir == "" {
+		return "", errors.New("config dir is empty")
 	}
 	absoluteConfigDir, err := filepath.Abs(configDir)
 	if err != nil {
@@ -40,7 +49,7 @@ func FilePath(configDir, workDir, fileName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Clean(absoluteConfigDir), DirName, key, fileName), nil
+	return filepath.Join(filepath.Clean(absoluteConfigDir), DirName, key), nil
 }
 
 // LegacyProjectFilePath returns the old project-local path for session data.

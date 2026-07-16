@@ -246,6 +246,10 @@ export function GetInputHistoryFilePath() {
   return window['go']['main']['App']['GetInputHistoryFilePath']();
 }
 
+export function GetInputHistoryForSession(arg1) {
+  return window['go']['main']['App']['GetInputHistoryForSession'](arg1);
+}
+
 export function GetMCPDetail(arg1, arg2) {
   return window['go']['main']['App']['GetMCPDetail'](arg1, arg2);
 }

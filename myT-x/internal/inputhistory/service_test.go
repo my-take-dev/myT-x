@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"myT-x/internal/sessioninfo"
 )
 
 // --------------------------------------------------------------------
@@ -248,6 +250,322 @@ func TestWriteEntry_WritesToFile(t *testing.T) {
 	}
 	if parsed.Input != "ls -la" {
 		t.Errorf("input = %q, want %q", parsed.Input, "ls -la")
+	}
+}
+
+func TestWriteEntry_SessionScopedDailyFiles(t *testing.T) {
+	configDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "workspace")
+	now := time.Date(2026, 5, 16, 9, 0, 0, 0, time.Local)
+	svc := NewService(nil, nil,
+		WithSessionScopeResolver(func(sessionName string) (string, error) {
+			if sessionName != "session-a" {
+				return "", fmt.Errorf("unknown session %s", sessionName)
+			}
+			return workDir, nil
+		}, func() (string, error) {
+			return configDir, nil
+		}),
+		WithClock(func() time.Time { return now }),
+	)
+	defer svc.Close()
+
+	svc.WriteEntry(Entry{Timestamp: "20260516090000", Input: "first", Session: "session-a"})
+	svc.WriteEntry(Entry{Timestamp: "20260516090100", Input: "second", Session: "session-a"})
+
+	key, err := sessioninfo.FolderKey(workDir)
+	if err != nil {
+		t.Fatalf("FolderKey(): %v", err)
+	}
+	dayOne := filepath.Join(configDir, sessioninfo.DirName, key, Dir, "input-20260516.jsonl")
+	content, err := os.ReadFile(dayOne)
+	if err != nil {
+		t.Fatalf("ReadFile(dayOne): %v", err)
+	}
+	if got := strings.Count(strings.TrimSpace(string(content)), "\n") + 1; got != 2 {
+		t.Fatalf("day one line count = %d, want 2", got)
+	}
+
+	now = now.AddDate(0, 0, 1)
+	svc.WriteEntry(Entry{Timestamp: "20260517090000", Input: "third", Session: "session-a"})
+	dayTwo := filepath.Join(configDir, sessioninfo.DirName, key, Dir, "input-20260517.jsonl")
+	if _, err := os.Stat(dayTwo); err != nil {
+		t.Fatalf("expected rotated daily file: %v", err)
+	}
+}
+
+func TestWriteEntry_EmptySessionUsesFallbackDailyFile(t *testing.T) {
+	configDir := t.TempDir()
+	now := time.Date(2026, 5, 16, 9, 0, 0, 0, time.Local)
+	svc := NewService(nil, nil,
+		WithSessionScopeResolver(func(sessionName string) (string, error) {
+			return "", fmt.Errorf("resolver should not be called for empty session %q", sessionName)
+		}, func() (string, error) {
+			return configDir, nil
+		}),
+		WithClock(func() time.Time { return now }),
+	)
+	defer svc.Close()
+
+	svc.WriteEntry(Entry{Timestamp: "20260516090000", Input: "fallback", Session: ""})
+
+	path := filepath.Join(configDir, Dir, "input-20260516.jsonl")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(fallback): %v", err)
+	}
+	var parsed Entry
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(content))), &parsed); err != nil {
+		t.Fatalf("Unmarshal(fallback): %v", err)
+	}
+	if parsed.Input != "fallback" {
+		t.Fatalf("fallback input = %q, want fallback", parsed.Input)
+	}
+	if parsed.Seq != 1 {
+		t.Fatalf("fallback seq = %d, want 1", parsed.Seq)
+	}
+}
+
+func TestFilePathForSession_ReturnsRequestedScope(t *testing.T) {
+	configDir := t.TempDir()
+	workDirA := filepath.Join(t.TempDir(), "workspace-a")
+	workDirB := filepath.Join(t.TempDir(), "workspace-b")
+	now := time.Date(2026, 5, 16, 9, 0, 0, 0, time.Local)
+	svc := NewService(nil, nil,
+		WithSessionScopeResolver(func(sessionName string) (string, error) {
+			switch sessionName {
+			case "session-a":
+				return workDirA, nil
+			case "session-b":
+				return workDirB, nil
+			default:
+				return "", fmt.Errorf("unknown session %s", sessionName)
+			}
+		}, func() (string, error) {
+			return configDir, nil
+		}),
+		WithClock(func() time.Time { return now }),
+	)
+	defer svc.Close()
+
+	svc.WriteEntry(Entry{Timestamp: "20260516090000", Input: "a", Session: "session-a"})
+	svc.WriteEntry(Entry{Timestamp: "20260516090100", Input: "b", Session: "session-b"})
+
+	pathA := svc.FilePathForSession("session-a")
+	pathB := svc.FilePathForSession("session-b")
+	if pathA == "" || pathB == "" {
+		t.Fatalf("expected non-empty paths, got A=%q B=%q", pathA, pathB)
+	}
+	if pathA == pathB {
+		t.Fatalf("session paths should differ, both were %q", pathA)
+	}
+	if !strings.Contains(pathA, Dir) || !strings.Contains(pathB, Dir) {
+		t.Fatalf("paths should include history dir, got A=%q B=%q", pathA, pathB)
+	}
+}
+
+func TestWriteEntry_AllowsConcurrentDifferentScopes(t *testing.T) {
+	configDir := t.TempDir()
+	workDirA := filepath.Join(t.TempDir(), "workspace-a")
+	workDirB := filepath.Join(t.TempDir(), "workspace-b")
+	svc := NewService(nil, nil,
+		WithSessionScopeResolver(func(sessionName string) (string, error) {
+			switch sessionName {
+			case "session-a":
+				return workDirA, nil
+			case "session-b":
+				return workDirB, nil
+			default:
+				return "", fmt.Errorf("unknown session %s", sessionName)
+			}
+		}, func() (string, error) {
+			return configDir, nil
+		}),
+		WithClock(func() time.Time {
+			return time.Date(2026, 5, 16, 9, 0, 0, 0, time.Local)
+		}),
+	)
+	defer svc.Close()
+
+	const entriesPerSession = 50
+	var wg sync.WaitGroup
+	for _, sessionName := range []string{"session-a", "session-b"} {
+		wg.Go(func() {
+			for i := range entriesPerSession {
+				svc.WriteEntry(Entry{
+					Timestamp: "20260516090000",
+					Input:     fmt.Sprintf("%s-%d", sessionName, i),
+					Session:   sessionName,
+				})
+			}
+		})
+	}
+	wg.Wait()
+
+	for _, sessionName := range []string{"session-a", "session-b"} {
+		snapshot := svc.SnapshotForSession(sessionName)
+		if len(snapshot.Entries) != entriesPerSession {
+			t.Fatalf("%s entries = %d, want %d", sessionName, len(snapshot.Entries), entriesPerSession)
+		}
+	}
+}
+
+func TestSnapshotForSession_LoadsLastSevenCalendarDays(t *testing.T) {
+	configDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "workspace")
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.Local)
+	baseDir, err := sessioninfo.DirectoryPath(configDir, workDir)
+	if err != nil {
+		t.Fatalf("DirectoryPath(): %v", err)
+	}
+	historyDir := filepath.Join(baseDir, Dir)
+	if err := os.MkdirAll(historyDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+	writeDailyHistoryFile(t, historyDir, "20260509", []string{`{"input":"too-old","ts":"20260509120000","pane_id":"%1","source":"chat","session":"session-a"}`})
+	writeDailyHistoryFile(t, historyDir, "20260510", []string{`{"input":"oldest-loaded","ts":"20260510120000","pane_id":"%1","source":"chat","session":"session-a"}`})
+	writeDailyHistoryFile(t, historyDir, "20260516", []string{
+		`{malformed`,
+		`{"input":"today","ts":"20260516120000","pane_id":"%1","source":"chat","session":"session-a"}`,
+	})
+
+	svc := NewService(nil, nil,
+		WithSessionScopeResolver(func(sessionName string) (string, error) {
+			return workDir, nil
+		}, func() (string, error) {
+			return configDir, nil
+		}),
+		WithClock(func() time.Time { return now }),
+	)
+	defer svc.Close()
+
+	snapshot := svc.SnapshotForSession("session-a")
+	if snapshot.ScopeKey == "" {
+		t.Fatal("expected non-empty scope key")
+	}
+	inputs := make([]string, 0, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		inputs = append(inputs, entry.Input)
+	}
+	want := []string{"oldest-loaded", "today"}
+	if strings.Join(inputs, ",") != strings.Join(want, ",") {
+		t.Fatalf("loaded inputs = %v, want %v", inputs, want)
+	}
+	if snapshot.Entries[0].Seq == 0 || snapshot.Entries[1].Seq != snapshot.Entries[0].Seq+1 {
+		t.Fatalf("loaded entries were not resequenced chronologically: %+v", snapshot.Entries)
+	}
+}
+
+func TestSnapshotForSession_PreservesPersistedSeq(t *testing.T) {
+	configDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "workspace")
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.Local)
+	baseDir, err := sessioninfo.DirectoryPath(configDir, workDir)
+	if err != nil {
+		t.Fatalf("DirectoryPath(): %v", err)
+	}
+	historyDir := filepath.Join(baseDir, Dir)
+	writeDailyHistoryFile(t, historyDir, "20260516", []string{
+		`{"seq":41,"input":"first","ts":"20260516120000","pane_id":"%1","source":"chat","session":"session-a"}`,
+		`{"seq":42,"input":"second","ts":"20260516120100","pane_id":"%1","source":"chat","session":"session-a"}`,
+	})
+
+	svc := NewService(nil, nil,
+		WithSessionScopeResolver(func(sessionName string) (string, error) {
+			return workDir, nil
+		}, func() (string, error) {
+			return configDir, nil
+		}),
+		WithClock(func() time.Time { return now }),
+	)
+	defer svc.Close()
+
+	snapshot := svc.SnapshotForSession("session-a")
+	if len(snapshot.Entries) != 2 {
+		t.Fatalf("snapshot length = %d, want 2", len(snapshot.Entries))
+	}
+	if snapshot.Entries[0].Seq != 41 || snapshot.Entries[1].Seq != 42 {
+		t.Fatalf("loaded seqs = %d,%d want 41,42", snapshot.Entries[0].Seq, snapshot.Entries[1].Seq)
+	}
+
+	svc.WriteEntry(Entry{Timestamp: "20260516120200", Input: "third", Session: "session-a"})
+	updated := svc.SnapshotForSession("session-a")
+	if got := updated.Entries[len(updated.Entries)-1].Seq; got != 43 {
+		t.Fatalf("next seq = %d, want 43", got)
+	}
+}
+
+func TestCleanupOldFiles_DeletesExpiredSessionInfoDailyFiles(t *testing.T) {
+	configDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "workspace")
+	baseDir, err := sessioninfo.DirectoryPath(configDir, workDir)
+	if err != nil {
+		t.Fatalf("DirectoryPath(): %v", err)
+	}
+	historyDir := filepath.Join(baseDir, Dir)
+	if err := os.MkdirAll(historyDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+	fallbackHistoryDir := filepath.Join(configDir, Dir)
+	writeDailyHistoryFile(t, fallbackHistoryDir, "20260414", []string{`{"input":"expired-fallback"}`})
+	writeDailyHistoryFile(t, historyDir, "20260415", []string{`{"input":"expired"}`})
+	writeDailyHistoryFile(t, historyDir, "20260416", []string{`{"input":"retained"}`})
+	svc := NewService(nil, nil,
+		WithSessionScopeResolver(func(sessionName string) (string, error) {
+			return workDir, nil
+		}, func() (string, error) {
+			return configDir, nil
+		}),
+		WithClock(func() time.Time {
+			return time.Date(2026, 5, 16, 12, 0, 0, 0, time.Local)
+		}),
+	)
+	defer svc.Close()
+	svc.CleanupOldFiles()
+
+	if _, err := os.Stat(filepath.Join(historyDir, "input-20260415.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("expected expired file to be deleted, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(historyDir, "input-20260416.jsonl")); err != nil {
+		t.Fatalf("expected retention boundary file to remain: %v", err)
+	}
+	if _, err := os.Stat(fallbackHistoryDir); !os.IsNotExist(err) {
+		t.Fatalf("expected fallback history directory to be removed after all files expire, err=%v", err)
+	}
+}
+
+func TestWriteEntry_UnresolvedSessionDoesNotCreateGlobalHistory(t *testing.T) {
+	configDir := t.TempDir()
+	svc := NewService(nil, nil,
+		WithSessionScopeResolver(func(sessionName string) (string, error) {
+			return "", fmt.Errorf("session %s not found", sessionName)
+		}, func() (string, error) {
+			return configDir, nil
+		}),
+	)
+	defer svc.Close()
+
+	svc.WriteEntry(Entry{Timestamp: "20260516120000", Input: "dropped", Session: "missing"})
+
+	if entries := svc.Snapshot(); len(entries) != 0 {
+		t.Fatalf("legacy snapshot length = %d, want 0", len(entries))
+	}
+	if _, err := os.Stat(filepath.Join(configDir, Dir)); !os.IsNotExist(err) {
+		t.Fatalf("expected no global input-history directory, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, sessioninfo.DirName)); !os.IsNotExist(err) {
+		t.Fatalf("expected no session-info directory, err=%v", err)
+	}
+}
+
+func writeDailyHistoryFile(t *testing.T, dir, date string, lines []string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", dir, err)
+	}
+	content := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "input-"+date+".jsonl"), []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", date, err)
 	}
 }
 

@@ -184,10 +184,10 @@ function TerminalPaneComponent(props: TerminalPaneProps) {
         fontSizeRef,
     });
 
-    const preventTerminalFocusSteal = (event: ReactMouseEvent<HTMLElement>): void => {
+    const preventTerminalFocusSteal = useCallback((event: ReactMouseEvent<HTMLElement>): void => {
         event.preventDefault();
         event.stopPropagation();
-    };
+    }, []);
 
     const handleAutoClick = useCallback(() => {
         if (autoRunning) {

@@ -197,8 +197,17 @@ func NewApp() *App {
 	isShuttingDown := func() bool { return app.shuttingDown.Load() }
 
 	app.sessionLogService = sessionlog.NewService(emitter, isShuttingDown)
-	app.inputHistoryService = inputhistory.NewService(emitter, isShuttingDown)
 	app.sessionService = session.NewService(buildSessionServiceDeps(app))
+	app.inputHistoryService = inputhistory.NewService(
+		emitter,
+		isShuttingDown,
+		inputhistory.WithSessionScopeResolver(
+			func(sessionName string) (string, error) {
+				return app.sessionService.ResolveSessionWorkDir(sessionName)
+			},
+			appConfigDirProvider(app),
+		),
+	)
 	app.orchestratorService = orchestrator.NewService(buildOrchestratorServiceDeps(app))
 	app.promptPresetsService = promptpresets.NewService(buildPromptPresetsServiceDeps(app))
 	app.sessionMemoService = sessionmemo.NewService(buildSessionMemoServiceDeps(app))

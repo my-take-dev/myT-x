@@ -1,6 +1,7 @@
 import {useEffect, useRef} from "react";
 import {api} from "../../api";
 import {useInputHistoryStore} from "../../stores/inputHistoryStore";
+import {useTmuxStore} from "../../stores/tmuxStore";
 import {logFrontendEventSafe} from "../../utils/logFrontendEventSafe";
 import {cleanupEventListeners, createEventSubscriber} from "./eventHelpers";
 
@@ -18,14 +19,17 @@ interface InputHistoryEventMap {
  * Subscribes to input history update pings and fetches the full history snapshot.
  *
  * Uses the same "ping + fetch" pattern as useSessionLogSync: lightweight backend
- * ping triggers a full snapshot fetch with debounce, retry, and stale-response
+ * ping triggers a scoped snapshot fetch with debounce, retry, and stale-response
  * protection via a monotonic fetch counter.
  */
 export function useInputHistorySync(): void {
+    const activeSession = useTmuxStore((state) => state.activeSession);
     const isMountedRef = useRef(true);
+    const fetchGenerationRef = useRef(0);
 
     useEffect(() => {
         isMountedRef.current = true;
+        const effectGeneration = ++fetchGenerationRef.current;
         const cleanupFns: Array<() => void> = [];
         const onEvent = createEventSubscriber<InputHistoryEventMap>(cleanupFns);
 
@@ -35,23 +39,38 @@ export function useInputHistorySync(): void {
 
         const fetchInputHistory = (attempt = 0) => {
             if (!isMountedRef.current) return;
+            if (activeSession == null || activeSession.trim() === "") {
+                useInputHistoryStore.getState().setSnapshot({scope_key: "", entries: []});
+                return;
+            }
             const seq = ++fetchSeq;
-            void api.GetInputHistory()
+            const capturedActiveSession = activeSession;
+            void api.GetInputHistoryForSession(capturedActiveSession)
                 .then((result) => {
-                    if (!isMountedRef.current || seq !== fetchSeq) return;
+                    if (
+                        !isMountedRef.current ||
+                        effectGeneration !== fetchGenerationRef.current ||
+                        seq !== fetchSeq ||
+                        useTmuxStore.getState().activeSession !== capturedActiveSession
+                    ) return;
                     if (retryTimer != null) {
                         clearTimeout(retryTimer);
                         retryTimer = null;
                     }
-                    useInputHistoryStore.getState().setEntries(result ?? []);
+                    useInputHistoryStore.getState().setSnapshot(result ?? {scope_key: "", entries: []});
                 })
                 .catch((err: unknown) => {
-                    if (!isMountedRef.current || seq !== fetchSeq) return;
+                    if (
+                        !isMountedRef.current ||
+                        effectGeneration !== fetchGenerationRef.current ||
+                        seq !== fetchSeq ||
+                        useTmuxStore.getState().activeSession !== capturedActiveSession
+                    ) return;
                     if (import.meta.env.DEV) {
-                        console.warn("[SYNC] GetInputHistory failed:", err, "attempt:", attempt + 1);
+                        console.warn("[SYNC] GetInputHistoryForSession failed:", err, "attempt:", attempt + 1);
                     }
                     if (attempt >= 1) {
-                        logFrontendEventSafe("warn", "GetInputHistory failed after retry", "frontend/sync");
+                        logFrontendEventSafe("warn", "GetInputHistoryForSession failed after retry", "frontend/sync");
                         return;
                     }
                     if (retryTimer != null) {
@@ -76,6 +95,7 @@ export function useInputHistorySync(): void {
         fetchInputHistory();
 
         return () => {
+            fetchGenerationRef.current++;
             isMountedRef.current = false;
             if (debounceTimer != null) {
                 clearTimeout(debounceTimer);
@@ -87,5 +107,5 @@ export function useInputHistorySync(): void {
             }
             cleanupEventListeners(cleanupFns);
         };
-    }, []);
+    }, [activeSession]);
 }

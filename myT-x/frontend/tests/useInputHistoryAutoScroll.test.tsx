@@ -16,6 +16,10 @@ function makeEntry(seq: number): InputHistoryEntry {
     };
 }
 
+function setInputHistoryEntries(entries: InputHistoryEntry[]): void {
+    useInputHistoryStore.getState().setSnapshot({scope_key: "", entries});
+}
+
 /**
  * Test harness that renders useInputHistory and exposes the registerBodyElement
  * callback so we can attach a mock scrollable element.
@@ -42,9 +46,11 @@ describe("useInputHistory auto-scroll", () => {
 
         // Reset store to initial state
         useInputHistoryStore.setState({
+            scopeKey: "",
             entries: [],
             unreadCount: 0,
             lastReadSeq: 0,
+            readSeqByScope: {},
         });
     });
 
@@ -71,7 +77,7 @@ describe("useInputHistory auto-scroll", () => {
 
         // Set initial entries (seq=1)
         act(() => {
-            useInputHistoryStore.getState().setEntries([makeEntry(1)]);
+            setInputHistoryEntries([makeEntry(1)]);
         });
 
         // scrollTop should be assigned scrollHeight (500)
@@ -97,13 +103,13 @@ describe("useInputHistory auto-scroll", () => {
 
         // Set entries with seq=1
         act(() => {
-            useInputHistoryStore.getState().setEntries([makeEntry(1)]);
+            setInputHistoryEntries([makeEntry(1)]);
         });
         const callCountAfterFirst = scrollTopSetter.mock.calls.length;
 
         // Set entries again with same seq=1 (no new entry)
         act(() => {
-            useInputHistoryStore.getState().setEntries([makeEntry(1)]);
+            setInputHistoryEntries([makeEntry(1)]);
         });
 
         // No additional scroll calls since latestEntrySeq didn't change
@@ -118,7 +124,7 @@ describe("useInputHistory auto-scroll", () => {
 
         // This should not throw even when entries arrive
         act(() => {
-            useInputHistoryStore.getState().setEntries([makeEntry(1)]);
+            setInputHistoryEntries([makeEntry(1)]);
         });
 
         expect(container.querySelector('[data-testid="count"]')?.textContent).toBe("1");
@@ -139,7 +145,7 @@ describe("useInputHistory auto-scroll", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([makeEntry(1)]);
+            setInputHistoryEntries([makeEntry(1)]);
         });
 
         // scrollTop should NOT be reassigned because user is far from bottom

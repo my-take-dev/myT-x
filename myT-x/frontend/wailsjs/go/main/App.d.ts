@@ -140,6 +140,8 @@ export function GetInputHistory():Promise<Array<inputhistory.Entry>>;
 
 export function GetInputHistoryFilePath():Promise<string>;
 
+export function GetInputHistoryForSession(arg1:string):Promise<inputhistory.Snapshot>;
+
 export function GetMCPDetail(arg1:string,arg2:string):Promise<mcp.Snapshot>;
 
 export function GetOrchestratorTaskDetail(arg1:string,arg2:string):Promise<main.OrchestratorTaskDetail>;

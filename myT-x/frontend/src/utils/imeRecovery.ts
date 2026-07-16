@@ -1,15 +1,4 @@
-const nonTextInputTypes = new Set([
-    "button",
-    "checkbox",
-    "color",
-    "file",
-    "hidden",
-    "image",
-    "radio",
-    "range",
-    "reset",
-    "submit",
-]);
+import {isTextEntryElement} from "./terminalFocus";
 
 export const TERMINAL_IME_RECOVERY_EVENT = "mytx:terminal-ime-recovery";
 export const IME_RECOVERY_AUTO_COOLDOWN_MS = 1_000;
@@ -46,21 +35,11 @@ function isRecoverySurface(element: HTMLElement): boolean {
     return element.getAttribute(IME_RECOVERY_SURFACE_ATTRIBUTE) === "true";
 }
 
-function isTextInputElement(element: HTMLElement): boolean {
-    if (element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-        return true;
-    }
-    if (element instanceof HTMLInputElement) {
-        return !nonTextInputTypes.has(element.type);
-    }
-    return element.isContentEditable;
-}
-
 export function asRecoverableTextEntryTarget(value: EventTarget | null): HTMLElement | null {
     if (!(value instanceof HTMLElement)) {
         return null;
     }
-    if (isRecoverySurface(value) || !isTextInputElement(value)) {
+    if (isRecoverySurface(value) || !isTextEntryElement(value)) {
         return null;
     }
     return value;

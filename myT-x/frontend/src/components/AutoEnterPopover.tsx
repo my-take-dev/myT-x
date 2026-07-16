@@ -1,6 +1,7 @@
 import {memo, useCallback, useEffect, useRef, useState} from "react";
 import type {MouseEvent as ReactMouseEvent} from "react";
 import {useI18n} from "../i18n";
+import {findTextEntryAncestor} from "../utils/terminalFocus";
 
 interface AutoEnterPopoverProps {
     readonly onStart: (intervalSeconds: number) => void;
@@ -53,11 +54,27 @@ export const AutoEnterPopover = memo(function AutoEnterPopover({
         onStart(parsedInterval);
     }, [canStart, parsedInterval, onStart]);
 
+    const handlePopoverMouseDown = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+        if (findTextEntryAncestor(event.target) !== null) {
+            // Keep text editing usable while preventing the parent pane from taking the event.
+            event.stopPropagation();
+            return;
+        }
+        preventTerminalFocusSteal(event);
+    }, [preventTerminalFocusSteal]);
+
+    const stopTextEntryClickPropagation = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+        if (findTextEntryAncestor(event.target) !== null) {
+            event.stopPropagation();
+        }
+    }, []);
+
     return (
         <div
             ref={popoverRef}
             className="auto-enter-popover"
-            onMouseDown={preventTerminalFocusSteal}
+            onMouseDown={handlePopoverMouseDown}
+            onClick={stopTextEntryClickPropagation}
         >
             <div className="auto-enter-popover-title">
                 {isEn ? "Auto Confirm" : t("autoEnter.popover.title", "自動確定")}
@@ -102,8 +119,10 @@ export const AutoEnterPopover = memo(function AutoEnterPopover({
                 type="button"
                 className="auto-enter-popover-start-btn"
                 disabled={!canStart}
-                onMouseDown={preventTerminalFocusSteal}
-                onClick={handleStart}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    handleStart();
+                }}
             >
                 {isEn ? "Start" : t("autoEnter.popover.start", "開始")}
             </button>

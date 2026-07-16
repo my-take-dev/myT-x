@@ -4,8 +4,8 @@ build-shim:
 	go build -o tmux-shim.exe ./cmd/tmux-shim
 
 prepare-embed: build-shim
-	if not exist internal\install\embedded\shimbin mkdir internal\install\embedded\shimbin
-	copy /Y tmux-shim.exe internal\install\embedded\shimbin\tmux-shim.exe
+	mkdir -p internal/install/embedded/shimbin
+	cp -f tmux-shim.exe internal/install/embedded/shimbin/tmux-shim.exe
 
 dev:
 	go build -o tmux-shim.exe ./cmd/tmux-shim
@@ -15,5 +15,5 @@ build: prepare-embed
 	wails build -tags embed_shim
 
 clean-embed:
-	if exist internal\install\embedded\shimbin rmdir /S /Q internal\install\embedded\shimbin
-	if exist tmux-shim.exe del tmux-shim.exe
+	rm -rf internal/install/embedded/shimbin
+	rm -f tmux-shim.exe

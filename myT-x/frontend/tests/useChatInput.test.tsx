@@ -52,6 +52,10 @@ function inputHistoryEntry(seq: number, overrides: Partial<InputHistoryEntry> = 
     };
 }
 
+function setInputHistoryEntries(entries: InputHistoryEntry[], scopeKey = ""): void {
+    useInputHistoryStore.getState().setSnapshot({scope_key: scopeKey, entries});
+}
+
 interface KeyDownEventOptions {
     readonly altKey?: boolean;
     readonly ctrlKey?: boolean;
@@ -110,9 +114,11 @@ describe("useChatInput", () => {
         apiMock.SendChatMessage.mockReset();
         apiMock.SendChatMessage.mockResolvedValue(undefined);
         useInputHistoryStore.setState({
+            scopeKey: "",
             entries: [],
             unreadCount: 0,
             lastReadSeq: 0,
+            readSeqByScope: {},
         });
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     });
@@ -123,9 +129,11 @@ describe("useChatInput", () => {
         });
         container.remove();
         useInputHistoryStore.setState({
+            scopeKey: "",
             entries: [],
             unreadCount: 0,
             lastReadSeq: 0,
+            readSeqByScope: {},
         });
         vi.restoreAllMocks();
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
@@ -187,7 +195,7 @@ describe("useChatInput", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([
+            setInputHistoryEntries([
                 inputHistoryEntry(1, {pane_id: "pane-1", input: "old pane message"}),
                 inputHistoryEntry(2, {pane_id: "pane-1", input: "terminal command", source: "keyboard"}),
                 inputHistoryEntry(3, {pane_id: "pane-1", input: "   "}),
@@ -218,7 +226,7 @@ describe("useChatInput", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([
+            setInputHistoryEntries([
                 inputHistoryEntry(1, {input: "repeat"}),
                 inputHistoryEntry(2, {input: "repeat"}),
                 inputHistoryEntry(3, {input: "newest"}),
@@ -249,7 +257,7 @@ describe("useChatInput", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([
+            setInputHistoryEntries([
                 inputHistoryEntry(1, {input: "oldest"}),
                 inputHistoryEntry(2, {input: "newest"}),
             ]);
@@ -271,7 +279,7 @@ describe("useChatInput", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([
+            setInputHistoryEntries([
                 inputHistoryEntry(1, {input: "oldest"}),
                 inputHistoryEntry(2, {input: "newest"}),
             ]);
@@ -315,8 +323,8 @@ describe("useChatInput", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([inputHistoryEntry(1, {input: "history"})]);
-            getCurrentState().setText("manual input");
+            setInputHistoryEntries([inputHistoryEntry(1, {input: "history"})]);
+            getCurrentState().setDirectText("manual input");
         });
 
         const up = keyDownEvent("ArrowUp");
@@ -328,13 +336,47 @@ describe("useChatInput", () => {
         expect(getCurrentState().text).toBe("manual input");
     });
 
+    it("does not intercept history arrows when the caret is before the end of recalled text", () => {
+        act(() => {
+            root.render(<ChatInputProbe activePaneId="pane-1" paneIds={["pane-1"]}/>);
+        });
+
+        act(() => {
+            setInputHistoryEntries([
+                inputHistoryEntry(1, {input: "oldest"}),
+                inputHistoryEntry(2, {input: "newest"}),
+            ]);
+        });
+
+        act(() => {
+            getCurrentState().handleExpandedKeyDown(keyDownEvent("ArrowUp").event);
+        });
+        expect(getCurrentState().text).toBe("newest");
+
+        for (const key of ["ArrowUp", "ArrowDown"]) {
+            const arrow = keyDownEvent(key, {
+                currentTarget: {
+                    value: "newest",
+                    selectionStart: "new".length,
+                    selectionEnd: "new".length,
+                },
+            });
+            act(() => {
+                getCurrentState().handleExpandedKeyDown(arrow.event);
+            });
+
+            expect(arrow.preventDefault).not.toHaveBeenCalled();
+            expect(getCurrentState().text).toBe("newest");
+        }
+    });
+
     it("does not intercept modified arrow keys during history browsing", () => {
         act(() => {
             root.render(<ChatInputProbe activePaneId="pane-1" paneIds={["pane-1"]}/>);
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([
+            setInputHistoryEntries([
                 inputHistoryEntry(1, {input: "oldest"}),
                 inputHistoryEntry(2, {input: "newest"}),
             ]);
@@ -373,7 +415,7 @@ describe("useChatInput", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([inputHistoryEntry(1, {input: "history"})]);
+            setInputHistoryEntries([inputHistoryEntry(1, {input: "history"})]);
             getCurrentState().handleCompositionStart();
         });
 
@@ -392,7 +434,7 @@ describe("useChatInput", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([
+            setInputHistoryEntries([
                 inputHistoryEntry(1, {input: "oldest"}),
                 inputHistoryEntry(2, {input: "recalled"}),
                 inputHistoryEntry(3, {input: "newer"}),
@@ -407,7 +449,7 @@ describe("useChatInput", () => {
         expect(getCurrentState().text).toBe("recalled");
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([
+            setInputHistoryEntries([
                 inputHistoryEntry(2, {input: "recalled"}),
                 inputHistoryEntry(3, {input: "newer"}),
                 inputHistoryEntry(4, {input: "newest"}),
@@ -429,7 +471,7 @@ describe("useChatInput", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([
+            setInputHistoryEntries([
                 inputHistoryEntry(1, {input: "old"}),
                 inputHistoryEntry(2, {input: "line 1\nline 2\nline 3"}),
             ]);
@@ -483,13 +525,13 @@ describe("useChatInput", () => {
         expect(getCurrentState().text).toBe("line 1\nline 2\nline 3");
     });
 
-    it("uses history navigation only at multiline text boundaries", () => {
+    it("uses history navigation only at the absolute text end", () => {
         act(() => {
             root.render(<ChatInputProbe activePaneId="pane-1" paneIds={["pane-1"]}/>);
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([
+            setInputHistoryEntries([
                 inputHistoryEntry(1, {input: "old"}),
                 inputHistoryEntry(2, {input: "line 1\nline 2"}),
             ]);
@@ -511,14 +553,14 @@ describe("useChatInput", () => {
             getCurrentState().handleExpandedKeyDown(upFromFirstLine.event);
         });
 
-        expect(upFromFirstLine.preventDefault).toHaveBeenCalledOnce();
-        expect(getCurrentState().text).toBe("old");
+        expect(upFromFirstLine.preventDefault).not.toHaveBeenCalled();
+        expect(getCurrentState().text).toBe("line 1\nline 2");
 
         const downFromLastLine = keyDownEvent("ArrowDown", {
             currentTarget: {
-                value: "old",
-                selectionStart: "old".length,
-                selectionEnd: "old".length,
+                value: "line 1\nline 2",
+                selectionStart: "line 1\nline 2".length,
+                selectionEnd: "line 1\nline 2".length,
             },
         });
         act(() => {
@@ -526,7 +568,7 @@ describe("useChatInput", () => {
         });
 
         expect(downFromLastLine.preventDefault).toHaveBeenCalledOnce();
-        expect(getCurrentState().text).toBe("line 1\nline 2");
+        expect(getCurrentState().text).toBe("");
     });
 
     it("does not intercept ArrowUp when history is empty", () => {
@@ -549,7 +591,7 @@ describe("useChatInput", () => {
         });
 
         act(() => {
-            useInputHistoryStore.getState().setEntries([inputHistoryEntry(1, {input: "history"})]);
+            setInputHistoryEntries([inputHistoryEntry(1, {input: "history"})]);
         });
 
         act(() => {
@@ -558,7 +600,7 @@ describe("useChatInput", () => {
         expect(getCurrentState().text).toBe("history");
 
         act(() => {
-            getCurrentState().setText("manual input");
+            getCurrentState().setDirectText("manual input");
         });
 
         const downAfterManualInput = keyDownEvent("ArrowDown");
@@ -587,5 +629,90 @@ describe("useChatInput", () => {
 
         expect(downAfterPresetUpdate.preventDefault).not.toHaveBeenCalled();
         expect(getCurrentState().text).toBe("history with preset");
+    });
+
+    it("allows history recall after direct input is cleared", () => {
+        act(() => {
+            root.render(<ChatInputProbe activePaneId="pane-1" paneIds={["pane-1"]}/>);
+        });
+
+        act(() => {
+            setInputHistoryEntries([inputHistoryEntry(1, {input: "history"})]);
+            getCurrentState().setDirectText("manual input");
+        });
+
+        act(() => {
+            getCurrentState().setDirectText("");
+        });
+
+        const up = keyDownEvent("ArrowUp");
+        act(() => {
+            getCurrentState().handleExpandedKeyDown(up.event);
+        });
+
+        expect(up.preventDefault).toHaveBeenCalledOnce();
+        expect(getCurrentState().text).toBe("history");
+    });
+
+    it("allows history recall from non-empty programmatic text", () => {
+        act(() => {
+            root.render(<ChatInputProbe activePaneId="pane-1" paneIds={["pane-1"]}/>);
+        });
+
+        act(() => {
+            setInputHistoryEntries([inputHistoryEntry(1, {input: "history"})]);
+            getCurrentState().setText("preset text");
+        });
+
+        const up = keyDownEvent("ArrowUp");
+        act(() => {
+            getCurrentState().handleExpandedKeyDown(up.event);
+        });
+
+        expect(up.preventDefault).toHaveBeenCalledOnce();
+        expect(getCurrentState().text).toBe("history");
+    });
+
+    it("keeps history recall disabled when programmatic text is appended after direct input", () => {
+        act(() => {
+            root.render(<ChatInputProbe activePaneId="pane-1" paneIds={["pane-1"]}/>);
+        });
+
+        act(() => {
+            setInputHistoryEntries([inputHistoryEntry(1, {input: "history"})]);
+            getCurrentState().setDirectText("manual input");
+            getCurrentState().setText((previous) => `${previous}\npreset text`);
+        });
+
+        const up = keyDownEvent("ArrowUp");
+        act(() => {
+            getCurrentState().handleExpandedKeyDown(up.event);
+        });
+
+        expect(up.preventDefault).not.toHaveBeenCalled();
+        expect(getCurrentState().text).toBe("manual input\npreset text");
+    });
+
+    it("recalls only entries from the active input-history scope", () => {
+        act(() => {
+            root.render(<ChatInputProbe activePaneId="pane-1" paneIds={["pane-1"]}/>);
+        });
+
+        act(() => {
+            useInputHistoryStore.getState().setSnapshot({
+                scope_key: "scope-a",
+                entries: [inputHistoryEntry(1, {input: "scope-a command"})],
+            });
+            useInputHistoryStore.getState().setSnapshot({
+                scope_key: "scope-b",
+                entries: [inputHistoryEntry(1, {input: "scope-b command"})],
+            });
+        });
+
+        act(() => {
+            getCurrentState().handleExpandedKeyDown(keyDownEvent("ArrowUp").event);
+        });
+
+        expect(getCurrentState().text).toBe("scope-b command");
     });
 });

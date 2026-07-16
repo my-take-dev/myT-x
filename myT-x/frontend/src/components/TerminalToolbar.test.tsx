@@ -1,7 +1,7 @@
 import {act} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {setLanguage} from "../i18n";
+import {getLanguage, setLanguage} from "../i18n";
 import {TerminalToolbar} from "./TerminalToolbar";
 
 function renderToolbar(root: Root): void {
@@ -30,12 +30,14 @@ function renderToolbar(root: Root): void {
 describe("TerminalToolbar", () => {
     let container: HTMLDivElement;
     let root: Root;
+    let previousLanguage: ReturnType<typeof getLanguage>;
 
     beforeEach(() => {
         container = document.createElement("div");
         document.body.appendChild(container);
         root = createRoot(container);
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+        previousLanguage = getLanguage();
         setLanguage("en");
     });
 
@@ -44,6 +46,7 @@ describe("TerminalToolbar", () => {
             root.unmount();
         });
         container.remove();
+        setLanguage(previousLanguage);
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
     });
 
@@ -94,6 +97,44 @@ describe("TerminalToolbar", () => {
         });
 
         expect(onRootToggle).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps title input clicks from bubbling to the parent pane", () => {
+        const parentClick = vi.fn();
+
+        act(() => {
+            root.render(
+                <div onClick={parentClick}>
+                    <TerminalToolbar
+                        paneId="%1"
+                        titleDraft="Pane"
+                        renameBusy={false}
+                        autoRunning={false}
+                        onTitleEditStart={vi.fn()}
+                        onTitleChange={vi.fn()}
+                        onTitleCommit={vi.fn()}
+                        onTitleCancel={vi.fn()}
+                        onAutoClick={vi.fn()}
+                        onAutoStartClick={vi.fn()}
+                        autoStartDisabled={false}
+                        onSplitVertical={vi.fn()}
+                        onSplitHorizontal={vi.fn()}
+                        onAddMember={vi.fn()}
+                        onClose={vi.fn()}
+                        preventTerminalFocusSteal={vi.fn()}
+                    />
+                </div>,
+            );
+        });
+
+        const input = container.querySelector(".terminal-toolbar-title-input") as HTMLInputElement;
+        expect(input).not.toBeNull();
+
+        act(() => {
+            input.click();
+        });
+
+        expect(parentClick).not.toHaveBeenCalled();
     });
 
     it("localizes the root toggle in Japanese mode", () => {
