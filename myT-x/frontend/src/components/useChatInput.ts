@@ -52,7 +52,7 @@ function selectionIsCollapsed(target: HTMLTextAreaElement): boolean {
     return target.selectionStart === target.selectionEnd;
 }
 
-function shouldUseArrowUpForHistory(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+function shouldUseArrowForHistory(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
     if (hasHistoryNavigationModifier(event)) {
         return false;
     }
@@ -60,18 +60,7 @@ function shouldUseArrowUpForHistory(event: KeyboardEvent<HTMLTextAreaElement>): 
     if (!selectionIsCollapsed(target)) {
         return false;
     }
-    return !target.value.slice(0, target.selectionStart).includes("\n");
-}
-
-function shouldUseArrowDownForHistory(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
-    if (hasHistoryNavigationModifier(event)) {
-        return false;
-    }
-    const target = event.currentTarget;
-    if (!selectionIsCollapsed(target)) {
-        return false;
-    }
-    return target.value.indexOf("\n", target.selectionStart) === -1;
+    return target.selectionStart === target.value.length;
 }
 
 export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExpanded}: UseChatInputParams) {
@@ -81,6 +70,7 @@ export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExp
     const [sendError, setSendError] = useState<string | null>(null);
     const [selectedPaneId, setSelectedPaneId] = useState<string | null>(null);
     const [historySeq, setHistorySeq] = useState<number | null>(null);
+    const hasDirectUserInputRef = useRef(false);
     const composingRef = useRef(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const historyInputs = useMemo(
@@ -92,6 +82,18 @@ export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExp
     // External text writes exit history recall mode.
     const setText = useCallback<Dispatch<SetStateAction<string>>>((value) => {
         setHistorySeq(null);
+        setTextState((previous) => {
+            const next = typeof value === "function" ? value(previous) : value;
+            if (next.length === 0) {
+                hasDirectUserInputRef.current = false;
+            }
+            return next;
+        });
+    }, []);
+
+    const setDirectText = useCallback((value: string) => {
+        setHistorySeq(null);
+        hasDirectUserInputRef.current = value.length > 0;
         setTextState(value);
     }, []);
 
@@ -151,8 +153,8 @@ export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExp
                     }
                     return;
                 case "ArrowUp": {
-                    if (historyInputs.length === 0 || (historySeq === null && hasText)) return;
-                    if (!shouldUseArrowUpForHistory(e)) return;
+                    if (historyInputs.length === 0 || (historySeq === null && hasText && hasDirectUserInputRef.current)) return;
+                    if (!shouldUseArrowForHistory(e)) return;
                     e.preventDefault();
                     const currentIndex = historySeq === null ? -1 : indexForSeq(historyInputs, historySeq);
                     const currentPosition = historySeq === null
@@ -171,7 +173,8 @@ export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExp
                 }
                 case "ArrowDown": {
                     if (historySeq === null) return;
-                    if (!shouldUseArrowDownForHistory(e)) return;
+                    if (hasText && hasDirectUserInputRef.current) return;
+                    if (!shouldUseArrowForHistory(e)) return;
                     e.preventDefault();
                     const currentIndex = indexForSeq(historyInputs, historySeq);
                     const nextIndex = currentIndex === -1
@@ -209,6 +212,7 @@ export function useChatInput({activePaneId, paneIds, autoClose, expanded, setExp
     return {
         text,
         setText,
+        setDirectText,
         sending,
         sendError,
         setSendError,

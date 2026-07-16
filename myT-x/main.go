@@ -19,7 +19,7 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-const appTitle = "myT-x v1.1.2"
+const appTitle = "myT-x v1.1.3"
 
 func main() {
 	os.Exit(run())

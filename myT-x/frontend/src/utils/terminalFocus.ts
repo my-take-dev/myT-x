@@ -16,6 +16,8 @@ const protectedFocusContainerSelector = [
     "[aria-modal=\"true\"]",
     "[role=\"menu\"]",
     ".terminal-search-bar",
+    ".auto-enter-popover",
+    ".auto-start-popover",
 ].join(", ");
 
 const nonTextInputTypes = new Set([
@@ -31,7 +33,7 @@ const nonTextInputTypes = new Set([
     "submit",
 ]);
 
-function isTextEntryElement(element: HTMLElement): boolean {
+export function isTextEntryElement(element: HTMLElement): boolean {
     if (element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
         return true;
     }
@@ -39,6 +41,17 @@ function isTextEntryElement(element: HTMLElement): boolean {
         return !nonTextInputTypes.has(element.type);
     }
     return element.isContentEditable;
+}
+
+export function findTextEntryAncestor(target: EventTarget | null): HTMLElement | null {
+    if (!(target instanceof Element)) {
+        return null;
+    }
+    const element = target.closest("input, textarea, select, [contenteditable]");
+    if (!(element instanceof HTMLElement) || !isTextEntryElement(element)) {
+        return null;
+    }
+    return element;
 }
 
 function isInteractiveElement(element: HTMLElement): boolean {

@@ -19,3 +19,6 @@ const (
 
 // InputHistoryEntry represents a single input history record.
 type InputHistoryEntry = inputhistory.Entry
+
+// InputHistorySnapshot represents input history for one session-info scope.
+type InputHistorySnapshot = inputhistory.Snapshot

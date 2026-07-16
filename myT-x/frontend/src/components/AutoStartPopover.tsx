@@ -1,7 +1,8 @@
-import {memo, useEffect, useMemo, useRef} from "react";
+import {memo, useCallback, useEffect, useMemo, useRef} from "react";
 import type {MouseEvent as ReactMouseEvent} from "react";
 import type {AppConfigAutoStartCommand} from "../types/tmux";
 import {useI18n} from "../i18n";
+import {findTextEntryAncestor} from "../utils/terminalFocus";
 
 interface AutoStartPopoverProps {
     readonly entries: AppConfigAutoStartCommand[];
@@ -29,6 +30,21 @@ export const AutoStartPopover = memo(function AutoStartPopover({
         [entries],
     );
 
+    const handlePopoverMouseDown = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+        if (findTextEntryAncestor(event.target) !== null) {
+            // Keep text editing usable while preventing the parent pane from taking the event.
+            event.stopPropagation();
+            return;
+        }
+        preventTerminalFocusSteal(event);
+    }, [preventTerminalFocusSteal]);
+
+    const stopTextEntryClickPropagation = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+        if (findTextEntryAncestor(event.target) !== null) {
+            event.stopPropagation();
+        }
+    }, []);
+
     useEffect(() => {
         const handleMouseDown = (event: MouseEvent) => {
             if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
@@ -52,7 +68,8 @@ export const AutoStartPopover = memo(function AutoStartPopover({
         <div
             ref={popoverRef}
             className="auto-start-popover"
-            onMouseDown={preventTerminalFocusSteal}
+            onMouseDown={handlePopoverMouseDown}
+            onClick={stopTextEntryClickPropagation}
         >
             <div className="auto-enter-popover-title">
                 {language === "en" ? "AutoStart" : t("autoStart.popover.title", "AutoStart")}

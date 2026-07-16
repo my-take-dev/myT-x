@@ -1,18 +1,21 @@
 import {act} from "react";
+import type {MouseEvent as ReactMouseEvent} from "react";
 import {createRoot, type Root} from "react-dom/client";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {setLanguage} from "../i18n";
+import {getLanguage, setLanguage} from "../i18n";
 import {AutoStartPopover} from "./AutoStartPopover";
 
 describe("AutoStartPopover", () => {
     let container: HTMLDivElement;
     let root: Root;
+    let previousLanguage: ReturnType<typeof getLanguage>;
 
     beforeEach(() => {
         container = document.createElement("div");
         document.body.appendChild(container);
         root = createRoot(container);
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+        previousLanguage = getLanguage();
         setLanguage("en");
     });
 
@@ -21,6 +24,7 @@ describe("AutoStartPopover", () => {
             root.unmount();
         });
         container.remove();
+        setLanguage(previousLanguage);
         (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
     });
 
@@ -104,5 +108,35 @@ describe("AutoStartPopover", () => {
         });
 
         expect(onStart).not.toHaveBeenCalled();
+    });
+
+    it("prevents command button mousedown from refocusing the terminal", () => {
+        const preventTerminalFocusSteal = vi.fn((event: ReactMouseEvent<HTMLElement>) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+
+        act(() => {
+            root.render(
+                <AutoStartPopover
+                    entries={[{name: "", command: "pwsh.exe", args: ""}]}
+                    onStart={vi.fn()}
+                    onClose={vi.fn()}
+                    startDisabled={false}
+                    preventTerminalFocusSteal={preventTerminalFocusSteal}
+                />,
+            );
+        });
+
+        const button = container.querySelector(".auto-start-command-btn") as HTMLButtonElement;
+        expect(button).not.toBeNull();
+
+        const mouseDown = new MouseEvent("mousedown", {bubbles: true, cancelable: true});
+        act(() => {
+            button.dispatchEvent(mouseDown);
+        });
+
+        expect(preventTerminalFocusSteal).toHaveBeenCalledTimes(1);
+        expect(mouseDown.defaultPrevented).toBe(true);
     });
 });

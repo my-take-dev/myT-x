@@ -1,6 +1,7 @@
 import {memo} from "react";
 import type {MouseEvent as ReactMouseEvent} from "react";
 import {useI18n} from "../i18n";
+import {findTextEntryAncestor} from "../utils/terminalFocus";
 
 interface TerminalToolbarProps {
     readonly paneId: string;
@@ -49,16 +50,17 @@ export const TerminalToolbar = memo(function TerminalToolbar({
     const isEn = language === "en";
 
     const handleToolbarMouseDown = (event: ReactMouseEvent<HTMLDivElement>): void => {
-        const target = event.target;
-        if (
-            target instanceof HTMLInputElement
-            || target instanceof HTMLTextAreaElement
-            || (target instanceof HTMLElement && target.isContentEditable)
-        ) {
+        if (findTextEntryAncestor(event.target) !== null) {
             event.stopPropagation();
             return;
         }
         preventTerminalFocusSteal(event);
+    };
+
+    const stopTextEntryClickPropagation = (event: ReactMouseEvent<HTMLDivElement>): void => {
+        if (findTextEntryAncestor(event.target) !== null) {
+            event.stopPropagation();
+        }
     };
 
     const autoButtonClass = autoRunning
@@ -90,6 +92,7 @@ export const TerminalToolbar = memo(function TerminalToolbar({
             className="terminal-toolbar"
             draggable={false}
             onMouseDown={handleToolbarMouseDown}
+            onClick={stopTextEntryClickPropagation}
         >
             <div className="terminal-toolbar-pane">
                 <span className="terminal-toolbar-id">{paneId}</span>

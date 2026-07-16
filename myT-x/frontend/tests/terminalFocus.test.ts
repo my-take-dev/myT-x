@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {shouldRecoverTerminalFocus} from "../src/utils/terminalFocus";
+import {findTextEntryAncestor, shouldRecoverTerminalFocus} from "../src/utils/terminalFocus";
 
 describe("shouldRecoverTerminalFocus", () => {
     it("recovers focus when the active element is document.body", () => {
@@ -49,6 +49,19 @@ describe("shouldRecoverTerminalFocus", () => {
         input.remove();
     });
 
+    it("does not treat non-text inputs as text entry targets", () => {
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        const text = document.createElement("input");
+        text.type = "text";
+
+        expect(findTextEntryAncestor(checkbox)).toBeNull();
+        expect(findTextEntryAncestor(radio)).toBeNull();
+        expect(findTextEntryAncestor(text)).toBe(text);
+    });
+
     it("does not steal focus from dialog descendants", () => {
         const terminalElement = document.createElement("div");
         const dialog = document.createElement("div");
@@ -62,6 +75,36 @@ describe("shouldRecoverTerminalFocus", () => {
         ).toBe(false);
 
         dialog.remove();
+    });
+
+    it("does not steal focus from auto-enter popover descendants", () => {
+        const terminalElement = document.createElement("div");
+        const popover = document.createElement("div");
+        popover.className = "auto-enter-popover";
+        const button = document.createElement("button");
+        popover.append(button);
+        document.body.append(popover);
+
+        expect(
+            shouldRecoverTerminalFocus("window-focus", button, terminalElement, null),
+        ).toBe(false);
+
+        popover.remove();
+    });
+
+    it("does not steal focus from auto-start popover descendants", () => {
+        const terminalElement = document.createElement("div");
+        const popover = document.createElement("div");
+        popover.className = "auto-start-popover";
+        const button = document.createElement("button");
+        popover.append(button);
+        document.body.append(popover);
+
+        expect(
+            shouldRecoverTerminalFocus("window-focus", button, terminalElement, null),
+        ).toBe(false);
+
+        popover.remove();
     });
 
     it("does not recover focus when the composition textarea is already focused", () => {

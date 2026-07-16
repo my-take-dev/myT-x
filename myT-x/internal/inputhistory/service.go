@@ -1,6 +1,7 @@
 package inputhistory
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,33 +15,64 @@ import (
 	"unicode"
 
 	"myT-x/internal/apptypes"
+	"myT-x/internal/sessioninfo"
 )
 
 // Service manages input history persistence, buffering, and event emission.
 type Service struct {
 	emitter        apptypes.RuntimeEventEmitter
 	isShuttingDown func() bool
+	resolveWorkDir func(sessionName string) (string, error)
+	configDir      func() (string, error)
+	now            func() time.Time
+	cleanupDelay   time.Duration
 	mu             sync.RWMutex
+	scopes         map[string]*scopeState
+	lastPath       string
 	file           *os.File
 	path           string
 	entries        ringBuffer
 	lastEmit       time.Time
 	seq            uint64
+	cleanupMu      sync.Mutex
+	cleanupStop    chan struct{}
+	cleanupDone    chan struct{}
 	lineBufMu      sync.Mutex
 	lineBuffers    map[string]*lineBuffer
 }
 
 // NewService creates a new input history service.
-func NewService(emitter apptypes.RuntimeEventEmitter, isShuttingDown func() bool) *Service {
+func NewService(emitter apptypes.RuntimeEventEmitter, isShuttingDown func() bool, options ...Option) *Service {
 	if isShuttingDown == nil {
 		isShuttingDown = func() bool { return false }
+	}
+	opts := serviceOptions{
+		now:          time.Now,
+		cleanupDelay: cleanupDelay,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
+	if opts.now == nil {
+		opts.now = time.Now
 	}
 	return &Service{
 		emitter:        emitter,
 		isShuttingDown: isShuttingDown,
+		resolveWorkDir: opts.resolveSessionWorkDir,
+		configDir:      opts.configDir,
+		now:            opts.now,
+		cleanupDelay:   opts.cleanupDelay,
+		scopes:         map[string]*scopeState{},
 		entries:        newRingBuffer(maxEntries),
 		lineBuffers:    map[string]*lineBuffer{},
 	}
+}
+
+func writeDiagnostic(format string, args ...any) {
+	_, _ = fmt.Fprintf(os.Stderr, format, args...)
 }
 
 // Init creates the JSONL input history file for the current run.
@@ -52,6 +84,16 @@ func NewService(emitter apptypes.RuntimeEventEmitter, isShuttingDown func() bool
 func (s *Service) Init(configPath string) {
 	// Flush any pending line buffers before switching files to prevent data loss.
 	s.FlushAllLineBuffers()
+
+	configDir := filepath.Dir(configPath)
+	if s.configDir == nil && strings.TrimSpace(configDir) != "" {
+		s.configDir = func() (string, error) { return configDir, nil }
+	}
+	if s.resolveWorkDir != nil {
+		s.scheduleCleanup()
+		slog.Info("[input-history] initialized session-scoped storage", "configDir", configDir)
+		return
+	}
 
 	dir := filepath.Join(filepath.Dir(configPath), Dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -83,6 +125,63 @@ func (s *Service) Init(configPath string) {
 
 	s.CleanupOldFiles()
 	slog.Info("[input-history] initialized", "path", fullPath)
+}
+
+func (s *Service) scheduleCleanup() {
+	delay := max(s.cleanupDelay, 0)
+	s.cleanupMu.Lock()
+	if s.cleanupStop != nil {
+		s.cleanupMu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	s.cleanupStop = stop
+	s.cleanupDone = done
+	s.cleanupMu.Unlock()
+
+	go func() {
+		defer close(done)
+
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			if !s.isShuttingDown() {
+				s.CleanupOldFiles()
+			}
+		case <-stop:
+			return
+		}
+
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if !s.isShuttingDown() {
+					s.CleanupOldFiles()
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+func (s *Service) stopCleanup() {
+	s.cleanupMu.Lock()
+	stop := s.cleanupStop
+	done := s.cleanupDone
+	s.cleanupStop = nil
+	s.cleanupDone = nil
+	s.cleanupMu.Unlock()
+
+	if stop == nil {
+		return
+	}
+	close(stop)
+	<-done
 }
 
 func isAllDecimalDigits(value string) bool {
@@ -144,6 +243,18 @@ func sortFilesForCleanup(files []string) {
 
 // CleanupOldFiles removes the oldest input history files when the count exceeds MaxFiles.
 func (s *Service) CleanupOldFiles() {
+	if s.resolveWorkDir != nil {
+		configDir, err := s.currentConfigDir()
+		if err != nil {
+			slog.Warn("[input-history] cleanup skipped: config dir unavailable", "error", err)
+			return
+		}
+		if err := cleanupSessionInfoHistoryFiles(configDir, s.now()); err != nil {
+			slog.Warn("[input-history] session-info cleanup failed", "error", err)
+		}
+		return
+	}
+
 	s.mu.RLock()
 	currentPath := s.path
 	s.mu.RUnlock()
@@ -500,10 +611,70 @@ func (s *Service) FlushAllLineBuffers() {
 //   - Sync() intentionally omitted: input history is high-frequency, non-critical data.
 //     The fsync cost per write would degrade interactive responsiveness. Acceptable
 //     trade-off: up to ~5 seconds of history may be lost on unclean shutdown.
-//   - fmt.Fprintf(os.Stderr, ...) used instead of slog.Warn: WriteEntry may be called
+//   - writeDiagnostic(...) used instead of slog.Warn: WriteEntry may be called
 //     from TeeHandler's slog log handler (via RecordInput). Using slog here would
 //     cause recursive locking inside the slog handler chain.
 func (s *Service) WriteEntry(entry Entry) {
+	if s.resolveWorkDir == nil {
+		s.writeLegacyEntry(entry)
+		return
+	}
+
+	scope, err := s.resolveScope(entry.Session)
+	if err != nil {
+		writeDiagnostic("[input-history] dropped entry: resolve scope for session %q: %v\n", entry.Session, err)
+		return
+	}
+
+	if err := s.ensureScopeLoaded(scope); err != nil {
+		writeDiagnostic("[input-history] dropped entry: load scope %q: %v\n", scope.key, err)
+		return
+	}
+
+	shouldEmit := false
+
+	s.mu.Lock()
+
+	if err := s.ensureDailyFileLocked(scope); err != nil {
+		s.mu.Unlock()
+		writeDiagnostic("[input-history] dropped entry: open daily file for scope %q: %v\n", scope.key, err)
+		return
+	}
+
+	nextSeq := scope.seq + 1
+	entry.Seq = nextSeq
+
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		s.mu.Unlock()
+		writeDiagnostic("[input-history] failed to marshal entry: %v\n", err)
+		return
+	}
+	raw = append(raw, '\n')
+	if _, err := scope.file.Write(raw); err != nil {
+		s.mu.Unlock()
+		writeDiagnostic("[input-history] failed to write entry: %v\n", err)
+		return
+	}
+
+	scope.seq = nextSeq
+	scope.entries.push(entry)
+	s.lastPath = scope.path
+
+	now := s.now()
+	if now.Sub(s.lastEmit) >= emitMinInterval {
+		s.lastEmit = now
+		shouldEmit = true
+	}
+
+	s.mu.Unlock()
+
+	if shouldEmit && s.emitter != nil {
+		s.emitter.Emit("app:input-history-updated", nil)
+	}
+}
+
+func (s *Service) writeLegacyEntry(entry Entry) {
 	var marshalErr, writeErr error
 	shouldEmit := false
 
@@ -535,10 +706,10 @@ func (s *Service) WriteEntry(entry Entry) {
 	s.mu.Unlock()
 
 	if marshalErr != nil {
-		fmt.Fprintf(os.Stderr, "[input-history] failed to marshal entry: %v\n", marshalErr)
+		writeDiagnostic("[input-history] failed to marshal entry: %v\n", marshalErr)
 	}
 	if writeErr != nil {
-		fmt.Fprintf(os.Stderr, "[input-history] failed to write entry: %v\n", writeErr)
+		writeDiagnostic("[input-history] failed to write entry: %v\n", writeErr)
 	}
 
 	if shouldEmit && s.emitter != nil {
@@ -551,17 +722,29 @@ func (s *Service) WriteEntry(entry Entry) {
 // pending buffered input. The standard shutdown sequence in app_lifecycle.go
 // is: FlushAllLineBuffers() → Close().
 func (s *Service) Close() {
-	var closeErr error
+	s.stopCleanup()
+
+	var closeErrors []error
 
 	s.mu.Lock()
+	for _, scope := range s.scopes {
+		if scope != nil && scope.file != nil {
+			if err := scope.file.Close(); err != nil {
+				closeErrors = append(closeErrors, err)
+			}
+			scope.file = nil
+		}
+	}
 	if s.file != nil {
-		closeErr = s.file.Close()
+		if err := s.file.Close(); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
 		s.file = nil
 	}
 	s.mu.Unlock()
 
-	if closeErr != nil {
-		fmt.Fprintf(os.Stderr, "[input-history] failed to close history file: %v\n", closeErr)
+	for _, closeErr := range closeErrors {
+		writeDiagnostic("[input-history] failed to close history file: %v\n", closeErr)
 	}
 }
 
@@ -572,9 +755,345 @@ func (s *Service) Snapshot() []Entry {
 	return s.entries.snapshot()
 }
 
+// SnapshotForSession returns input history scoped to the session's work directory.
+func (s *Service) SnapshotForSession(sessionName string) Snapshot {
+	if s.resolveWorkDir == nil {
+		return Snapshot{Entries: s.Snapshot()}
+	}
+	scope, err := s.resolveScope(sessionName)
+	if err != nil {
+		slog.Warn("[input-history] failed to resolve input history scope", "session", sessionName, "error", err)
+		return Snapshot{Entries: []Entry{}}
+	}
+
+	if err := s.ensureScopeLoaded(scope); err != nil {
+		slog.Warn("[input-history] failed to load input history scope", "scopeKey", scope.key, "error", err)
+		return Snapshot{ScopeKey: scope.key, Entries: []Entry{}}
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return Snapshot{ScopeKey: scope.key, Entries: scope.entries.snapshot()}
+}
+
 // FilePath returns the current history file path.
 func (s *Service) FilePath() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.lastPath != "" {
+		return s.lastPath
+	}
 	return s.path
+}
+
+// FilePathForSession returns the daily history path for the session scope.
+func (s *Service) FilePathForSession(sessionName string) string {
+	if s.resolveWorkDir == nil {
+		return s.FilePath()
+	}
+	scope, err := s.resolveScope(sessionName)
+	if err != nil {
+		slog.Warn("[input-history] failed to resolve input history file path", "session", sessionName, "error", err)
+		return ""
+	}
+
+	s.mu.RLock()
+	path := scope.path
+	dir := scope.dir
+	s.mu.RUnlock()
+	if path != "" {
+		return path
+	}
+	return filepath.Join(dir, fmt.Sprintf("input-%s.jsonl", s.now().Format("20060102")))
+}
+
+func (s *Service) currentConfigDir() (string, error) {
+	if s.configDir != nil {
+		configDir, err := s.configDir()
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(configDir) == "" {
+			return "", fmt.Errorf("config dir is empty")
+		}
+		return configDir, nil
+	}
+	return "", fmt.Errorf("config dir resolver is not configured")
+}
+
+func (s *Service) resolveScope(sessionName string) (*scopeState, error) {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		configDir, err := s.currentConfigDir()
+		if err != nil {
+			return nil, err
+		}
+		return s.scopeForDir("", filepath.Join(filepath.Clean(configDir), Dir)), nil
+	}
+	workDir, err := s.resolveWorkDir(sessionName)
+	if err != nil {
+		return nil, err
+	}
+	configDir, err := s.currentConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	key, err := sessioninfo.FolderKey(workDir)
+	if err != nil {
+		return nil, err
+	}
+	baseDir, err := sessioninfo.DirectoryPath(configDir, workDir)
+	if err != nil {
+		return nil, err
+	}
+	return s.scopeForDir(key, filepath.Join(baseDir, Dir)), nil
+}
+
+func (s *Service) scopeForDir(key, historyDir string) *scopeState {
+	s.mu.RLock()
+	scope := s.scopes[key]
+	s.mu.RUnlock()
+	if scope != nil && scope.dir == historyDir {
+		return scope
+	}
+
+	var staleFile *os.File
+	s.mu.Lock()
+	if scope = s.scopes[key]; scope != nil {
+		if scope.dir == historyDir {
+			s.mu.Unlock()
+			return scope
+		}
+		staleFile = scope.file
+		scope.file = nil
+		scope.path = ""
+		scope.fileDate = ""
+		scope.dir = historyDir
+		s.mu.Unlock()
+		if staleFile != nil {
+			if err := staleFile.Close(); err != nil {
+				writeDiagnostic("[input-history] failed to close stale scope file for scope %q: %v\n", key, err)
+			}
+		}
+		return scope
+	}
+
+	scope = &scopeState{
+		key:     key,
+		dir:     historyDir,
+		entries: newRingBuffer(maxEntries),
+	}
+	s.scopes[key] = scope
+	s.mu.Unlock()
+	return scope
+}
+
+func (s *Service) ensureScopeLoaded(scope *scopeState) error {
+	s.mu.RLock()
+	if scope.loaded {
+		s.mu.RUnlock()
+		return nil
+	}
+	dir := scope.dir
+	s.mu.RUnlock()
+
+	entries, maxSeq, loadErrors, err := s.loadScopeFromDisk(dir)
+	for _, loadErr := range loadErrors {
+		writeDiagnostic("[input-history] failed to load daily history file: %v\n", loadErr)
+	}
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if scope.loaded {
+		return nil
+	}
+	scope.entries = entries
+	if maxSeq > scope.seq {
+		scope.seq = maxSeq
+	}
+	scope.loaded = true
+	return nil
+}
+
+func (s *Service) loadScopeFromDisk(dir string) (ringBuffer, uint64, []error, error) {
+	entries := newRingBuffer(maxEntries)
+	files, err := listDailyFiles(dir)
+	if err != nil {
+		return entries, 0, nil, err
+	}
+
+	var loadErrors []error
+	var maxSeq uint64
+	minDate := dateOnly(s.now()).AddDate(0, 0, -(LoadWindowDays - 1))
+	for _, file := range files {
+		if file.date.Before(minDate) {
+			continue
+		}
+		nextSeq, err := loadDailyFile(&entries, file.path, maxSeq)
+		maxSeq = nextSeq
+		if err != nil {
+			loadErrors = append(loadErrors, err)
+		}
+	}
+	return entries, maxSeq, loadErrors, nil
+}
+
+func loadDailyFile(entries *ringBuffer, path string, maxSeq uint64) (uint64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return maxSeq, nil
+		}
+		return maxSeq, err
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			writeDiagnostic("[input-history] failed to close history file after load %q: %v\n", path, err)
+		}
+	}()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var entry Entry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			writeDiagnostic("[input-history] skipped malformed history line in %q: %v\n", path, err)
+			continue
+		}
+		if entry.Seq == 0 {
+			maxSeq++
+			entry.Seq = maxSeq
+		} else if entry.Seq > maxSeq {
+			maxSeq = entry.Seq
+		}
+		entries.push(entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return maxSeq, err
+	}
+	return maxSeq, nil
+}
+
+func (s *Service) ensureDailyFileLocked(scope *scopeState) error {
+	date := s.now().Format("20060102")
+	if scope.file != nil && scope.fileDate == date {
+		return nil
+	}
+	if err := os.MkdirAll(scope.dir, 0o700); err != nil {
+		return fmt.Errorf("create input history directory: %w", err)
+	}
+	if scope.file != nil {
+		if err := scope.file.Close(); err != nil {
+			writeDiagnostic("[input-history] failed to close previous daily file for scope %q: %v\n", scope.key, err)
+		}
+		scope.file = nil
+	}
+	path := filepath.Join(scope.dir, fmt.Sprintf("input-%s.jsonl", date))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	scope.file = file
+	scope.path = path
+	scope.fileDate = date
+	return nil
+}
+
+type dailyFile struct {
+	path string
+	date time.Time
+}
+
+func listDailyFiles(dir string) ([]dailyFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	files := make([]dailyFile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		date, ok := parseDailyFileName(entry.Name())
+		if !ok {
+			continue
+		}
+		files = append(files, dailyFile{path: filepath.Join(dir, entry.Name()), date: date})
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].date.Before(files[j].date)
+	})
+	return files, nil
+}
+
+func parseDailyFileName(name string) (time.Time, bool) {
+	if !strings.HasPrefix(name, "input-") || !strings.HasSuffix(name, ".jsonl") {
+		return time.Time{}, false
+	}
+	datePart := strings.TrimSuffix(strings.TrimPrefix(name, "input-"), ".jsonl")
+	if len(datePart) != 8 || !isAllDecimalDigits(datePart) {
+		return time.Time{}, false
+	}
+	// Daily history files are keyed by the user's local calendar day.
+	date, err := time.ParseInLocation("20060102", datePart, time.Local)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return date, true
+}
+
+func cleanupSessionInfoHistoryFiles(configDir string, now time.Time) error {
+	absoluteConfigDir, err := filepath.Abs(strings.TrimSpace(configDir))
+	if err != nil {
+		return fmt.Errorf("resolve config dir: %w", err)
+	}
+	absoluteConfigDir = filepath.Clean(absoluteConfigDir)
+	cutoff := dateOnly(now).AddDate(0, 0, -RetentionDays)
+
+	cleanupScopedHistoryDir(filepath.Join(absoluteConfigDir, Dir), cutoff)
+
+	root := filepath.Join(absoluteConfigDir, sessioninfo.DirName)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		cleanupScopedHistoryDir(filepath.Join(root, entry.Name(), Dir), cutoff)
+	}
+	return nil
+}
+
+func cleanupScopedHistoryDir(historyDir string, cutoff time.Time) {
+	files, err := listDailyFiles(historyDir)
+	if err != nil {
+		slog.Warn("[input-history] failed to list scoped history directory", "dir", historyDir, "error", err)
+		return
+	}
+	for _, file := range files {
+		if !file.date.Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(file.path); err != nil {
+			slog.Warn("[input-history] failed to delete expired history file", "path", file.path, "error", err)
+		}
+	}
+	_ = os.Remove(historyDir)
+	_ = os.Remove(filepath.Dir(historyDir))
+}
+
+func dateOnly(t time.Time) time.Time {
+	year, month, day := t.Local().Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.Local)
 }

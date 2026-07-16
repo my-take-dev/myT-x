@@ -1,4 +1,4 @@
-import {describe, expect, it, vi} from "vitest";
+import {beforeEach, describe, expect, it, vi} from "vitest";
 
 // Mock Wails runtime and App bindings before importing the store.
 vi.mock("../wailsjs/runtime/runtime", () => ({
@@ -18,10 +18,22 @@ import {
     extractPaneId,
     isAutoEnterTitle,
     isSchedulerEntryLike,
+    startAutoEnter,
     syncFromSchedulerData,
     useAutoEnterStore,
     type SchedulerEntryLike,
 } from "../src/stores/autoEnterStore";
+import {DeleteScheduler, StartScheduler, StopScheduler} from "../wailsjs/go/main/App";
+
+beforeEach(() => {
+    useAutoEnterStore.setState({activeEntries: {}});
+    vi.mocked(StartScheduler).mockReset();
+    vi.mocked(StartScheduler).mockResolvedValue("");
+    vi.mocked(StopScheduler).mockReset();
+    vi.mocked(StopScheduler).mockResolvedValue();
+    vi.mocked(DeleteScheduler).mockReset();
+    vi.mocked(DeleteScheduler).mockResolvedValue();
+});
 
 // ---------------------------------------------------------------------------
 // isAutoEnterTitle
@@ -202,5 +214,65 @@ describe("syncFromSchedulerData", () => {
 
         const state = useAutoEnterStore.getState();
         expect(Object.keys(state.activeEntries)).toEqual(["%1"]);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// startAutoEnter
+// ---------------------------------------------------------------------------
+
+describe("startAutoEnter", () => {
+    it("passes the requested interval seconds to StartScheduler", async () => {
+        await startAutoEnter("%1", 45);
+
+        expect(StartScheduler).toHaveBeenCalledWith("__auto_enter_%1", "%1", "", 45, 0);
+    });
+
+    it("stops and deletes the existing scheduler before starting a new one", async () => {
+        useAutoEnterStore.setState({
+            activeEntries: {
+                "%1": {schedulerId: "existing-scheduler", intervalSeconds: 30},
+            },
+        });
+
+        await startAutoEnter("%1", 45);
+
+        expect(StopScheduler).toHaveBeenCalledWith("existing-scheduler");
+        expect(DeleteScheduler).toHaveBeenCalledWith("existing-scheduler");
+        expect(StartScheduler).toHaveBeenCalledWith("__auto_enter_%1", "%1", "", 45, 0);
+        expect(vi.mocked(StopScheduler).mock.invocationCallOrder[0])
+            .toBeLessThan(vi.mocked(DeleteScheduler).mock.invocationCallOrder[0]);
+        expect(vi.mocked(DeleteScheduler).mock.invocationCallOrder[0])
+            .toBeLessThan(vi.mocked(StartScheduler).mock.invocationCallOrder[0]);
+    });
+
+    it("aborts without starting a duplicate scheduler when stopping the existing scheduler fails", async () => {
+        useAutoEnterStore.setState({
+            activeEntries: {
+                "%1": {schedulerId: "existing-scheduler", intervalSeconds: 30},
+            },
+        });
+        vi.mocked(StopScheduler).mockRejectedValueOnce(new Error("stop failed"));
+
+        await expect(startAutoEnter("%1", 45))
+            .rejects.toThrow("Failed to stop existing auto-enter before starting new one");
+
+        expect(DeleteScheduler).not.toHaveBeenCalled();
+        expect(StartScheduler).not.toHaveBeenCalled();
+    });
+
+    it("aborts without starting a duplicate scheduler when deleting the existing scheduler fails", async () => {
+        useAutoEnterStore.setState({
+            activeEntries: {
+                "%1": {schedulerId: "existing-scheduler", intervalSeconds: 30},
+            },
+        });
+        vi.mocked(DeleteScheduler).mockRejectedValueOnce(new Error("delete failed"));
+
+        await expect(startAutoEnter("%1", 45))
+            .rejects.toThrow("Failed to stop existing auto-enter before starting new one");
+
+        expect(StopScheduler).toHaveBeenCalledWith("existing-scheduler");
+        expect(StartScheduler).not.toHaveBeenCalled();
     });
 });
